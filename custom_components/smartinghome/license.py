@@ -146,7 +146,8 @@ class LicenseManager:
     async def validate(self) -> LicenseInfo:
         """Perform initial license validation.
 
-        FREE mode returns a synthetic valid LicenseInfo immediately.
+        FREE mode returns a synthetic valid LicenseInfo immediately
+        and sends a non-blocking anonymous telemetry ping.
         PRO mode validates against the license server.
         """
         if self.is_free_mode:
@@ -166,6 +167,11 @@ class LicenseManager:
             self._cached_valid = True
             self._cached_tier = LicenseTier.FREE
             _LOGGER.info("Running in FREE mode — no license required")
+
+            # Fire-and-forget anonymous telemetry (never blocks startup)
+            import asyncio
+            asyncio.create_task(self._register_free_ping())
+
             return info
 
         # PRO/ENTERPRISE — validate with server
@@ -262,3 +268,41 @@ class LicenseManager:
         except Exception as err:
             _LOGGER.error("Unexpected error during license check: %s", err)
             self._last_check_attempt = time.time()
+
+    async def _register_free_ping(self) -> None:
+        """Send anonymous telemetry ping for FREE mode users.
+
+        Non-blocking, fire-and-forget. Never crashes the integration.
+        """
+        try:
+            import aiohttp
+            from .const import LICENSE_API_URL
+
+            url = f"{LICENSE_API_URL}/register-free"
+
+            # Get HA instance UUID as device_id
+            device_id = self.hass.data.get("core.uuid", "unknown")
+            ha_version = self.hass.config.version or "unknown"
+
+            payload = {
+                "device_id": str(device_id),
+                "ha_version": ha_version,
+                "integration_version": "1.3.0",
+            }
+
+            session = self.hass.helpers.aiohttp_client.async_get_clientsession(
+                self.hass
+            )
+            async with session.post(
+                url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    _LOGGER.debug("FREE registration ping sent successfully")
+                else:
+                    _LOGGER.debug("FREE ping returned %s", resp.status)
+
+        except Exception as err:
+            # Silently ignore — telemetry should never affect operation
+            _LOGGER.debug("FREE registration ping failed (non-critical): %s", err)
