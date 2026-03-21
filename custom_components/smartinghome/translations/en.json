@@ -54,8 +54,18 @@
   },
   "options": {
     "step": {
-      "init": {
-        "title": "Smarting HOME — Settings",
+      "upgrade": {
+        "title": "Smarting HOME — Settings & Upgrade",
+        "description": "You are on the FREE plan. Enter a PRO license key to unlock all features.\nBuy at: {website}",
+        "data": {
+          "license_key": "🔑 PRO License Key (leave empty to stay FREE)",
+          "tariff": "Tariff Type",
+          "rce_enabled": "Enable RCE PSE",
+          "update_interval": "Update Interval (seconds)"
+        }
+      },
+      "settings": {
+        "title": "Smarting HOME — PRO Settings",
         "data": {
           "tariff": "Tariff Type",
           "rce_enabled": "Enable RCE PSE",
