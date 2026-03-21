@@ -41,6 +41,25 @@
           "anthropic_api_key": "Anthropic Claude API Key",
           "update_interval": "Update Interval (seconds)"
         }
+      },
+      "sensors": {
+        "title": "Sensor Mapping",
+        "description": "Map your inverter sensors. Select the matching entity for each parameter.\nDefaults work for GoodWe inverters.",
+        "data": {
+          "pv_power": "☀️ PV Power (W)",
+          "load_power": "🏠 House Load (W)",
+          "grid_power": "🔌 Grid Power (W)",
+          "battery_power": "🔋 Battery Power (W)",
+          "battery_soc": "🔋 Battery SOC (%)",
+          "pv_today": "☀️ PV Today (kWh)",
+          "grid_import_today": "↓ Grid Import Today (kWh)",
+          "grid_export_today": "↑ Grid Export Today (kWh)",
+          "battery_charge_today": "🔋 Battery Charge Today (kWh)",
+          "battery_discharge_today": "⚡ Battery Discharge Today (kWh)",
+          "voltage_l1": "⚡ Voltage L1 (V)",
+          "voltage_l2": "⚡ Voltage L2 (V)",
+          "voltage_l3": "⚡ Voltage L3 (V)"
+        }
       }
     },
     "error": {
@@ -72,6 +91,25 @@
           "gemini_api_key": "Google Gemini API Key",
           "anthropic_api_key": "Anthropic Claude API Key",
           "update_interval": "Update Interval (seconds)"
+        }
+      },
+      "sensors": {
+        "title": "Sensor Mapping",
+        "description": "Map your inverter sensors to the correct entities.",
+        "data": {
+          "pv_power": "☀️ PV Power (W)",
+          "load_power": "🏠 House Load (W)",
+          "grid_power": "🔌 Grid Power (W)",
+          "battery_power": "🔋 Battery Power (W)",
+          "battery_soc": "🔋 Battery SOC (%)",
+          "pv_today": "☀️ PV Today (kWh)",
+          "grid_import_today": "↓ Grid Import Today (kWh)",
+          "grid_export_today": "↑ Grid Export Today (kWh)",
+          "battery_charge_today": "🔋 Battery Charge Today (kWh)",
+          "battery_discharge_today": "⚡ Battery Discharge Today (kWh)",
+          "voltage_l1": "⚡ Voltage L1 (V)",
+          "voltage_l2": "⚡ Voltage L2 (V)",
+          "voltage_l3": "⚡ Voltage L3 (V)"
         }
       }
     }

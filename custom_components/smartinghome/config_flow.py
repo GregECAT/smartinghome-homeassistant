@@ -12,6 +12,8 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import SmartingHomeAPI, AuthenticationError, ConnectionError as APIConnectionError
+from homeassistant.helpers import selector
+
 from .const import (
     DOMAIN,
     CONF_LICENSE_KEY,
@@ -26,10 +28,13 @@ from .const import (
     CONF_MODBUS_PORT,
     CONF_MODBUS_SLAVE,
     CONF_UPDATE_INTERVAL,
+    CONF_SENSOR_MAP,
     DEFAULT_GOODWE_DEVICE_ID,
     DEFAULT_MODBUS_PORT,
     DEFAULT_MODBUS_SLAVE,
     DEFAULT_UPDATE_INTERVAL,
+    DEFAULT_SENSOR_MAP,
+    SENSOR_MAP_KEYS,
     LICENSE_MODE_FREE,
     LICENSE_MODE_PRO,
     TariffType,
@@ -194,25 +199,8 @@ class SmartingHomeConfigFlow(
                 CONF_RCE_ENABLED, True
             )
 
-            # If PRO mode, show AI step; if FREE, skip AI
-            if self._license_mode == LICENSE_MODE_PRO:
-                return await self.async_step_ai()
-
-            # FREE mode — skip AI, set defaults, create entry
-            self._data[CONF_AI_ENABLED] = False
-            self._data[CONF_GEMINI_API_KEY] = ""
-            self._data[CONF_ANTHROPIC_API_KEY] = ""
-            self._data[CONF_UPDATE_INTERVAL] = DEFAULT_UPDATE_INTERVAL
-
-            await self.async_set_unique_id(
-                f"smartinghome_{self._data[CONF_DEVICE_ID][:8]}"
-            )
-            self._abort_if_unique_id_configured()
-
-            return self.async_create_entry(
-                title="Smarting HOME — Energy Management",
-                data=self._data,
-            )
+            # Next step: sensor mapping
+            return await self.async_step_sensors()
 
         return self.async_show_form(
             step_id="tariff",
@@ -240,10 +228,55 @@ class SmartingHomeConfigFlow(
             },
         )
 
+    async def async_step_sensors(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Step 4: Sensor mapping — select entities for each logical sensor."""
+        if user_input is not None:
+            # Store sensor map
+            sensor_map = {}
+            for key in SENSOR_MAP_KEYS:
+                sensor_map[key] = user_input.get(key, DEFAULT_SENSOR_MAP.get(key, ""))
+            self._data[CONF_SENSOR_MAP] = sensor_map
+
+            # If PRO mode, show AI step; if FREE, create entry now
+            if self._license_mode == LICENSE_MODE_PRO:
+                return await self.async_step_ai()
+
+            # FREE mode — set defaults and create entry
+            self._data[CONF_AI_ENABLED] = False
+            self._data[CONF_GEMINI_API_KEY] = ""
+            self._data[CONF_ANTHROPIC_API_KEY] = ""
+            self._data[CONF_UPDATE_INTERVAL] = DEFAULT_UPDATE_INTERVAL
+
+            await self.async_set_unique_id(
+                f"smartinghome_{self._data[CONF_DEVICE_ID][:8]}"
+            )
+            self._abort_if_unique_id_configured()
+
+            return self.async_create_entry(
+                title="Smarting HOME — Energy Management",
+                data=self._data,
+            )
+
+        # Build schema with entity selectors
+        schema_dict = {}
+        for key, _desc in SENSOR_MAP_KEYS.items():
+            schema_dict[vol.Optional(key, default=DEFAULT_SENSOR_MAP.get(key, ""))] = (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="sensor")
+                )
+            )
+
+        return self.async_show_form(
+            step_id="sensors",
+            data_schema=vol.Schema(schema_dict),
+        )
+
     async def async_step_ai(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Step 4: AI configuration (PRO only, optional)."""
+        """Step 5: AI configuration (PRO only, optional)."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -309,13 +342,44 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Manage options — show upgrade option for FREE users."""
+        """Manage options — choose what to configure."""
         current = self._config_entry.data
         is_free = current.get(CONF_LICENSE_MODE, LICENSE_MODE_FREE) == LICENSE_MODE_FREE
 
         if is_free:
             return await self.async_step_upgrade(user_input)
         return await self.async_step_settings(user_input)
+
+    async def async_step_sensors(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Sensor mapping step in Options Flow."""
+        current = self._config_entry.data
+        current_map = current.get(CONF_SENSOR_MAP, DEFAULT_SENSOR_MAP)
+
+        if user_input is not None:
+            sensor_map = {}
+            for key in SENSOR_MAP_KEYS:
+                sensor_map[key] = user_input.get(key, current_map.get(key, ""))
+            # Update entry data with new sensor map
+            new_data = {**current, CONF_SENSOR_MAP: sensor_map}
+            self.hass.config_entries.async_update_entry(
+                self._config_entry, data=new_data
+            )
+            return self.async_create_entry(title="", data={})
+
+        schema_dict = {}
+        for key, _desc in SENSOR_MAP_KEYS.items():
+            schema_dict[vol.Optional(key, default=current_map.get(key, DEFAULT_SENSOR_MAP.get(key, "")))] = (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="sensor")
+                )
+            )
+
+        return self.async_show_form(
+            step_id="sensors",
+            data_schema=vol.Schema(schema_dict),
+        )
 
     async def async_step_upgrade(
         self, user_input: dict[str, Any] | None = None
@@ -404,6 +468,12 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
                 "website": "https://smartinghome.pl/buy",
             },
         )
+
+    async def async_step_sensor_mapping(
+        self, _user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Redirect to sensors step from menu."""
+        return await self.async_step_sensors()
 
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None

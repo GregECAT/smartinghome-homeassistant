@@ -49,6 +49,26 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Helpers ─────────────────────────────── */
+  // Sensor map: read from diagnostic entity, fallback to defaults
+  static DEFAULT_MAP = {
+    pv_power: "sensor.pv_power",
+    load_power: "sensor.load",
+    grid_power: "sensor.meter_active_power_total",
+    battery_power: "sensor.battery_power",
+    battery_soc: "sensor.battery_state_of_charge",
+    pv_today: "sensor.today_s_pv_generation",
+    grid_import_today: "sensor.grid_import_daily",
+    grid_export_today: "sensor.grid_export_daily",
+    battery_charge_today: "sensor.today_battery_charge",
+    battery_discharge_today: "sensor.today_battery_discharge",
+    voltage_l1: "sensor.on_grid_l1_voltage",
+    voltage_l2: "sensor.on_grid_l2_voltage",
+    voltage_l3: "sensor.on_grid_l3_voltage",
+  };
+  _m(logicalName) {
+    const map = this._hass?.states["sensor.smartinghome_sensor_map"]?.attributes;
+    return map?.[logicalName] || SmartingHomePanel.DEFAULT_MAP[logicalName] || "";
+  }
   _s(id) {
     if (!this._hass?.states[id]) return null;
     return this._hass.states[id].state;
@@ -72,11 +92,11 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   _updatePowerFlow() {
-    const pv = this._n("sensor.pv_power") || 0;
-    const load = this._n("sensor.load") || 0;
-    const grid = this._n("sensor.meter_active_power_total") || 0;
-    const batt = this._n("sensor.battery_power") || 0;
-    const soc = this._n("sensor.battery_state_of_charge") || 0;
+    const pv = this._n(this._m("pv_power")) || 0;
+    const load = this._n(this._m("load_power")) || 0;
+    const grid = this._n(this._m("grid_power")) || 0;
+    const batt = this._n(this._m("battery_power")) || 0;
+    const soc = this._n(this._m("battery_soc")) || 0;
 
     // Update power values
     this._setText("pf-pv-val", `${Math.round(pv)} W`);
@@ -115,7 +135,7 @@ class SmartingHomePanel extends HTMLElement {
 
   _updateStats() {
     const updates = {
-      "val-pv-today": `${this._f("sensor.today_s_pv_generation")} kWh`,
+      "val-pv-today": `${this._f(this._m("pv_today"))} kWh`,
       "val-g13-zone": this._s("sensor.smartinghome_g13_current_zone") || "—",
       "val-g13-price": `${this._f("sensor.smartinghome_g13_buy_price", 2)} PLN`,
       "val-rce-price": `${this._f("sensor.smartinghome_rce_sell_price", 2)} PLN`,
@@ -134,19 +154,19 @@ class SmartingHomePanel extends HTMLElement {
       "val-battery-runtime": this._s("sensor.smartinghome_battery_runtime") || "—",
       "val-forecast-today": `${this._f("sensor.smartinghome_pv_forecast_today_total")} kWh`,
       "val-forecast-tomorrow": `${this._f("sensor.smartinghome_pv_forecast_tomorrow_total")} kWh`,
-      "val-voltage-l1": `${this._f("sensor.on_grid_l1_voltage")} V`,
-      "val-voltage-l2": `${this._f("sensor.on_grid_l2_voltage")} V`,
-      "val-voltage-l3": `${this._f("sensor.on_grid_l3_voltage")} V`,
+      "val-voltage-l1": `${this._f(this._m("voltage_l1"))} V`,
+      "val-voltage-l2": `${this._f(this._m("voltage_l2"))} V`,
+      "val-voltage-l3": `${this._f(this._m("voltage_l3"))} V`,
       "val-arbitrage": `${this._f("sensor.smartinghome_battery_arbitrage_potential")} PLN`,
-      "val-grid-import": `${this._f("sensor.grid_import_daily")} kWh`,
-      "val-grid-export": `${this._f("sensor.grid_export_daily")} kWh`,
-      "val-batt-charge": `${this._f("sensor.today_battery_charge")} kWh`,
-      "val-batt-discharge": `${this._f("sensor.today_battery_discharge")} kWh`,
+      "val-grid-import": `${this._f(this._m("grid_import_today"))} kWh`,
+      "val-grid-export": `${this._f(this._m("grid_export_today"))} kWh`,
+      "val-batt-charge": `${this._f(this._m("battery_charge_today"))} kWh`,
+      "val-batt-discharge": `${this._f(this._m("battery_discharge_today"))} kWh`,
     };
     for (const [id, v] of Object.entries(updates)) this._setText(id, v);
 
-    // SOC bars
-    const soc = this._n("sensor.battery_state_of_charge") || 0;
+    // SOC bars — use mapped battery_soc
+    const soc = this._n(this._m("battery_soc")) || 0;
     ["soc-bar-fill", "soc-bar-fill-2"].forEach(id => {
       const el = this.shadowRoot.getElementById(id);
       if (el) {
