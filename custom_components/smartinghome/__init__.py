@@ -120,34 +120,47 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
     panel_file = panel_dir / "panel.js"
 
     if not panel_file.exists():
-        _LOGGER.warning("Panel JS file not found: %s", panel_file)
+        _LOGGER.error(
+            "Panel JS file not found at %s — sidebar panel will NOT appear. "
+            "Make sure frontend/panel.js exists in the integration directory.",
+            panel_file,
+        )
         return
 
+    _LOGGER.debug("Panel JS found: %s (%d bytes)", panel_file, panel_file.stat().st_size)
+
     # Register the JS file as a static resource
-    hass.http.register_static_path(
-        PANEL_URL, str(panel_file), cache_headers=False
-    )
+    try:
+        hass.http.register_static_path(
+            PANEL_URL, str(panel_file), cache_headers=False
+        )
+    except Exception:
+        # Already registered — OK on reload/restart
+        _LOGGER.debug("Static path %s already registered", PANEL_URL)
 
     # Register the panel in the sidebar
     from homeassistant.components.frontend import (
         async_register_built_in_panel,
     )
 
-    async_register_built_in_panel(
-        hass,
-        component_name="custom",
-        sidebar_title=PANEL_TITLE,
-        sidebar_icon=PANEL_ICON,
-        frontend_url_path=DOMAIN,
-        require_admin=False,
-        config={
-            "_panel_custom": {
-                "name": "smartinghome-panel",
-                "module_url": PANEL_URL,
-            }
-        },
-    )
-    _LOGGER.info("Registered Smarting HOME sidebar panel")
+    try:
+        async_register_built_in_panel(
+            hass,
+            component_name="custom",
+            sidebar_title=PANEL_TITLE,
+            sidebar_icon=PANEL_ICON,
+            frontend_url_path=DOMAIN,
+            require_admin=False,
+            config={
+                "_panel_custom": {
+                    "name": "smartinghome-panel",
+                    "module_url": PANEL_URL,
+                }
+            },
+        )
+        _LOGGER.info("Registered Smarting HOME sidebar panel ✅")
+    except Exception as err:
+        _LOGGER.warning("Panel registration issue (may already exist): %s", err)
 
 
 async def async_unload_entry(
