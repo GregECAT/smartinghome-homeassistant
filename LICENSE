@@ -1,0 +1,290 @@
+================================================================================
+                    SMARTING HOME COMMERCIAL LICENSE
+                          Version 1.0, 2026
+================================================================================
+
+Copyright (c) 2026 Smarting HOME — GregECAT (smartinghome.pl)
+All Rights Reserved.
+
+================================================================================
+
+This Software License Agreement ("Agreement") is a legal agreement between you
+("Licensee") and Smarting HOME, operated by GregECAT ("Licensor"), for the use
+of the Smarting HOME — Autonomous Energy Management System software
+("Software"), including all source code, compiled code, documentation,
+configuration files, automation blueprints, dashboard templates, AI integration
+modules, and associated materials.
+
+By installing, copying, or otherwise using the Software, you agree to be bound
+by the terms of this Agreement. If you do not agree, do not use the Software.
+
+================================================================================
+                           1. DEFINITIONS
+================================================================================
+
+"Software" means the Smarting HOME Home Assistant integration, including all
+custom components, blueprints, dashboards, translations, and documentation.
+
+"License Key" means the unique alphanumeric key issued to the Licensee upon
+purchase, required to activate PRO or ENTERPRISE features.
+
+"Instance" means a single Home Assistant installation running on one (1)
+physical or virtual host.
+
+"DEMO Mode" means the limited functionality mode available without a valid
+License Key, restricted to a maximum of 10 sensors and excluding AI features,
+advanced automation blueprints, and premium dashboards.
+
+================================================================================
+                        2. LICENSE GRANT
+================================================================================
+
+Subject to the terms and conditions of this Agreement and upon payment of
+the applicable license fees, Licensor grants you a:
+
+  (a) Non-exclusive,
+  (b) Non-transferable,
+  (c) Non-sublicensable,
+  (d) Revocable
+
+license to install, configure, and use the Software on a limited number of
+Instances as determined by your License Tier:
+
+  • DEMO    — One (1) Instance, limited functionality, no time restriction
+  • PRO     — One (1) Instance, full functionality, subscription-based
+  • ENTERPRISE — Up to five (5) Instances, full functionality, subscription-based
+
+================================================================================
+                         3. RESTRICTIONS
+================================================================================
+
+You may NOT, without prior written consent from the Licensor:
+
+  (a) Copy, reproduce, or duplicate the Software, except for reasonable backup;
+  (b) Modify, adapt, translate, or create derivative works of the Software;
+  (c) Reverse engineer, decompile, disassemble, or attempt to derive the source
+      code, algorithms, or data structures of the Software;
+  (d) Distribute, sublicense, lease, rent, lend, or otherwise transfer the
+      Software or License Key to any third party;
+  (e) Remove, alter, or obscure any copyright, trademark, or proprietary
+      notices contained in the Software;
+  (f) Share, publish, or otherwise disclose your License Key;
+  (g) Use the Software to develop a competing product or service;
+  (h) Use the Software in violation of any applicable laws or regulations;
+  (i) Circumvent or attempt to circumvent the license validation system.
+
+================================================================================
+                      4. LICENSE VALIDATION
+================================================================================
+
+4.1 The Software requires periodic license validation via secure HTTPS
+    connection to Smarting HOME servers (smartinghome.pl).
+
+4.2 A grace period of seventy-two (72) hours is provided for temporary
+    internet connectivity interruptions. During this period, the Software
+    will continue to operate with full licensed functionality.
+
+4.3 After the grace period expires without successful validation, the Software
+    will revert to DEMO Mode until connectivity is restored.
+
+4.4 License validation data transmitted includes only:
+    - License Key (hashed)
+    - Home Assistant instance identifier
+    - Software version
+    - Timestamp
+
+    No personal data, energy usage data, or home network information is
+    collected or transmitted.
+
+================================================================================
+                        5. LICENSE TIERS
+================================================================================
+
+  DEMO (Free)
+  ─────────────────────────────────────────────────────
+  • Up to 10 computed sensors
+  • Basic energy monitoring
+  • No AI Energy Advisor
+  • No automation blueprints
+  • No premium dashboards
+  • Community support only
+
+  PRO (Paid Subscription)
+  ─────────────────────────────────────────────────────
+  • Unlimited sensors (33+ computed, 3 binary, 5 switches, 2 selects, 3 numbers)
+  • Full HEMS engine (G13 + RCE + SOC layers)
+  • AI Energy Advisor (Google Gemini + Anthropic Claude)
+  • All 7+ automation blueprints
+  • All 3 premium dashboards
+  • Night arbitrage, voltage cascade, PV surplus cascade
+  • Email support
+  • Single Instance
+
+  ENTERPRISE (Paid Subscription)
+  ─────────────────────────────────────────────────────
+  • All PRO features
+  • Up to 5 Instances
+  • Priority support (24h response SLA)
+  • Custom blueprint development (upon request)
+  • Early access to new features
+
+================================================================================
+                       6. SUBSCRIPTION & RENEWAL
+================================================================================
+
+6.1 PRO and ENTERPRISE licenses are subscription-based with monthly or annual
+    billing cycles.
+
+6.2 Upon subscription expiration, the Software will revert to DEMO Mode.
+    No data is lost; full functionality is restored upon renewal.
+
+6.3 Licensor reserves the right to adjust pricing for future subscription
+    periods with thirty (30) days written notice.
+
+================================================================================
+                     7. INTELLECTUAL PROPERTY
+================================================================================
+
+7.1 The Software, including but not limited to:
+    - Source code and compiled binaries
+    - HEMS optimization algorithms and strategies
+    - G13/RCE tariff optimization logic
+    - AI energy advisory system prompts and context builders
+    - Voltage and PV surplus cascade algorithms
+    - Night arbitrage scheduling logic
+    - Dashboard designs and configurations
+    - Automation blueprint templates
+    - Documentation and training materials
+    - Brand assets, logos, and trademarks
+
+    are and shall remain the exclusive intellectual property of the Licensor.
+
+7.2 This Agreement does not grant the Licensee any rights to the Licensor's
+    trademarks, trade names, or service marks, except as required for
+    normal use of the Software.
+
+7.3 The "Smarting HOME" name and logo are registered trademarks of GregECAT.
+
+================================================================================
+                      8. DATA & PRIVACY
+================================================================================
+
+8.1 The Software processes energy data locally within the Licensee's Home
+    Assistant instance. No energy usage or personal data is transmitted to
+    Smarting HOME servers.
+
+8.2 If the Licensee enables the AI Energy Advisor feature, system state data
+    is transmitted directly from the Licensee's instance to the chosen AI
+    provider (Google or Anthropic) using the Licensee's own API key. Smarting
+    HOME does not act as an intermediary for AI requests.
+
+8.3 License validation data (Section 4.4) is processed in accordance with
+    Polish data protection law and the EU General Data Protection Regulation
+    (GDPR).
+
+================================================================================
+                   9. WARRANTY DISCLAIMER
+================================================================================
+
+THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND ACCURACY.
+
+THE LICENSOR DOES NOT WARRANT THAT:
+  (a) The Software will meet all of the Licensee's requirements;
+  (b) The Software will operate uninterrupted or error-free;
+  (c) Any energy optimization recommendations (including AI-generated advice)
+      will result in specific financial savings;
+  (d) The Software will be compatible with all hardware configurations,
+      firmware versions, or Home Assistant versions.
+
+================================================================================
+                  10. LIMITATION OF LIABILITY
+================================================================================
+
+10.1 IN NO EVENT SHALL THE LICENSOR, ITS EMPLOYEES, AGENTS, OR AFFILIATES BE
+     LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY,
+     OR PUNITIVE DAMAGES, INCLUDING BUT NOT LIMITED TO:
+
+     (a) Loss of revenue or profits;
+     (b) Loss of data or equipment damage;
+     (c) Damage to electrical systems, inverters, batteries, or grid equipment;
+     (d) Incorrect energy management decisions;
+     (e) Business interruption;
+
+     ARISING OUT OF OR IN CONNECTION WITH THE USE OF THE SOFTWARE, EVEN IF
+     ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+10.2 THE LICENSOR'S TOTAL AGGREGATE LIABILITY SHALL NOT EXCEED THE AMOUNT PAID
+     BY THE LICENSEE FOR THE SOFTWARE IN THE TWELVE (12) MONTHS PRECEDING THE
+     CLAIM.
+
+10.3 THE LICENSEE ACKNOWLEDGES THAT THE SOFTWARE CONTROLS ELECTRICAL EQUIPMENT
+     AND ACCEPTS FULL RESPONSIBILITY FOR ENSURING SAFE OPERATION OF THEIR
+     ENERGY SYSTEM.
+
+================================================================================
+                       11. INDEMNIFICATION
+================================================================================
+
+The Licensee agrees to indemnify and hold harmless the Licensor from any
+claims, damages, losses, or expenses arising from the Licensee's use of the
+Software, including but not limited to claims arising from:
+
+  (a) Improper installation or configuration;
+  (b) Use with unsupported hardware or firmware;
+  (c) Modifications made to the Software;
+  (d) Failure to maintain adequate electrical safety measures.
+
+================================================================================
+                        12. TERMINATION
+================================================================================
+
+12.1 This Agreement is effective until terminated.
+
+12.2 The Licensor may terminate this Agreement immediately if:
+     (a) The Licensee breaches any term of this Agreement;
+     (b) The Licensee fails to pay applicable license fees;
+     (c) The Licensee attempts to circumvent the license validation system.
+
+12.3 Upon termination:
+     (a) The Licensee must cease all use of the Software;
+     (b) The Licensee must destroy all copies of the Software;
+     (c) The License Key will be permanently deactivated;
+     (d) No refund will be provided for the current billing period.
+
+12.4 Sections 7, 8, 9, 10, 11, and 13 shall survive termination.
+
+================================================================================
+                       13. GOVERNING LAW
+================================================================================
+
+13.1 This Agreement shall be governed by and construed in accordance with the
+     laws of the Republic of Poland, without regard to its conflict of law
+     provisions.
+
+13.2 Any disputes shall be submitted to the exclusive jurisdiction of the
+     courts in Wrocław, Poland.
+
+13.3 If any provision of this Agreement is held to be unenforceable, the
+     remaining provisions shall continue in full force and effect.
+
+================================================================================
+                         14. CONTACT
+================================================================================
+
+Licensor:
+  Smarting HOME — GregECAT
+  Website:  https://smartinghome.pl
+  Email:    kontakt@smartinghome.pl
+  GitHub:   https://github.com/GregECAT
+
+For license inquiries, support requests, or legal questions,
+please contact: kontakt@smartinghome.pl
+
+================================================================================
+
+Last updated: March 21, 2026
+License version: 1.0
+
+================================================================================

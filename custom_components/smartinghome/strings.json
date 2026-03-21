@@ -1,0 +1,120 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Smarting HOME — License Activation",
+        "description": "Enter your Smarting HOME license key.\nPurchase a license at {website}",
+        "data": {
+          "license_key": "License Key"
+        }
+      },
+      "inverter": {
+        "title": "Inverter Configuration",
+        "description": "Configure your GoodWe inverter connection.",
+        "data": {
+          "device_id": "GoodWe Device ID",
+          "modbus_enabled": "Enable Modbus RS485",
+          "modbus_port": "Modbus Serial Port",
+          "modbus_slave": "Modbus Slave Address"
+        }
+      },
+      "tariff": {
+        "title": "Tariff Configuration",
+        "description": "Select your electricity tariff.\nG13 prices: Off-peak {g13_off_peak}, Morning {g13_morning}, Afternoon {g13_afternoon}",
+        "data": {
+          "tariff": "Tariff Type",
+          "rce_enabled": "Enable RCE PSE Dynamic Pricing"
+        }
+      },
+      "ai": {
+        "title": "AI Energy Advisor (Optional)",
+        "description": "Configure AI providers for intelligent energy optimization.\nLeave empty to skip.",
+        "data": {
+          "gemini_api_key": "Google Gemini API Key",
+          "anthropic_api_key": "Anthropic Claude API Key",
+          "update_interval": "Update Interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "invalid_license": "Invalid license key. Please check your key or purchase at smartinghome.pl",
+      "cannot_connect": "Cannot connect to Smarting HOME license server. Check your internet connection.",
+      "unknown": "An unexpected error occurred. Please try again."
+    },
+    "abort": {
+      "already_configured": "This inverter is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Smarting HOME — Settings",
+        "data": {
+          "tariff": "Tariff Type",
+          "rce_enabled": "Enable RCE PSE",
+          "gemini_api_key": "Google Gemini API Key",
+          "anthropic_api_key": "Anthropic Claude API Key",
+          "update_interval": "Update Interval (seconds)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "grid_import_power": { "name": "Grid Import Power" },
+      "grid_export_power": { "name": "Grid Export Power" },
+      "hems_pv_surplus_power": { "name": "PV Surplus Power" },
+      "hems_active_loads": { "name": "Active Loads" },
+      "hems_rce_recommendation": { "name": "HEMS Recommendation" },
+      "goodwe_battery_energy_available": { "name": "Battery Energy Available" },
+      "goodwe_battery_runtime": { "name": "Battery Runtime" },
+      "goodwe_grid_frequency_average": { "name": "Grid Frequency Average" },
+      "goodwe_load_balance_difference": { "name": "Load Balance Difference" },
+      "g13_current_zone": { "name": "G13 Current Zone" },
+      "g13_buy_price": { "name": "G13 Buy Price" },
+      "rce_sell_price": { "name": "RCE Sell Price" },
+      "rce_sell_price_next_hour": { "name": "RCE Sell Price +1h" },
+      "rce_sell_price_2h": { "name": "RCE Sell Price +2h" },
+      "rce_sell_price_3h": { "name": "RCE Sell Price +3h" },
+      "rce_average_today": { "name": "RCE Average Today" },
+      "rce_min_today": { "name": "RCE Min Today" },
+      "rce_max_today": { "name": "RCE Max Today" },
+      "g13_rce_spread": { "name": "G13 vs RCE Spread" },
+      "rce_price_trend": { "name": "RCE Price Trend" },
+      "rce_good_sell": { "name": "RCE Sell Evaluation" },
+      "g13_battery_arbitrage_potential": { "name": "Battery Arbitrage Potential" },
+      "pv_forecast_power_now_total": { "name": "PV Forecast Power Now (Total)" },
+      "pv_forecast_today_total": { "name": "PV Forecast Today (Total)" },
+      "pv_forecast_remaining_today_total": { "name": "PV Forecast Remaining Today" },
+      "pv_forecast_tomorrow_total": { "name": "PV Forecast Tomorrow (Total)" },
+      "pv_forecast_accuracy_today": { "name": "PV Forecast Accuracy" },
+      "goodwe_autarky_today": { "name": "Autarky Today" },
+      "goodwe_self_consumption_today": { "name": "Self-Consumption Today" },
+      "goodwe_home_consumption_from_pv_today": { "name": "Home Consumption from PV" },
+      "goodwe_net_grid_today": { "name": "Net Grid Today" },
+      "goodwe_system_status": { "name": "System Status" },
+      "license_tier": { "name": "License Tier" }
+    },
+    "binary_sensor": {
+      "g13_is_afternoon_peak": { "name": "G13 Afternoon Peak" },
+      "g13_is_off_peak": { "name": "G13 Off-Peak" },
+      "license_valid": { "name": "License Valid" }
+    },
+    "switch": {
+      "hems_auto_mode": { "name": "HEMS Auto Mode" },
+      "hems_battery_export": { "name": "Battery Export" },
+      "hems_night_arbitrage": { "name": "Night Arbitrage" },
+      "hems_load_cascade": { "name": "Load Cascade" },
+      "hems_voltage_protection": { "name": "Voltage Protection" }
+    },
+    "select": {
+      "hems_ems_mode": { "name": "EMS Mode" },
+      "hems_strategy": { "name": "HEMS Strategy" }
+    },
+    "number": {
+      "hems_ems_power_target": { "name": "EMS Power Target" },
+      "hems_charge_current_limit": { "name": "Charge Current Limit" },
+      "hems_export_limit": { "name": "Export Limit" }
+    }
+  }
+}

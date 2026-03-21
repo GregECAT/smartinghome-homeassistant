@@ -1,0 +1,14 @@
+{
+  "domain": "smartinghome",
+  "name": "Smarting HOME — Energy Management",
+  "codeowners": ["@GregECAT"],
+  "config_flow": true,
+  "documentation": "https://smartinghome.pl/docs",
+  "issue_tracker": "https://github.com/GregECAT/smartinghome-ha-goodwe/issues",
+  "iot_class": "local_polling",
+  "integration_type": "hub",
+  "version": "1.0.0",
+  "requirements": [
+    "aiohttp>=3.9.0"
+  ]
+}

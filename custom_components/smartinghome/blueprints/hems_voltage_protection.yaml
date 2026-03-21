@@ -1,0 +1,106 @@
+blueprint:
+  name: "HEMS — Voltage Protection Cascade"
+  description: >-
+    Safety Layer: Voltage protection cascade to prevent PV grid disconnection.
+    
+    Thresholds:
+    - > 252V: Turn on boiler (3.8 kW load)
+    - > 253V: Turn on boiler + AC
+    - > 254V: Turn on boiler + AC + restore battery charging
+    - < 248V (5 min): Recovery — turn off loads, restore normal mode
+    
+    Active only during daylight hours (sunrise–sunset).
+    
+    Part of the Smarting HOME HEMS G13+RCE strategy.
+    Layer: W3 — Safety
+  domain: automation
+  author: Smarting HOME
+  source_url: https://smartinghome.pl/blueprints/hems-voltage-protection
+  input:
+    voltage_sensor:
+      name: Grid Voltage Sensor (any phase)
+      default: sensor.on_grid_l1_voltage
+      selector:
+        entity:
+          domain: sensor
+    boiler_switch:
+      name: Boiler Switch
+      default: switch.bojler_3800
+      selector:
+        entity:
+          domain: switch
+    ac_switch:
+      name: AC Switch
+      default: switch.klimatyzacja_socket_1
+      selector:
+        entity:
+          domain: switch
+    goodwe_device_id:
+      name: GoodWe Device ID
+      default: "02592f41265ac022d0c8b8aa99728b3e"
+      selector:
+        text:
+
+trigger:
+  - platform: numeric_state
+    entity_id: !input voltage_sensor
+    above: 252
+    for:
+      seconds: 30
+
+condition:
+  - condition: sun
+    after: sunrise
+    before: sunset
+
+action:
+  - choose:
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input voltage_sensor
+            above: 254
+        sequence:
+          - service: switch.turn_on
+            target:
+              entity_id: !input boiler_switch
+          - service: switch.turn_on
+            target:
+              entity_id: !input ac_switch
+          - service: goodwe.set_parameter
+            data:
+              device_id: !input goodwe_device_id
+              parameter: battery_charge_current
+              value: "18.5"
+          - service: notify.persistent_notification
+            data:
+              title: "⚡ Voltage Critical > 254V"
+              message: "All loads ON + battery charging restored"
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input voltage_sensor
+            above: 253
+        sequence:
+          - service: switch.turn_on
+            target:
+              entity_id: !input boiler_switch
+          - service: switch.turn_on
+            target:
+              entity_id: !input ac_switch
+          - service: notify.persistent_notification
+            data:
+              title: "⚡ Voltage High > 253V"
+              message: "Boiler + AC activated"
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input voltage_sensor
+            above: 252
+        sequence:
+          - service: switch.turn_on
+            target:
+              entity_id: !input boiler_switch
+          - service: notify.persistent_notification
+            data:
+              title: "⚡ Voltage Warning > 252V"
+              message: "Boiler activated to absorb surplus"
+
+mode: single

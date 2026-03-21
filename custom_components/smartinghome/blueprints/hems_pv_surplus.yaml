@@ -1,0 +1,100 @@
+blueprint:
+  name: "HEMS — PV Surplus Load Cascade"
+  description: >-
+    Automatically activate loads based on PV surplus power.
+    
+    Cascade:
+    - Surplus > 2 kW + SOC > 80%: Boiler ON
+    - Surplus > 3 kW + SOC > 85%: Boiler + AC ON
+    - Surplus > 4 kW + SOC > 90%: Boiler + AC + Socket 2 ON
+    - Surplus < 500 W: All loads OFF
+    - SOC < 50%: Emergency — all OFF
+    
+    Part of the Smarting HOME HEMS G13+RCE strategy.
+    Layer: W3 — Safety + Optimization
+  domain: automation
+  author: Smarting HOME
+  source_url: https://smartinghome.pl/blueprints/hems-pv-surplus
+  input:
+    surplus_sensor:
+      name: PV Surplus Power Sensor
+      default: sensor.smartinghome_pv_surplus_power
+      selector:
+        entity:
+          domain: sensor
+    soc_sensor:
+      name: Battery SOC Sensor
+      default: sensor.battery_state_of_charge
+      selector:
+        entity:
+          domain: sensor
+    boiler_switch:
+      name: Boiler Switch
+      default: switch.bojler_3800
+      selector:
+        entity:
+          domain: switch
+    ac_switch:
+      name: AC Switch
+      default: switch.klimatyzacja_socket_1
+      selector:
+        entity:
+          domain: switch
+    socket2_switch:
+      name: Socket 2 Switch
+      default: switch.drugie_gniazdko
+      selector:
+        entity:
+          domain: switch
+
+trigger:
+  - platform: numeric_state
+    entity_id: !input surplus_sensor
+    above: 2000
+    for:
+      minutes: 2
+
+condition:
+  - condition: numeric_state
+    entity_id: !input soc_sensor
+    above: 80
+
+action:
+  - choose:
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input surplus_sensor
+            above: 4000
+          - condition: numeric_state
+            entity_id: !input soc_sensor
+            above: 90
+        sequence:
+          - service: switch.turn_on
+            target:
+              entity_id:
+                - !input boiler_switch
+                - !input ac_switch
+                - !input socket2_switch
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input surplus_sensor
+            above: 3000
+          - condition: numeric_state
+            entity_id: !input soc_sensor
+            above: 85
+        sequence:
+          - service: switch.turn_on
+            target:
+              entity_id:
+                - !input boiler_switch
+                - !input ac_switch
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input surplus_sensor
+            above: 2000
+        sequence:
+          - service: switch.turn_on
+            target:
+              entity_id: !input boiler_switch
+
+mode: restart

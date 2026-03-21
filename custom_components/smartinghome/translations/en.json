@@ -1,0 +1,62 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Smarting HOME — License Activation",
+        "description": "Enter your Smarting HOME license key.\nPurchase a license at {website}",
+        "data": {
+          "license_key": "License Key"
+        }
+      },
+      "inverter": {
+        "title": "Inverter Configuration",
+        "description": "Configure your GoodWe inverter connection.",
+        "data": {
+          "device_id": "GoodWe Device ID",
+          "modbus_enabled": "Enable Modbus RS485",
+          "modbus_port": "Modbus Serial Port",
+          "modbus_slave": "Modbus Slave Address"
+        }
+      },
+      "tariff": {
+        "title": "Tariff Configuration",
+        "description": "Select your electricity tariff.\nG13 prices: Off-peak {g13_off_peak}, Morning {g13_morning}, Afternoon {g13_afternoon}",
+        "data": {
+          "tariff": "Tariff Type",
+          "rce_enabled": "Enable RCE PSE Dynamic Pricing"
+        }
+      },
+      "ai": {
+        "title": "AI Energy Advisor (Optional)",
+        "description": "Configure AI providers for intelligent energy optimization.\nLeave empty to skip.",
+        "data": {
+          "gemini_api_key": "Google Gemini API Key",
+          "anthropic_api_key": "Anthropic Claude API Key",
+          "update_interval": "Update Interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "invalid_license": "Invalid license key. Please check your key or purchase at smartinghome.pl",
+      "cannot_connect": "Cannot connect to Smarting HOME license server. Check your internet connection.",
+      "unknown": "An unexpected error occurred. Please try again."
+    },
+    "abort": {
+      "already_configured": "This inverter is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Smarting HOME — Settings",
+        "data": {
+          "tariff": "Tariff Type",
+          "rce_enabled": "Enable RCE PSE",
+          "gemini_api_key": "Google Gemini API Key",
+          "anthropic_api_key": "Anthropic Claude API Key",
+          "update_interval": "Update Interval (seconds)"
+        }
+      }
+    }
+  }
+}

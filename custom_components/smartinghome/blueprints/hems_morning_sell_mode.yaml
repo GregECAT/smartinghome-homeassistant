@@ -1,0 +1,59 @@
+blueprint:
+  name: "HEMS — Morning Sell Mode (07:00)"
+  description: >-
+    G13 Layer 1: At 07:00 on weekdays, switch to sell mode.
+    Blocks battery charging and sets maximum grid export.
+    
+    Part of the Smarting HOME HEMS G13+RCE strategy.
+    Layer: W1 — G13 Schedule
+  domain: automation
+  author: Smarting HOME
+  source_url: https://smartinghome.pl/blueprints/hems-morning-sell
+  input:
+    goodwe_device_id:
+      name: GoodWe Device ID
+      description: "Your GoodWe inverter device ID"
+      default: "02592f41265ac022d0c8b8aa99728b3e"
+      selector:
+        text:
+    export_limit:
+      name: Export Limit (W)
+      description: "Maximum export power in Watts"
+      default: 16000
+      selector:
+        number:
+          min: 0
+          max: 16000
+          step: 1000
+          unit_of_measurement: W
+
+trigger:
+  - platform: time
+    at: "07:00:00"
+
+condition:
+  - condition: time
+    weekday:
+      - mon
+      - tue
+      - wed
+      - thu
+      - fri
+
+action:
+  - service: goodwe.set_parameter
+    data:
+      device_id: !input goodwe_device_id
+      parameter: battery_charge_current
+      value: "0"
+  - service: goodwe.set_parameter
+    data:
+      device_id: !input goodwe_device_id
+      parameter: grid_export_limit
+      value: "{{ !input export_limit }}"
+  - service: notify.persistent_notification
+    data:
+      title: "⚡ HEMS — Sell Mode"
+      message: "07:00 Morning sell mode activated. Battery charging blocked, export enabled."
+
+mode: single

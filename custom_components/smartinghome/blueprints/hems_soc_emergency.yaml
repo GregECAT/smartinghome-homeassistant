@@ -1,0 +1,52 @@
+blueprint:
+  name: "HEMS — SOC Emergency Protection"
+  description: >-
+    Safety Layer 3: Emergency battery protection.
+    When SOC drops below 20%, immediately enable charging.
+    
+    Part of the Smarting HOME HEMS G13+RCE strategy.
+    Layer: W3 — SOC Safety
+  domain: automation
+  author: Smarting HOME
+  source_url: https://smartinghome.pl/blueprints/hems-soc-emergency
+  input:
+    goodwe_device_id:
+      name: GoodWe Device ID
+      default: "02592f41265ac022d0c8b8aa99728b3e"
+      selector:
+        text:
+    soc_sensor:
+      name: Battery SOC Sensor
+      default: sensor.battery_state_of_charge
+      selector:
+        entity:
+          domain: sensor
+    emergency_threshold:
+      name: Emergency SOC Threshold (%)
+      default: 20
+      selector:
+        number:
+          min: 5
+          max: 30
+          step: 5
+          unit_of_measurement: "%"
+
+trigger:
+  - platform: numeric_state
+    entity_id: !input soc_sensor
+    below: !input emergency_threshold
+
+action:
+  - service: goodwe.set_parameter
+    data:
+      device_id: !input goodwe_device_id
+      parameter: battery_charge_current
+      value: "18.5"
+  - service: notify.persistent_notification
+    data:
+      title: "⚠️ HEMS — SOC Emergency"
+      message: >-
+        Battery SOC dropped below {{ !input emergency_threshold }}%!
+        Emergency charging enabled. Current SOC: {{ states(!input soc_sensor) }}%
+
+mode: single

@@ -1,0 +1,147 @@
+# Smarting HOME — HEMS Control Dashboard
+title: "🤖 HEMS Control"
+icon: "mdi:brain"
+type: sections
+cards:
+
+  # ── System Status ──────────────────────────────────
+  - type: markdown
+    content: >-
+      # 🤖 Smarting HOME — HEMS Control
+
+      **System Status:** {{ states('sensor.smartinghome_system_status') }}
+
+      **License:** {{ states('sensor.smartinghome_license_tier') | upper }}
+
+  # ── Current Mode & Controls ───────────────────────
+  - type: entities
+    title: "⚙️ HEMS Controls"
+    show_header_toggle: false
+    entities:
+      - entity: select.smartinghome_ems_mode
+        name: "EMS Mode"
+      - entity: select.smartinghome_hems_strategy
+        name: "Strategy"
+      - entity: switch.smartinghome_hems_auto_mode
+        name: "Auto Mode"
+      - entity: switch.smartinghome_battery_export
+        name: "Battery Export"
+      - entity: switch.smartinghome_night_arbitrage
+        name: "Night Arbitrage"
+      - entity: switch.smartinghome_load_cascade
+        name: "Load Cascade"
+      - entity: switch.smartinghome_voltage_protection
+        name: "Voltage Protection"
+      - type: divider
+      - entity: number.smartinghome_ems_power_target
+        name: "EMS Power Target"
+      - entity: number.smartinghome_charge_current_limit
+        name: "Charge Current Limit"
+      - entity: number.smartinghome_export_limit
+        name: "Export Limit"
+
+  # ── G13 Tariff ────────────────────────────────────
+  - type: entities
+    title: "⏰ G13 Tariff"
+    show_header_toggle: false
+    entities:
+      - entity: sensor.smartinghome_g13_current_zone
+        name: "Current Zone"
+      - entity: sensor.smartinghome_g13_buy_price
+        name: "Buy Price"
+      - entity: binary_sensor.smartinghome_g13_afternoon_peak
+        name: "Afternoon Peak Active"
+      - entity: binary_sensor.smartinghome_g13_off_peak
+        name: "Off-Peak Active"
+
+  # ── RCE Dynamic Pricing ──────────────────────────
+  - type: entities
+    title: "📈 RCE Dynamic Pricing"
+    show_header_toggle: false
+    entities:
+      - entity: sensor.smartinghome_rce_sell_price
+        name: "Sell Price Now"
+      - entity: sensor.smartinghome_rce_sell_price_next_hour
+        name: "Sell Price +1h"
+      - entity: sensor.smartinghome_rce_sell_price_2h
+        name: "Sell Price +2h"
+      - entity: sensor.smartinghome_rce_sell_price_3h
+        name: "Sell Price +3h"
+      - type: divider
+      - entity: sensor.smartinghome_rce_average_today
+        name: "Average Today"
+      - entity: sensor.smartinghome_rce_min_today
+        name: "Min Today"
+      - entity: sensor.smartinghome_rce_max_today
+        name: "Max Today"
+      - type: divider
+      - entity: sensor.smartinghome_g13_rce_spread
+        name: "G13 vs RCE Spread"
+      - entity: sensor.smartinghome_rce_price_trend
+        name: "Price Trend"
+      - entity: sensor.smartinghome_rce_sell_evaluation
+        name: "Sell Evaluation"
+
+  # ── HEMS Recommendation ──────────────────────────
+  - type: markdown
+    content: >-
+      ## 💡 HEMS Recommendation
+
+      {{ states('sensor.smartinghome_hems_recommendation') }}
+
+  # ── Battery & Forecast ───────────────────────────
+  - type: entities
+    title: "🔋 Battery & Forecast"
+    show_header_toggle: false
+    entities:
+      - entity: sensor.smartinghome_battery_energy_available
+        name: "Energy Available"
+      - entity: sensor.smartinghome_battery_runtime
+        name: "Runtime"
+      - type: divider
+      - entity: sensor.smartinghome_pv_forecast_today_total
+        name: "PV Forecast Today"
+      - entity: sensor.smartinghome_pv_forecast_remaining_today
+        name: "PV Remaining Today"
+      - entity: sensor.smartinghome_pv_forecast_tomorrow_total
+        name: "PV Forecast Tomorrow"
+      - entity: sensor.smartinghome_pv_forecast_accuracy
+        name: "Forecast Accuracy"
+
+  # ── Arbitrage ────────────────────────────────────
+  - type: entities
+    title: "💰 Arbitrage"
+    show_header_toggle: false
+    entities:
+      - entity: sensor.smartinghome_battery_arbitrage_potential
+        name: "Battery Arbitrage Potential"
+
+  # ── Quick Actions ────────────────────────────────
+  - type: horizontal-stack
+    cards:
+      - type: button
+        name: "Force Charge"
+        icon: "mdi:battery-charging"
+        tap_action:
+          action: call-service
+          service: smartinghome.force_charge
+      - type: button
+        name: "Force Discharge"
+        icon: "mdi:battery-arrow-down"
+        tap_action:
+          action: call-service
+          service: smartinghome.force_discharge
+      - type: button
+        name: "Ask AI"
+        icon: "mdi:robot"
+        tap_action:
+          action: call-service
+          service: smartinghome.ask_ai_advisor
+          service_data:
+            question: "What should I optimize right now?"
+      - type: button
+        name: "Daily Report"
+        icon: "mdi:file-chart"
+        tap_action:
+          action: call-service
+          service: smartinghome.generate_report

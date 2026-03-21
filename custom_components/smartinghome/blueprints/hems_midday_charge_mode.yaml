@@ -1,0 +1,44 @@
+blueprint:
+  name: "HEMS — Midday Charge Mode (13:00)"
+  description: >-
+    G13 Layer 1: At 13:00 on weekdays, switch to charge mode.
+    Enables battery charging from PV (off-peak G13 zone starts).
+    
+    Part of the Smarting HOME HEMS G13+RCE strategy.
+    Layer: W1 — G13 Schedule
+  domain: automation
+  author: Smarting HOME
+  source_url: https://smartinghome.pl/blueprints/hems-midday-charge
+  input:
+    goodwe_device_id:
+      name: GoodWe Device ID
+      description: "Your GoodWe inverter device ID"
+      default: "02592f41265ac022d0c8b8aa99728b3e"
+      selector:
+        text:
+
+trigger:
+  - platform: time
+    at: "13:00:00"
+
+condition:
+  - condition: time
+    weekday:
+      - mon
+      - tue
+      - wed
+      - thu
+      - fri
+
+action:
+  - service: goodwe.set_parameter
+    data:
+      device_id: !input goodwe_device_id
+      parameter: battery_charge_current
+      value: "18.5"
+  - service: notify.persistent_notification
+    data:
+      title: "🔋 HEMS — Charge Mode"
+      message: "13:00 Midday charge mode activated. Battery charging from PV enabled."
+
+mode: single
