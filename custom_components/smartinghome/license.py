@@ -17,6 +17,8 @@ from .const import (
     DOMAIN,
     LICENSE_CHECK_INTERVAL,
     LICENSE_GRACE_PERIOD,
+    LICENSE_MODE_FREE,
+    LICENSE_MODE_PRO,
     LicenseTier,
     ATTR_LICENSE_VALID,
     ATTR_LICENSE_TIER,
@@ -34,19 +36,35 @@ class LicenseManager:
         self,
         hass: HomeAssistant,
         api: SmartingHomeAPI,
+        license_mode: str = LICENSE_MODE_FREE,
     ) -> None:
         """Initialize the license manager."""
         self.hass = hass
         self._api = api
+        self._license_mode = license_mode
         self._license_info: LicenseInfo | None = None
         self._last_successful_check: float = 0.0
         self._last_check_attempt: float = 0.0
         self._cached_valid: bool = False
-        self._cached_tier: LicenseTier = LicenseTier.DEMO
+        self._cached_tier: LicenseTier = (
+            LicenseTier.FREE if license_mode == LICENSE_MODE_FREE
+            else LicenseTier.DEMO
+        )
+
+    @property
+    def is_free_mode(self) -> bool:
+        """Return True if running in FREE mode (no license needed)."""
+        return self._license_mode == LICENSE_MODE_FREE
 
     @property
     def is_valid(self) -> bool:
-        """Return True if license is currently valid (including grace period)."""
+        """Return True if license is currently valid (including grace period).
+
+        FREE mode is always valid.
+        """
+        if self.is_free_mode:
+            return True
+
         if self._cached_valid:
             return True
 
@@ -66,6 +84,9 @@ class LicenseManager:
     @property
     def tier(self) -> LicenseTier:
         """Return current license tier."""
+        if self.is_free_mode:
+            return LicenseTier.FREE
+
         if self.is_valid:
             return self._cached_tier
         return LicenseTier.DEMO
@@ -88,6 +109,9 @@ class LicenseManager:
     @property
     def grace_period_remaining(self) -> float:
         """Return remaining grace period in seconds."""
+        if self.is_free_mode:
+            return float("inf")
+
         if self._last_successful_check <= 0:
             return 0.0
         elapsed = time.time() - self._last_successful_check
@@ -97,6 +121,9 @@ class LicenseManager:
     @property
     def needs_recheck(self) -> bool:
         """Return True if license needs re-validation."""
+        if self.is_free_mode:
+            return False  # FREE mode never needs server checks
+
         if self._last_check_attempt <= 0:
             return True
         elapsed = time.time() - self._last_check_attempt
@@ -112,17 +139,38 @@ class LicenseManager:
                 self._license_info.expires if self._license_info else None
             ),
             ATTR_LICENSE_LAST_CHECK: self._last_successful_check,
+            "license_mode": self._license_mode,
             "grace_period_remaining_hours": round(
                 self.grace_period_remaining / 3600, 1
-            ),
+            ) if not self.is_free_mode else None,
         }
 
     async def validate(self) -> LicenseInfo:
         """Perform initial license validation.
 
-        Returns LicenseInfo.
-        Raises AuthenticationError for invalid keys.
+        FREE mode returns a synthetic valid LicenseInfo immediately.
+        PRO mode validates against the license server.
         """
+        if self.is_free_mode:
+            info = LicenseInfo(
+                valid=True,
+                tier=LicenseTier.FREE,
+                expires=None,
+                email=None,
+                max_installations=1,
+                features=[
+                    "sensors", "binary_sensors", "g13_tariff",
+                    "rce_read", "hems_auto_mode",
+                ],
+                message="FREE mode — basic energy monitoring active.",
+            )
+            self._license_info = info
+            self._cached_valid = True
+            self._cached_tier = LicenseTier.FREE
+            _LOGGER.info("Running in FREE mode — no license required")
+            return info
+
+        # PRO/ENTERPRISE — validate with server
         try:
             info = await self._api.validate_license()
             self._license_info = info
@@ -173,7 +221,11 @@ class LicenseManager:
         """Perform periodic license re-validation.
 
         Called by the coordinator on schedule. Handles errors gracefully.
+        FREE mode skips all server checks.
         """
+        if self.is_free_mode:
+            return  # No server checks for FREE mode
+
         if not self.needs_recheck:
             return
 

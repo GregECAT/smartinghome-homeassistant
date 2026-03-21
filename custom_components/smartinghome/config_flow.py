@@ -16,6 +16,7 @@ from .api import SmartingHomeAPI, AuthenticationError, ConnectionError as APICon
 from .const import (
     DOMAIN,
     CONF_LICENSE_KEY,
+    CONF_LICENSE_MODE,
     CONF_DEVICE_ID,
     CONF_TARIFF,
     CONF_RCE_ENABLED,
@@ -30,6 +31,8 @@ from .const import (
     DEFAULT_MODBUS_PORT,
     DEFAULT_MODBUS_SLAVE,
     DEFAULT_UPDATE_INTERVAL,
+    LICENSE_MODE_FREE,
+    LICENSE_MODE_PRO,
     TariffType,
     HEMSStrategy,
     G13_PRICES,
@@ -45,12 +48,13 @@ class SmartingHomeConfigFlow(
     """Handle a config flow for Smarting HOME."""
 
     VERSION = 1
-    MINOR_VERSION = 0
+    MINOR_VERSION = 1
 
     def __init__(self) -> None:
         """Initialize the config flow."""
         self._license_key: str = ""
         self._license_tier: str = ""
+        self._license_mode: str = ""
         self._device_id: str = DEFAULT_GOODWE_DEVICE_ID
         self._tariff: str = TariffType.G13
         self._data: dict[str, Any] = {}
@@ -58,7 +62,41 @@ class SmartingHomeConfigFlow(
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Step 1: License key entry."""
+        """Step 0: Choose license mode — FREE or PRO."""
+        if user_input is not None:
+            self._license_mode = user_input.get(CONF_LICENSE_MODE, LICENSE_MODE_FREE)
+            self._data[CONF_LICENSE_MODE] = self._license_mode
+
+            if self._license_mode == LICENSE_MODE_PRO:
+                return await self.async_step_license()
+
+            # FREE mode — skip license, go to inverter
+            self._data[CONF_LICENSE_KEY] = ""
+            return await self.async_step_inverter()
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_LICENSE_MODE, default=LICENSE_MODE_FREE
+                    ): vol.In(
+                        {
+                            LICENSE_MODE_FREE: "🆓 FREE — Basic energy monitoring (free forever)",
+                            LICENSE_MODE_PRO: "⭐ PRO — Full HEMS + AI Advisor (license required)",
+                        }
+                    ),
+                }
+            ),
+            description_placeholders={
+                "website": "https://smartinghome.pl",
+            },
+        )
+
+    async def async_step_license(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Step 1: License key entry (PRO mode only)."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -84,7 +122,7 @@ class SmartingHomeConfigFlow(
                 errors["base"] = "unknown"
 
         return self.async_show_form(
-            step_id="user",
+            step_id="license",
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_LICENSE_KEY): str,
@@ -157,7 +195,26 @@ class SmartingHomeConfigFlow(
             self._data[CONF_RCE_ENABLED] = user_input.get(
                 CONF_RCE_ENABLED, True
             )
-            return await self.async_step_ai()
+
+            # If PRO mode, show AI step; if FREE, skip AI
+            if self._license_mode == LICENSE_MODE_PRO:
+                return await self.async_step_ai()
+
+            # FREE mode — skip AI, set defaults, create entry
+            self._data[CONF_AI_ENABLED] = False
+            self._data[CONF_GEMINI_API_KEY] = ""
+            self._data[CONF_ANTHROPIC_API_KEY] = ""
+            self._data[CONF_UPDATE_INTERVAL] = DEFAULT_UPDATE_INTERVAL
+
+            await self.async_set_unique_id(
+                f"smartinghome_{self._data[CONF_DEVICE_ID][:8]}"
+            )
+            self._abort_if_unique_id_configured()
+
+            return self.async_create_entry(
+                title="Smarting HOME — Energy Management",
+                data=self._data,
+            )
 
         return self.async_show_form(
             step_id="tariff",
@@ -188,7 +245,7 @@ class SmartingHomeConfigFlow(
     async def async_step_ai(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Step 4: AI configuration (optional)."""
+        """Step 4: AI configuration (PRO only, optional)."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -259,41 +316,45 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(title="", data=user_input)
 
         current = self._config_entry.data
+        is_pro = current.get(CONF_LICENSE_MODE, LICENSE_MODE_FREE) == LICENSE_MODE_PRO
+
+        schema_dict = {
+            vol.Optional(
+                CONF_TARIFF,
+                default=current.get(CONF_TARIFF, TariffType.G13),
+            ): vol.In(
+                {
+                    TariffType.G11: "G11 — Flat rate",
+                    TariffType.G12: "G12 — Two-zone",
+                    TariffType.G13: "G13 — Three-zone",
+                }
+            ),
+            vol.Optional(
+                CONF_RCE_ENABLED,
+                default=current.get(CONF_RCE_ENABLED, True),
+            ): bool,
+            vol.Optional(
+                CONF_UPDATE_INTERVAL,
+                default=current.get(
+                    CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
+                ),
+            ): vol.All(
+                vol.Coerce(int), vol.Range(min=10, max=300)
+            ),
+        }
+
+        # Only show AI fields for PRO users
+        if is_pro:
+            schema_dict[vol.Optional(
+                CONF_GEMINI_API_KEY,
+                default=current.get(CONF_GEMINI_API_KEY, ""),
+            )] = str
+            schema_dict[vol.Optional(
+                CONF_ANTHROPIC_API_KEY,
+                default=current.get(CONF_ANTHROPIC_API_KEY, ""),
+            )] = str
 
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(
-                        CONF_TARIFF,
-                        default=current.get(CONF_TARIFF, TariffType.G13),
-                    ): vol.In(
-                        {
-                            TariffType.G11: "G11 — Flat rate",
-                            TariffType.G12: "G12 — Two-zone",
-                            TariffType.G13: "G13 — Three-zone",
-                        }
-                    ),
-                    vol.Optional(
-                        CONF_RCE_ENABLED,
-                        default=current.get(CONF_RCE_ENABLED, True),
-                    ): bool,
-                    vol.Optional(
-                        CONF_GEMINI_API_KEY,
-                        default=current.get(CONF_GEMINI_API_KEY, ""),
-                    ): str,
-                    vol.Optional(
-                        CONF_ANTHROPIC_API_KEY,
-                        default=current.get(CONF_ANTHROPIC_API_KEY, ""),
-                    ): str,
-                    vol.Optional(
-                        CONF_UPDATE_INTERVAL,
-                        default=current.get(
-                            CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
-                        ),
-                    ): vol.All(
-                        vol.Coerce(int), vol.Range(min=10, max=300)
-                    ),
-                }
-            ),
+            data_schema=vol.Schema(schema_dict),
         )

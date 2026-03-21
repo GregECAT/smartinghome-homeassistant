@@ -6,6 +6,7 @@ Licensed under Smarting HOME Commercial License.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
@@ -18,6 +19,7 @@ from .const import (
     DOMAIN,
     PLATFORMS,
     CONF_LICENSE_KEY,
+    CONF_LICENSE_MODE,
     CONF_DEVICE_ID,
     CONF_TARIFF,
     CONF_RCE_ENABLED,
@@ -26,6 +28,7 @@ from .const import (
     CONF_AI_ENABLED,
     CONF_UPDATE_INTERVAL,
     DEFAULT_UPDATE_INTERVAL,
+    LICENSE_MODE_FREE,
     SERVICE_SET_MODE,
     SERVICE_FORCE_CHARGE,
     SERVICE_FORCE_DISCHARGE,
@@ -48,7 +51,7 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: SmartingHomeConfigEntry
 ) -> bool:
     """Set up Smarting HOME from a config entry."""
-    _LOGGER.info("Setting up Smarting HOME Energy Management v1.0.0")
+    _LOGGER.info("Setting up Smarting HOME Energy Management v1.1.0")
 
     hass.data.setdefault(DOMAIN, {})
 
@@ -58,7 +61,8 @@ async def async_setup_entry(
     api = SmartingHomeAPI(session, license_key)
 
     # Initialize license manager
-    license_mgr = LicenseManager(hass, api)
+    license_mode = entry.data.get(CONF_LICENSE_MODE, LICENSE_MODE_FREE)
+    license_mgr = LicenseManager(hass, api, license_mode=license_mode)
 
     # Validate license on startup
     try:
@@ -106,6 +110,28 @@ async def async_setup_entry(
     # Register services
     await async_setup_services(hass, coordinator, license_mgr)
 
+    # Register custom panel in sidebar
+    panel_path = os.path.join(
+        os.path.dirname(__file__), "frontend", "panel.js"
+    )
+    hass.http.register_static_path(
+        f"/{DOMAIN}/panel.js", panel_path, cache_headers=False
+    )
+    hass.components.frontend.async_register_built_in_panel(
+        component_name="custom",
+        sidebar_title="Smarting HOME",
+        sidebar_icon="mdi:solar-power-variant",
+        frontend_url_path=DOMAIN,
+        require_admin=False,
+        config={
+            "_panel_custom": {
+                "name": "smartinghome-panel",
+                "module_url": f"/{DOMAIN}/panel.js",
+            }
+        },
+    )
+    _LOGGER.info("Registered Smarting HOME sidebar panel")
+
     # Listen for options updates
     entry.async_on_unload(
         entry.add_update_listener(_async_update_listener)
@@ -128,6 +154,8 @@ async def async_unload_entry(
     if unload_ok:
         await async_unload_services(hass)
         hass.data[DOMAIN].pop(entry.entry_id)
+        # Remove sidebar panel
+        hass.components.frontend.async_remove_panel(DOMAIN)
 
     return unload_ok
 
