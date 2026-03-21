@@ -41,6 +41,25 @@
           "anthropic_api_key": "Klucz API Anthropic Claude",
           "update_interval": "Interwał aktualizacji (sekundy)"
         }
+      },
+      "sensors": {
+        "title": "Mapowanie sensorów",
+        "description": "Przypisz encje sensorów falownika. Domyślne ustawienia działają z falownikami GoodWe.",
+        "data": {
+          "pv_power": "☀️ Moc PV (W)",
+          "load_power": "🏠 Zużycie domu (W)",
+          "grid_power": "🔌 Moc sieci (W)",
+          "battery_power": "🔋 Moc baterii (W)",
+          "battery_soc": "🔋 Poziom naładowania (%)",
+          "pv_today": "☀️ Produkcja PV dziś (kWh)",
+          "grid_import_today": "↓ Import z sieci dziś (kWh)",
+          "grid_export_today": "↑ Eksport do sieci dziś (kWh)",
+          "battery_charge_today": "🔋 Ładowanie baterii dziś (kWh)",
+          "battery_discharge_today": "⚡ Rozładowanie baterii dziś (kWh)",
+          "voltage_l1": "⚡ Napięcie L1 (V)",
+          "voltage_l2": "⚡ Napięcie L2 (V)",
+          "voltage_l3": "⚡ Napięcie L3 (V)"
+        }
       }
     },
     "error": {
@@ -72,6 +91,25 @@
           "gemini_api_key": "Klucz API Google Gemini",
           "anthropic_api_key": "Klucz API Anthropic Claude",
           "update_interval": "Interwał aktualizacji (sekundy)"
+        }
+      },
+      "sensors": {
+        "title": "Mapowanie sensorów",
+        "description": "Przypisz encje sensorów falownika.",
+        "data": {
+          "pv_power": "☀️ Moc PV (W)",
+          "load_power": "🏠 Zużycie domu (W)",
+          "grid_power": "🔌 Moc sieci (W)",
+          "battery_power": "🔋 Moc baterii (W)",
+          "battery_soc": "🔋 Poziom naładowania (%)",
+          "pv_today": "☀️ Produkcja PV dziś (kWh)",
+          "grid_import_today": "↓ Import z sieci dziś (kWh)",
+          "grid_export_today": "↑ Eksport do sieci dziś (kWh)",
+          "battery_charge_today": "🔋 Ładowanie baterii dziś (kWh)",
+          "battery_discharge_today": "⚡ Rozładowanie baterii dziś (kWh)",
+          "voltage_l1": "⚡ Napięcie L1 (V)",
+          "voltage_l2": "⚡ Napięcie L2 (V)",
+          "voltage_l3": "⚡ Napięcie L3 (V)"
         }
       }
     }

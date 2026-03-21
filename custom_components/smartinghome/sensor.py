@@ -27,6 +27,8 @@ from .const import (
     MANUFACTURER,
     INTEGRATION_NAME,
     VERSION,
+    CONF_SENSOR_MAP,
+    DEFAULT_SENSOR_MAP,
     ICON_PV,
     ICON_BATTERY,
     ICON_GRID,
@@ -304,7 +306,7 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: SmartingHomeCoordinator = data["coordinator"]
 
-    entities: list[SmartingHomeSensor] = []
+    entities: list[SensorEntity] = []
 
     for description in HEMS_SENSOR_DESCRIPTIONS:
         entities.append(
@@ -315,8 +317,11 @@ async def async_setup_entry(
             )
         )
 
+    # Add sensor map diagnostic entity
+    entities.append(SmartingHomeSensorMapSensor(entry=entry))
+
     async_add_entities(entities)
-    _LOGGER.info("Added %d Smarting HOME sensors", len(entities))
+    _LOGGER.info("Added %d Smarting HOME sensors (incl. sensor map)", len(entities))
 
 
 class SmartingHomeSensor(
@@ -364,3 +369,49 @@ class SmartingHomeSensor(
             and self.coordinator.data is not None
             and self.entity_description.key in self.coordinator.data
         )
+
+
+class SmartingHomeSensorMapSensor(SensorEntity):
+    """Diagnostic sensor exposing the sensor mapping as attributes.
+
+    Panel.js reads hass.states["sensor.smartinghome_sensor_map"].attributes
+    to know which entity IDs to display for PV, grid, battery, etc.
+    """
+
+    _attr_has_entity_name = True
+    _attr_entity_category = "diagnostic"
+    _attr_icon = "mdi:map-legend"
+
+    def __init__(self, entry: ConfigEntry) -> None:
+        """Initialize sensor map entity."""
+        self._entry = entry
+        self._attr_unique_id = f"{DOMAIN}_{entry.entry_id}_sensor_map"
+        self._attr_name = "Sensor Map"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry.entry_id)},
+            name=INTEGRATION_NAME,
+            manufacturer=MANUFACTURER,
+            model="HEMS — Home Energy Management System",
+            sw_version=VERSION,
+            configuration_url="https://smartinghome.pl",
+        )
+
+    @property
+    def native_value(self) -> str:
+        """Return 'configured' if user has custom map, else 'defaults'."""
+        sensor_map = self._entry.data.get(CONF_SENSOR_MAP)
+        return "configured" if sensor_map else "defaults"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the sensor mapping as attributes."""
+        return self._entry.data.get(CONF_SENSOR_MAP, DEFAULT_SENSOR_MAP)
+
+    @property
+    def available(self) -> bool:
+        """Always available."""
+        return True

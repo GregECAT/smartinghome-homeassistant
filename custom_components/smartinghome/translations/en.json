@@ -2,76 +2,114 @@
   "config": {
     "step": {
       "user": {
-        "title": "Smarting HOME — Choose License",
-        "description": "Welcome to Smarting HOME Energy Management!\n\nChoose your license mode:\n• **FREE** — All sensors, G13 tariff, RCE prices (basic monitoring)\n• **PRO** — Full HEMS engine, AI Advisor, all blueprints & dashboards\n\nPurchase PRO at {website}",
+        "title": "Smarting HOME — Wybierz licencję",
+        "description": "Witaj w Smarting HOME Energy Management!\n\nWybierz tryb licencji:\n• **FREE** — Wszystkie sensory, taryfa G13, ceny RCE (podstawowy monitoring)\n• **PRO** — Pełny silnik HEMS, Doradca AI, wszystkie blueprinty i dashboardy\n\nKup PRO na {website}",
         "data": {
-          "license_mode": "License Mode"
+          "license_mode": "Tryb licencji"
         }
       },
       "license": {
-        "title": "Smarting HOME — License Activation",
-        "description": "Enter your Smarting HOME PRO license key.\nPurchase a license at {website}",
+        "title": "Smarting HOME — Aktywacja licencji",
+        "description": "Wprowadź klucz licencyjny Smarting HOME PRO.\nKup licencję na {website}",
         "data": {
-          "license_key": "License Key"
+          "license_key": "Klucz licencyjny"
         }
       },
       "inverter": {
-        "title": "Inverter Configuration",
-        "description": "Configure your GoodWe inverter connection.",
+        "title": "Konfiguracja falownika",
+        "description": "Skonfiguruj połączenie z falownikiem GoodWe.",
         "data": {
-          "device_id": "GoodWe Device ID",
-          "modbus_enabled": "Enable Modbus RS485",
-          "modbus_port": "Modbus Serial Port",
-          "modbus_slave": "Modbus Slave Address"
+          "device_id": "ID urządzenia GoodWe",
+          "modbus_enabled": "Włącz Modbus RS485",
+          "modbus_port": "Port szeregowy Modbus",
+          "modbus_slave": "Adres slave Modbus"
         }
       },
       "tariff": {
-        "title": "Tariff Configuration",
-        "description": "Select your electricity tariff.\nG13 prices: Off-peak {g13_off_peak}, Morning {g13_morning}, Afternoon {g13_afternoon}",
+        "title": "Konfiguracja taryfy",
+        "description": "Wybierz taryfę energetyczną.\nCeny G13: Pozaszczyt {g13_off_peak}, Poranny szczyt {g13_morning}, Popołudniowy szczyt {g13_afternoon}",
         "data": {
-          "tariff": "Tariff Type",
-          "rce_enabled": "Enable RCE PSE Dynamic Pricing"
+          "tariff": "Typ taryfy",
+          "rce_enabled": "Włącz ceny dynamiczne RCE PSE"
         }
       },
       "ai": {
-        "title": "AI Energy Advisor (Optional)",
-        "description": "Configure AI providers for intelligent energy optimization.\nLeave empty to skip.",
+        "title": "Doradca AI (Opcjonalnie)",
+        "description": "Skonfiguruj dostawców AI do inteligentnej optymalizacji energii.\nPozostaw puste, aby pominąć.",
         "data": {
-          "gemini_api_key": "Google Gemini API Key",
-          "anthropic_api_key": "Anthropic Claude API Key",
-          "update_interval": "Update Interval (seconds)"
+          "gemini_api_key": "Klucz API Google Gemini",
+          "anthropic_api_key": "Klucz API Anthropic Claude",
+          "update_interval": "Interwał aktualizacji (sekundy)"
+        }
+      },
+      "sensors": {
+        "title": "Mapowanie sensorów",
+        "description": "Przypisz encje sensorów falownika. Domyślne ustawienia działają z falownikami GoodWe.",
+        "data": {
+          "pv_power": "☀️ Moc PV (W)",
+          "load_power": "🏠 Zużycie domu (W)",
+          "grid_power": "🔌 Moc sieci (W)",
+          "battery_power": "🔋 Moc baterii (W)",
+          "battery_soc": "🔋 Poziom naładowania (%)",
+          "pv_today": "☀️ Produkcja PV dziś (kWh)",
+          "grid_import_today": "↓ Import z sieci dziś (kWh)",
+          "grid_export_today": "↑ Eksport do sieci dziś (kWh)",
+          "battery_charge_today": "🔋 Ładowanie baterii dziś (kWh)",
+          "battery_discharge_today": "⚡ Rozładowanie baterii dziś (kWh)",
+          "voltage_l1": "⚡ Napięcie L1 (V)",
+          "voltage_l2": "⚡ Napięcie L2 (V)",
+          "voltage_l3": "⚡ Napięcie L3 (V)"
         }
       }
     },
     "error": {
-      "invalid_license": "Invalid license key. Please check your key or purchase at smartinghome.pl",
-      "cannot_connect": "Cannot connect to Smarting HOME license server. Check your internet connection.",
-      "unknown": "An unexpected error occurred. Please try again."
+      "invalid_license": "Nieprawidłowy klucz licencyjny. Sprawdź klucz lub kup na smartinghome.pl",
+      "cannot_connect": "Nie można połączyć z serwerem licencji Smarting HOME. Sprawdź połączenie internetowe.",
+      "unknown": "Wystąpił nieoczekiwany błąd. Spróbuj ponownie."
     },
     "abort": {
-      "already_configured": "This inverter is already configured."
+      "already_configured": "Ten falownik jest już skonfigurowany."
     }
   },
   "options": {
     "step": {
       "upgrade": {
-        "title": "Smarting HOME — Settings & Upgrade",
-        "description": "You are on the FREE plan. Enter a PRO license key to unlock all features.\nBuy at: {website}",
+        "title": "Smarting HOME — Ustawienia & Upgrade",
+        "description": "Masz plan FREE. Wpisz klucz PRO, aby odblokować wszystkie funkcje.\nKup na: {website}",
         "data": {
-          "license_key": "🔑 PRO License Key (leave empty to stay FREE)",
-          "tariff": "Tariff Type",
-          "rce_enabled": "Enable RCE PSE",
-          "update_interval": "Update Interval (seconds)"
+          "license_key": "🔑 Klucz licencji PRO (zostaw puste = FREE)",
+          "tariff": "Typ taryfy",
+          "rce_enabled": "Włącz RCE PSE",
+          "update_interval": "Interwał aktualizacji (sekundy)"
         }
       },
       "settings": {
-        "title": "Smarting HOME — PRO Settings",
+        "title": "Smarting HOME — Ustawienia PRO",
         "data": {
-          "tariff": "Tariff Type",
-          "rce_enabled": "Enable RCE PSE",
-          "gemini_api_key": "Google Gemini API Key",
-          "anthropic_api_key": "Anthropic Claude API Key",
-          "update_interval": "Update Interval (seconds)"
+          "tariff": "Typ taryfy",
+          "rce_enabled": "Włącz RCE PSE",
+          "gemini_api_key": "Klucz API Google Gemini",
+          "anthropic_api_key": "Klucz API Anthropic Claude",
+          "update_interval": "Interwał aktualizacji (sekundy)"
+        }
+      },
+      "sensors": {
+        "title": "Mapowanie sensorów",
+        "description": "Przypisz encje sensorów falownika.",
+        "data": {
+          "pv_power": "☀️ Moc PV (W)",
+          "load_power": "🏠 Zużycie domu (W)",
+          "grid_power": "🔌 Moc sieci (W)",
+          "battery_power": "🔋 Moc baterii (W)",
+          "battery_soc": "🔋 Poziom naładowania (%)",
+          "pv_today": "☀️ Produkcja PV dziś (kWh)",
+          "grid_import_today": "↓ Import z sieci dziś (kWh)",
+          "grid_export_today": "↑ Eksport do sieci dziś (kWh)",
+          "battery_charge_today": "🔋 Ładowanie baterii dziś (kWh)",
+          "battery_discharge_today": "⚡ Rozładowanie baterii dziś (kWh)",
+          "voltage_l1": "⚡ Napięcie L1 (V)",
+          "voltage_l2": "⚡ Napięcie L2 (V)",
+          "voltage_l3": "⚡ Napięcie L3 (V)"
         }
       }
     }

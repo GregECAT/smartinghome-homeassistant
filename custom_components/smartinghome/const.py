@@ -28,10 +28,46 @@ CONF_MODBUS_ENABLED: Final = "modbus_enabled"
 CONF_MODBUS_PORT: Final = "modbus_port"
 CONF_MODBUS_SLAVE: Final = "modbus_slave"
 CONF_UPDATE_INTERVAL: Final = "update_interval"
+CONF_SENSOR_MAP: Final = "sensor_map"
 
 # License mode values
 LICENSE_MODE_FREE: Final = "free"
 LICENSE_MODE_PRO: Final = "pro"
+
+# =============================================================================
+# Sensor Mapping — universal entity configuration
+# =============================================================================
+SENSOR_MAP_KEYS: Final = {
+    "pv_power": "Total PV power (W)",
+    "load_power": "House load / consumption (W)",
+    "grid_power": "Grid power (W, + import / − export)",
+    "battery_power": "Battery power (W, + charge / − discharge)",
+    "battery_soc": "Battery state of charge (%)",
+    "pv_today": "PV generation today (kWh)",
+    "grid_import_today": "Grid import today (kWh)",
+    "grid_export_today": "Grid export today (kWh)",
+    "battery_charge_today": "Battery charge today (kWh)",
+    "battery_discharge_today": "Battery discharge today (kWh)",
+    "voltage_l1": "Grid voltage L1 (V)",
+    "voltage_l2": "Grid voltage L2 (V)",
+    "voltage_l3": "Grid voltage L3 (V)",
+}
+
+DEFAULT_SENSOR_MAP: Final = {
+    "pv_power": "sensor.pv_power",
+    "load_power": "sensor.load",
+    "grid_power": "sensor.meter_active_power_total",
+    "battery_power": "sensor.battery_power",
+    "battery_soc": "sensor.battery_state_of_charge",
+    "pv_today": "sensor.today_s_pv_generation",
+    "grid_import_today": "sensor.grid_import_daily",
+    "grid_export_today": "sensor.grid_export_daily",
+    "battery_charge_today": "sensor.today_battery_charge",
+    "battery_discharge_today": "sensor.today_battery_discharge",
+    "voltage_l1": "sensor.on_grid_l1_voltage",
+    "voltage_l2": "sensor.on_grid_l2_voltage",
+    "voltage_l3": "sensor.on_grid_l3_voltage",
+}
 
 # =============================================================================
 # Defaults
