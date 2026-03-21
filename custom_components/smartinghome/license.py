@@ -14,11 +14,9 @@ from .api import (
     ConnectionError as APIConnectionError,
 )
 from .const import (
-    DOMAIN,
     LICENSE_CHECK_INTERVAL,
     LICENSE_GRACE_PERIOD,
     LICENSE_MODE_FREE,
-    LICENSE_MODE_PRO,
     LicenseTier,
     ATTR_LICENSE_VALID,
     ATTR_LICENSE_TIER,

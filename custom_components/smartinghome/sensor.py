@@ -16,11 +16,8 @@ from homeassistant.const import (
     UnitOfEnergy,
     UnitOfFrequency,
     UnitOfPower,
-    UnitOfElectricPotential,
-    UnitOfElectricCurrent,
-    UnitOfTemperature,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -30,7 +27,6 @@ from .const import (
     MANUFACTURER,
     INTEGRATION_NAME,
     VERSION,
-    LicenseTier,
     ICON_PV,
     ICON_BATTERY,
     ICON_GRID,
@@ -43,11 +39,8 @@ from .const import (
     ICON_AUTARKY,
     ICON_IMPORT,
     ICON_EXPORT,
-    ICON_VOLTAGE,
-    ICON_TEMPERATURE,
     ICON_FREQUENCY,
     ICON_ARBITRAGE,
-    ICON_AI,
     ICON_LICENSE,
 )
 from .coordinator import SmartingHomeCoordinator

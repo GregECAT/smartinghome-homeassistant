@@ -75,8 +75,6 @@ from .const import (
     RCETrend,
     DEFAULT_BATTERY_CAPACITY,
     DEFAULT_BATTERY_MIN_SOC,
-    LicenseTier,
-    DEMO_MAX_SENSORS,
 )
 from .license import LicenseManager
 
@@ -184,7 +182,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # —— Battery calculations ——
         soc = _safe_float(raw.get(SENSOR_BATTERY_SOC))
-        battery_power = _safe_float(raw.get(SENSOR_BATTERY_POWER))
+        _battery_power = _safe_float(raw.get(SENSOR_BATTERY_POWER))  # noqa: F841
         data["goodwe_battery_energy_available"] = round(
             (soc - DEFAULT_BATTERY_MIN_SOC) / 100 * DEFAULT_BATTERY_CAPACITY / 1000, 2
         )
@@ -208,11 +206,11 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         l3 = _safe_float(raw.get(SENSOR_LOAD_L3))
         loads = [l1, l2, l3]
         data["goodwe_load_balance_difference"] = (
-            max(loads) - min(loads) if all(l > 0 for l in loads) else 0
+            max(loads) - min(loads) if all(load_val > 0 for load_val in loads) else 0
         )
 
         # —— Active loads count ——
-        active = sum(1 for l in loads if l > 100)
+        active = sum(1 for load_val in loads if load_val > 100)
         data["hems_active_loads"] = f"{active}/3"
 
         # —— G13 Tariff zone ——

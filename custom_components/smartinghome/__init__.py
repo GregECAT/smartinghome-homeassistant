@@ -6,13 +6,11 @@ Licensed under Smarting HOME Commercial License.
 from __future__ import annotations
 
 import logging
-import os
 from datetime import timedelta
 from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import SmartingHomeAPI
@@ -21,23 +19,9 @@ from .const import (
     PLATFORMS,
     CONF_LICENSE_KEY,
     CONF_LICENSE_MODE,
-    CONF_DEVICE_ID,
-    CONF_TARIFF,
-    CONF_RCE_ENABLED,
-    CONF_GEMINI_API_KEY,
-    CONF_ANTHROPIC_API_KEY,
-    CONF_AI_ENABLED,
     CONF_UPDATE_INTERVAL,
     DEFAULT_UPDATE_INTERVAL,
     LICENSE_MODE_FREE,
-    SERVICE_SET_MODE,
-    SERVICE_FORCE_CHARGE,
-    SERVICE_FORCE_DISCHARGE,
-    SERVICE_SET_EXPORT_LIMIT,
-    SERVICE_ASK_AI,
-    SERVICE_GENERATE_REPORT,
-    LicenseTier,
-    HEMSMode,
 )
 from .coordinator import SmartingHomeCoordinator
 from .license import LicenseManager
@@ -47,7 +31,7 @@ _LOGGER = logging.getLogger(__name__)
 
 SmartingHomeConfigEntry = ConfigEntry
 
-PANEL_URL = f"/smartinghome_panel"
+PANEL_URL = "/smartinghome_panel"
 PANEL_TITLE = "Smarting HOME"
 PANEL_ICON = "mdi:solar-power-variant"
 
@@ -56,7 +40,7 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: SmartingHomeConfigEntry
 ) -> bool:
     """Set up Smarting HOME from a config entry."""
-    _LOGGER.info("Setting up Smarting HOME Energy Management v1.1.0")
+    _LOGGER.info("Setting up Smarting HOME Energy Management v1.2.0")
 
     hass.data.setdefault(DOMAIN, {})
 
@@ -145,7 +129,6 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
     )
 
     # Register the panel in the sidebar
-    # Use the frontend component to add a custom panel
     from homeassistant.components.frontend import (
         async_register_built_in_panel,
     )
