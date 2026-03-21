@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" alt="Smarting HOME — Autonomous Energy Management" width="800"/>
+  <img src="https://smartinghome.pl/wp-content/uploads/2026/03/smartinghome_banner_1774113402088.jpg" alt="Smarting HOME — Autonomous Energy Management" width="800"/>
 </p>
 
 <h1 align="center">Smarting HOME — Autonomous Energy Management</h1>

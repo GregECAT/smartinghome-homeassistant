@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/GregECAT/smartinghome-ha-goodwe/main/assets/banner.png" alt="Smarting HOME" width="600"/>
+  <img src="https://smartinghome.pl/wp-content/uploads/2026/03/smartinghome_banner_1774113402088.jpg" alt="Smarting HOME" width="600"/>
 </p>
 
 ## ⚡ Smarting HOME — Autonomous Energy Management
