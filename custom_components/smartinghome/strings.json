@@ -2,8 +2,15 @@
   "config": {
     "step": {
       "user": {
+        "title": "Smarting HOME — Choose License",
+        "description": "Welcome to Smarting HOME Energy Management!\n\nChoose your license mode:\n• **FREE** — All sensors, G13 tariff, RCE prices (basic monitoring)\n• **PRO** — Full HEMS engine, AI Advisor, all blueprints & dashboards\n\nPurchase PRO at {website}",
+        "data": {
+          "license_mode": "License Mode"
+        }
+      },
+      "license": {
         "title": "Smarting HOME — License Activation",
-        "description": "Enter your Smarting HOME license key.\nPurchase a license at {website}",
+        "description": "Enter your Smarting HOME PRO license key.\nPurchase a license at {website}",
         "data": {
           "license_key": "License Key"
         }

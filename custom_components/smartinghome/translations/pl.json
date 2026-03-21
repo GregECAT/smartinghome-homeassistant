@@ -2,8 +2,15 @@
   "config": {
     "step": {
       "user": {
-        "title": "Smarting HOME — Aktywacja Licencji",
-        "description": "Wprowadź klucz licencyjny Smarting HOME.\nKup licencję na {website}",
+        "title": "Smarting HOME — Wybierz licencję",
+        "description": "Witaj w Smarting HOME Energy Management!\n\nWybierz tryb licencji:\n• **FREE** — Wszystkie sensory, taryfa G13, ceny RCE (podstawowy monitoring)\n• **PRO** — Pełny silnik HEMS, Doradca AI, wszystkie blueprinty i dashboardy\n\nKup PRO na {website}",
+        "data": {
+          "license_mode": "Tryb licencji"
+        }
+      },
+      "license": {
+        "title": "Smarting HOME — Aktywacja licencji",
+        "description": "Wprowadź klucz licencyjny Smarting HOME PRO.\nKup licencję na {website}",
         "data": {
           "license_key": "Klucz licencyjny"
         }
@@ -20,15 +27,15 @@
       },
       "tariff": {
         "title": "Konfiguracja taryfy",
-        "description": "Wybierz swoją taryfę energetyczną.\nCeny G13: Pozaszczytowa {g13_off_peak}, Przedpołudniowa {g13_morning}, Popołudniowa {g13_afternoon}",
+        "description": "Wybierz taryfę energetyczną.\nCeny G13: Pozaszczyt {g13_off_peak}, Poranny szczyt {g13_morning}, Popołudniowy szczyt {g13_afternoon}",
         "data": {
           "tariff": "Typ taryfy",
-          "rce_enabled": "Włącz dynamiczne ceny RCE PSE"
+          "rce_enabled": "Włącz ceny dynamiczne RCE PSE"
         }
       },
       "ai": {
-        "title": "Doradca AI (opcjonalnie)",
-        "description": "Skonfiguruj dostawców AI dla inteligentnej optymalizacji energii.\nPozostaw puste aby pominąć.",
+        "title": "Doradca AI (Opcjonalnie)",
+        "description": "Skonfiguruj dostawców AI do inteligentnej optymalizacji energii.\nPozostaw puste, aby pominąć.",
         "data": {
           "gemini_api_key": "Klucz API Google Gemini",
           "anthropic_api_key": "Klucz API Anthropic Claude",

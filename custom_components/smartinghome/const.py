@@ -10,12 +10,13 @@ from typing import Final
 DOMAIN: Final = "smartinghome"
 MANUFACTURER: Final = "Smarting HOME"
 INTEGRATION_NAME: Final = "Smarting HOME — Energy Management"
-VERSION: Final = "1.0.0"
+VERSION: Final = "1.1.0"
 
 # =============================================================================
 # Config Entry Keys
 # =============================================================================
 CONF_LICENSE_KEY: Final = "license_key"
+CONF_LICENSE_MODE: Final = "license_mode"
 CONF_DEVICE_ID: Final = "device_id"
 CONF_TARIFF: Final = "tariff"
 CONF_TARIFF_PRICES: Final = "tariff_prices"
@@ -27,6 +28,10 @@ CONF_MODBUS_ENABLED: Final = "modbus_enabled"
 CONF_MODBUS_PORT: Final = "modbus_port"
 CONF_MODBUS_SLAVE: Final = "modbus_slave"
 CONF_UPDATE_INTERVAL: Final = "update_interval"
+
+# License mode values
+LICENSE_MODE_FREE: Final = "free"
+LICENSE_MODE_PRO: Final = "pro"
 
 # =============================================================================
 # Defaults
@@ -60,12 +65,28 @@ ATTR_LICENSE_LAST_CHECK: Final = "license_last_check"
 class LicenseTier(StrEnum):
     """License tier levels."""
 
+    FREE = "free"
     DEMO = "demo"
     PRO = "pro"
     ENTERPRISE = "enterprise"
 
 
-# Demo mode limits
+# ── Feature Gating ──────────────────────────────────────────────────────────
+# FREE tier limits
+FREE_SENSORS_ENABLED: Final = True        # All 33 sensors available
+FREE_BINARY_SENSORS_ENABLED: Final = True  # G13 peak, off-peak, license
+FREE_G13_ENABLED: Final = True             # G13 zone + buy price
+FREE_RCE_READ_ENABLED: Final = True        # RCE prices read-only
+FREE_HEMS_AUTO_MODE: Final = True          # Basic auto mode switch
+FREE_NIGHT_ARBITRAGE: Final = False        # ❌ PRO only
+FREE_VOLTAGE_CASCADE: Final = False        # ❌ PRO only
+FREE_PV_SURPLUS_CASCADE: Final = False     # ❌ PRO only
+FREE_AI_ENABLED: Final = False             # ❌ PRO only
+FREE_EXPORT_LIMIT_CONTROL: Final = False   # ❌ PRO only
+FREE_BLUEPRINTS_COUNT: Final = 2           # Morning sell + midday charge only
+FREE_DASHBOARDS_COUNT: Final = 1           # HEMS control only
+
+# DEMO tier limits (fallback from expired PRO)
 DEMO_MAX_SENSORS: Final = 10
 DEMO_AI_ENABLED: Final = False
 DEMO_BLUEPRINTS_ENABLED: Final = False
