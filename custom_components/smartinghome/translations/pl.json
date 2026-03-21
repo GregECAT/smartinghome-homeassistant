@@ -54,8 +54,18 @@
   },
   "options": {
     "step": {
-      "init": {
-        "title": "Smarting HOME — Ustawienia",
+      "upgrade": {
+        "title": "Smarting HOME — Ustawienia & Upgrade",
+        "description": "Masz plan FREE. Wpisz klucz PRO, aby odblokować wszystkie funkcje.\nKup na: {website}",
+        "data": {
+          "license_key": "🔑 Klucz licencji PRO (zostaw puste = FREE)",
+          "tariff": "Typ taryfy",
+          "rce_enabled": "Włącz RCE PSE",
+          "update_interval": "Interwał aktualizacji (sekundy)"
+        }
+      },
+      "settings": {
+        "title": "Smarting HOME — Ustawienia PRO",
         "data": {
           "tariff": "Typ taryfy",
           "rce_enabled": "Włącz RCE PSE",

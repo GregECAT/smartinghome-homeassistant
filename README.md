@@ -186,6 +186,22 @@ Provide your own API keys for AI energy advisory:
 
 ---
 
+## 🔄 Upgrade FREE → PRO
+
+Already installed as FREE? You can upgrade to PRO **without reinstalling**:
+
+1. Go to **Settings → Devices & Services → Smarting HOME**
+2. Click **Configure** (⚙️ gear icon)
+3. Enter your PRO license key in the **🔑 License Key** field
+4. Click **Submit** — license is validated automatically
+5. **Restart Home Assistant** to activate all PRO features
+
+> 💡 Buy PRO license at [smartinghome.pl/buy](https://smartinghome.pl/buy)
+
+After upgrade you'll unlock: Night Arbitrage, Voltage/PV Cascades, AI Advisor, Export Limit Control, all 7 Blueprints, 3 full Dashboards.
+
+---
+
 ## 🖥️ Dashboards
 
 ### Automatic — Sidebar Panel

@@ -309,12 +309,110 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Manage the options."""
+        """Manage options — show upgrade option for FREE users."""
+        current = self._config_entry.data
+        is_free = current.get(CONF_LICENSE_MODE, LICENSE_MODE_FREE) == LICENSE_MODE_FREE
+
+        if is_free:
+            return await self.async_step_upgrade(user_input)
+        return await self.async_step_settings(user_input)
+
+    async def async_step_upgrade(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """FREE → PRO upgrade step: enter license key."""
+        errors: dict[str, str] = {}
+        current = self._config_entry.data
+
+        if user_input is not None:
+            license_key = user_input.get(CONF_LICENSE_KEY, "").strip()
+
+            if license_key:
+                # Validate the license key
+                session = async_get_clientsession(self.hass)
+                api = SmartingHomeAPI(session, license_key)
+
+                try:
+                    info = await api.validate_license()
+                    if info.valid:
+                        # Upgrade: update entry data to PRO
+                        new_data = {**current}
+                        new_data[CONF_LICENSE_MODE] = LICENSE_MODE_PRO
+                        new_data[CONF_LICENSE_KEY] = license_key
+                        self.hass.config_entries.async_update_entry(
+                            self._config_entry, data=new_data
+                        )
+                        _LOGGER.info(
+                            "License upgraded to %s (key: %s...)",
+                            info.tier.value,
+                            license_key[:12],
+                        )
+                        return self.async_create_entry(
+                            title="",
+                            data={
+                                **user_input,
+                                "_upgraded": True,
+                            },
+                        )
+                    errors["base"] = "invalid_license"
+                except AuthenticationError:
+                    errors["base"] = "invalid_license"
+                except APIConnectionError:
+                    errors["base"] = "cannot_connect"
+                except Exception:
+                    _LOGGER.exception("Error during license upgrade")
+                    errors["base"] = "unknown"
+            else:
+                # No key entered — just save other settings
+                return self.async_create_entry(title="", data=user_input)
+
+        return self.async_show_form(
+            step_id="upgrade",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_LICENSE_KEY,
+                        default="",
+                        description={"suggested_value": ""},
+                    ): str,
+                    vol.Optional(
+                        CONF_TARIFF,
+                        default=current.get(CONF_TARIFF, TariffType.G13),
+                    ): vol.In(
+                        {
+                            TariffType.G11: "G11 — Flat rate",
+                            TariffType.G12: "G12 — Two-zone",
+                            TariffType.G13: "G13 — Three-zone",
+                        }
+                    ),
+                    vol.Optional(
+                        CONF_RCE_ENABLED,
+                        default=current.get(CONF_RCE_ENABLED, True),
+                    ): bool,
+                    vol.Optional(
+                        CONF_UPDATE_INTERVAL,
+                        default=current.get(
+                            CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
+                        ),
+                    ): vol.All(
+                        vol.Coerce(int), vol.Range(min=10, max=300)
+                    ),
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "website": "https://smartinghome.pl/buy",
+            },
+        )
+
+    async def async_step_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """PRO settings — tariff, RCE, AI, update interval."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
         current = self._config_entry.data
-        is_pro = current.get(CONF_LICENSE_MODE, LICENSE_MODE_FREE) == LICENSE_MODE_PRO
 
         schema_dict = {
             vol.Optional(
@@ -339,20 +437,18 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
             ): vol.All(
                 vol.Coerce(int), vol.Range(min=10, max=300)
             ),
-        }
-
-        # Only show AI fields for PRO users
-        if is_pro:
-            schema_dict[vol.Optional(
+            vol.Optional(
                 CONF_GEMINI_API_KEY,
                 default=current.get(CONF_GEMINI_API_KEY, ""),
-            )] = str
-            schema_dict[vol.Optional(
+            ): str,
+            vol.Optional(
                 CONF_ANTHROPIC_API_KEY,
                 default=current.get(CONF_ANTHROPIC_API_KEY, ""),
-            )] = str
+            ): str,
+        }
 
         return self.async_show_form(
-            step_id="init",
+            step_id="settings",
             data_schema=vol.Schema(schema_dict),
         )
+
