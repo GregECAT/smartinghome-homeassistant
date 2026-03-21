@@ -342,13 +342,20 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Manage options — choose what to configure."""
+        """Manage options — show menu to choose what to configure."""
         current = self._config_entry.data
         is_free = current.get(CONF_LICENSE_MODE, LICENSE_MODE_FREE) == LICENSE_MODE_FREE
 
+        menu_options = ["sensors"]
         if is_free:
-            return await self.async_step_upgrade(user_input)
-        return await self.async_step_settings(user_input)
+            menu_options.insert(0, "upgrade")
+        else:
+            menu_options.insert(0, "settings")
+
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=menu_options,
+        )
 
     async def async_step_sensors(
         self, user_input: dict[str, Any] | None = None

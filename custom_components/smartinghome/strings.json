@@ -73,6 +73,15 @@
   },
   "options": {
     "step": {
+      "init": {
+        "title": "Smarting HOME — Options",
+        "description": "Choose what to configure:",
+        "menu_options": {
+          "upgrade": "⚙️ Settings & Upgrade",
+          "settings": "⚙️ PRO Settings",
+          "sensors": "🔌 Sensor Mapping"
+        }
+      },
       "upgrade": {
         "title": "Smarting HOME — Settings & Upgrade",
         "description": "You are on the FREE plan. Enter a PRO license key to unlock all features.\nBuy at: {website}",
