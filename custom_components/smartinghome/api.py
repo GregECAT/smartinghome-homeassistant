@@ -68,12 +68,12 @@ class SmartingHomeAPI:
         headers = {
             "Content-Type": "application/json",
             "X-License-Key": self._license_key,
-            "User-Agent": "SmartingHOME-HA/1.0.0",
+            "User-Agent": "SmartingHOME-HA/1.2.0",
         }
         payload = {
             "license_key": self._license_key,
             "product": "smartinghome-ha",
-            "version": "1.0.0",
+            "version": "1.2.0",
         }
 
         try:
@@ -145,7 +145,7 @@ class SmartingHomeAPI:
         url = f"{self._base_url}{LICENSE_STATUS_ENDPOINT}"
         headers = {
             "X-License-Key": self._license_key,
-            "User-Agent": "SmartingHOME-HA/1.0.0",
+            "User-Agent": "SmartingHOME-HA/1.2.0",
         }
 
         try:

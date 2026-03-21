@@ -50,7 +50,7 @@ DEFAULT_BATTERY_CHARGE_CURRENT_BLOCK: Final = "0"
 # =============================================================================
 # License
 # =============================================================================
-LICENSE_API_URL: Final = "https://smartinghome.pl/api/license"
+LICENSE_API_URL: Final = "https://mslvyiimjevhvujojfax.supabase.co/functions/v1/sh-license-api"
 LICENSE_VALIDATE_ENDPOINT: Final = "/validate"
 LICENSE_STATUS_ENDPOINT: Final = "/status"
 LICENSE_CHECK_INTERVAL: Final = 86400  # 24 hours in seconds
