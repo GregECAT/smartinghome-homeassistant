@@ -40,7 +40,7 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: SmartingHomeConfigEntry
 ) -> bool:
     """Set up Smarting HOME from a config entry."""
-    _LOGGER.info("Setting up Smarting HOME Energy Management v1.2.0")
+    _LOGGER.info("Setting up Smarting HOME Energy Management v1.3.0")
 
     hass.data.setdefault(DOMAIN, {})
 
