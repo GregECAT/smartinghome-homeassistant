@@ -31,7 +31,7 @@ _LOGGER = logging.getLogger(__name__)
 
 SmartingHomeConfigEntry = ConfigEntry
 
-PANEL_URL = "/api/panel_custom/smartinghome/panel.js"
+PANEL_FRONTEND_PATH = "/smartinghome_frontend"
 PANEL_TITLE = "Smarting HOME"
 PANEL_ICON = "mdi:solar-power-variant"
 
@@ -101,7 +101,7 @@ async def async_setup_entry(
 
     # Register custom panel in sidebar
     try:
-        await _async_register_panel(hass)
+        _async_register_panel(hass)
     except Exception as err:
         _LOGGER.warning("Could not register sidebar panel: %s", err)
 
@@ -114,34 +114,35 @@ async def async_setup_entry(
     return True
 
 
-async def _async_register_panel(hass: HomeAssistant) -> None:
+def _async_register_panel(hass: HomeAssistant) -> None:
     """Register the Smarting HOME panel in the sidebar."""
-    panel_dir = Path(__file__).parent / "frontend"
-    panel_file = panel_dir / "panel.js"
+    frontend_dir = Path(__file__).parent / "frontend"
+    panel_file = frontend_dir / "panel.js"
 
     if not panel_file.exists():
         _LOGGER.error(
-            "Panel JS file not found at %s — sidebar panel will NOT appear. "
-            "Make sure frontend/panel.js exists in the integration directory.",
+            "Panel JS not found at %s — sidebar panel will NOT appear.",
             panel_file,
         )
         return
 
-    _LOGGER.debug("Panel JS found: %s (%d bytes)", panel_file, panel_file.stat().st_size)
+    _LOGGER.info(
+        "Panel JS found: %s (%d bytes)", panel_file, panel_file.stat().st_size
+    )
 
-    # Register the JS file as a static resource
+    # Register the entire frontend directory as a static path
     try:
         hass.http.register_static_path(
-            PANEL_URL, str(panel_file), cache_headers=False
+            PANEL_FRONTEND_PATH, str(frontend_dir), cache_headers=False
         )
+        _LOGGER.info("Registered static path: %s → %s", PANEL_FRONTEND_PATH, frontend_dir)
     except Exception:
-        # Already registered — OK on reload/restart
-        _LOGGER.debug("Static path %s already registered", PANEL_URL)
+        _LOGGER.debug("Static path %s already registered", PANEL_FRONTEND_PATH)
 
     # Register the panel in the sidebar
-    from homeassistant.components.frontend import (
-        async_register_built_in_panel,
-    )
+    from homeassistant.components.frontend import async_register_built_in_panel
+
+    module_url = f"{PANEL_FRONTEND_PATH}/panel.js"
 
     try:
         async_register_built_in_panel(
@@ -154,13 +155,13 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
             config={
                 "_panel_custom": {
                     "name": "smartinghome-panel",
-                    "module_url": PANEL_URL,
+                    "module_url": module_url,
                 }
             },
         )
-        _LOGGER.info("Registered Smarting HOME sidebar panel ✅")
+        _LOGGER.info("Registered sidebar panel → %s ✅", module_url)
     except Exception as err:
-        _LOGGER.warning("Panel registration issue (may already exist): %s", err)
+        _LOGGER.warning("Panel registration issue: %s", err)
 
 
 async def async_unload_entry(
