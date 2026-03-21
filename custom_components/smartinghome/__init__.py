@@ -31,16 +31,17 @@ _LOGGER = logging.getLogger(__name__)
 
 SmartingHomeConfigEntry = ConfigEntry
 
-PANEL_FRONTEND_PATH = "/smartinghome_frontend"
 PANEL_TITLE = "Smarting HOME"
 PANEL_ICON = "mdi:solar-power-variant"
+PANEL_FILENAME = "panel.js"
+PANEL_WWW_DIR = "community/smartinghome"
 
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: SmartingHomeConfigEntry
 ) -> bool:
     """Set up Smarting HOME from a config entry."""
-    _LOGGER.info("Setting up Smarting HOME Energy Management v1.3.0")
+    _LOGGER.info("Setting up Smarting HOME Energy Management v1.3.1")
 
     hass.data.setdefault(DOMAIN, {})
 
@@ -101,7 +102,7 @@ async def async_setup_entry(
 
     # Register custom panel in sidebar
     try:
-        _async_register_panel(hass)
+        await _async_register_panel(hass)
     except Exception as err:
         _LOGGER.warning("Could not register sidebar panel: %s", err)
 
@@ -114,35 +115,37 @@ async def async_setup_entry(
     return True
 
 
-def _async_register_panel(hass: HomeAssistant) -> None:
-    """Register the Smarting HOME panel in the sidebar."""
-    frontend_dir = Path(__file__).parent / "frontend"
-    panel_file = frontend_dir / "panel.js"
+async def _async_register_panel(hass: HomeAssistant) -> None:
+    """Register the Smarting HOME panel in the sidebar.
 
-    if not panel_file.exists():
-        _LOGGER.error(
-            "Panel JS not found at %s — sidebar panel will NOT appear.",
-            panel_file,
-        )
+    Approach: copy panel.js to <config>/www/community/smartinghome/
+    and register with module_url /local/community/smartinghome/panel.js.
+    The /local/ path is HA's built-in static file server for www/.
+    """
+    import shutil
+
+    source_file = Path(__file__).parent / "frontend" / PANEL_FILENAME
+    if not source_file.exists():
+        _LOGGER.error("Panel JS not found: %s", source_file)
         return
 
-    _LOGGER.info(
-        "Panel JS found: %s (%d bytes)", panel_file, panel_file.stat().st_size
-    )
+    # Copy panel.js to <config>/www/community/smartinghome/
+    www_dir = Path(hass.config.path("www")) / PANEL_WWW_DIR
+    www_dir.mkdir(parents=True, exist_ok=True)
+    dest_file = www_dir / PANEL_FILENAME
 
-    # Register the entire frontend directory as a static path
     try:
-        hass.http.register_static_path(
-            PANEL_FRONTEND_PATH, str(frontend_dir), cache_headers=False
-        )
-        _LOGGER.info("Registered static path: %s → %s", PANEL_FRONTEND_PATH, frontend_dir)
-    except Exception:
-        _LOGGER.debug("Static path %s already registered", PANEL_FRONTEND_PATH)
+        shutil.copy2(str(source_file), str(dest_file))
+        _LOGGER.info("Copied panel.js → %s", dest_file)
+    except Exception as err:
+        _LOGGER.error("Failed to copy panel.js to www/: %s", err)
+        return
+
+    # module_url via /local/ — HA's built-in static path for www/
+    module_url = f"/local/{PANEL_WWW_DIR}/{PANEL_FILENAME}"
 
     # Register the panel in the sidebar
     from homeassistant.components.frontend import async_register_built_in_panel
-
-    module_url = f"{PANEL_FRONTEND_PATH}/panel.js"
 
     try:
         async_register_built_in_panel(
@@ -161,7 +164,7 @@ def _async_register_panel(hass: HomeAssistant) -> None:
         )
         _LOGGER.info("Registered sidebar panel → %s ✅", module_url)
     except Exception as err:
-        _LOGGER.warning("Panel registration issue: %s", err)
+        _LOGGER.warning("Panel already registered or error: %s", err)
 
 
 async def async_unload_entry(
