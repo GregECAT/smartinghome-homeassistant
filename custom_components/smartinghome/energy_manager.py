@@ -2,14 +2,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 
 from .const import (
-    DOMAIN,
-    CONF_DEVICE_ID,
     DEFAULT_GOODWE_DEVICE_ID,
     DEFAULT_BATTERY_CHARGE_CURRENT_MAX,
     DEFAULT_BATTERY_CHARGE_CURRENT_BLOCK,
@@ -18,9 +15,6 @@ from .const import (
     DEFAULT_BATTERY_CAPACITY,
     G13Zone,
     G13_PRICES,
-    G13_WINTER_SCHEDULE,
-    G13_SUMMER_SCHEDULE,
-    WINTER_MONTHS,
     HEMSMode,
     HEMSStrategy,
     VOLTAGE_THRESHOLD_WARNING,
@@ -43,7 +37,6 @@ from .const import (
     SWITCH_AC,
     SWITCH_SOCKET2,
     SELECT_WORK_MODE,
-    NUMBER_EXPORT_LIMIT,
     NUMBER_DOD_ON_GRID,
 )
 

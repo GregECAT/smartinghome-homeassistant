@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
@@ -21,13 +20,7 @@ from .const import (
     INTEGRATION_NAME,
     VERSION,
     ICON_TARIFF,
-    ICON_RCE,
-    ICON_BATTERY,
     ICON_LICENSE,
-    ICON_AI,
-    ICON_VOLTAGE,
-    G13Zone,
-    SOC_EMERGENCY,
 )
 from .coordinator import SmartingHomeCoordinator
 

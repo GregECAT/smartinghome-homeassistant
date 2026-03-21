@@ -39,37 +39,3 @@ action:
       message: "Cheapest RCE window active — battery charging enabled"
 
 mode: single
----
-blueprint:
-  name: "HEMS — RCE Expensive Window Alert"
-  description: >-
-    RCE Layer 2: Alert when the most expensive RCE price window is active.
-    Maximum savings mode — use battery, minimize grid import.
-    
-    Part of the Smarting HOME HEMS G13+RCE strategy.
-    Layer: W2 — RCE Dynamic
-  domain: automation
-  author: Smarting HOME
-  source_url: https://smartinghome.pl/blueprints/hems-rce-expensive
-  input:
-    expensive_window_sensor:
-      name: RCE Most Expensive Window Binary Sensor
-      default: binary_sensor.rce_pse_aktywne_najdrozsze_okno_dzisiaj
-      selector:
-        entity:
-          domain: binary_sensor
-
-trigger:
-  - platform: state
-    entity_id: !input expensive_window_sensor
-    to: "on"
-
-action:
-  - service: notify.persistent_notification
-    data:
-      title: "🔥 HEMS — RCE Peak Price!"
-      message: >-
-        Most expensive RCE window is NOW ACTIVE!
-        Maximize self-consumption, export if beneficial.
-
-mode: single

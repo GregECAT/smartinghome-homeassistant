@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import aiohttp
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -34,7 +33,6 @@ from .const import (
     LICENSE_MODE_FREE,
     LICENSE_MODE_PRO,
     TariffType,
-    HEMSStrategy,
     G13_PRICES,
     G13Zone,
 )
