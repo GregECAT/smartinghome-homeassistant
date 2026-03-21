@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import timedelta
+from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -45,6 +46,10 @@ from .services import async_setup_services, async_unload_services
 _LOGGER = logging.getLogger(__name__)
 
 SmartingHomeConfigEntry = ConfigEntry
+
+PANEL_URL = f"/smartinghome_panel"
+PANEL_TITLE = "Smarting HOME"
+PANEL_ICON = "mdi:solar-power-variant"
 
 
 async def async_setup_entry(
@@ -111,26 +116,10 @@ async def async_setup_entry(
     await async_setup_services(hass, coordinator, license_mgr)
 
     # Register custom panel in sidebar
-    panel_path = os.path.join(
-        os.path.dirname(__file__), "frontend", "panel.js"
-    )
-    hass.http.register_static_path(
-        f"/{DOMAIN}/panel.js", panel_path, cache_headers=False
-    )
-    hass.components.frontend.async_register_built_in_panel(
-        component_name="custom",
-        sidebar_title="Smarting HOME",
-        sidebar_icon="mdi:solar-power-variant",
-        frontend_url_path=DOMAIN,
-        require_admin=False,
-        config={
-            "_panel_custom": {
-                "name": "smartinghome-panel",
-                "module_url": f"/{DOMAIN}/panel.js",
-            }
-        },
-    )
-    _LOGGER.info("Registered Smarting HOME sidebar panel")
+    try:
+        await _async_register_panel(hass)
+    except Exception as err:
+        _LOGGER.warning("Could not register sidebar panel: %s", err)
 
     # Listen for options updates
     entry.async_on_unload(
@@ -139,6 +128,43 @@ async def async_setup_entry(
 
     _LOGGER.info("Smarting HOME setup complete (tier=%s)", license_mgr.tier)
     return True
+
+
+async def _async_register_panel(hass: HomeAssistant) -> None:
+    """Register the Smarting HOME panel in the sidebar."""
+    panel_dir = Path(__file__).parent / "frontend"
+    panel_file = panel_dir / "panel.js"
+
+    if not panel_file.exists():
+        _LOGGER.warning("Panel JS file not found: %s", panel_file)
+        return
+
+    # Register the JS file as a static resource
+    hass.http.register_static_path(
+        PANEL_URL, str(panel_file), cache_headers=False
+    )
+
+    # Register the panel in the sidebar
+    # Use the frontend component to add a custom panel
+    from homeassistant.components.frontend import (
+        async_register_built_in_panel,
+    )
+
+    async_register_built_in_panel(
+        hass,
+        component_name="custom",
+        sidebar_title=PANEL_TITLE,
+        sidebar_icon=PANEL_ICON,
+        frontend_url_path=DOMAIN,
+        require_admin=False,
+        config={
+            "_panel_custom": {
+                "name": "smartinghome-panel",
+                "module_url": PANEL_URL,
+            }
+        },
+    )
+    _LOGGER.info("Registered Smarting HOME sidebar panel")
 
 
 async def async_unload_entry(
@@ -155,7 +181,11 @@ async def async_unload_entry(
         await async_unload_services(hass)
         hass.data[DOMAIN].pop(entry.entry_id)
         # Remove sidebar panel
-        hass.components.frontend.async_remove_panel(DOMAIN)
+        try:
+            from homeassistant.components.frontend import async_remove_panel
+            async_remove_panel(hass, DOMAIN)
+        except Exception:
+            _LOGGER.debug("Panel already removed or not registered")
 
     return unload_ok
 
