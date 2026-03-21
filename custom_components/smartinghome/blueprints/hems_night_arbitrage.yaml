@@ -1,0 +1,108 @@
+blueprint:
+  name: "HEMS — Night Arbitrage"
+  description: >-
+    G13 Layer 1: Night arbitrage — charge battery from grid at off-peak
+    prices (0.63 PLN/kWh) and discharge during afternoon peak (1.50 PLN/kWh).
+    
+    Conditions: 23:00, forecast tomorrow < 8 kWh, SOC < 50%.
+    Stop: SOC > 90% or 06:00.
+    Profit potential: ~8.87 PLN per cycle.
+    
+    Part of the Smarting HOME HEMS G13+RCE strategy.
+    Layer: W1 — G13 Schedule
+  domain: automation
+  author: Smarting HOME
+  source_url: https://smartinghome.pl/blueprints/hems-night-arbitrage
+  input:
+    goodwe_device_id:
+      name: GoodWe Device ID
+      default: "02592f41265ac022d0c8b8aa99728b3e"
+      selector:
+        text:
+    forecast_sensor:
+      name: PV Forecast Tomorrow Sensor
+      description: "Sensor with tomorrow's PV forecast (kWh)"
+      default: sensor.pv_forecast_tomorrow_total
+      selector:
+        entity:
+          domain: sensor
+    soc_sensor:
+      name: Battery SOC Sensor
+      default: sensor.battery_state_of_charge
+      selector:
+        entity:
+          domain: sensor
+    min_forecast_threshold:
+      name: Min Forecast Threshold (kWh)
+      description: "Only arbitrage if forecast below this value"
+      default: 8.0
+      selector:
+        number:
+          min: 0
+          max: 20
+          step: 0.5
+          unit_of_measurement: kWh
+    soc_start_threshold:
+      name: SOC Start Threshold (%)
+      description: "Only start if SOC below this"
+      default: 50
+      selector:
+        number:
+          min: 10
+          max: 80
+          step: 5
+          unit_of_measurement: "%"
+    soc_stop_threshold:
+      name: SOC Stop Threshold (%)
+      description: "Stop charging when SOC reaches this"
+      default: 90
+      selector:
+        number:
+          min: 50
+          max: 100
+          step: 5
+          unit_of_measurement: "%"
+
+trigger:
+  - platform: time
+    at: "23:00:00"
+
+condition:
+  - condition: numeric_state
+    entity_id: !input forecast_sensor
+    below: !input min_forecast_threshold
+  - condition: numeric_state
+    entity_id: !input soc_sensor
+    below: !input soc_start_threshold
+
+action:
+  - service: goodwe.set_parameter
+    data:
+      device_id: !input goodwe_device_id
+      parameter: battery_charge_current
+      value: "18.5"
+  - service: notify.persistent_notification
+    data:
+      title: "🌙 HEMS — Night Arbitrage Started"
+      message: >-
+        Night arbitrage started. Charging battery from grid at off-peak rate.
+        Forecast tomorrow: {{ states(!input forecast_sensor) }} kWh.
+        Will stop at SOC {{ !input soc_stop_threshold }}% or 06:00.
+  - wait_for_trigger:
+      - platform: numeric_state
+        entity_id: !input soc_sensor
+        above: !input soc_stop_threshold
+      - platform: time
+        at: "06:00:00"
+    timeout: "07:00:00"
+  - service: goodwe.set_parameter
+    data:
+      device_id: !input goodwe_device_id
+      parameter: battery_charge_current
+      value: "0"
+  - service: notify.persistent_notification
+    data:
+      title: "🌙 HEMS — Night Arbitrage Complete"
+      message: "Night charge complete. SOC: {{ states(!input soc_sensor) }}%"
+
+mode: single

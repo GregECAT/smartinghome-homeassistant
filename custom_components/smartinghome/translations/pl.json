@@ -1,0 +1,62 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Smarting HOME — Aktywacja Licencji",
+        "description": "Wprowadź klucz licencyjny Smarting HOME.\nKup licencję na {website}",
+        "data": {
+          "license_key": "Klucz licencyjny"
+        }
+      },
+      "inverter": {
+        "title": "Konfiguracja falownika",
+        "description": "Skonfiguruj połączenie z falownikiem GoodWe.",
+        "data": {
+          "device_id": "ID urządzenia GoodWe",
+          "modbus_enabled": "Włącz Modbus RS485",
+          "modbus_port": "Port szeregowy Modbus",
+          "modbus_slave": "Adres slave Modbus"
+        }
+      },
+      "tariff": {
+        "title": "Konfiguracja taryfy",
+        "description": "Wybierz swoją taryfę energetyczną.\nCeny G13: Pozaszczytowa {g13_off_peak}, Przedpołudniowa {g13_morning}, Popołudniowa {g13_afternoon}",
+        "data": {
+          "tariff": "Typ taryfy",
+          "rce_enabled": "Włącz dynamiczne ceny RCE PSE"
+        }
+      },
+      "ai": {
+        "title": "Doradca AI (opcjonalnie)",
+        "description": "Skonfiguruj dostawców AI dla inteligentnej optymalizacji energii.\nPozostaw puste aby pominąć.",
+        "data": {
+          "gemini_api_key": "Klucz API Google Gemini",
+          "anthropic_api_key": "Klucz API Anthropic Claude",
+          "update_interval": "Interwał aktualizacji (sekundy)"
+        }
+      }
+    },
+    "error": {
+      "invalid_license": "Nieprawidłowy klucz licencyjny. Sprawdź klucz lub kup na smartinghome.pl",
+      "cannot_connect": "Nie można połączyć z serwerem licencji Smarting HOME. Sprawdź połączenie internetowe.",
+      "unknown": "Wystąpił nieoczekiwany błąd. Spróbuj ponownie."
+    },
+    "abort": {
+      "already_configured": "Ten falownik jest już skonfigurowany."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Smarting HOME — Ustawienia",
+        "data": {
+          "tariff": "Typ taryfy",
+          "rce_enabled": "Włącz RCE PSE",
+          "gemini_api_key": "Klucz API Google Gemini",
+          "anthropic_api_key": "Klucz API Anthropic Claude",
+          "update_interval": "Interwał aktualizacji (sekundy)"
+        }
+      }
+    }
+  }
+}

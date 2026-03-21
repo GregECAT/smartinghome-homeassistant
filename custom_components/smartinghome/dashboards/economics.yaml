@@ -1,0 +1,84 @@
+# Smarting HOME — Economics Dashboard
+title: "💲 Economics"
+icon: "mdi:currency-usd"
+type: sections
+cards:
+
+  # ── Daily Summary ────────────────────────────────
+  - type: markdown
+    content: >-
+      # 💲 Energy Economics — G13 + RCE
+
+      **Tariff Zone:** {{ states('sensor.smartinghome_g13_current_zone') }}
+      | **Buy Price:** {{ states('sensor.smartinghome_g13_buy_price') }} PLN/kWh
+
+      **RCE Sell Price:** {{ states('sensor.smartinghome_rce_sell_price') }} PLN/kWh
+      | **Trend:** {{ states('sensor.smartinghome_rce_price_trend') }}
+
+  # ── Autarky & Self-Consumption ──────────────────
+  - type: entities
+    title: "🛡️ Energy Independence"
+    entities:
+      - entity: sensor.smartinghome_autarky_today
+        name: "Autarky Today"
+      - entity: sensor.smartinghome_self_consumption_today
+        name: "Self-Consumption Today"
+      - entity: sensor.smartinghome_home_consumption_from_pv
+        name: "Home from PV Today"
+      - entity: sensor.smartinghome_net_grid_today
+        name: "Net Grid Today"
+
+  # ── PV Production ───────────────────────────────
+  - type: entities
+    title: "☀️ PV Production"
+    entities:
+      - entity: sensor.today_s_pv_generation
+        name: "PV Generation Today"
+      - entity: sensor.smartinghome_pv_forecast_today_total
+        name: "Forecast Today"
+      - entity: sensor.smartinghome_pv_forecast_accuracy
+        name: "Forecast Accuracy"
+      - entity: sensor.smartinghome_pv_surplus_power
+        name: "Current Surplus"
+
+  # ── Grid Import/Export ──────────────────────────
+  - type: glance
+    title: "📊 Grid Today"
+    show_name: true
+    entities:
+      - entity: sensor.smartinghome_grid_import_power
+        name: "Import Power"
+      - entity: sensor.smartinghome_grid_export_power
+        name: "Export Power"
+      - entity: sensor.grid_import_daily
+        name: "Import Today"
+      - entity: sensor.grid_export_daily
+        name: "Export Today"
+
+  # ── Battery Economics ──────────────────────────
+  - type: entities
+    title: "🔋 Battery Utilization"
+    entities:
+      - entity: sensor.today_battery_charge
+        name: "Charged Today"
+      - entity: sensor.today_battery_discharge
+        name: "Discharged Today"
+      - entity: sensor.smartinghome_battery_energy_available
+        name: "Currently Available"
+      - entity: sensor.smartinghome_battery_arbitrage_potential
+        name: "Arbitrage Potential"
+
+  # ── Arbitrage Calculator ───────────────────────
+  - type: markdown
+    content: >-
+      ## 📐 Arbitrage Calculator
+
+      **Battery capacity:** 10.2 kWh
+
+      **Buy at off-peak:** 10.2 × 0.63 = **6.43 PLN**
+
+      **Sell at afternoon peak:** 10.2 × 1.50 = **15.30 PLN**
+
+      **Profit per cycle:** 15.30 - 6.43 = **8.87 PLN**
+
+      **Monthly potential (20 cycles):** ~**177 PLN**

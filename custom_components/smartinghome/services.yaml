@@ -1,0 +1,84 @@
+set_mode:
+  name: Set HEMS Mode
+  description: >-
+    Set the Home Energy Management System operating mode.
+    Controls battery charge/discharge behavior and grid export strategy.
+  fields:
+    mode:
+      name: Mode
+      description: >-
+        HEMS operating mode to set.
+      required: true
+      example: "auto"
+      selector:
+        select:
+          options:
+            - "auto"
+            - "sell"
+            - "charge"
+            - "peak_save"
+            - "night_arbitrage"
+            - "emergency"
+            - "manual"
+
+force_charge:
+  name: Force Battery Charge
+  description: >-
+    Force the battery to charge by setting charge current to maximum (18.5A).
+    Overrides the current HEMS mode.
+
+force_discharge:
+  name: Force Battery Discharge
+  description: >-
+    Force the battery to discharge by blocking charge current (0A).
+    Battery will power the home load and export surplus to grid.
+
+set_export_limit:
+  name: Set Grid Export Limit
+  description: >-
+    Set the grid export power limit in Watts.
+    GoodWe BT supports up to 16000W via set_parameter.
+  fields:
+    limit:
+      name: Export Limit
+      description: "Export limit in Watts (0-16000)"
+      required: true
+      example: 16000
+      selector:
+        number:
+          min: 0
+          max: 16000
+          step: 500
+          unit_of_measurement: W
+
+ask_ai_advisor:
+  name: Ask AI Energy Advisor
+  description: >-
+    Ask the AI energy advisor a question about your energy system.
+    Requires PRO license and a configured AI provider (Google Gemini or Anthropic Claude).
+    Response is fired as a smartinghome_ai_response event.
+  fields:
+    question:
+      name: Question
+      description: "Your question about the energy system"
+      required: true
+      example: "Should I export energy to the grid right now?"
+      selector:
+        text:
+    provider:
+      name: AI Provider
+      description: "AI provider to use (auto selects the best available)"
+      required: false
+      default: "auto"
+      selector:
+        select:
+          options:
+            - "auto"
+            - "gemini"
+            - "anthropic"
+
+generate_report:
+  name: Generate Daily Report
+  description: >-
+    Generate an AI-powered daily energy report.
+    Requires PRO license. Response is fired as a smartinghome_daily_report event.

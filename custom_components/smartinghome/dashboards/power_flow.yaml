@@ -1,0 +1,116 @@
+# Smarting HOME — Power Flow Dashboard
+# Uses Sunsynk Power Flow Card (HACS)
+title: "⚡ Power Flow"
+icon: "mdi:flash"
+type: panel
+cards:
+  - type: "custom:sunsynk-power-flow-card"
+    cardstyle: full
+    wide: true
+    large_font: true
+    invert_grid: true
+    three_phase: true
+    show_solar: true
+    show_battery: true
+    show_grid: true
+
+    inverter:
+      model: goodwe_gridmode
+      three_phase: true
+      autarky: energy
+      modern: true
+      colour: "#5ce65c"
+
+    solar:
+      mppts: 2
+      pv1_name: "Roof 1"
+      pv2_name: "Roof 2"
+      colour: "#F7B731"
+      animation_speed: 9
+      max_power: 6000
+      show_daily: true
+
+    battery:
+      energy: 10200
+      shutdown_soc: 5
+      colour: "#5bc0de"
+      show_daily: true
+      animation_speed: 6
+      max_power: 5000
+
+    grid:
+      colour: "#5ce65c"
+      export_colour: "#27ae60"
+      no_grid_colour: "#e74c3c"
+      show_daily_buy: true
+      show_daily_sell: true
+      show_nonessential: true
+      animation_speed: 8
+
+    load:
+      colour: "#e74c3c"
+      show_daily: true
+      show_aux: true
+      additional_loads: 3
+      load1_name: "Boiler"
+      load1_icon: "mdi:water-boiler"
+      load2_name: "AC"
+      load2_icon: "mdi:air-conditioner"
+      load3_name: "Socket 2"
+      load3_icon: "mdi:power-socket-eu"
+
+    entities:
+      # Solar
+      pv1_power_186: sensor.pv1_power
+      pv2_power_187: sensor.pv2_power
+      pv1_voltage_109: sensor.pv1_voltage
+      pv2_voltage_111: sensor.pv2_voltage
+      pv1_current_110: sensor.pv1_current
+      pv2_current_112: sensor.pv2_current
+      solar_sell_247: none
+      remaining_solar: sensor.pv_forecast_remaining_today_total
+      day_pv_energy_108: sensor.today_s_pv_generation
+
+      # Battery
+      battery_power_190: sensor.battery_power
+      battery_soc_184: sensor.battery_state_of_charge
+      battery_voltage_183: sensor.battery_voltage
+      battery_current_191: sensor.battery_current
+      battery_temp_182: sensor.battery_temperature
+      day_battery_charge_70: sensor.today_battery_charge
+      day_battery_discharge_71: sensor.today_battery_discharge
+
+      # Grid
+      grid_power_169: sensor.meter_active_power_total
+      grid_ct_power_172: sensor.meter_active_power_total
+      grid_ct_power_L2: sensor.meter_active_power_l2
+      grid_ct_power_L3: sensor.meter_active_power_l3
+      grid_voltage: sensor.on_grid_l1_voltage
+      day_grid_import_76: sensor.grid_import_daily
+      day_grid_export_77: sensor.grid_export_daily
+
+      # Load
+      essential_power: sensor.load
+      load_power_L1: sensor.load_l1
+      load_power_L2: sensor.load_l2
+      load_power_L3: sensor.load_l3
+      day_load_energy_84: sensor.today_load
+
+      # Additional loads
+      essential_load1: sensor.load_l1
+      essential_load2: sensor.load_l2
+      essential_load1_extra: sensor.load_l3
+
+      # Inverter
+      inverter_status_59: sensor.work_mode
+      inverter_voltage_154: sensor.on_grid_l1_voltage
+      inverter_voltage_L2: sensor.on_grid_l2_voltage
+      inverter_voltage_L3: sensor.on_grid_l3_voltage
+      inverter_current_164: sensor.pv1_current
+      inverter_current_L2: sensor.pv2_current
+      radiator_temp_91: sensor.inverter_temperature_air
+
+      # Autarky
+      use_timer_248: switch.smartinghome_hems_auto_mode
+      energy_cost_buy: sensor.smartinghome_g13_buy_price
+      energy_cost_sell: sensor.smartinghome_rce_sell_price
