@@ -122,6 +122,7 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
     and register with module_url /local/community/smartinghome/panel.js.
     The /local/ path is HA's built-in static file server for www/.
     """
+    import hashlib
     import shutil
 
     source_file = Path(__file__).parent / "frontend" / PANEL_FILENAME
@@ -141,8 +142,9 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
         _LOGGER.error("Failed to copy panel.js to www/: %s", err)
         return
 
-    # module_url via /local/ — HA's built-in static path for www/
-    module_url = f"/local/{PANEL_WWW_DIR}/{PANEL_FILENAME}"
+    # Cache-busting: hash of file content as query param
+    file_hash = hashlib.md5(dest_file.read_bytes()).hexdigest()[:8]
+    module_url = f"/local/{PANEL_WWW_DIR}/{PANEL_FILENAME}?v={file_hash}"
 
     # Register the panel in the sidebar
     from homeassistant.components.frontend import async_register_built_in_panel
