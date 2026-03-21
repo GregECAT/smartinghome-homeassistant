@@ -12,7 +12,7 @@
   <a href="https://hacs.xyz"><img src="https://img.shields.io/badge/HACS-Custom-41BDF5?style=for-the-badge&logo=homeassistantcommunitystore&logoColor=white" alt="HACS" /></a>
   <a href="https://www.home-assistant.io"><img src="https://img.shields.io/badge/Home%20Assistant-2025.1+-18BCF2?style=for-the-badge&logo=homeassistant&logoColor=white" alt="Home Assistant" /></a>
   <a href="https://smartinghome.pl"><img src="https://img.shields.io/badge/License-Commercial-E74C3C?style=for-the-badge&logo=keycdn&logoColor=white" alt="License" /></a>
-  <img src="https://img.shields.io/badge/Version-1.0.0-2ECC71?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/Version-1.1.0-2ECC71?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
 </p>
 
@@ -144,17 +144,26 @@ cp -r smartinghome-ha-goodwe/custom_components/smartinghome /config/custom_compo
 
 After installation, add the integration via **Settings → Devices & Services → Add Integration → Smarting HOME**.
 
-The setup wizard guides you through 4 steps:
+The setup wizard guides you through:
 
-### Step 1 — License Activation 🔑
+### Step 1 — Choose License Mode 🔑
 
-Enter your license key purchased at [smartinghome.pl](https://smartinghome.pl).
+Choose between **FREE** (no license needed) or **PRO** (license key required):
 
-| Tier | Sensors | AI Advisor | Blueprints | Dashboards | Support |
-|------|---------|------------|------------|------------|---------|
-| **DEMO** | 10 | ❌ | ❌ | ❌ | Community |
-| **PRO** | Unlimited | ✅ | ✅ | ✅ | Email |
-| **ENTERPRISE** | Unlimited | ✅ | ✅ | ✅ | Priority + Multi-site |
+| Feature | 🆓 FREE | ⭐ PRO | 🏢 ENTERPRISE |
+|---------|---------|--------|---------------|
+| **Sensors** (33) | ✅ All | ✅ All | ✅ All |
+| **G13 Tariff + RCE** | ✅ | ✅ | ✅ |
+| **HEMS Auto Mode** | ✅ | ✅ | ✅ |
+| **Night Arbitrage** | ❌ | ✅ | ✅ |
+| **Voltage/PV Cascades** | ❌ | ✅ | ✅ |
+| **AI Advisor** | ❌ | ✅ | ✅ |
+| **Export Limit Control** | ❌ | ✅ | ✅ |
+| **Blueprints** | 2 basic | 7 full | 7 full |
+| **Dashboards** | 1 basic | 3 full | 3 full |
+| **Multi-site** | ❌ | ❌ | ✅ |
+
+> 💡 **FREE mode works immediately** — no license server, no registration needed.
 
 ### Step 2 — Inverter Configuration ⚡
 
@@ -169,11 +178,55 @@ Choose your electricity tariff:
 
 Enable **RCE PSE** dynamic pricing for real-time market data.
 
-### Step 4 — AI Configuration 🤖 *(Optional)*
+### Step 4 — AI Configuration 🤖 *(PRO only, optional)*
 
 Provide your own API keys for AI energy advisory:
 - **Google Gemini**: [Get key at ai.google.dev](https://ai.google.dev/)
 - **Anthropic Claude**: [Get key at console.anthropic.com](https://console.anthropic.com/)
+
+---
+
+## 🖥️ Dashboards
+
+### Automatic — Sidebar Panel
+
+After setup, **Smarting HOME** panel appears automatically in the HA sidebar with 5 tabs:
+- **📊 Przegląd** — Live PV/Grid/Battery/Load, SOC bar, daily stats
+- **⚡ Energia** — 3-phase voltage, PV forecast, quick actions
+- **💰 Taryfy & RCE** — G13 zones, RCE prices, trends
+- **🔋 Bateria** — SOC, energy, runtime, arbitrage calculator
+- **🤖 HEMS** — Mode control, AI advisor, reports
+
+> Click **⊞ Pełny ekran** for fullscreen (kiosk) mode — perfect for wall-mounted tablets.
+
+### Manual — YAML Dashboards
+
+For additional dashboards, add to `configuration.yaml`:
+
+```yaml
+lovelace:
+  dashboards:
+    smartinghome-hems:
+      mode: yaml
+      title: "HEMS Control"
+      icon: mdi:brain
+      show_in_sidebar: true
+      filename: custom_components/smartinghome/dashboards/hems_control.yaml
+    smartinghome-power:
+      mode: yaml
+      title: "Power Flow"
+      icon: mdi:solar-power-variant
+      show_in_sidebar: true
+      filename: custom_components/smartinghome/dashboards/power_flow.yaml
+    smartinghome-economics:
+      mode: yaml
+      title: "Economics"
+      icon: mdi:currency-usd
+      show_in_sidebar: true
+      filename: custom_components/smartinghome/dashboards/economics.yaml
+```
+
+Restart Home Assistant after adding.
 
 ---
 
