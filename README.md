@@ -12,14 +12,14 @@
   <a href="https://hacs.xyz"><img src="https://img.shields.io/badge/HACS-Custom-41BDF5?style=for-the-badge&logo=homeassistantcommunitystore&logoColor=white" alt="HACS" /></a>
   <a href="https://www.home-assistant.io"><img src="https://img.shields.io/badge/Home%20Assistant-2025.1+-18BCF2?style=for-the-badge&logo=homeassistant&logoColor=white" alt="Home Assistant" /></a>
   <a href="https://smartinghome.pl"><img src="https://img.shields.io/badge/License-Commercial-E74C3C?style=for-the-badge&logo=keycdn&logoColor=white" alt="License" /></a>
-  <img src="https://img.shields.io/badge/Version-1.3.0-2ECC71?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/Version-1.3.1-2ECC71?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
 </p>
 
 <p align="center">
   <a href="https://smartinghome.pl">🌐 Website</a> •
   <a href="https://smartinghome.pl/docs">📖 Documentation</a> •
-  <a href="https://github.com/GregECAT/smartinghome-ha-goodwe/issues">🐛 Issues</a> •
+  <a href="https://github.com/GregECAT/smartinghome-homeassistant/issues">🐛 Issues</a> •
   <a href="https://smartinghome.pl/buy">🛒 Buy License</a>
 </p>
 
@@ -121,7 +121,7 @@
 
 1. Open **HACS** in your Home Assistant instance
 2. Click the **⋮** menu → **Custom repositories**
-3. Add URL: `https://github.com/GregECAT/smartinghome-ha-goodwe`
+3. Add URL: `https://github.com/GregECAT/smartinghome-homeassistant`
 4. Select category: **Integration**
 5. Search for "**Smarting HOME**" and click **Download**
 6. **Restart Home Assistant**
@@ -130,10 +130,10 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/GregECAT/smartinghome-ha-goodwe.git
+git clone https://github.com/GregECAT/smartinghome-homeassistant.git
 
 # Copy to your HA config directory
-cp -r smartinghome-ha-goodwe/custom_components/smartinghome /config/custom_components/
+cp -r smartinghome-homeassistant/custom_components/smartinghome /config/custom_components/
 
 # Restart Home Assistant
 ```
@@ -391,7 +391,7 @@ Dashboard YAML files: `custom_components/smartinghome/dashboards/`
 ## 📁 Repository Structure
 
 ```
-smartinghome-ha-goodwe/
+smartinghome-homeassistant/
 ├── .github/workflows/validate.yml       # CI/CD pipeline
 ├── assets/banner.png                    # Brand assets
 ├── hacs.json                            # HACS manifest
@@ -442,7 +442,7 @@ smartinghome-ha-goodwe/
 | 🌐 Website | [smartinghome.pl](https://smartinghome.pl) |
 | 🛒 Buy License | [smartinghome.pl/buy](https://smartinghome.pl/buy) |
 | 📖 Documentation | [smartinghome.pl/docs](https://smartinghome.pl/docs) |
-| 🐛 Bug Reports | [GitHub Issues](https://github.com/GregECAT/smartinghome-ha-goodwe/issues) |
+| 🐛 Bug Reports | [GitHub Issues](https://github.com/GregECAT/smartinghome-homeassistant/issues) |
 | 📧 Email | [kontakt@smartinghome.pl](mailto:kontakt@smartinghome.pl) |
 | 💬 Community | [Home Assistant Community](https://community.home-assistant.io/) |
 
