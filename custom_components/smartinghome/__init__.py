@@ -31,7 +31,7 @@ _LOGGER = logging.getLogger(__name__)
 
 SmartingHomeConfigEntry = ConfigEntry
 
-PANEL_URL = "/smartinghome_panel"
+PANEL_URL = "/api/panel_custom/smartinghome/panel.js"
 PANEL_TITLE = "Smarting HOME"
 PANEL_ICON = "mdi:solar-power-variant"
 
