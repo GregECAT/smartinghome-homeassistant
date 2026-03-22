@@ -249,13 +249,35 @@ class SmartingHomePanel extends HTMLElement {
 
     // Grid
     this._setText("v-grid", this._pw(Math.abs(grid)));
-    this._setText("v-grid-dir", grid > 0 ? "POBÓR Z SIECI" : grid < 0 ? "ODDAWANIE DO SIECI" : "");
+    this._setText("v-grid-dir", grid > 0 ? "POBÓR Z SIECI" : grid < -10 ? "ODDAWANIE DO SIECI" : "");
     this._setText("v-grid-import", `${this._fm("grid_import_today")} kWh`);
     this._setText("v-grid-export", `${this._fm("grid_export_today")} kWh`);
     this._setText("v-grid-v1", `${this._fm("voltage_l1")} V`);
     this._setText("v-grid-v2", `${this._fm("voltage_l2")} V`);
     this._setText("v-grid-v3", `${this._fm("voltage_l3")} V`);
     this._setText("v-grid-freq", `${this._fm("grid_frequency", 2)} Hz`);
+    // Dynamic grid node coloring
+    const gridNode = this.shadowRoot.getElementById("grid-node");
+    const gridBig = this.shadowRoot.getElementById("v-grid");
+    const gridDirEl = this.shadowRoot.getElementById("v-grid-dir");
+    if (gridNode) {
+      if (grid > 10) {
+        gridNode.style.borderColor = "rgba(231,76,60,0.5)";
+        gridNode.style.boxShadow = "0 8px 32px 0 rgba(231,76,60,0.2)";
+        if (gridDirEl) gridDirEl.style.color = "#e74c3c";
+        if (gridBig) gridBig.style.color = "#e74c3c";
+      } else if (grid < -10) {
+        gridNode.style.borderColor = "rgba(46,204,113,0.5)";
+        gridNode.style.boxShadow = "0 8px 32px 0 rgba(46,204,113,0.2)";
+        if (gridDirEl) gridDirEl.style.color = "#2ecc71";
+        if (gridBig) gridBig.style.color = "#2ecc71";
+      } else {
+        gridNode.style.borderColor = "rgba(255,255,255,0.1)";
+        gridNode.style.boxShadow = "0 8px 32px 0 rgba(0,0,0,0.3)";
+        if (gridDirEl) gridDirEl.style.color = "#64748b";
+        if (gridBig) gridBig.style.color = "#fff";
+      }
+    }
 
     // Battery
     this._setText("v-batt", this._pw(Math.abs(batt)));
@@ -499,10 +521,10 @@ class SmartingHomePanel extends HTMLElement {
         .flow-nodes {
           position: relative; z-index: 1;
           display: grid;
-          grid-template-columns: 1fr auto 1fr;
+          grid-template-columns: 1fr 1fr 1fr;
           grid-template-rows: auto auto auto;
-          gap: 10px; min-height: 520px;
-          align-items: center;
+          gap: 12px; min-height: 540px;
+          align-items: start;
         }
 
         /* Node boxes */
@@ -515,7 +537,7 @@ class SmartingHomePanel extends HTMLElement {
           border-radius: 16px;
           padding: 18px;
           position: relative;
-          transition: all 0.3s ease;
+          transition: all 0.4s ease;
         }
         .node:hover {
           border-color: rgba(0,212,255,0.3);
@@ -535,12 +557,12 @@ class SmartingHomePanel extends HTMLElement {
           text-transform: uppercase; margin-top: 2px;
         }
 
-        /* Cross layout: PV top, Batt left, Inv center, Home right, Grid bottom */
-        .pv-area { grid-column: 2; grid-row: 1; }
-        .batt-area { grid-column: 1; grid-row: 2; }
+        /* Corner layout: PV top-left, Home top-right, Inv center, Batt bottom-left, Grid bottom-right */
+        .pv-area { grid-column: 1; grid-row: 1; }
+        .home-area { grid-column: 3; grid-row: 1; }
         .inv-area { grid-column: 2; grid-row: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-        .home-area { grid-column: 3; grid-row: 2; }
-        .grid-area { grid-column: 2; grid-row: 3; }
+        .batt-area { grid-column: 1; grid-row: 2 / 4; align-self: center; }
+        .grid-area { grid-column: 3; grid-row: 2 / 4; align-self: center; }
         .summary-area { grid-column: 1 / 4; grid-row: 4; }
 
         /* PV string boxes */
@@ -731,11 +753,11 @@ class SmartingHomePanel extends HTMLElement {
 
         @media (max-width: 800px) {
           .flow-nodes { grid-template-columns: 1fr 1fr; grid-template-rows: auto; gap: 8px; }
-          .pv-area { grid-column: 1 / 3; grid-row: 1; }
+          .pv-area { grid-column: 1; grid-row: 1; }
+          .home-area { grid-column: 2; grid-row: 1; }
           .inv-area { grid-column: 1 / 3; grid-row: 2; flex-direction: row; gap: 12px; }
           .batt-area { grid-column: 1; grid-row: 3; }
-          .home-area { grid-column: 2; grid-row: 3; }
-          .grid-area { grid-column: 1 / 3; grid-row: 4; }
+          .grid-area { grid-column: 2; grid-row: 3; }
           .summary-area { grid-column: 1 / 3; }
           .flow-svg-bg { display: none; }
         }
@@ -771,60 +793,71 @@ class SmartingHomePanel extends HTMLElement {
           <div class="flow-wrapper">
             <!-- ORTHOGONAL SVG OVERLAY -->
             <svg class="flow-svg-bg" viewBox="0 0 700 500" preserveAspectRatio="xMidYMid meet">
-              <!-- PV → Inverter (vertical down) -->
-              <path class="fl-line" d="M 350,80 V 200" />
+              <!-- PV (top-left) → Inverter (center): right then down -->
+              <path class="fl-line" d="M 150,90 H 350 V 220" />
               <g id="fl-pv-inv" class="fl-dot solar" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 350,80 V 200" />
+                <animateMotion dur="2s" repeatCount="indefinite" path="M 150,90 H 350 V 220" />
               </g>
-              <!-- Inverter → Home (horizontal right) -->
-              <path class="fl-line" d="M 400,250 H 580" />
+              <!-- Inverter → Home (top-right): up then right -->
+              <path class="fl-line" d="M 350,220 V 90 H 550" />
               <g id="fl-inv-load" class="fl-dot load-flow" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 400,250 H 580" />
+                <animateMotion dur="2s" repeatCount="indefinite" path="M 350,220 V 90 H 550" />
               </g>
-              <!-- Inverter → Battery (horizontal left) -->
-              <path class="fl-line" d="M 300,250 H 120" />
+              <!-- Inverter → Battery (bottom-left): left -->
+              <path class="fl-line" d="M 300,280 H 150" />
               <g id="fl-inv-batt" class="fl-dot batt-charge" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 300,250 H 120" />
+                <animateMotion dur="2s" repeatCount="indefinite" path="M 300,280 H 150" />
               </g>
-              <!-- Battery → Inverter (horizontal right) -->
+              <!-- Battery → Inverter: right -->
               <g id="fl-batt-inv" class="fl-dot batt-discharge" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 120,250 H 300" />
+                <animateMotion dur="2s" repeatCount="indefinite" path="M 150,280 H 300" />
               </g>
-              <!-- Inverter → Grid (vertical down) -->
-              <path class="fl-line" d="M 350,300 V 430" />
-              <g id="fl-inv-grid" class="fl-dot grid-out" style="display:none">
-                <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 350,300 V 430" />
-              </g>
-              <!-- Grid → Inverter (vertical up) -->
+              <!-- Grid (bottom-right) → Inverter: left -->
+              <path class="fl-line" d="M 400,280 H 550" />
               <g id="fl-grid-inv" class="fl-dot grid-in" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 350,430 V 300" />
+                <animateMotion dur="2s" repeatCount="indefinite" path="M 550,280 H 400" />
+              </g>
+              <!-- Inverter → Grid: right -->
+              <g id="fl-inv-grid" class="fl-dot grid-out" style="display:none">
+                <circle r="5" />
+                <animateMotion dur="2s" repeatCount="indefinite" path="M 400,280 H 550" />
               </g>
             </svg>
 
             <!-- FLOW NODES GRID -->
             <div class="flow-nodes">
-              <!-- ☀️ PV AREA (top center) -->
+              <!-- ☀️ PV AREA (top left) -->
               <div class="pv-area">
-                <div class="node" style="border-color: rgba(247,183,49,0.2); margin-bottom:8px">
+                <div class="node" style="border-color: rgba(247,183,49,0.2)">
                   <div class="node-title">☀️ Produkcja PV</div>
                   <div class="node-big" style="color:#f7b731" id="v-pv">— W</div>
                   <div class="node-sub" id="v-pv-today">— kWh dziś</div>
-                </div>
-                <div class="pv-strings" style="display:flex; gap:6px; flex-wrap:wrap">
-                  <div class="pv-string" id="pv1-box"><div class="pv-name" id="pv1-label" onclick="this.getRootNode().host._editPvLabel(1)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV1</div><div class="pv-val" id="v-pv1-p">—</div><div class="pv-detail"><span id="v-pv1-v">— V</span> · <span id="v-pv1-a">— A</span></div></div>
-                  <div class="pv-string" id="pv2-box"><div class="pv-name" id="pv2-label" onclick="this.getRootNode().host._editPvLabel(2)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV2</div><div class="pv-val" id="v-pv2-p">—</div><div class="pv-detail"><span id="v-pv2-v">— V</span> · <span id="v-pv2-a">— A</span></div></div>
-                  <div class="pv-string" id="pv3-box" style="display:none"><div class="pv-name" id="pv3-label" onclick="this.getRootNode().host._editPvLabel(3)" style="cursor:pointer">PV3</div><div class="pv-val" id="v-pv3-p">—</div><div class="pv-detail"><span id="v-pv3-v">—</span></div></div>
-                  <div class="pv-string" id="pv4-box" style="display:none"><div class="pv-name" id="pv4-label" onclick="this.getRootNode().host._editPvLabel(4)" style="cursor:pointer">PV4</div><div class="pv-val" id="v-pv4-p">—</div><div class="pv-detail"><span id="v-pv4-v">—</span></div></div>
+                  <div class="pv-strings" style="display:flex; gap:6px; flex-wrap:wrap; margin-top:10px">
+                    <div class="pv-string" id="pv1-box"><div class="pv-name" id="pv1-label" onclick="this.getRootNode().host._editPvLabel(1)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV1</div><div class="pv-val" id="v-pv1-p">—</div><div class="pv-detail"><span id="v-pv1-v">— V</span> · <span id="v-pv1-a">— A</span></div></div>
+                    <div class="pv-string" id="pv2-box"><div class="pv-name" id="pv2-label" onclick="this.getRootNode().host._editPvLabel(2)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV2</div><div class="pv-val" id="v-pv2-p">—</div><div class="pv-detail"><span id="v-pv2-v">— V</span> · <span id="v-pv2-a">— A</span></div></div>
+                    <div class="pv-string" id="pv3-box" style="display:none"><div class="pv-name" id="pv3-label" onclick="this.getRootNode().host._editPvLabel(3)" style="cursor:pointer">PV3</div><div class="pv-val" id="v-pv3-p">—</div><div class="pv-detail"><span id="v-pv3-v">—</span></div></div>
+                    <div class="pv-string" id="pv4-box" style="display:none"><div class="pv-name" id="pv4-label" onclick="this.getRootNode().host._editPvLabel(4)" style="cursor:pointer">PV4</div><div class="pv-val" id="v-pv4-p">—</div><div class="pv-detail"><span id="v-pv4-v">—</span></div></div>
+                  </div>
                 </div>
               </div>
 
-              <!-- 🔋 BATTERY (middle left) -->
+              <!-- 🏠 ZUZYCIE (top right) -->
+              <div class="home-area">
+                <div class="node" style="border-color: rgba(46,204,113,0.2)">
+                  <div class="node-title">🏠 Zużycie</div>
+                  <div class="node-big" id="v-load">— W</div>
+                  <div class="node-detail" style="margin-top:8px">
+                    <div id="v-load-l1">L1: — W</div><div id="v-load-l2">L2: — W</div><div id="v-load-l3">L3: — W</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 🔋 BATTERY (left, below PV) -->
               <div class="batt-area">
                 <div class="node" style="border-color: rgba(0,212,255,0.2)">
                   <div class="node-title">🔋 Bateria</div>
@@ -861,20 +894,9 @@ class SmartingHomePanel extends HTMLElement {
                 </div>
               </div>
 
-              <!-- 🏠 HOME (middle right) -->
-              <div class="home-area">
-                <div class="node" style="border-color: rgba(46,204,113,0.2)">
-                  <div class="node-title">🏠 Zużycie</div>
-                  <div class="node-big" id="v-load">— W</div>
-                  <div class="node-detail" style="margin-top:8px">
-                    <div id="v-load-l1">L1: — W</div><div id="v-load-l2">L2: — W</div><div id="v-load-l3">L3: — W</div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 🔌 GRID (bottom center) -->
+              <!-- 🔌 GRID / SIEĆ (right, below Home) -->
               <div class="grid-area">
-                <div class="node" style="border-color: rgba(231,76,60,0.15)">
+                <div class="node" id="grid-node" style="border-color: rgba(231,76,60,0.15); transition: border-color 0.5s, box-shadow 0.5s">
                   <div class="node-title">🔌 Sieć</div>
                   <div class="node-big" id="v-grid">— W</div>
                   <div class="node-dir" id="v-grid-dir" style="color:#e74c3c"></div>
@@ -1089,7 +1111,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.8</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.9</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
