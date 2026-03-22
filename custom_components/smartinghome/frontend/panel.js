@@ -544,6 +544,109 @@ class SmartingHomePanel extends HTMLElement {
     el.innerHTML = cards.join('');
   }
 
+  _calcHEMSScore() {
+    const el = this.shadowRoot.getElementById("hems-score-display");
+    if (!el) return;
+
+    // ── Factor 1: Autarky (30%) — how much energy comes from PV vs grid
+    const impToday = this._nm("grid_import_today") || 0;
+    const pvToday = parseFloat(this._fm("pv_today")) || 0;
+    let autarky = 0;
+    if (pvToday > 0 || impToday > 0) {
+      const total = pvToday + impToday;
+      autarky = total > 0 ? Math.min(100, ((total - impToday) / total) * 100) : 0;
+    } else {
+      const pvNow = this._nm("pv_power") || 0;
+      const loadNow = this._nm("load_power") || 0;
+      autarky = loadNow > 0 ? Math.min(100, (pvNow / loadNow) * 100) : 0;
+    }
+
+    // ── Factor 2: Self-consumption (25%) — how much PV is used vs exported
+    const expToday = this._nm("grid_export_today") || 0;
+    let selfCons = 0;
+    if (pvToday > 0) {
+      selfCons = Math.min(100, ((pvToday - expToday) / pvToday) * 100);
+    } else {
+      selfCons = (this._nm("pv_power") || 0) > 0 ? 100 : 0;
+    }
+
+    // ── Factor 3: Battery utilization (15%) — SOC management
+    const soc = this._nm("battery_soc") || 0;
+    // Optimal SOC range: 20-90%. Penalize extremes
+    let battScore = 0;
+    if (soc >= 20 && soc <= 90) battScore = 100;
+    else if (soc > 90) battScore = 100 - (soc - 90) * 5; // slight penalty for overcharging
+    else battScore = soc * 5; // 0% SOC = 0, 20% SOC = 100
+
+    // ── Factor 4: Tariff optimization (15%) — are we using cheap energy?
+    const hour = new Date().getHours();
+    const isOffPeak = (hour >= 22 || hour < 6) || (new Date().getDay() === 0 || new Date().getDay() === 6);
+    const gridPower = Math.abs(this._nm("grid_power") || 0);
+    let tariffScore = 100; // default: good
+    if (gridPower > 100) { // significant grid usage
+      if (!isOffPeak && hour >= 13 && hour <= 15) tariffScore = 90; // midday cheaper
+      else if (!isOffPeak && (hour >= 7 && hour < 13)) tariffScore = 40; // morning peak
+      else if (!isOffPeak && (hour >= 15 && hour < 22)) tariffScore = 20; // afternoon peak!
+      // Off-peak importing is OK = 100
+    }
+    // Bonus: if we're exporting during high RCE, great
+    const rceSell = parseFloat(this._s("sensor.rce_pse_cena_sprzedazy") || "0");
+    if (rceSell > 0.5 && expToday > 0) tariffScore = Math.min(100, tariffScore + 20);
+
+    // ── Factor 5: PV yield vs forecast (15%)
+    const forecastToday = this._n("sensor.smartinghome_pv_forecast_today_total") || 0;
+    let pvYieldScore = 50; // neutral default
+    if (forecastToday > 0 && pvToday > 0) {
+      pvYieldScore = Math.min(100, (pvToday / forecastToday) * 100);
+    } else if (hour < 7) {
+      pvYieldScore = 50; // too early to judge
+    }
+
+    // ── Weighted score
+    const score = Math.round(
+      autarky * 0.30 +
+      selfCons * 0.25 +
+      battScore * 0.15 +
+      tariffScore * 0.15 +
+      pvYieldScore * 0.15
+    );
+    const clampedScore = Math.min(100, Math.max(0, score));
+
+    // Store for AI
+    this._hemsScore = clampedScore;
+
+    // Color grading
+    let scoreColor, scoreLabel, scoreBg;
+    if (clampedScore >= 80) { scoreColor = '#2ecc71'; scoreLabel = '🟢 Doskonale'; scoreBg = 'rgba(46,204,113,0.08)'; }
+    else if (clampedScore >= 60) { scoreColor = '#f7b731'; scoreLabel = '🟡 Dobrze'; scoreBg = 'rgba(247,183,49,0.08)'; }
+    else if (clampedScore >= 40) { scoreColor = '#f39c12'; scoreLabel = '🟠 Przeciętnie'; scoreBg = 'rgba(243,156,18,0.08)'; }
+    else { scoreColor = '#e74c3c'; scoreLabel = '🔴 Słabo'; scoreBg = 'rgba(231,76,60,0.08)'; }
+
+    el.innerHTML = `
+      <div style="display:flex; align-items:center; gap:16px">
+        <div style="position:relative; width:80px; height:80px; flex-shrink:0">
+          <svg viewBox="0 0 36 36" style="width:80px; height:80px; transform:rotate(-90deg)">
+            <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="3"/>
+            <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="${scoreColor}" stroke-width="3" stroke-dasharray="${clampedScore}, 100" stroke-linecap="round" style="transition:stroke-dasharray 1s ease"/>
+          </svg>
+          <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column">
+            <div style="font-size:22px; font-weight:900; color:${scoreColor}">${clampedScore}</div>
+            <div style="font-size:8px; color:#64748b; margin-top:-2px">/ 100</div>
+          </div>
+        </div>
+        <div style="flex:1">
+          <div style="font-size:14px; font-weight:700; color:${scoreColor}; margin-bottom:6px">${scoreLabel}</div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px 12px; font-size:10px">
+            <div style="color:#94a3b8">⚡ Autarkia</div><div style="color:#fff; font-weight:600">${autarky.toFixed(0)}%</div>
+            <div style="color:#94a3b8">♻️ Autokonsumpcja</div><div style="color:#fff; font-weight:600">${selfCons.toFixed(0)}%</div>
+            <div style="color:#94a3b8">🔋 Bateria</div><div style="color:#fff; font-weight:600">${battScore.toFixed(0)}%</div>
+            <div style="color:#94a3b8">💰 Taryfa</div><div style="color:#fff; font-weight:600">${tariffScore.toFixed(0)}%</div>
+            <div style="color:#94a3b8">☀️ PV Yield</div><div style="color:#fff; font-weight:600">${pvYieldScore.toFixed(0)}%</div>
+          </div>
+        </div>
+      </div>`;
+  }
+
   _loadCronSettings() {
     const s = this._settings;
     const chkH = this.shadowRoot.getElementById("chk-cron-hems");
@@ -991,7 +1094,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._calcHEMSScore(); }
 
   _updateSunWidget() {
     const now = new Date();
@@ -1237,29 +1340,36 @@ class SmartingHomePanel extends HTMLElement {
     } else {
       // Autarky = (1 - grid_import / total_consumption) × 100
       const impToday = this._nm("grid_import_today") || 0;
-      const loadTotal = (this._nm("pv_power") || 0) > 0 ? ((this._nm("load_power") || 0) > 0 ? (this._nm("load_power") || 1) : 1) : 1;
-      // Use daily data: pv_today + batt_discharge - batt_charge + import = total consumption; autarky = (total - import) / total
       const pvToday = parseFloat(this._fm("pv_today")) || 0;
       if (pvToday > 0 || impToday > 0) {
-        const totalConsumed = pvToday + impToday; // simplified: total consumption ≈ pv generated + imported
+        const totalConsumed = pvToday + impToday;
         const autarky = totalConsumed > 0 ? Math.min(100, Math.max(0, ((totalConsumed - impToday) / totalConsumed) * 100)) : 0;
         this._setText("v-autarky", `${autarky.toFixed(0)}%`);
       } else {
-        this._setText("v-autarky", "—%");
+        // Fallback to real-time power: if grid is positive (importing), autarky = pv_power / load_power
+        const pvNow = this._nm("pv_power") || 0;
+        const loadNow = this._nm("load_power") || 0;
+        if (loadNow > 0) {
+          const rtAutarky = Math.min(100, Math.max(0, (pvNow / loadNow) * 100));
+          this._setText("v-autarky", `${rtAutarky.toFixed(0)}%`);
+        } else {
+          this._setText("v-autarky", "0%");
+        }
       }
     }
     const selfConsVal = this._n("sensor.smartinghome_self_consumption_today");
     if (selfConsVal !== null) {
       this._setText("v-selfcons", `${selfConsVal.toFixed(0)}%`);
     } else {
-      // Self-consumption = (1 - grid_export / pv_generation) × 100
       const expToday = this._nm("grid_export_today") || 0;
       const pvGen = parseFloat(this._fm("pv_today")) || 0;
       if (pvGen > 0) {
         const selfCons = Math.min(100, Math.max(0, ((pvGen - expToday) / pvGen) * 100));
         this._setText("v-selfcons", `${selfCons.toFixed(0)}%`);
       } else {
-        this._setText("v-selfcons", "—%");
+        // No PV generation — self consumption is 100% (nothing exported) or 0% (nothing produced)
+        const pvNow = this._nm("pv_power") || 0;
+        this._setText("v-selfcons", pvNow > 0 ? "100%" : "0%");
       }
     }
 
@@ -2242,6 +2352,14 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
+          <!-- 📊 HEMS Score -->
+          <div class="card" style="margin-top:10px">
+            <div class="card-title">📊 Sprawność HEMS</div>
+            <div id="hems-score-display" style="padding:4px 0">
+              <div style="text-align:center; color:#64748b; font-size:11px">Obliczanie...</div>
+            </div>
+          </div>
+
           <!-- HEMS Recommendation -->
           <div class="card" style="margin-top:10px">
             <div class="card-title">💡 Rekomendacja HEMS</div>
@@ -3204,7 +3322,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
