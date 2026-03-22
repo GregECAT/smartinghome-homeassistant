@@ -2172,8 +2172,38 @@ class SmartingHomePanel extends HTMLElement {
           border: 1px solid rgba(247,183,49,0.2);
         }
 
-        @media (max-width: 800px) {
-          .flow-nodes { grid-template-columns: 1fr 1fr; grid-template-rows: auto; gap: 8px; }
+        /* ── Responsive grid helpers ── */
+        .g4 { display: grid; gap: 10px; grid-template-columns: repeat(4, 1fr); }
+        .g3 { display: grid; gap: 10px; grid-template-columns: repeat(3, 1fr); }
+        .g2-1fr { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
+
+        /* ── Top bar container ── */
+        .top-bar { display: flex; align-items: stretch; background: rgba(255,255,255,0.03); border-bottom: 1px solid rgba(255,255,255,0.06); flex-wrap: wrap; }
+        .top-left { flex: 2; min-width: 0; }
+        .top-center { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 4px 10px; border-left: 1px solid rgba(255,255,255,0.06); min-width: 200px; }
+        .top-right { display: flex; flex-direction: column; justify-content: center; align-items: flex-end; gap: 6px; padding: 6px 14px; border-left: 1px solid rgba(255,255,255,0.06); }
+
+        /* ═══ TABLET LANDSCAPE (≤1024px) ═══ */
+        @media (max-width: 1024px) {
+          .top-bar { flex-wrap: wrap; }
+          .top-left { flex: 1 1 100%; order: 1; }
+          .top-center { flex: 1 1 auto; order: 2; min-width: 200px; border-left: none; border-top: 1px solid rgba(255,255,255,0.06); padding: 6px 12px; }
+          .top-right { order: 3; flex-direction: row; padding: 6px 12px; border-left: none; border-top: 1px solid rgba(255,255,255,0.06); }
+          .tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+          .tabs::-webkit-scrollbar { display: none; }
+          .flow-wrapper { min-height: 440px; }
+          .flow-nodes { min-height: 440px; gap: 8px; }
+          .node { padding: 14px; }
+          .g4 { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        /* ═══ TABLET PORTRAIT (≤768px) ═══ */
+        @media (max-width: 768px) {
+          .header h1 { font-size: 15px; }
+          .tab-btn { padding: 6px 10px; font-size: 11px; }
+          .tab-content { padding: 10px 10px; }
+          .flow-wrapper { min-height: 380px; }
+          .flow-nodes { min-height: 380px; gap: 6px; grid-template-columns: 1fr 1fr; grid-template-rows: auto; }
           .pv-area { grid-column: 1; grid-row: 1; }
           .home-area { grid-column: 2; grid-row: 1; }
           .inv-area { grid-column: 1 / 3; grid-row: 2; flex-direction: row; gap: 12px; }
@@ -2181,18 +2211,59 @@ class SmartingHomePanel extends HTMLElement {
           .grid-area { grid-column: 2; grid-row: 3; }
           .summary-area { grid-column: 1 / 3; }
           .flow-svg-bg { display: none; }
+          .node { padding: 12px; }
+          .node-title { font-size: 9px; }
+          .card { padding: 14px; border-radius: 12px; }
+          .card-title { font-size: 10px; margin-bottom: 8px; }
+          .gc-2 { grid-template-columns: 1fr; }
+          .gc-3 { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+          .g4 { grid-template-columns: repeat(2, 1fr); }
+          .g3 { grid-template-columns: 1fr 1fr; }
+          .summary-bar { gap: 10px; padding: 10px 12px; flex-wrap: wrap; justify-content: space-around; }
+          .summary-item .si-val { font-size: 14px; }
+          .recommendation { padding: 10px; font-size: 12px; }
+          .dr .lb { font-size: 11px; }
+          .dr .vl { font-size: 12px; }
+          .actions { grid-template-columns: 1fr; }
         }
+
+        /* ═══ PHONE (≤480px) ═══ */
         @media (max-width: 480px) {
-          .flow-nodes { grid-template-columns: 1fr; }
+          .top-center { min-width: unset; flex: 1 1 100%; justify-content: space-around; }
+          .top-right { flex: 1 1 100%; flex-direction: row; justify-content: center; }
+          .header h1 { font-size: 14px; }
+          .tab-btn { padding: 5px 8px; font-size: 10px; }
+          .tab-content { padding: 8px 6px; }
+          .flow-wrapper { min-height: auto; }
+          .flow-nodes { grid-template-columns: 1fr; min-height: auto; }
           .pv-area, .home-area, .inv-area, .batt-area, .grid-area, .summary-area { grid-column: 1; }
+          .inv-area { flex-direction: column; }
+          .node { padding: 10px; border-radius: 12px; }
+          .card { padding: 10px; border-radius: 10px; }
+          .card-title { font-size: 9px; }
+          .g4 { grid-template-columns: 1fr 1fr; gap: 6px; }
+          .g3 { grid-template-columns: 1fr; gap: 6px; }
+          .g2-1fr { grid-template-columns: 1fr; gap: 6px; }
+          .gc-3 { grid-template-columns: 1fr; }
+          .summary-bar { flex-direction: column; gap: 6px; padding: 8px; }
+          .summary-item { display: flex; justify-content: space-between; width: 100%; }
+          .summary-item .si-label { text-align: left; }
+          .summary-item .si-val { font-size: 13px; text-align: right; }
+          .dr { padding: 6px 0; }
+          .dr .lb { font-size: 10px; }
+          .dr .vl { font-size: 11px; }
+          .recommendation { padding: 8px; font-size: 11px; line-height: 1.5; }
+          .fullscreen-btn { display: none; }
+          .settings-field input { font-size: 12px; padding: 8px 10px; }
+          .save-btn { font-size: 12px; padding: 8px 18px; }
         }
       </style>
 
       <div class="panel-container">
         <!-- Top Row: Logo+Tabs (left) + Sun Widget (mid) + Buttons (right) -->
-        <div style="display:flex; align-items:stretch; background:rgba(255,255,255,0.03); border-bottom:1px solid rgba(255,255,255,0.06)">
+        <div class="top-bar">
           <!-- Left: Header + Tabs -->
-          <div style="flex:2; min-width:0">
+          <div class="top-left">
             <div class="header" style="position:relative; border-bottom:none">
               <div class="header-left">
                 <span style="font-size:22px">⚡</span>
@@ -2210,7 +2281,7 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
           <!-- Center: Sun Widget (compact) -->
-          <div style="flex:1; display:flex; align-items:center; justify-content:center; gap:8px; padding:4px 10px; border-left:1px solid rgba(255,255,255,0.06); min-width:280px">
+          <div class="top-center">
             <div style="text-align:center">
               <div style="font-size:8px; color:#64748b; text-transform:uppercase; letter-spacing:0.8px" id="ov-date">—</div>
               <div style="font-size:24px; font-weight:900; color:#fff; letter-spacing:-1px; line-height:1" id="ov-clock">--:--</div>
@@ -2233,7 +2304,7 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
           <!-- Right: Actions -->
-          <div style="display:flex; flex-direction:column; justify-content:center; align-items:flex-end; gap:6px; padding:6px 14px; border-left:1px solid rgba(255,255,255,0.06); min-width:120px">
+          <div class="top-right">
             <div style="display:flex; align-items:center; gap:6px">
               <span class="badge free" id="v-license">FREE</span>
               <button class="gear-btn" title="Ustawienia" onclick="this.getRootNode().host._switchTab('settings')">⚙️</button>
@@ -2489,7 +2560,7 @@ class SmartingHomePanel extends HTMLElement {
         <div class="tab-content" data-tab="tariff">
 
           <!-- ROW 1: RCE Price Cards -->
-          <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px">
+                    <div class="g4" style="margin-bottom:14px">
             <div class="card" style="text-align:center; padding:14px 8px">
               <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:1px">RCE teraz</div>
               <div style="font-size:28px; font-weight:800; margin:4px 0" id="v-rce-now">—</div>
@@ -2513,7 +2584,7 @@ class SmartingHomePanel extends HTMLElement {
           </div>
 
           <!-- ROW 2: RCE Stats + Trend -->
-          <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px">
+                    <div class="g4" style="margin-bottom:14px">
             <div class="card" style="text-align:center; padding:12px 8px">
               <div style="font-size:9px; color:#64748b; text-transform:uppercase">Średnia dziś</div>
               <div style="font-size:18px; font-weight:700; color:#00d4ff; margin-top:4px" id="v-rce-avg2">—</div>
@@ -2537,7 +2608,7 @@ class SmartingHomePanel extends HTMLElement {
           </div>
 
           <!-- ROW 3: Time Windows + G13 Zone -->
-          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:14px">
+          <div class="g3" style="margin-bottom:14px">
             <div class="card" style="padding:14px; border-left:3px solid #2ecc71">
               <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px">
                 <div style="width:10px; height:10px; border-radius:50%; background:#2ecc71"></div>
@@ -2619,7 +2690,7 @@ class SmartingHomePanel extends HTMLElement {
           </div>
 
           <!-- ROW 6: Economics -->
-          <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px">
+                    <div class="g4" style="margin-bottom:14px">
             <div class="card" style="text-align:center; padding:12px 8px">
               <div style="font-size:9px; color:#64748b; text-transform:uppercase">Oszczędności</div>
               <div style="font-size:20px; font-weight:800; color:#2ecc71; margin-top:6px" id="v-savings">—</div>
@@ -3394,7 +3465,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.5</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.6</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
