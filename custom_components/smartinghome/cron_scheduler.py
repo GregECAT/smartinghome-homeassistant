@@ -102,7 +102,49 @@ class AICronScheduler:
             "export_revenue": raw.get("g13_export_revenue_today"),
             "savings": raw.get("g13_self_consumption_savings_today"),
             **weather_data,
+            **self._calc_hems_score(raw),
         }
+
+    def _calc_hems_score(self, raw: dict) -> dict:
+        """Calculate HEMS efficiency score (0-100)."""
+        from datetime import datetime
+        try:
+            pv_today = float(raw.get("sensor.today_s_pv_generation") or 0)
+            imp_today = float(raw.get("sensor.grid_export_daily") or 0)  # mapped: grid_export = our import
+            exp_today = float(raw.get("sensor.grid_import_daily") or 0)  # mapped: grid_import = our export
+            soc = float(raw.get("sensor.battery_state_of_charge") or 0)
+            pv_power = float(raw.get("sensor.pv_power") or 0)
+            load_power = float(raw.get("sensor.load") or 0)
+
+            # Autarky
+            total = pv_today + imp_today
+            autarky = min(100, ((total - imp_today) / total) * 100) if total > 0 else (min(100, pv_power / load_power * 100) if load_power > 0 else 0)
+
+            # Self-consumption
+            self_cons = min(100, ((pv_today - exp_today) / pv_today) * 100) if pv_today > 0 else 0
+
+            # Battery score
+            batt = 100 if 20 <= soc <= 90 else (100 - (soc - 90) * 5 if soc > 90 else soc * 5)
+
+            # Tariff score
+            hour = datetime.now().hour
+            weekday = datetime.now().weekday()
+            is_off_peak = (hour >= 22 or hour < 6) or weekday >= 5
+            grid_power = abs(float(raw.get("sensor.meter_active_power_total") or 0))
+            tariff = 100
+            if grid_power > 100 and not is_off_peak:
+                if 7 <= hour < 13: tariff = 40
+                elif 15 <= hour < 22: tariff = 20
+                elif 13 <= hour <= 15: tariff = 90
+
+            # PV yield
+            forecast = float(raw.get("pv_forecast_today_total") or 0)
+            pv_yield = min(100, (pv_today / forecast) * 100) if forecast > 0 and pv_today > 0 else 50
+
+            score = round(autarky * 0.30 + self_cons * 0.25 + batt * 0.15 + tariff * 0.15 + pv_yield * 0.15)
+            return {"hems_score": min(100, max(0, score)), "self_consumption": round(self_cons)}
+        except Exception:
+            return {"hems_score": 0, "self_consumption": 0}
 
     def _get_settings_path(self) -> Path:
         """Return path to settings.json."""

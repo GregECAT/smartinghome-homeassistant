@@ -201,6 +201,11 @@ class AIAdvisor:
             f"- Export Revenue: {data.get('export_revenue', 0)} PLN",
             f"- Self-consumption Savings: {data.get('savings', 0)} PLN",
             f"- Autarky: {data.get('autarky', 0)}%",
+            f"- Self-consumption: {data.get('self_consumption', 0)}%",
+            "",
+            "## HEMS Efficiency Score",
+            f"- Current Score: {data.get('hems_score', 'N/A')} / 100",
+            f"- Score breakdown: autarky(30%), self-consumption(25%), battery(15%), tariff(15%), PV yield(15%)",
         ]
         return "\n".join(lines)
 
