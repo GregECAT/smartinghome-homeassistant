@@ -27,6 +27,7 @@ from .coordinator import SmartingHomeCoordinator
 from .energy_manager import EnergyManager
 from .ai_advisor import AIAdvisor
 from .license import LicenseManager
+from .cron_scheduler import AICronScheduler
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -92,8 +93,8 @@ async def async_setup_services(
     hass: HomeAssistant,
     coordinator: SmartingHomeCoordinator,
     license_mgr: LicenseManager,
-) -> None:
-    """Register Smarting HOME services."""
+) -> AICronScheduler:
+    """Register Smarting HOME services. Returns the AI cron scheduler."""
     entry = coordinator.entry
     device_id = entry.data.get("device_id", "")
 
@@ -362,6 +363,15 @@ async def async_setup_services(
     )
 
     _LOGGER.info("Registered %d Smarting HOME services", 10)
+
+    # Start AI Cron Scheduler
+    cron = AICronScheduler(
+        hass,
+        ai_advisor,
+        get_coordinator_data=lambda: coordinator.data or {},
+    )
+    await cron.async_start()
+    return cron
 
 
 async def async_unload_services(hass: HomeAssistant) -> None:

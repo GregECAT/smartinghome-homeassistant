@@ -97,8 +97,11 @@ async def async_setup_entry(
     # Set up platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Register services
-    await async_setup_services(hass, coordinator, license_mgr)
+    # Register services (returns AI cron scheduler)
+    cron_scheduler = await async_setup_services(hass, coordinator, license_mgr)
+
+    # Store cron reference for cleanup
+    hass.data[DOMAIN][entry.entry_id]["cron_scheduler"] = cron_scheduler
 
     # Register custom panel in sidebar
     try:
@@ -180,6 +183,10 @@ async def async_unload_entry(
     )
 
     if unload_ok:
+        # Stop AI cron scheduler
+        cron = hass.data[DOMAIN].get(entry.entry_id, {}).get("cron_scheduler")
+        if cron:
+            await cron.async_stop()
         await async_unload_services(hass)
         hass.data[DOMAIN].pop(entry.entry_id)
         # Remove sidebar panel

@@ -110,6 +110,19 @@ class SmartingHomePanel extends HTMLElement {
         // Restore tariff plan
         const tSel = this.shadowRoot.getElementById('sel-tariff-plan');
         if (tSel && this._settings.tariff_plan) tSel.value = this._settings.tariff_plan;
+        // Restore cron settings
+        this._loadCronSettings();
+        // Show AI-powered HEMS advice if available
+        this._updateHEMSFromAI();
+        // Subscribe to live AI cron updates
+        if (this._hass && !this._cronSub) {
+          this._cronSub = this._hass.connection.subscribeEvents((ev) => {
+            const d = ev.data;
+            if (d.result_key) this._settings[d.result_key] = { text: d.text, timestamp: d.timestamp, provider: d.provider };
+            this._updateHEMSFromAI();
+            this._updateCronStatus();
+          }, "smartinghome_ai_cron_update");
+        }
         // Re-apply PV labels and all data after settings loaded
         if (this._hass) this._updateAll();
       }
@@ -393,6 +406,71 @@ class SmartingHomePanel extends HTMLElement {
       this._updateKeyStatus();
       const st = this.shadowRoot.getElementById("v-save-status");
       if (st) { st.textContent = "✅ Modele zapisane" + (Object.keys(saveData).length > 0 ? " + klucze zaktualizowane!" : "!"); setTimeout(() => { st.textContent = ""; }, 4000); }
+    }
+  }
+
+  _saveCronSettings() {
+    const updates = {
+      cron_hems_enabled: this.shadowRoot.getElementById("chk-cron-hems")?.checked ?? true,
+      cron_hems_interval: parseInt(this.shadowRoot.getElementById("sel-cron-hems")?.value || "30"),
+      cron_report_enabled: this.shadowRoot.getElementById("chk-cron-report")?.checked ?? true,
+      cron_report_interval: parseInt(this.shadowRoot.getElementById("sel-cron-report")?.value || "360"),
+      cron_anomaly_enabled: this.shadowRoot.getElementById("chk-cron-anomaly")?.checked ?? true,
+      cron_anomaly_interval: parseInt(this.shadowRoot.getElementById("sel-cron-anomaly")?.value || "60"),
+    };
+    this._savePanelSettings(updates);
+    const st = this.shadowRoot.getElementById("v-cron-save-status");
+    if (st) { st.textContent = "\u2705 Harmonogram zapisany! Restart HA wymagany."; setTimeout(() => { st.textContent = ""; }, 6000); }
+  }
+
+  _loadCronSettings() {
+    const s = this._settings;
+    const chkH = this.shadowRoot.getElementById("chk-cron-hems");
+    const chkR = this.shadowRoot.getElementById("chk-cron-report");
+    const chkA = this.shadowRoot.getElementById("chk-cron-anomaly");
+    if (chkH && s.cron_hems_enabled !== undefined) chkH.checked = s.cron_hems_enabled;
+    if (chkR && s.cron_report_enabled !== undefined) chkR.checked = s.cron_report_enabled;
+    if (chkA && s.cron_anomaly_enabled !== undefined) chkA.checked = s.cron_anomaly_enabled;
+    const selH = this.shadowRoot.getElementById("sel-cron-hems");
+    const selR = this.shadowRoot.getElementById("sel-cron-report");
+    const selA = this.shadowRoot.getElementById("sel-cron-anomaly");
+    if (selH && s.cron_hems_interval) selH.value = String(s.cron_hems_interval);
+    if (selR && s.cron_report_interval) selR.value = String(s.cron_report_interval);
+    if (selA && s.cron_anomaly_interval) selA.value = String(s.cron_anomaly_interval);
+    this._updateCronStatus();
+  }
+
+  _updateCronStatus() {
+    const s = this._settings;
+    ["hems", "report", "anomaly"].forEach(job => {
+      const key = job === "hems" ? "ai_hems_advice" : job === "report" ? "ai_daily_report" : "ai_anomaly_report";
+      const el = this.shadowRoot.getElementById(`cron-status-${job}`);
+      if (el && s[key] && s[key].timestamp) {
+        el.textContent = "\u23f0 Ostatnio: " + s[key].timestamp;
+        el.style.color = "#2ecc71";
+      }
+    });
+  }
+
+  _updateHEMSFromAI() {
+    const s = this._settings;
+    if (s.ai_hems_advice && s.ai_hems_advice.text) {
+      const el = this.shadowRoot.getElementById("v-hems-rec");
+      if (el) {
+        const txt = s.ai_hems_advice.text.replace(/\n/g, '<br>');
+        const prov = s.ai_hems_advice.provider || '';
+        const ts = s.ai_hems_advice.timestamp || '';
+        el.innerHTML = '<div style="font-size:13px;line-height:1.5">' + txt + '</div><div style="font-size:9px;color:#64748b;margin-top:6px">\ud83e\udd16 AI ' + prov + ' \u2022 ' + ts + '</div>';
+      }
+    }
+    if (s.ai_daily_report && s.ai_daily_report.text) {
+      const el = this.shadowRoot.getElementById("v-hems-rec-tab");
+      if (el) {
+        const txt = s.ai_daily_report.text.replace(/\n/g, '<br>');
+        const prov = s.ai_daily_report.provider || '';
+        const ts = s.ai_daily_report.timestamp || '';
+        el.innerHTML = '<div style="font-size:13px;line-height:1.5">' + txt + '</div><div style="font-size:9px;color:#64748b;margin-top:6px">\ud83e\udd16 AI ' + prov + ' \u2022 ' + ts + '</div>';
+      }
     }
   }
 
@@ -2341,6 +2419,61 @@ class SmartingHomePanel extends HTMLElement {
               <div id="v-save-status" style="font-size:11px; color:#2ecc71; margin-top:8px"></div>
             </div>
 
+            <!-- 🤖 AI Cron Settings -->
+            <div class="card" style="grid-column: 1 / -1">
+              <div class="card-title">🤖 AI Cron — Automatyczne porady</div>
+              <div style="font-size:11px; color:#94a3b8; margin-bottom:12px">Ustaw harmonogram automatycznych analiz AI. Wymagane skonfigurowane klucze API powyżej.</div>
+              <div style="display:flex; flex-direction:column; gap:10px">
+                <!-- HEMS Optimization -->
+                <div style="display:flex; align-items:center; gap:10px; padding:8px 12px; background:rgba(255,255,255,0.03); border-radius:8px; flex-wrap:wrap">
+                  <input type="checkbox" id="chk-cron-hems" checked style="accent-color:#f7b731; width:16px; height:16px" />
+                  <div style="flex:1; min-width:160px">
+                    <div style="font-size:12px; font-weight:600; color:#fff">💡 HEMS Optymalizacja</div>
+                    <div style="font-size:10px; color:#64748b">Porady optymalizacji zużycia i zarządzania baterią</div>
+                  </div>
+                  <select id="sel-cron-hems" style="padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:6px; color:#fff; font-size:11px">
+                    <option value="15">co 15 min</option>
+                    <option value="30" selected>co 30 min</option>
+                    <option value="60">co 1 godz</option>
+                    <option value="120">co 2 godz</option>
+                  </select>
+                  <div style="font-size:9px; color:#64748b; min-width:100px" id="cron-status-hems">—</div>
+                </div>
+                <!-- Daily Report -->
+                <div style="display:flex; align-items:center; gap:10px; padding:8px 12px; background:rgba(255,255,255,0.03); border-radius:8px; flex-wrap:wrap">
+                  <input type="checkbox" id="chk-cron-report" checked style="accent-color:#2ecc71; width:16px; height:16px" />
+                  <div style="flex:1; min-width:160px">
+                    <div style="font-size:12px; font-weight:600; color:#fff">📊 Raport dzienny</div>
+                    <div style="font-size:10px; color:#64748b">Podsumowanie produkcji, zużycia i oszczędności</div>
+                  </div>
+                  <select id="sel-cron-report" style="padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:6px; color:#fff; font-size:11px">
+                    <option value="60">co 1 godz</option>
+                    <option value="180">co 3 godz</option>
+                    <option value="360" selected>co 6 godz</option>
+                    <option value="720">co 12 godz</option>
+                  </select>
+                  <div style="font-size:9px; color:#64748b; min-width:100px" id="cron-status-report">—</div>
+                </div>
+                <!-- Anomaly Detection -->
+                <div style="display:flex; align-items:center; gap:10px; padding:8px 12px; background:rgba(255,255,255,0.03); border-radius:8px; flex-wrap:wrap">
+                  <input type="checkbox" id="chk-cron-anomaly" checked style="accent-color:#e74c3c; width:16px; height:16px" />
+                  <div style="flex:1; min-width:160px">
+                    <div style="font-size:12px; font-weight:600; color:#fff">🔍 Wykrywanie anomalii</div>
+                    <div style="font-size:10px; color:#64748b">Analiza nieprawidłowości w systemie energetycznym</div>
+                  </div>
+                  <select id="sel-cron-anomaly" style="padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:6px; color:#fff; font-size:11px">
+                    <option value="30">co 30 min</option>
+                    <option value="60" selected>co 1 godz</option>
+                    <option value="120">co 2 godz</option>
+                    <option value="240">co 4 godz</option>
+                  </select>
+                  <div style="font-size:9px; color:#64748b; min-width:100px" id="cron-status-anomaly">—</div>
+                </div>
+              </div>
+              <button class="save-btn" style="margin-top:12px" onclick="this.getRootNode().host._saveCronSettings()">💾 Zapisz harmonogram AI</button>
+              <div id="v-cron-save-status" style="font-size:11px; color:#2ecc71; margin-top:6px"></div>
+            </div>
+
             <!-- ⚡ Tariff Plan -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">⚡ Taryfa energetyczna</div>
@@ -2434,7 +2567,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.7.7</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.7.8</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
