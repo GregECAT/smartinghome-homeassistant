@@ -273,19 +273,14 @@ class SmartingHomeConfigFlow(
                 data=self._data,
             )
 
-        # Build schema with entity selectors — all 35 sensors
         schema_dict = {}
         for key, _desc in SENSOR_MAP_KEYS.items():
             default_val = defaults.get(key, "")
-            if default_val:
-                schema_dict[vol.Optional(key, default=default_val)] = (
-                    selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="sensor")
-                    )
+            schema_dict[vol.Optional(key, default=default_val)] = (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="sensor")
                 )
-            else:
-                # Optional sensors with no default — use text input
-                schema_dict[vol.Optional(key, default="")] = str
+            )
 
         return self.async_show_form(
             step_id="sensors",
@@ -399,14 +394,11 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
         schema_dict = {}
         for key, _desc in SENSOR_MAP_KEYS.items():
             current_val = current_map.get(key, brand_defaults.get(key, ""))
-            if current_val:
-                schema_dict[vol.Optional(key, default=current_val)] = (
-                    selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain="sensor")
-                    )
+            schema_dict[vol.Optional(key, default=current_val)] = (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="sensor")
                 )
-            else:
-                schema_dict[vol.Optional(key, default="")] = str
+            )
 
         return self.async_show_form(
             step_id="sensors",

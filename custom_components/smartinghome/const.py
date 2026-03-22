@@ -102,14 +102,26 @@ SENSOR_MAP_INVERTER: Final = {
     "inverter_temp": "Inverter temperature (°C)",
 }
 
-# ── Weather ──
-SENSOR_MAP_WEATHER: Final = {
-    "weather_temp": "Outside temperature (°C)",
-    "weather_humidity": "Outside humidity (%)",
-    "weather_cloud_cover": "Cloud cover (%)",
+# ── Weather — Cloud API (AccuWeather, OpenWeatherMap, Forecast.Solar) ──
+SENSOR_MAP_WEATHER_CLOUD: Final = {
+    "weather_temp": "Outside temperature — cloud API (°C)",
+    "weather_humidity": "Outside humidity — cloud API (%)",
+    "weather_cloud_cover": "Cloud cover — cloud API (%)",
+    "weather_wind_speed": "Wind speed — cloud API (km/h)",
+    "weather_pressure": "Atmospheric pressure — cloud API (hPa)",
+    "weather_uv_index": "UV index — cloud API",
 }
 
-# Combined map (all 35 keys)
+# ── Weather — Local Station (EcoWitt, WS2910, etc.) ──
+SENSOR_MAP_WEATHER_LOCAL: Final = {
+    "local_temp": "Outside temperature — local station (°C)",
+    "local_humidity": "Outside humidity — local station (%)",
+    "local_wind_speed": "Wind speed — local station (km/h)",
+    "local_rain_rate": "Rain rate — local station (mm/h)",
+    "local_solar_radiation": "Solar radiation — local station (W/m²)",
+}
+
+# Combined map (all keys)
 SENSOR_MAP_KEYS: Final = {
     **SENSOR_MAP_CORE,
     **SENSOR_MAP_PV,
@@ -117,7 +129,8 @@ SENSOR_MAP_KEYS: Final = {
     **SENSOR_MAP_GRID,
     **SENSOR_MAP_DAILY,
     **SENSOR_MAP_INVERTER,
-    **SENSOR_MAP_WEATHER,
+    **SENSOR_MAP_WEATHER_CLOUD,
+    **SENSOR_MAP_WEATHER_LOCAL,
 }
 
 # ── GoodWe defaults ──
@@ -162,10 +175,19 @@ DEFAULT_SENSOR_MAP: Final = {
     # Inverter
     "inverter_power": "sensor.active_power",
     "inverter_temp": "sensor.inverter_temperature_air",
-    # Weather (user fills in)
+    # Weather — cloud (user fills in)
     "weather_temp": "",
     "weather_humidity": "",
     "weather_cloud_cover": "",
+    "weather_wind_speed": "",
+    "weather_pressure": "",
+    "weather_uv_index": "",
+    # Weather — local station (user fills in)
+    "local_temp": "",
+    "local_humidity": "",
+    "local_wind_speed": "",
+    "local_rain_rate": "",
+    "local_solar_radiation": "",
 }
 
 # ── Deye defaults ──
@@ -210,10 +232,19 @@ DEFAULT_SENSOR_MAP_DEYE: Final = {
     # Inverter
     "inverter_power": "sensor.deye_active_power",
     "inverter_temp": "sensor.deye_dc_temperature",
-    # Weather (user fills in)
+    # Weather — cloud (user fills in)
     "weather_temp": "",
     "weather_humidity": "",
     "weather_cloud_cover": "",
+    "weather_wind_speed": "",
+    "weather_pressure": "",
+    "weather_uv_index": "",
+    # Weather — local station (user fills in)
+    "local_temp": "",
+    "local_humidity": "",
+    "local_wind_speed": "",
+    "local_rain_rate": "",
+    "local_solar_radiation": "",
 }
 
 # =============================================================================

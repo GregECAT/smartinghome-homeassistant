@@ -80,9 +80,17 @@
           "battery_discharge_today": "⚡ Discharge Today (kWh)",
           "inverter_power": "⚙️ Inverter Power (W)",
           "inverter_temp": "🌡️ Inverter Temp (°C)",
-          "weather_temp": "🌤️ Outside Temp (°C)",
-          "weather_humidity": "💧 Humidity (%)",
-          "weather_cloud_cover": "☁️ Cloud Cover (%)"
+          "weather_temp": "🌤️ Outside Temp — Cloud API (°C)",
+          "weather_humidity": "💧 Humidity — Cloud API (%)",
+          "weather_cloud_cover": "☁️ Cloud Cover — Cloud API (%)",
+          "weather_wind_speed": "💨 Wind Speed — Cloud API (km/h)",
+          "weather_pressure": "🌡️ Pressure — Cloud API (hPa)",
+          "weather_uv_index": "☀️ UV Index — Cloud API",
+          "local_temp": "🏠🌡️ Outside Temp — Local Station (°C)",
+          "local_humidity": "🏠💧 Humidity — Local Station (%)",
+          "local_wind_speed": "🏠💨 Wind Speed — Local Station (km/h)",
+          "local_rain_rate": "🏠🌧️ Rain Rate — Local Station (mm/h)",
+          "local_solar_radiation": "🏠☀️ Solar Radiation — Local Station (W/m²)"
         }
       }
     },
@@ -164,9 +172,17 @@
           "battery_discharge_today": "⚡ Discharge Today (kWh)",
           "inverter_power": "⚙️ Inverter Power (W)",
           "inverter_temp": "🌡️ Inverter Temp (°C)",
-          "weather_temp": "🌤️ Outside Temp (°C)",
-          "weather_humidity": "💧 Humidity (%)",
-          "weather_cloud_cover": "☁️ Cloud Cover (%)"
+          "weather_temp": "🌤️ Outside Temp — Cloud API (°C)",
+          "weather_humidity": "💧 Humidity — Cloud API (%)",
+          "weather_cloud_cover": "☁️ Cloud Cover — Cloud API (%)",
+          "weather_wind_speed": "💨 Wind Speed — Cloud API (km/h)",
+          "weather_pressure": "🌡️ Pressure — Cloud API (hPa)",
+          "weather_uv_index": "☀️ UV Index — Cloud API",
+          "local_temp": "🏠🌡️ Outside Temp — Local Station (°C)",
+          "local_humidity": "🏠💧 Humidity — Local Station (%)",
+          "local_wind_speed": "🏠💨 Wind Speed — Local Station (km/h)",
+          "local_rain_rate": "🏠🌧️ Rain Rate — Local Station (mm/h)",
+          "local_solar_radiation": "🏠☀️ Solar Radiation — Local Station (W/m²)"
         }
       }
     }
