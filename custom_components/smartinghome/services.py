@@ -230,9 +230,9 @@ async def async_setup_services(
         hass.config_entries.async_update_entry(entry, data=new_data)
 
         if gemini_key:
-            ai_advisor._gemini_api_key = gemini_key
+            ai_advisor._gemini_key = gemini_key
         if anthropic_key:
-            ai_advisor._anthropic_api_key = anthropic_key
+            ai_advisor._anthropic_key = anthropic_key
 
         # Also persist key status to settings.json so frontend can show it after refresh
         status_updates = {}
@@ -253,11 +253,11 @@ async def async_setup_services(
             if provider == "gemini":
                 # Use provided key if given, otherwise use stored one
                 if test_key:
-                    ai_advisor._gemini_api_key = test_key
+                    ai_advisor._gemini_key = test_key
                 valid = await ai_advisor.test_gemini_key()
             else:
                 if test_key:
-                    ai_advisor._anthropic_api_key = test_key
+                    ai_advisor._anthropic_key = test_key
                 valid = await ai_advisor.test_anthropic_key()
             status = "valid" if valid else "invalid"
         except Exception:
