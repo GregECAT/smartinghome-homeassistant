@@ -70,35 +70,49 @@ class AIAdvisor:
         return self.gemini_available or self.anthropic_available
 
     async def test_gemini_key(self) -> bool:
-        """Test if the Gemini API key is valid."""
+        """Test if the Gemini API key is valid via REST API."""
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=self._gemini_key)
-            model = genai.GenerativeModel(self._gemini_model)
-            resp = await self.hass.async_add_executor_job(
-                lambda: model.generate_content(
-                    "Reply with OK",
-                    generation_config=genai.types.GenerationConfig(max_output_tokens=10),
-                )
+            import aiohttp
+            url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{self._gemini_model}:generateContent?key={self._gemini_key}"
             )
-            return bool(resp.text)
+            payload = {"contents": [{"parts": [{"text": "Reply with OK"}]}],
+                       "generationConfig": {"maxOutputTokens": 10}}
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return bool(data.get("candidates"))
+                    _LOGGER.error("Gemini test HTTP %s: %s", resp.status, await resp.text())
+                    return False
         except Exception as err:
             _LOGGER.error("Gemini key test failed: %s", err)
             return False
 
     async def test_anthropic_key(self) -> bool:
-        """Test if the Anthropic API key is valid."""
+        """Test if the Anthropic API key is valid via REST API."""
         try:
-            import anthropic
-            client = anthropic.Anthropic(api_key=self._anthropic_key)
-            resp = await self.hass.async_add_executor_job(
-                lambda: client.messages.create(
-                    model=self._anthropic_model,
-                    max_tokens=10,
-                    messages=[{"role": "user", "content": "Reply with OK"}],
-                )
-            )
-            return bool(resp.content)
+            import aiohttp
+            url = "https://api.anthropic.com/v1/messages"
+            headers = {
+                "x-api-key": self._anthropic_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            }
+            payload = {
+                "model": self._anthropic_model,
+                "max_tokens": 10,
+                "messages": [{"role": "user", "content": "Reply with OK"}],
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, headers=headers,
+                                        timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return bool(data.get("content"))
+                    _LOGGER.error("Anthropic test HTTP %s: %s", resp.status, await resp.text())
+                    return False
         except Exception as err:
             _LOGGER.error("Anthropic key test failed: %s", err)
             return False
@@ -168,7 +182,7 @@ class AIAdvisor:
         question: str,
         data: dict[str, Any],
     ) -> str:
-        """Ask Google Gemini for energy advice."""
+        """Ask Google Gemini for energy advice via REST API."""
         if not self.gemini_available:
             return "Google Gemini is not configured. Add your API key in integration settings."
 
@@ -176,11 +190,7 @@ class AIAdvisor:
             return "Rate limit reached. Please try again later."
 
         try:
-            import google.generativeai as genai
-
-            if not self._gemini_client:
-                genai.configure(api_key=self._gemini_key)
-                self._gemini_client = genai.GenerativeModel(self._gemini_model)
+            import aiohttp
 
             context = self._build_context(data)
             prompt = f"""You are an expert energy management advisor for a home solar+battery system in Poland.
@@ -196,19 +206,32 @@ User question: {question}"""
 
             self._call_timestamps.append(time.time())
 
-            response = await self.hass.async_add_executor_job(
-                lambda: self._gemini_client.generate_content(
-                    prompt,
-                    generation_config=genai.types.GenerationConfig(
-                        max_output_tokens=AI_MAX_TOKENS,
-                        temperature=AI_TEMPERATURE,
-                    ),
-                )
+            url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{self._gemini_model}:generateContent?key={self._gemini_key}"
             )
-            return response.text
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "maxOutputTokens": AI_MAX_TOKENS,
+                    "temperature": AI_TEMPERATURE,
+                },
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload,
+                                        timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        candidates = result.get("candidates", [])
+                        if candidates:
+                            parts = candidates[0].get("content", {}).get("parts", [])
+                            if parts:
+                                return parts[0].get("text", "No response text.")
+                        return "No response from Gemini."
+                    err_text = await resp.text()
+                    _LOGGER.error("Gemini API HTTP %s: %s", resp.status, err_text)
+                    return f"Gemini error (HTTP {resp.status})"
 
-        except ImportError:
-            return "Google Generative AI library not installed. Run: pip install google-generativeai"
         except Exception as err:
             _LOGGER.error("Gemini API error: %s", err)
             return f"Gemini error: {err}"
@@ -218,7 +241,7 @@ User question: {question}"""
         question: str,
         data: dict[str, Any],
     ) -> str:
-        """Ask Anthropic Claude for energy advice."""
+        """Ask Anthropic Claude for energy advice via REST API."""
         if not self.anthropic_available:
             return "Anthropic Claude is not configured. Add your API key in integration settings."
 
@@ -226,12 +249,7 @@ User question: {question}"""
             return "Rate limit reached. Please try again later."
 
         try:
-            import anthropic
-
-            if not self._anthropic_client:
-                self._anthropic_client = anthropic.Anthropic(
-                    api_key=self._anthropic_key
-                )
+            import aiohttp
 
             context = self._build_context(data)
             prompt = f"""You are an expert energy management advisor for a home solar+battery system in Poland.
@@ -247,18 +265,31 @@ User question: {question}"""
 
             self._call_timestamps.append(time.time())
 
-            response = await self.hass.async_add_executor_job(
-                lambda: self._anthropic_client.messages.create(
-                    model=self._anthropic_model,
-                    max_tokens=AI_MAX_TOKENS,
-                    temperature=AI_TEMPERATURE,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-            )
-            return response.content[0].text
+            url = "https://api.anthropic.com/v1/messages"
+            headers = {
+                "x-api-key": self._anthropic_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            }
+            payload = {
+                "model": self._anthropic_model,
+                "max_tokens": AI_MAX_TOKENS,
+                "temperature": AI_TEMPERATURE,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, headers=headers,
+                                        timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        content = result.get("content", [])
+                        if content:
+                            return content[0].get("text", "No response text.")
+                        return "No response from Anthropic."
+                    err_text = await resp.text()
+                    _LOGGER.error("Anthropic API HTTP %s: %s", resp.status, err_text)
+                    return f"Anthropic error (HTTP {resp.status})"
 
-        except ImportError:
-            return "Anthropic library not installed. Run: pip install anthropic"
         except Exception as err:
             _LOGGER.error("Anthropic API error: %s", err)
             return f"Anthropic error: {err}"
