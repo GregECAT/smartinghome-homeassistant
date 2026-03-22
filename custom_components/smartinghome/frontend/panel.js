@@ -129,6 +129,120 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
 
+  _roiPeriod = "day";
+
+  _switchRoiPeriod(period) {
+    this._roiPeriod = period;
+    ["day","week","month","year"].forEach(p => {
+      const btn = this.shadowRoot.getElementById(`roi-period-${p}`);
+      if (btn) btn.classList.toggle("active", p === period);
+    });
+    this._updateRoi();
+  }
+
+  _saveRoiInvestment(val) {
+    const v = parseFloat(val) || 0;
+    this._savePanelSettings({ roi_investment: v });
+    this._updateRoi();
+  }
+
+  _n(entityId) {
+    const state = this._hass?.states[entityId];
+    if (!state || state.state === "unavailable" || state.state === "unknown") return null;
+    const v = parseFloat(state.state);
+    return isNaN(v) ? null : v;
+  }
+
+  _updateRoi() {
+    if (!this._hass) return;
+    const p = this._roiPeriod;
+    const labels = { day: "dziś", week: "ten tydzień", month: "ten miesiąc", year: "ten rok" };
+    this._setText("roi-period-label", `(${labels[p]})`);
+    this._setText("roi-fin-label", `(${labels[p]})`);
+
+    // Sensor mapping per period
+    const suffixes = { day: "daily", week: "weekly", month: "monthly", year: "yearly" };
+    const s = suffixes[p];
+
+    // Energy
+    const pvVal = p === "day" ? (this._n("sensor.today_s_pv_generation") ?? 0) : (this._n(`sensor.pv_${s}`) ?? 0);
+    const impVal = this._n(`sensor.grid_import_${s}`) ?? 0;
+    const expVal = this._n(`sensor.grid_export_${s}`) ?? 0;
+    const selfUse = Math.max(0, pvVal - expVal);
+
+    this._setText("roi-pv", `${pvVal.toFixed(1)} kWh`);
+    this._setText("roi-import", `${impVal.toFixed(1)} kWh`);
+    this._setText("roi-export", `${expVal.toFixed(1)} kWh`);
+    this._setText("roi-selfuse", `${selfUse.toFixed(1)} kWh`);
+
+    // Financial (G13 sensors)
+    const costVal = p === "day" ? (this._n("sensor.g13_import_cost_today") ?? 0) : (this._n(`sensor.g13_import_cost_${s}`) ?? 0);
+    const revVal = p === "day" ? (this._n("sensor.g13_export_revenue_today") ?? 0) : (this._n(`sensor.g13_export_revenue_${s}`) ?? 0);
+    const savVal = p === "day" ? (this._n("sensor.g13_self_consumption_savings_today") ?? 0) : (this._n(`sensor.g13_self_consumption_savings_${s}`) ?? 0);
+    const balVal = p === "day" ? (this._n("sensor.g13_net_balance_today") ?? 0) : (this._n(`sensor.g13_net_balance_${s}`) ?? 0);
+
+    this._setText("roi-cost", `${costVal.toFixed(2)} zł`);
+    this._setText("roi-revenue", `${revVal.toFixed(2)} zł`);
+    this._setText("roi-savings", `${savVal.toFixed(2)} zł`);
+    this._setText("roi-balance", `${balVal >= 0 ? "+" : ""}${balVal.toFixed(2)} zł`);
+
+    // Balance card colors
+    const balCard = this.shadowRoot.getElementById("roi-balance-card");
+    const balText = this.shadowRoot.getElementById("roi-balance");
+    if (balCard) { balCard.style.borderColor = balVal >= 0 ? "#2ecc71" : "#e74c3c"; balCard.style.background = balVal >= 0 ? "rgba(46,204,113,0.1)" : "rgba(231,76,60,0.1)"; }
+    if (balText) balText.style.color = balVal >= 0 ? "#2ecc71" : "#e74c3c";
+
+    // Efficiency
+    const autarky = (pvVal + impVal) > 0 ? Math.min(100, (pvVal / (pvVal + impVal)) * 100) : 0;
+    const selfCons = pvVal > 0 ? Math.min(100, (selfUse / pvVal) * 100) : 0;
+    this._setText("roi-autarky", `${autarky.toFixed(0)}%`);
+    this._setText("roi-selfcons", `${selfCons.toFixed(0)}%`);
+    const aBar = this.shadowRoot.getElementById("roi-autarky-bar");
+    const scBar = this.shadowRoot.getElementById("roi-selfcons-bar");
+    if (aBar) aBar.style.width = `${autarky}%`;
+    if (scBar) scBar.style.width = `${selfCons}%`;
+
+    // ROI calculation
+    const invest = this._settings.roi_investment || 0;
+    const invInput = this.shadowRoot.getElementById("roi-invest-input");
+    if (invInput && !invInput.matches(":focus") && invest) invInput.value = invest;
+
+    // Estimate yearly savings from current period data
+    const multiplier = { day: 365, week: 52, month: 12, year: 1 };
+    const yearlySavings = (balVal > 0 ? balVal : (revVal + savVal - costVal)) * multiplier[p];
+    this._setText("roi-yearly-savings", `${yearlySavings.toFixed(0)} zł/rok`);
+
+    if (invest > 0 && yearlySavings > 0) {
+      const paybackYears = invest / yearlySavings;
+      this._setText("roi-payback", `~${paybackYears.toFixed(1)} lat`);
+      const pctDone = Math.min(100, (1 / paybackYears) * 100); // how much paid back in 1 year
+      const pbBar = this.shadowRoot.getElementById("roi-payback-bar");
+      if (pbBar) pbBar.style.width = `${pctDone}%`;
+      this._setText("roi-payback-pct", `${pctDone.toFixed(0)}% rocznie`);
+    } else {
+      this._setText("roi-payback", invest > 0 ? "— (brak danych)" : "— (podaj koszt)");
+    }
+
+    // Summary table — all periods
+    const periods = [
+      { key: "d", suffix: "daily", label: "today", pvSensor: "sensor.today_s_pv_generation" },
+      { key: "w", suffix: "weekly", pvSensor: "sensor.pv_weekly" },
+      { key: "m", suffix: "monthly", pvSensor: "sensor.pv_monthly" },
+      { key: "y", suffix: "yearly", pvSensor: "sensor.pv_yearly" },
+    ];
+    periods.forEach(({ key, suffix, pvSensor }) => {
+      const pv = this._n(pvSensor) ?? 0;
+      const imp = this._n(`sensor.grid_import_${suffix}`) ?? 0;
+      const exp = this._n(`sensor.grid_export_${suffix}`) ?? 0;
+      const bal = key === "d" ? (this._n("sensor.g13_net_balance_today") ?? 0) : (this._n(`sensor.g13_net_balance_${suffix}`) ?? 0);
+      this._setText(`roi-tbl-pv-${key}`, pv.toFixed(1));
+      this._setText(`roi-tbl-imp-${key}`, imp.toFixed(1));
+      this._setText(`roi-tbl-exp-${key}`, exp.toFixed(1));
+      const balEl = this.shadowRoot.getElementById(`roi-tbl-bal-${key}`);
+      if (balEl) { balEl.textContent = `${bal >= 0 ? "+" : ""}${bal.toFixed(2)}`; balEl.style.color = bal >= 0 ? "#2ecc71" : "#e74c3c"; }
+    });
+  }
+
   _saveApiKeys() {
     const gemini = this.shadowRoot.getElementById("inp-gemini-key")?.value || "";
     const anthropic = this.shadowRoot.getElementById("inp-anthropic-key")?.value || "";
@@ -529,6 +643,8 @@ class SmartingHomePanel extends HTMLElement {
     if (upgradeBox) upgradeBox.style.display = (tier === "PRO" || tier === "ENTERPRISE") ? "none" : "block";
     // Settings: API key status
     this._updateKeyStatus();
+    // ROI Tab
+    this._updateRoi();
     // RCE / Tariff — G13 Zone Badge
     const g13Zone = this._s("sensor.smartinghome_g13_current_zone") || this._s("sensor.g13_current_zone") || "—";
     const g13Badge = this.shadowRoot.getElementById("v-g13-zone-badge");
@@ -1049,6 +1165,7 @@ class SmartingHomePanel extends HTMLElement {
           <button class="tab-btn" data-tab="tariff" onclick="this.getRootNode().host._switchTab('tariff')">💰 Taryfy & RCE</button>
           <button class="tab-btn" data-tab="battery" onclick="this.getRootNode().host._switchTab('battery')">🔋 Bateria</button>
           <button class="tab-btn" data-tab="hems" onclick="this.getRootNode().host._switchTab('hems')">🤖 HEMS</button>
+          <button class="tab-btn" data-tab="roi" onclick="this.getRootNode().host._switchTab('roi')">📈 Opłacalność</button>
         </div>
 
         <!-- ═══════ TAB: OVERVIEW ═══════ -->
@@ -1437,6 +1554,143 @@ class SmartingHomePanel extends HTMLElement {
           </div>
         </div>
 
+        <!-- ═══════ TAB: ROI / OPŁACALNOŚĆ ═══════ -->
+        <div class="tab-content" data-tab="roi">
+
+          <!-- Period selector -->
+          <div style="display:flex; gap:6px; margin-bottom:16px; flex-wrap:wrap">
+            <button class="tab-btn active" id="roi-period-day" onclick="this.getRootNode().host._switchRoiPeriod('day')" style="font-size:11px; padding:6px 14px">📅 Dzień</button>
+            <button class="tab-btn" id="roi-period-week" onclick="this.getRootNode().host._switchRoiPeriod('week')" style="font-size:11px; padding:6px 14px">📆 Tydzień</button>
+            <button class="tab-btn" id="roi-period-month" onclick="this.getRootNode().host._switchRoiPeriod('month')" style="font-size:11px; padding:6px 14px">🗓️ Miesiąc</button>
+            <button class="tab-btn" id="roi-period-year" onclick="this.getRootNode().host._switchRoiPeriod('year')" style="font-size:11px; padding:6px 14px">📊 Rok</button>
+          </div>
+
+          <!-- ROW 1: Energy balance -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">⚡ Bilans energetyczny <span id="roi-period-label" style="color:#00d4ff; font-size:11px">(dziś)</span></div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:10px; margin-top:8px">
+              <div style="background:rgba(247,183,49,0.1); border-radius:12px; padding:12px; text-align:center">
+                <div style="font-size:10px; color:#f7b731; text-transform:uppercase; letter-spacing:1px">☀️ Produkcja PV</div>
+                <div style="font-size:22px; font-weight:800; color:#f7b731; margin-top:4px" id="roi-pv">— kWh</div>
+              </div>
+              <div style="background:rgba(231,76,60,0.1); border-radius:12px; padding:12px; text-align:center">
+                <div style="font-size:10px; color:#e74c3c; text-transform:uppercase; letter-spacing:1px">↓ Import z sieci</div>
+                <div style="font-size:22px; font-weight:800; color:#e74c3c; margin-top:4px" id="roi-import">— kWh</div>
+              </div>
+              <div style="background:rgba(46,204,113,0.1); border-radius:12px; padding:12px; text-align:center">
+                <div style="font-size:10px; color:#2ecc71; text-transform:uppercase; letter-spacing:1px">↑ Eksport do sieci</div>
+                <div style="font-size:22px; font-weight:800; color:#2ecc71; margin-top:4px" id="roi-export">— kWh</div>
+              </div>
+              <div style="background:rgba(0,212,255,0.1); border-radius:12px; padding:12px; text-align:center">
+                <div style="font-size:10px; color:#00d4ff; text-transform:uppercase; letter-spacing:1px">🏠 Zużycie własne</div>
+                <div style="font-size:22px; font-weight:800; color:#00d4ff; margin-top:4px" id="roi-selfuse">— kWh</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ROW 2: Financial -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">💰 Finanse <span id="roi-fin-label" style="color:#00d4ff; font-size:11px">(dziś)</span></div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:10px; margin-top:8px">
+              <div style="background:rgba(231,76,60,0.1); border-radius:12px; padding:14px; text-align:center">
+                <div style="font-size:10px; color:#e74c3c; text-transform:uppercase; letter-spacing:1px">💸 Koszt importu</div>
+                <div style="font-size:24px; font-weight:800; color:#e74c3c; margin-top:4px" id="roi-cost">— zł</div>
+              </div>
+              <div style="background:rgba(46,204,113,0.1); border-radius:12px; padding:14px; text-align:center">
+                <div style="font-size:10px; color:#2ecc71; text-transform:uppercase; letter-spacing:1px">💵 Przychód eksport</div>
+                <div style="font-size:24px; font-weight:800; color:#2ecc71; margin-top:4px" id="roi-revenue">— zł</div>
+              </div>
+              <div style="background:rgba(0,212,255,0.1); border-radius:12px; padding:14px; text-align:center">
+                <div style="font-size:10px; color:#00d4ff; text-transform:uppercase; letter-spacing:1px">🏦 Oszczędność</div>
+                <div style="font-size:24px; font-weight:800; color:#00d4ff; margin-top:4px" id="roi-savings">— zł</div>
+                <div style="font-size:9px; color:#94a3b8; margin-top:2px">(autokonsumpcja)</div>
+              </div>
+              <div style="border-radius:12px; padding:14px; text-align:center; border:2px solid" id="roi-balance-card">
+                <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px">📊 Bilans netto</div>
+                <div style="font-size:28px; font-weight:900; margin-top:4px" id="roi-balance">— zł</div>
+                <div style="font-size:9px; color:#94a3b8; margin-top:2px">(przychód + oszczędność − koszt)</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ROW 3: Efficiency -->
+          <div class="grid-cards gc-2" style="margin-bottom:12px">
+            <div class="card">
+              <div class="card-title">🎯 Efektywność</div>
+              <div class="dr"><span class="lb">Autarkia</span><span class="vl" id="roi-autarky">—%</span></div>
+              <div style="margin:6px 0; background:rgba(255,255,255,0.08); border-radius:6px; height:8px; overflow:hidden">
+                <div id="roi-autarky-bar" style="height:100%; width:0%; background:#2ecc71; border-radius:6px; transition:width 0.5s"></div>
+              </div>
+              <div class="dr"><span class="lb">Autokonsumpcja</span><span class="vl" id="roi-selfcons">—%</span></div>
+              <div style="margin:6px 0; background:rgba(255,255,255,0.08); border-radius:6px; height:8px; overflow:hidden">
+                <div id="roi-selfcons-bar" style="height:100%; width:0%; background:#00d4ff; border-radius:6px; transition:width 0.5s"></div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-title">🏗️ Zwrot inwestycji (ROI)</div>
+              <div class="dr">
+                <span class="lb">Koszt instalacji</span>
+                <span class="vl"><input id="roi-invest-input" type="number" value="" placeholder="np. 45000" style="width:80px; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); border-radius:6px; color:#fff; padding:4px 8px; font-size:12px; text-align:right" onchange="this.getRootNode().host._saveRoiInvestment(this.value)"> zł</span>
+              </div>
+              <div class="dr"><span class="lb">Oszczędności roczne (est.)</span><span class="vl" id="roi-yearly-savings">— zł</span></div>
+              <div class="dr"><span class="lb">Zwrot inwestycji</span><span class="vl" id="roi-payback" style="color:#f7b731; font-weight:700">— lat</span></div>
+              <div style="margin-top:8px; background:rgba(255,255,255,0.08); border-radius:6px; height:10px; overflow:hidden">
+                <div id="roi-payback-bar" style="height:100%; width:0%; background:linear-gradient(90deg,#f7b731,#2ecc71); border-radius:6px; transition:width 0.5s"></div>
+              </div>
+              <div style="font-size:9px; color:#64748b; text-align:right; margin-top:2px" id="roi-payback-pct">0%</div>
+            </div>
+          </div>
+
+          <!-- ROW 4: Summary table -->
+          <div class="card">
+            <div class="card-title">📋 Podsumowanie okresów</div>
+            <div style="overflow-x:auto">
+              <table style="width:100%; border-collapse:collapse; font-size:11px; margin-top:8px">
+                <thead>
+                  <tr style="border-bottom:1px solid rgba(255,255,255,0.1)">
+                    <th style="text-align:left; padding:6px 8px; color:#94a3b8; font-weight:600">Okres</th>
+                    <th style="text-align:right; padding:6px 8px; color:#f7b731">PV kWh</th>
+                    <th style="text-align:right; padding:6px 8px; color:#e74c3c">Import kWh</th>
+                    <th style="text-align:right; padding:6px 8px; color:#2ecc71">Eksport kWh</th>
+                    <th style="text-align:right; padding:6px 8px; color:#00d4ff">Bilans zł</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style="border-bottom:1px solid rgba(255,255,255,0.05)">
+                    <td style="padding:6px 8px; color:#cbd5e1">📅 Dziś</td>
+                    <td style="text-align:right; padding:6px 8px" id="roi-tbl-pv-d">—</td>
+                    <td style="text-align:right; padding:6px 8px" id="roi-tbl-imp-d">—</td>
+                    <td style="text-align:right; padding:6px 8px" id="roi-tbl-exp-d">—</td>
+                    <td style="text-align:right; padding:6px 8px; font-weight:700" id="roi-tbl-bal-d">—</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid rgba(255,255,255,0.05)">
+                    <td style="padding:6px 8px; color:#cbd5e1">📆 Tydzień</td>
+                    <td style="text-align:right; padding:6px 8px" id="roi-tbl-pv-w">—</td>
+                    <td style="text-align:right; padding:6px 8px" id="roi-tbl-imp-w">—</td>
+                    <td style="text-align:right; padding:6px 8px" id="roi-tbl-exp-w">—</td>
+                    <td style="text-align:right; padding:6px 8px; font-weight:700" id="roi-tbl-bal-w">—</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid rgba(255,255,255,0.05)">
+                    <td style="padding:6px 8px; color:#cbd5e1">🗓️ Miesiąc</td>
+                    <td style="text-align:right; padding:6px 8px" id="roi-tbl-pv-m">—</td>
+                    <td style="text-align:right; padding:6px 8px" id="roi-tbl-imp-m">—</td>
+                    <td style="text-align:right; padding:6px 8px" id="roi-tbl-exp-m">—</td>
+                    <td style="text-align:right; padding:6px 8px; font-weight:700" id="roi-tbl-bal-m">—</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:6px 8px; color:#cbd5e1">📊 Rok</td>
+                    <td style="text-align:right; padding:6px 8px" id="roi-tbl-pv-y">—</td>
+                    <td style="text-align:right; padding:6px 8px" id="roi-tbl-imp-y">—</td>
+                    <td style="text-align:right; padding:6px 8px" id="roi-tbl-exp-y">—</td>
+                    <td style="text-align:right; padding:6px 8px; font-weight:700" id="roi-tbl-bal-y">—</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+
         <!-- ═══════ TAB: SETTINGS ═══════ -->
         <div class="tab-content" data-tab="settings">
           <div class="grid-cards gc-2">
@@ -1560,7 +1814,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.7</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.8</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
