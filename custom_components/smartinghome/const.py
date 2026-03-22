@@ -325,6 +325,7 @@ class TariffType(StrEnum):
 
     G11 = "g11"
     G12 = "g12"
+    G12W = "g12w"
     G13 = "g13"
 
 
