@@ -275,18 +275,20 @@ class SmartingHomePanel extends HTMLElement {
       imgEl.style.display = "block";
       const iconEl = this.shadowRoot.getElementById("v-inv-icon");
       if (iconEl) iconEl.style.display = "none";
-      // Try brand image first, fallback to inverter.png
-      const brandUrl = `/local/smartinghome/${imgName}.png`;
-      const fallbackUrl = `/local/smartinghome/inverter.png`;
+
+      // Fallback chain: local brand → local inverter.png → remote default
+      const localBrand = `/local/smartinghome/${imgName}.png`;
+      const localGeneric = `/local/smartinghome/inverter.png`;
+      const remoteFallback = `https://smartinghome.pl/wp-content/uploads/2026/03/${imgName === 'deye' ? 'Deye' : 'GoodWe'}.png`;
+
+      let fallbackStage = 0;
       imgEl.onerror = function() {
-        if (this.src.includes(imgName)) {
-          this.src = fallbackUrl;
-        } else {
-          this.style.display = 'none';
-          if (iconEl) iconEl.style.display = 'block';
-        }
+        fallbackStage++;
+        if (fallbackStage === 1) { this.src = localGeneric; }
+        else if (fallbackStage === 2) { this.src = remoteFallback; }
+        else { this.style.display = 'none'; if (iconEl) iconEl.style.display = 'block'; }
       };
-      imgEl.src = brandUrl + '?t=' + Date.now();
+      imgEl.src = localBrand + '?t=' + Date.now();
       imgEl.setAttribute("data-model", imgName);
     }
   }
@@ -788,7 +790,7 @@ class SmartingHomePanel extends HTMLElement {
               <!-- ⚡ INVERTER -->
               <div class="inv-area">
                 <div class="inv-box">
-                  <img id="v-inv-img" src="/local/smartinghome/goodwe.png" alt="Inverter" style="max-width:140px; max-height:100px; object-fit:contain" />
+                  <img id="v-inv-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/GoodWe.png" alt="Inverter" style="max-width:160px; max-height:120px; object-fit:contain" />
                   <div id="v-inv-icon" style="display:none; text-align:center">
                     <div class="inv-icon">⚡</div>
                     <div style="font-size:8px; color:#f39c12; line-height:1.2; margin-top:2px">Wgraj<br>goodwe.png lub deye.png<br>do /config/www/smartinghome/</div>
@@ -1023,10 +1025,11 @@ class SmartingHomePanel extends HTMLElement {
               <div style="margin-top:12px; padding:10px; border-radius:8px; background:rgba(0,212,255,0.04); border:1px solid rgba(0,212,255,0.1)">
                 <div style="font-size:11px; font-weight:700; color:#00d4ff; margin-bottom:6px">💡 Zalecenia</div>
                 <div style="font-size:10px; color:#94a3b8; line-height:1.6">
+                  • <strong>Domyślne zdjęcia:</strong> GoodWe i Deye wczytywane automatycznie z smartinghome.pl<br>
                   • <strong>Format:</strong> PNG z przezroczystym tłem (transparent) — najlepszy efekt<br>
-                  • <strong>Rozmiar:</strong> 200–400px szerokości, proporcjonalne<br>
-                  • <strong>Nazwa pliku:</strong> <code style="color:#f39c12">goodwe.png</code> lub <code style="color:#f39c12">deye.png</code> (auto-detekcja marki) lub <code style="color:#f39c12">inverter.png</code> (uniwersalne)<br>
-                  • <strong>Ścieżka na serwerze:</strong> <code style="color:#00d4ff">/config/www/smartinghome/</code>
+                  • <strong>Rozmiar:</strong> 500–800px szerokości, proporcjonalne<br>
+                  • <strong>Nazwa pliku:</strong> <code style="color:#f39c12">goodwe.png</code> lub <code style="color:#f39c12">deye.png</code> (nadpisuje domyślne) lub <code style="color:#f39c12">inverter.png</code><br>
+                  • <strong>Ścieżka:</strong> <code style="color:#00d4ff">/config/www/smartinghome/</code>
                 </div>
               </div>
             </div>
@@ -1049,7 +1052,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.5</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.6</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
