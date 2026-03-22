@@ -97,6 +97,27 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
 
+  async _uploadInverterImage(file) {
+    if (!file) return;
+    const st = this.shadowRoot.getElementById("v-upload-status");
+    if (st) st.textContent = "⏳ Wgrywanie...";
+    try {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (this._hass) {
+          this._hass.callService("smartinghome", "upload_inverter_image", {
+            filename: file.name,
+            data: reader.result.split(",")[1],
+          });
+          if (st) { st.textContent = "✅ Zdjęcie wgrane! Odśwież panel."; setTimeout(() => { st.textContent = ""; }, 6000); }
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch (e) {
+      if (st) st.textContent = "❌ Błąd wgrywania: " + e.message;
+    }
+  }
+
   // Smart unit formatting
   _pw(w) {
     if (w === null || isNaN(w)) return "—";
@@ -230,14 +251,9 @@ class SmartingHomePanel extends HTMLElement {
       badge.textContent = tier;
       badge.className = `badge ${tier === "PRO" ? "pro" : "free"}`;
     }
-    // Settings tab: PRO gating
-    const proFields = this.shadowRoot.getElementById("settings-pro-fields");
-    const freeMsg = this.shadowRoot.getElementById("settings-free-msg");
-    if (proFields && freeMsg) {
-      const isPro = tier === "PRO" || tier === "ENTERPRISE";
-      proFields.style.display = isPro ? "block" : "none";
-      freeMsg.style.display = isPro ? "none" : "block";
-    }
+    // Settings: show upgrade prompt for FREE users
+    const upgradeBox = this.shadowRoot.getElementById("settings-upgrade-box");
+    if (upgradeBox) upgradeBox.style.display = (tier === "PRO" || tier === "ENTERPRISE") ? "none" : "block";
     // RCE / Tariff
     const g13Zone = this._s("sensor.smartinghome_g13_current_zone") || "—";
     const g13Badge = this.shadowRoot.getElementById("v-g13-zone-badge");
@@ -579,6 +595,23 @@ class SmartingHomePanel extends HTMLElement {
           font-weight: 700; font-size: 13px; cursor: pointer; transition: all 0.2s;
         }
         .save-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(0,212,255,0.3); }
+        .gear-btn {
+          background: none; border: none; font-size: 20px; cursor: pointer;
+          padding: 4px 8px; border-radius: 6px; transition: all 0.2s;
+          filter: drop-shadow(0 0 2px rgba(255,255,255,0.2));
+        }
+        .gear-btn:hover { background: rgba(255,255,255,0.08); transform: rotate(30deg); }
+        .upload-zone {
+          border: 2px dashed rgba(255,255,255,0.15); border-radius: 12px; padding: 20px;
+          text-align: center; cursor: pointer; transition: all 0.2s;
+          background: rgba(255,255,255,0.02);
+        }
+        .upload-zone:hover { border-color: rgba(0,212,255,0.3); background: rgba(0,212,255,0.03); }
+        .upgrade-box {
+          padding: 14px; border-radius: 10px;
+          background: linear-gradient(135deg, rgba(247,183,49,0.08), rgba(0,212,255,0.08));
+          border: 1px solid rgba(247,183,49,0.2);
+        }
 
         @media (max-width: 800px) {
           .flow-nodes { grid-template-columns: 1fr 1fr; grid-template-rows: auto; }
@@ -604,6 +637,7 @@ class SmartingHomePanel extends HTMLElement {
           </div>
           <div class="header-right">
             <span class="badge free" id="v-license">FREE</span>
+            <button class="gear-btn" title="Ustawienia" onclick="this.getRootNode().host._switchTab('settings')">⚙️</button>
             <button class="fullscreen-btn" onclick="this.getRootNode().host._toggleFullscreen()">⊞ Pełny ekran</button>
           </div>
         </div>
@@ -865,31 +899,63 @@ class SmartingHomePanel extends HTMLElement {
         <!-- ═══════ TAB: SETTINGS ═══════ -->
         <div class="tab-content" data-tab="settings">
           <div class="grid-cards gc-2">
+
+            <!-- 🔑 API Keys -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">🔑 Klucze API — AI Advisor</div>
-              <div id="settings-pro-fields">
-                <div class="settings-field">
-                  <label>Google Gemini API Key</label>
-                  <input type="password" id="inp-gemini-key" placeholder="AIza..." />
-                </div>
-                <div class="settings-field">
-                  <label>Anthropic Claude API Key</label>
-                  <input type="password" id="inp-anthropic-key" placeholder="sk-ant-..." />
-                </div>
-                <button class="save-btn" onclick="this.getRootNode().host._saveApiKeys()">💾 Zapisz klucze API</button>
-                <div id="v-save-status" style="font-size:11px; color:#2ecc71; margin-top:8px"></div>
+              <div style="font-size:11px; color:#94a3b8; margin-bottom:10px">Podaj klucze API aby włączyć AI Advisor — inteligentne porady dotyczące zarządzania energią.</div>
+              <div class="settings-field">
+                <label>Google Gemini API Key</label>
+                <input type="password" id="inp-gemini-key" placeholder="AIza..." />
               </div>
-              <div id="settings-free-msg" style="display:none; padding:14px; border-radius:10px; background:rgba(231,76,60,0.08); border:1px solid rgba(231,76,60,0.2); margin-top:8px">
-                <div style="font-size:13px; color:#e74c3c; font-weight:700">🔒 Funkcja dostępna tylko w wersji PRO</div>
-                <div style="font-size:12px; color:#94a3b8; margin-top:4px">AI Advisor wymaga licencji PRO. <a href="https://smartinghome.pl/buy" target="_blank" style="color:#00d4ff">Kup licencję →</a></div>
+              <div class="settings-field">
+                <label>Anthropic Claude API Key</label>
+                <input type="password" id="inp-anthropic-key" placeholder="sk-ant-..." />
+              </div>
+              <button class="save-btn" onclick="this.getRootNode().host._saveApiKeys()">💾 Zapisz klucze API</button>
+              <div id="v-save-status" style="font-size:11px; color:#2ecc71; margin-top:8px"></div>
+            </div>
+
+            <!-- 🖼️ Inverter Image Upload -->
+            <div class="card" style="grid-column: 1 / -1">
+              <div class="card-title">🖼️ Zdjęcie falownika</div>
+              <div style="font-size:11px; color:#94a3b8; margin-bottom:10px">Wgraj zdjęcie falownika, które będzie wyświetlane w panelu Przegląd.</div>
+              <div class="upload-zone" onclick="this.nextElementSibling.click()">
+                <div style="font-size:32px; margin-bottom:6px">📂</div>
+                <div style="font-size:12px; color:#a0aec0">Kliknij aby wybrać plik PNG/JPG</div>
+                <div style="font-size:10px; color:#64748b; margin-top:4px">Plik zostanie zapisany jako <code style="color:#00d4ff">/config/www/smartinghome/inverter.png</code></div>
+              </div>
+              <input type="file" accept="image/png,image/jpeg" style="display:none" onchange="this.getRootNode().host._uploadInverterImage(this.files[0])" />
+              <div id="v-upload-status" style="font-size:11px; color:#2ecc71; margin-top:8px"></div>
+              <div style="margin-top:10px; font-size:10px; color:#64748b">
+                <strong>Alternatywnie:</strong> ręcznie skopiuj plik <code style="color:#f39c12">goodwe.png</code> lub <code style="color:#f39c12">deye.png</code> do katalogu <code style="color:#00d4ff">/config/www/smartinghome/</code> na serwerze HA.
               </div>
             </div>
+
+            <!-- ⭐ Upgrade Prompt (FREE only) -->
+            <div class="card" style="grid-column: 1 / -1" id="settings-upgrade-box">
+              <div class="upgrade-box">
+                <div style="font-size:15px; font-weight:700; color:#f7b731">⭐ Odblokuj pełną moc Smarting HOME</div>
+                <div style="font-size:12px; color:#a0aec0; margin-top:6px; line-height:1.5">
+                  Wersja <strong style="color:#00d4ff">PRO</strong> oferuje:<br>
+                  🧠 Pełny silnik HEMS z 3-warstwową optymalizacją<br>
+                  📈 Arbitraż nocny (zysk ~177 PLN/mies.)<br>
+                  🛡️ Kaskada napięciowa i ochrona SOC<br>
+                  📊 7 gotowych blueprintów automatyzacji
+                </div>
+                <a href="https://smartinghome.pl/buy" target="_blank" style="display:inline-block; margin-top:10px; padding:8px 20px; border-radius:8px; background:linear-gradient(135deg,#f7b731,#e67e22); color:#0a1628; font-weight:700; font-size:12px; text-decoration:none; transition:all 0.2s">🛒 Kup licencję PRO</a>
+              </div>
+            </div>
+
+            <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.1</span></div>
-              <div class="dr"><span class="lb">Zdjęcie falownika</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.2</span></div>
+              <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
+              <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
             </div>
+
           </div>
         </div>
       </div>
