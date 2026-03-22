@@ -225,13 +225,36 @@ class AIAdvisor:
             import aiohttp
 
             context = self._build_context(data)
+            format_instructions = """
+IMPORTANT — FORMAT YOUR RESPONSE as structured markdown for rich display:
+- Use ## for main sections (e.g. ## 📊 Analiza bieżącej sytuacji, ## 🔋 Bateria, ## ⚡ Sieć, ## 🎯 Rekomendacje)
+- Use ### for subsections
+- Use numbered lists (1. 2. 3.) for step-by-step recommendations
+- Use bullet points (- ) for details within sections
+- Use **bold** for key values and emphasis
+- Use > for important callout tips (prefix with ✅ for positive, ⚠️ for warning, ❌ for critical)
+- Use **Rekomendacja:** prefix for main action items
+- Use --- between major sections for visual separation
+- Use tables | header | header | for comparative data when useful
+- Keep each section focused and concise
+
+Example structure:
+## 📊 Analiza systemu
+- **Moc PV:** 0 W
+- **SOC baterii:** 10%
+---
+## 🎯 Rekomendacje na najbliższe 4 godziny
+1. **Rekomendacja:** Zatrzymaj rozładowywanie baterii
+> ✅ Bateria powinna ładować się z sieci w taniej taryfie
+2. **Rekomendacja:** Nie eksportuj do sieci
+> ⚠️ Brak produkcji PV — eksport jest niemożliwy
+"""
             prompt = f"""You are an expert energy management advisor for a home solar+battery system in Poland.
-Analyze the following system data and answer the user's question.
-Provide specific, actionable recommendations.
+Analyze the following system data and provide recommendations.
 Use Polish energy market knowledge (G13 tariff, RCE pricing, net-billing rules).
 Provide complete, actionable recommendations. Do NOT truncate your response.
-Respond in the same language as the question.
-
+Respond in Polish.
+{format_instructions}
 {context}
 
 User question: {question}"""
@@ -290,13 +313,25 @@ User question: {question}"""
             import aiohttp
 
             context = self._build_context(data)
+            format_instructions = """
+IMPORTANT — FORMAT YOUR RESPONSE as structured markdown for rich display:
+- Use ## for main sections (e.g. ## 📊 Analiza bieżącej sytuacji, ## 🔋 Bateria, ## ⚡ Sieć, ## 🎯 Rekomendacje)
+- Use ### for subsections
+- Use numbered lists (1. 2. 3.) for step-by-step recommendations
+- Use bullet points (- ) for details within sections
+- Use **bold** for key values and emphasis
+- Use > for important callout tips (prefix with ✅ for positive, ⚠️ for warning, ❌ for critical)
+- Use **Rekomendacja:** prefix for main action items
+- Use --- between major sections for visual separation
+- Use tables | header | header | for comparative data when useful
+- Keep each section focused and concise
+"""
             prompt = f"""You are an expert energy management advisor for a home solar+battery system in Poland.
-Analyze the following system data and answer the user's question.
-Provide specific, actionable recommendations.
+Analyze the following system data and provide recommendations.
 Use Polish energy market knowledge (G13 tariff, RCE pricing, net-billing rules).
 Provide complete, actionable recommendations. Do NOT truncate your response.
-Respond in the same language as the question.
-
+Respond in Polish.
+{format_instructions}
 {context}
 
 User question: {question}"""
