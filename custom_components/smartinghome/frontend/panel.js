@@ -886,7 +886,7 @@ class SmartingHomePanel extends HTMLElement {
             </div>
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.1</span></div>
               <div class="dr"><span class="lb">Zdjęcie falownika</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
             </div>
