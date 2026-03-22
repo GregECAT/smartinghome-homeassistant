@@ -463,9 +463,9 @@ class SmartingHomePanel extends HTMLElement {
       }
     }
 
-    // Battery
+    // Battery (GoodWe BT: positive = discharging, negative = charging)
     this._setText("v-batt", this._pw(Math.abs(batt)));
-    this._setText("v-batt-dir", batt > 0 ? "ŁADOWANIE ↑" : batt < 0 ? "ROZŁADOWANIE ↓" : "STANDBY");
+    this._setText("v-batt-dir", batt < -10 ? "ŁADOWANIE ↑" : batt > 10 ? "ROZŁADOWANIE ↓" : "STANDBY");
     this._setText("v-soc", `${Math.round(soc)}%`);
     this._setText("v-batt-v", `${this._fm("battery_voltage")} V`);
     this._setText("v-batt-a", `${this._fm("battery_current")} A`);
@@ -476,13 +476,13 @@ class SmartingHomePanel extends HTMLElement {
     const battNode = this.shadowRoot.getElementById("batt-node");
     const battDirEl = this.shadowRoot.getElementById("v-batt-dir");
     if (battNode) {
-      if (batt > 10) {
-        // Charging
+      if (batt < -10) {
+        // Charging (negative = charging for GoodWe BT)
         battNode.style.borderColor = "rgba(46,204,113,0.5)";
         battNode.style.boxShadow = "0 8px 32px 0 rgba(46,204,113,0.2)";
         if (battDirEl) battDirEl.style.color = "#2ecc71";
-      } else if (batt < -10) {
-        // Discharging
+      } else if (batt > 10) {
+        // Discharging (positive = discharging for GoodWe BT)
         battNode.style.borderColor = "rgba(243,156,18,0.5)";
         battNode.style.boxShadow = "0 8px 32px 0 rgba(243,156,18,0.2)";
         if (battDirEl) battDirEl.style.color = "#f39c12";
@@ -559,13 +559,13 @@ class SmartingHomePanel extends HTMLElement {
       this._setText("v-clouds", this._fm("weather_cloud_cover", 0) + "%");
     }
 
-    // Animated flows
+    // Animated flows (GoodWe BT: batt>0=discharge, batt<0=charge)
     this._flow("fl-pv-inv", pv > 10, pv);
     this._flow("fl-inv-load", load > 10, load);
     this._flow("fl-grid-inv", grid > 10, grid);
     this._flow("fl-inv-grid", grid < -10, Math.abs(grid));
-    this._flow("fl-inv-batt", batt > 10, batt);
-    this._flow("fl-batt-inv", batt < -10, Math.abs(batt));
+    this._flow("fl-inv-batt", batt < -10, Math.abs(batt));  // charging: inverter → battery
+    this._flow("fl-batt-inv", batt > 10, batt);               // discharging: battery → inverter
 
     // Dynamic Inverter Image Logic
     let imgName = "goodwe"; // domyślnie GoodWe
@@ -645,6 +645,19 @@ class SmartingHomePanel extends HTMLElement {
     this._updateKeyStatus();
     // ROI Tab
     this._updateRoi();
+    // Overview daily financial KPIs
+    const ovCost = this._n("sensor.g13_import_cost_today") ?? this._n("sensor.g13_import_cost_daily") ?? 0;
+    const ovRev = this._n("sensor.g13_export_revenue_today") ?? this._n("sensor.g13_export_revenue_daily") ?? 0;
+    const ovSav = this._n("sensor.g13_self_consumption_savings_today") ?? this._n("sensor.g13_self_consumption_savings_daily") ?? 0;
+    const ovBal = this._n("sensor.g13_net_balance_today") ?? this._n("sensor.g13_net_balance_daily") ?? (ovRev + ovSav - ovCost);
+    this._setText("ov-cost", `${ovCost.toFixed(2)} zł`);
+    this._setText("ov-revenue", `${ovRev.toFixed(2)} zł`);
+    this._setText("ov-savings", `${ovSav.toFixed(2)} zł`);
+    this._setText("ov-balance", `${ovBal >= 0 ? "+" : ""}${ovBal.toFixed(2)} zł`);
+    const ovBalCard = this.shadowRoot.getElementById("ov-balance-card");
+    const ovBalText = this.shadowRoot.getElementById("ov-balance");
+    if (ovBalCard) { ovBalCard.style.borderColor = ovBal >= 0 ? "#2ecc71" : "#e74c3c"; ovBalCard.style.background = ovBal >= 0 ? "rgba(46,204,113,0.08)" : "rgba(231,76,60,0.08)"; }
+    if (ovBalText) ovBalText.style.color = ovBal >= 0 ? "#2ecc71" : "#e74c3c";
     // RCE / Tariff — G13 Zone Badge
     const g13Zone = this._s("sensor.smartinghome_g13_current_zone") || this._s("sensor.g13_current_zone") || "—";
     const g13Badge = this.shadowRoot.getElementById("v-g13-zone-badge");
@@ -1324,6 +1337,26 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
+          <!-- Daily financial KPIs -->
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px; margin-top:10px">
+            <div style="background:rgba(231,76,60,0.08); border-radius:10px; padding:10px; text-align:center">
+              <div style="font-size:9px; color:#e74c3c; text-transform:uppercase; letter-spacing:0.5px">💸 Koszt importu</div>
+              <div style="font-size:18px; font-weight:800; color:#e74c3c; margin-top:2px" id="ov-cost">— zł</div>
+            </div>
+            <div style="background:rgba(46,204,113,0.08); border-radius:10px; padding:10px; text-align:center">
+              <div style="font-size:9px; color:#2ecc71; text-transform:uppercase; letter-spacing:0.5px">💵 Przychód</div>
+              <div style="font-size:18px; font-weight:800; color:#2ecc71; margin-top:2px" id="ov-revenue">— zł</div>
+            </div>
+            <div style="background:rgba(0,212,255,0.08); border-radius:10px; padding:10px; text-align:center">
+              <div style="font-size:9px; color:#00d4ff; text-transform:uppercase; letter-spacing:0.5px">🏦 Oszczędność</div>
+              <div style="font-size:18px; font-weight:800; color:#00d4ff; margin-top:2px" id="ov-savings">— zł</div>
+            </div>
+            <div style="border-radius:10px; padding:10px; text-align:center; border:1px solid" id="ov-balance-card">
+              <div style="font-size:9px; text-transform:uppercase; letter-spacing:0.5px">📊 Bilans dziś</div>
+              <div style="font-size:20px; font-weight:900; margin-top:2px" id="ov-balance">— zł</div>
+            </div>
+          </div>
+
           <!-- HEMS Recommendation -->
           <div class="card" style="margin-top:10px">
             <div class="card-title">💡 Rekomendacja HEMS</div>
@@ -1814,7 +1847,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.8</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.9</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
