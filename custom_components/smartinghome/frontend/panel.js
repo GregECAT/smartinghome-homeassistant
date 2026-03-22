@@ -397,10 +397,24 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-autarky", `${this._f("sensor.smartinghome_autarky_today", 0)}%`);
     this._setText("v-selfcons", `${this._f("sensor.smartinghome_self_consumption_today", 0)}%`);
 
-    // Weather
-    const wt = this._nm("weather_temp");
-    this._setText("v-weather", wt !== null ? `${wt.toFixed(0)}°C` : "");
-    this._setText("v-clouds", this._fm("weather_cloud_cover", 0) + "%");
+    // Weather — read from HA weather entity attributes
+    const weatherEntities = ["weather.home", "weather.forecast_home", "weather.openweathermap"];
+    let weatherState = null;
+    for (const we of weatherEntities) {
+      if (this._hass?.states[we]) { weatherState = this._hass.states[we]; break; }
+    }
+    if (weatherState) {
+      const wTemp = weatherState.attributes?.temperature;
+      const wHumid = weatherState.attributes?.humidity;
+      const wCloud = weatherState.attributes?.cloud_coverage;
+      this._setText("v-weather", wTemp != null ? `${Math.round(wTemp)}°C` : "");
+      this._setText("v-clouds", wCloud != null ? `${Math.round(wCloud)}%` : (wHumid != null ? `${Math.round(wHumid)}%` : "—%"));
+    } else {
+      // Fallback to mapped sensors
+      const wt = this._nm("weather_temp");
+      this._setText("v-weather", wt !== null ? `${wt.toFixed(0)}°C` : "");
+      this._setText("v-clouds", this._fm("weather_cloud_cover", 0) + "%");
+    }
 
     // Animated flows
     this._flow("fl-pv-inv", pv > 10, pv);
@@ -624,8 +638,30 @@ class SmartingHomePanel extends HTMLElement {
       socBarTab.style.background = soc > 50 ? "#2ecc71" : soc > 20 ? "#f39c12" : "#e74c3c";
     }
 
-    this._setText("v-surplus", `${this._f("sensor.smartinghome_pv_surplus_power", 0)} W`);
-    this._setText("v-net-grid", `${this._f("sensor.smartinghome_net_grid_today")} kWh`);
+    // PV Surplus — calculate from live values (pv - load)
+    const pvSurplusVal = this._n("sensor.smartinghome_pv_surplus_power");
+    if (pvSurplusVal !== null) {
+      this._setText("v-surplus", `${pvSurplusVal.toFixed(0)} W`);
+    } else {
+      const pvNow = this._nm("pv_power") || 0;
+      const loadNow = this._nm("load_power") || 0;
+      const surplus = pvNow - loadNow;
+      this._setText("v-surplus", `${surplus > 0 ? '+' : ''}${Math.round(surplus)} W`);
+      const surplusEl = this.shadowRoot.getElementById("v-surplus");
+      if (surplusEl) surplusEl.style.color = surplus > 0 ? "#2ecc71" : "#e74c3c";
+    }
+    // Net Grid — calculate from daily import/export
+    const netGridVal = this._n("sensor.smartinghome_net_grid_today");
+    if (netGridVal !== null) {
+      this._setText("v-net-grid", `${netGridVal.toFixed(1)} kWh`);
+    } else {
+      const imp = this._nm("grid_import_today") || 0;
+      const exp = this._nm("grid_export_today") || 0;
+      const netG = exp - imp;
+      this._setText("v-net-grid", `${netG > 0 ? '+' : ''}${netG.toFixed(1)} kWh`);
+      const netEl = this.shadowRoot.getElementById("v-net-grid");
+      if (netEl) netEl.style.color = netG >= 0 ? "#2ecc71" : "#e74c3c";
+    }
     
     // AI Rec Tab
     this._setText("v-hems-rec-tab", this._s("sensor.smartinghome_hems_recommendation") || "Brak danych z asystenta AI.");
@@ -1495,7 +1531,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.5</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.6</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
