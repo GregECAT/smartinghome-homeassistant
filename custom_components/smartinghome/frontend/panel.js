@@ -277,6 +277,16 @@ class SmartingHomePanel extends HTMLElement {
     // PV
     this._setText("v-pv", this._pw(pv));
     this._setText("v-pv-today", `${this._fm("pv_today")} kWh`);
+    // Dynamic PV node coloring: green if PV >= load, orange if not
+    const pvNode = this.shadowRoot.getElementById("pv-node");
+    const pvBig = this.shadowRoot.getElementById("v-pv");
+    if (pvNode) {
+      const pvCoversLoad = pv >= load && pv > 10;
+      const pvColor = pvCoversLoad ? "rgba(46,204,113," : "rgba(247,183,49,";
+      pvNode.style.borderColor = pvColor + "0.5)";
+      pvNode.style.boxShadow = `0 8px 32px 0 ${pvColor}0.2)`;
+      if (pvBig) pvBig.style.color = pvCoversLoad ? "#2ecc71" : "#f7b731";
+    }
     // PV Strings
     const pvLabels = (this._settings.pv_labels) || {};
     for (let i = 1; i <= 4; i++) {
@@ -296,6 +306,16 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-load-l1", `L1: ${this._fm("power_l1", 0)} W`);
     this._setText("v-load-l2", `L2: ${this._fm("power_l2", 0)} W`);
     this._setText("v-load-l3", `L3: ${this._fm("power_l3", 0)} W`);
+    // Dynamic Home node coloring: green if self-sufficient, orange if grid needed
+    const homeNode = this.shadowRoot.getElementById("home-node");
+    const homeBig = this.shadowRoot.getElementById("v-load");
+    if (homeNode) {
+      const selfSufficient = grid <= 10; // not importing from grid
+      const hColor = selfSufficient ? "rgba(46,204,113," : "rgba(243,156,18,";
+      homeNode.style.borderColor = hColor + "0.5)";
+      homeNode.style.boxShadow = `0 8px 32px 0 ${hColor}0.2)`;
+      if (homeBig) homeBig.style.color = selfSufficient ? "#2ecc71" : "#f39c12";
+    }
 
     // Grid
     this._setText("v-grid", this._pw(Math.abs(grid)));
@@ -338,6 +358,27 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-batt-temp", `${this._fm("battery_temp")}°C`);
     this._setText("v-batt-charge", `↑ ${this._fm("battery_charge_today")} kWh`);
     this._setText("v-batt-discharge", `↓ ${this._fm("battery_discharge_today")} kWh`);
+    // Dynamic Battery node coloring: green=charging, orange=discharging
+    const battNode = this.shadowRoot.getElementById("batt-node");
+    const battDirEl = this.shadowRoot.getElementById("v-batt-dir");
+    if (battNode) {
+      if (batt > 10) {
+        // Charging
+        battNode.style.borderColor = "rgba(46,204,113,0.5)";
+        battNode.style.boxShadow = "0 8px 32px 0 rgba(46,204,113,0.2)";
+        if (battDirEl) battDirEl.style.color = "#2ecc71";
+      } else if (batt < -10) {
+        // Discharging
+        battNode.style.borderColor = "rgba(243,156,18,0.5)";
+        battNode.style.boxShadow = "0 8px 32px 0 rgba(243,156,18,0.2)";
+        if (battDirEl) battDirEl.style.color = "#f39c12";
+      } else {
+        // Standby
+        battNode.style.borderColor = "rgba(0,212,255,0.2)";
+        battNode.style.boxShadow = "0 8px 32px 0 rgba(0,0,0,0.3)";
+        if (battDirEl) battDirEl.style.color = "#64748b";
+      }
+    }
 
     // SOC bar
     const socBar = this.shadowRoot.getElementById("soc-fill");
@@ -990,7 +1031,7 @@ class SmartingHomePanel extends HTMLElement {
             <div class="flow-nodes">
               <!-- ☀️ PV AREA (top left) -->
               <div class="pv-area">
-                <div class="node" style="border-color: rgba(247,183,49,0.2)">
+                <div class="node" id="pv-node" style="border-color: rgba(247,183,49,0.2); transition: border-color 0.5s, box-shadow 0.5s">
                   <div class="node-title">☀️ Produkcja PV</div>
                   <div class="node-big" style="color:#f7b731" id="v-pv">— W</div>
                   <div class="node-sub" id="v-pv-today">— kWh dziś</div>
@@ -1005,7 +1046,7 @@ class SmartingHomePanel extends HTMLElement {
 
               <!-- 🏠 ZUZYCIE (top right) -->
               <div class="home-area">
-                <div class="node" style="border-color: rgba(46,204,113,0.2)">
+                <div class="node" id="home-node" style="border-color: rgba(46,204,113,0.2); transition: border-color 0.5s, box-shadow 0.5s">
                   <div style="display:flex; align-items:flex-start; gap:12px">
                     <div style="flex:1">
                       <div class="node-title">🏠 Zużycie</div>
@@ -1023,7 +1064,7 @@ class SmartingHomePanel extends HTMLElement {
 
               <!-- 🔋 BATTERY (left, below PV) -->
               <div class="batt-area">
-                <div class="node" style="border-color: rgba(0,212,255,0.2)">
+                <div class="node" id="batt-node" style="border-color: rgba(0,212,255,0.2); transition: border-color 0.5s, box-shadow 0.5s">
                   <div class="node-title">🔋 Bateria</div>
                   <div style="display:flex; align-items:baseline; gap:8px">
                     <div class="node-big" id="v-soc" style="color:#2ecc71">—%</div>
@@ -1454,7 +1495,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.4</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.5</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
