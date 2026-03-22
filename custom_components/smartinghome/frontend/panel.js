@@ -527,6 +527,15 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
   // ── Winter Tab (Zima na plusie) ──
+  // Financial scenario definitions
+  _winterScenarios() {
+    return {
+      none:    { label: '🔴 Bez zarządzania',  importPrice: 0.87, exportPrice: 0.20, desc: 'Import po średniej G13, eksport po najgorszej RCE' },
+      basic:   { label: '🟡 Podstawowe',        importPrice: 0.63, exportPrice: 0.35, desc: 'Nocne ładowanie off-peak, sprzedaż po średniej RCE' },
+      optimal: { label: '🟢 HEMS Optymalne',     importPrice: 0.63, exportPrice: 1.08, desc: 'Off-peak import, sprzedaż w szczycie G13 po RCE×1.23' }
+    };
+  }
+
   _initWinterTab() {
     const months = ['Styczeń','Luty','Marzec','Kwiecień','Maj','Czerwiec','Lipiec','Sierpień','Wrzesień','Październik','Listopad','Grudzień'];
     const emojis = ['🥶','🥶','🌨️','🌤️','☀️','☀️','☀️','☀️','🌤️','🍂','🌧️','🥶'];
@@ -542,11 +551,15 @@ class SmartingHomePanel extends HTMLElement {
         '<td style="text-align:right;padding:5px 4px"><input type="number" data-month="' + i + '" class="wnt-cons-input" value="' + saved + '" placeholder="—" style="width:70px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:5px;color:#fff;padding:4px 6px;font-size:11px;text-align:right" onchange="this.getRootNode().host._recalcWinter()" /></td>' +
         '<td style="text-align:right;padding:5px 6px;color:#f7b731;font-size:11px" data-pv="' + i + '">—</td>' +
         '<td style="text-align:right;padding:5px 6px;font-weight:600;font-size:11px" data-bal="' + i + '">—</td>' +
+        '<td style="text-align:right;padding:5px 6px;font-size:10px;color:#e74c3c" data-cost="' + i + '">—</td>' +
+        '<td style="text-align:right;padding:5px 6px;font-size:10px;color:#2ecc71" data-rev="' + i + '">—</td>' +
+        '<td style="text-align:right;padding:5px 6px;font-weight:600;font-size:10px" data-fbal="' + i + '">—</td>' +
         '<td style="padding:5px 4px"><div style="background:rgba(255,255,255,0.06);border-radius:4px;height:8px;overflow:hidden"><div data-bar="' + i + '" style="height:100%;width:0%;border-radius:4px;transition:width 0.3s"></div></div></td>';
       tbody.appendChild(tr);
     });
     if (s.winter_pv_kwp) { const k = this.shadowRoot.getElementById('wnt-pv-kwp'); if (k) k.value = s.winter_pv_kwp; }
     if (s.winter_region) { const r = this.shadowRoot.getElementById('wnt-region'); if (r) r.value = s.winter_region; }
+    if (s.winter_scenario) { const sc = this.shadowRoot.getElementById('wnt-scenario'); if (sc) sc.value = s.winter_scenario; }
     this._recalcWinter();
   }
 
@@ -559,31 +572,48 @@ class SmartingHomePanel extends HTMLElement {
     const yieldPerKwp = { south: 1050, center: 1000, north: 950 };
     const kwp = parseFloat(this.shadowRoot.getElementById('wnt-pv-kwp')?.value) || 0;
     const region = this.shadowRoot.getElementById('wnt-region')?.value || 'center';
+    const scenarioKey = this.shadowRoot.getElementById('wnt-scenario')?.value || 'optimal';
+    const scenarios = this._winterScenarios();
+    const sc = scenarios[scenarioKey] || scenarios.optimal;
     const annualYield = kwp * (yieldPerKwp[region] || 1000);
     const dist = solarDist[region] || solarDist.center;
     const estEl = this.shadowRoot.getElementById('wnt-est-yearly');
     if (estEl) estEl.textContent = kwp > 0 ? Math.round(annualYield) + ' kWh' : '— kWh';
     const inputs = this.shadowRoot.querySelectorAll('.wnt-cons-input');
-    let totalCons = 0, totalPV = 0;
+    let totalCons = 0, totalPV = 0, totalCost = 0, totalRev = 0;
     const monthData = [];
     inputs.forEach((inp, i) => {
       const cons = parseFloat(inp.value) || 0;
       const pv = kwp > 0 ? Math.round(annualYield * dist[i]) : 0;
       const bal = pv - cons;
-      totalCons += cons; totalPV += pv;
-      monthData.push({ cons, pv, bal, month: i });
+      const cost = bal < 0 ? Math.abs(bal) * sc.importPrice : 0;
+      const rev = bal > 0 ? bal * sc.exportPrice : 0;
+      const fbal = rev - cost;
+      totalCons += cons; totalPV += pv; totalCost += cost; totalRev += rev;
+      monthData.push({ cons, pv, bal, cost, rev, fbal, month: i });
       const pvC = this.shadowRoot.querySelector('[data-pv="' + i + '"]');
       const balC = this.shadowRoot.querySelector('[data-bal="' + i + '"]');
+      const costC = this.shadowRoot.querySelector('[data-cost="' + i + '"]');
+      const revC = this.shadowRoot.querySelector('[data-rev="' + i + '"]');
+      const fbalC = this.shadowRoot.querySelector('[data-fbal="' + i + '"]');
       const barE = this.shadowRoot.querySelector('[data-bar="' + i + '"]');
       if (pvC) pvC.textContent = pv > 0 ? pv : '—';
       if (balC) { balC.textContent = cons > 0 ? (bal > 0 ? '+' + bal : '' + bal) : '—'; balC.style.color = bal >= 0 ? '#2ecc71' : '#e74c3c'; }
+      if (costC) costC.textContent = cost > 0 ? '-' + cost.toFixed(0) : '—';
+      if (revC) revC.textContent = rev > 0 ? '+' + rev.toFixed(0) : '—';
+      if (fbalC) { fbalC.textContent = cons > 0 ? (fbal >= 0 ? '+' : '') + fbal.toFixed(0) + ' zł' : '—'; fbalC.style.color = fbal >= 0 ? '#2ecc71' : '#e74c3c'; }
       if (barE && cons > 0) { const p = Math.min((pv / Math.max(cons, 1)) * 100, 100); barE.style.width = p + '%'; barE.style.background = p >= 100 ? '#2ecc71' : p >= 60 ? '#f7b731' : '#e74c3c'; }
     });
     const totalBal = totalPV - totalCons;
+    const totalFBal = totalRev - totalCost;
     this._setText('wnt-sum-cons', totalCons > 0 ? totalCons + ' kWh' : '—');
     this._setText('wnt-sum-pv', totalPV > 0 ? totalPV + ' kWh' : '—');
     const sBal = this.shadowRoot.getElementById('wnt-sum-bal');
     if (sBal) { sBal.textContent = totalCons > 0 ? (totalBal > 0 ? '+' : '') + totalBal + ' kWh' : '—'; sBal.style.color = totalBal >= 0 ? '#2ecc71' : '#e74c3c'; }
+    this._setText('wnt-sum-cost', totalCost > 0 ? '-' + totalCost.toFixed(0) + ' zł' : '—');
+    this._setText('wnt-sum-rev', totalRev > 0 ? '+' + totalRev.toFixed(0) + ' zł' : '—');
+    const sfb = this.shadowRoot.getElementById('wnt-sum-fbal');
+    if (sfb) { sfb.textContent = totalCons > 0 ? (totalFBal >= 0 ? '+' : '') + totalFBal.toFixed(0) + ' zł' : '—'; sfb.style.color = totalFBal >= 0 ? '#2ecc71' : '#e74c3c'; }
     this._setText('wnt-total-consumption', totalCons > 0 ? totalCons + ' kWh' : '— kWh');
     this._setText('wnt-total-production', totalPV > 0 ? totalPV + ' kWh' : '— kWh');
     const sn = this.shadowRoot.getElementById('wnt-balance-sign'); if (sn) sn.textContent = totalBal >= 0 ? '✅' : '⚠️';
@@ -594,6 +624,14 @@ class SmartingHomePanel extends HTMLElement {
       if (vl) { vl.textContent = (totalBal > 0 ? '+' : '') + totalBal + ' kWh'; vl.style.color = totalBal >= 0 ? '#2ecc71' : '#e74c3c'; }
       if (bx) bx.style.background = totalBal >= 0 ? 'rgba(46,204,113,0.1)' : 'rgba(231,76,60,0.1)';
       if (mg) { mg.textContent = totalBal >= 0 ? 'Nadwyżka: ' + totalBal + ' kWh/rok — JESTEŚ NA PLUSIE!' : 'Niedobór: ' + Math.abs(totalBal) + ' kWh/rok'; mg.style.color = totalBal >= 0 ? '#2ecc71' : '#f7b731'; }
+    }
+    // Financial balance in hero
+    const fvl = this.shadowRoot.getElementById('wnt-fbal-value');
+    const fmg = this.shadowRoot.getElementById('wnt-fbal-msg');
+    if (totalCons > 0 && kwp > 0 && fvl) {
+      fvl.textContent = (totalFBal >= 0 ? '+' : '') + totalFBal.toFixed(0) + ' zł';
+      fvl.style.color = totalFBal >= 0 ? '#2ecc71' : '#e74c3c';
+      if (fmg) { fmg.textContent = 'Scenariusz: ' + sc.label; fmg.style.color = '#94a3b8'; }
     }
     const cov = totalCons > 0 && totalPV > 0 ? Math.round(totalPV / totalCons * 100) : 0;
     const cb = this.shadowRoot.getElementById('wnt-coverage-bar'); if (cb) cb.style.width = Math.min(cov, 120) + '%';
@@ -608,6 +646,54 @@ class SmartingHomePanel extends HTMLElement {
     else { if (se) se.textContent = '🥶'; if (st) { st.textContent = 'Daleko od celu'; st.style.color = '#e74c3c'; } if (sd) sd.textContent = 'Pokrycie ' + cov + '%'; }
     this._renderWinterChart(monthData);
     this._renderWinterFocus(monthData);
+    this._renderScenarioComparison(monthData);
+  }
+
+  _renderScenarioComparison(data) {
+    const ct = this.shadowRoot.getElementById('wnt-scenario-compare');
+    if (!ct || data.every(d => d.cons === 0)) { if (ct) ct.innerHTML = '<div style="color:#64748b;font-size:11px;text-align:center;padding:16px">Wypełnij dane zużycia aby zobaczyć porównanie scenariuszy.</div>'; return; }
+    const scenarios = this._winterScenarios();
+    const keys = ['none', 'basic', 'optimal'];
+    const colors = ['#e74c3c', '#f7b731', '#2ecc71'];
+    const borders = ['rgba(231,76,60,0.2)', 'rgba(247,183,49,0.2)', 'rgba(46,204,113,0.2)'];
+    const bgs = ['rgba(231,76,60,0.06)', 'rgba(247,183,49,0.06)', 'rgba(46,204,113,0.06)'];
+    let html = '';
+    const results = keys.map(k => {
+      const s = scenarios[k];
+      let cost = 0, rev = 0;
+      data.forEach(d => {
+        if (d.bal < 0) cost += Math.abs(d.bal) * s.importPrice;
+        if (d.bal > 0) rev += d.bal * s.exportPrice;
+      });
+      return { key: k, label: s.label, desc: s.desc, cost, rev, net: rev - cost, importPrice: s.importPrice, exportPrice: s.exportPrice };
+    });
+    const bestNet = results[2].net;
+    const worstNet = results[0].net;
+    const savings = bestNet - worstNet;
+    html = results.map((r, i) => {
+      const diff = i > 0 ? r.net - worstNet : 0;
+      return '<div style="flex:1;background:' + bgs[i] + ';border:1px solid ' + borders[i] + ';border-radius:12px;padding:14px;text-align:center;min-width:180px">' +
+        '<div style="font-size:12px;font-weight:700;color:' + colors[i] + ';margin-bottom:8px">' + r.label + '</div>' +
+        '<div style="font-size:9px;color:#64748b;margin-bottom:10px;line-height:1.3">' + r.desc + '</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:8px;font-size:10px">' +
+        '<div style="color:#64748b">Import:</div><div style="color:#e74c3c;font-weight:600">' + r.importPrice.toFixed(2) + ' zł/kWh</div>' +
+        '<div style="color:#64748b">Eksport:</div><div style="color:#2ecc71;font-weight:600">' + r.exportPrice.toFixed(2) + ' zł/kWh</div>' +
+        '</div>' +
+        '<div style="border-top:1px solid rgba(255,255,255,0.06);padding-top:8px">' +
+        '<div style="font-size:9px;color:#64748b">Koszt importu</div><div style="font-size:14px;font-weight:700;color:#e74c3c">-' + r.cost.toFixed(0) + ' zł</div>' +
+        '<div style="font-size:9px;color:#64748b;margin-top:4px">Przychód z eksportu</div><div style="font-size:14px;font-weight:700;color:#2ecc71">+' + r.rev.toFixed(0) + ' zł</div>' +
+        '</div>' +
+        '<div style="margin-top:8px;padding:8px;border-radius:8px;background:rgba(255,255,255,0.04)">' +
+        '<div style="font-size:9px;color:#64748b">BILANS ROCZNY</div>' +
+        '<div style="font-size:22px;font-weight:900;color:' + (r.net >= 0 ? '#2ecc71' : '#e74c3c') + '">' + (r.net >= 0 ? '+' : '') + r.net.toFixed(0) + ' zł</div>' +
+        (i > 0 ? '<div style="font-size:10px;color:#2ecc71;margin-top:2px">+' + diff.toFixed(0) + ' zł vs brak zarządzania</div>' : '<div style="font-size:10px;color:#e74c3c;margin-top:2px">brak automatyzacji</div>') +
+        '</div></div>';
+    }).join('');
+    ct.innerHTML = '<div style="display:flex;gap:10px;flex-wrap:wrap">' + html + '</div>' +
+      (savings > 0 ? '<div style="margin-top:12px;padding:12px;background:rgba(46,204,113,0.08);border:1px solid rgba(46,204,113,0.2);border-radius:10px;text-align:center">' +
+      '<div style="font-size:11px;color:#94a3b8">💰 Oszczędność dzięki automatyzacji HEMS</div>' +
+      '<div style="font-size:28px;font-weight:900;color:#2ecc71;margin-top:4px">+' + savings.toFixed(0) + ' zł/rok</div>' +
+      '<div style="font-size:10px;color:#64748b;margin-top:2px">Różnica między brakiem zarządzania a optymalnym HEMS</div></div>' : '');
   }
 
   _renderWinterChart(data) {
@@ -662,7 +748,8 @@ class SmartingHomePanel extends HTMLElement {
     this._savePanelSettings({
       winter_consumption: cons,
       winter_pv_kwp: parseFloat(this.shadowRoot.getElementById('wnt-pv-kwp')?.value) || 0,
-      winter_region: this.shadowRoot.getElementById('wnt-region')?.value || 'center'
+      winter_region: this.shadowRoot.getElementById('wnt-region')?.value || 'center',
+      winter_scenario: this.shadowRoot.getElementById('wnt-scenario')?.value || 'optimal'
     });
     const st = this.shadowRoot.getElementById('wnt-save-status');
     if (st) { st.textContent = '\u2705 Dane zimowe zapisane!'; setTimeout(() => { st.textContent = ''; }, 4000); }
@@ -673,6 +760,7 @@ class SmartingHomePanel extends HTMLElement {
     if (s.winter_consumption) { const ii = this.shadowRoot.querySelectorAll('.wnt-cons-input'); ii.forEach((inp, i) => { if (s.winter_consumption[i]) inp.value = s.winter_consumption[i]; }); }
     if (s.winter_pv_kwp) { const k = this.shadowRoot.getElementById('wnt-pv-kwp'); if (k) k.value = s.winter_pv_kwp; }
     if (s.winter_region) { const r = this.shadowRoot.getElementById('wnt-region'); if (r) r.value = s.winter_region; }
+    if (s.winter_scenario) { const sc = this.shadowRoot.getElementById('wnt-scenario'); if (sc) sc.value = s.winter_scenario; }
     this._recalcWinter();
   }
 
@@ -2636,6 +2724,11 @@ class SmartingHomePanel extends HTMLElement {
               <div style="font-size:36px; font-weight:900; margin-top:4px" id="wnt-balance-value">— kWh</div>
               <div style="font-size:11px; margin-top:2px" id="wnt-balance-msg">Wypełnij dane poniżej</div>
             </div>
+            <div style="margin-top:8px; padding:10px; border-radius:10px; background:rgba(255,255,255,0.03); position:relative">
+              <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:#64748b">Bilans finansowy</div>
+              <div style="font-size:28px; font-weight:900; margin-top:4px" id="wnt-fbal-value">— zł</div>
+              <div style="font-size:10px; margin-top:2px" id="wnt-fbal-msg">Wybierz scenariusz zarządzania energią</div>
+            </div>
           </div>
 
           <!-- System sizing -->
@@ -2659,6 +2752,16 @@ class SmartingHomePanel extends HTMLElement {
                 </select>
               </div>
               <div style="font-size:10px; color:#64748b; margin-top:8px">Szacunkowa produkcja roczna: <span id="wnt-est-yearly" style="color:#f7b731; font-weight:600">— kWh</span></div>
+              <div class="settings-field" style="margin-top:10px">
+                <label style="font-size:10px; color:#64748b; text-transform:uppercase">Scenariusz zarządzania energią</label>
+                <select id="wnt-scenario"
+                  style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:12px"
+                  onchange="this.getRootNode().host._recalcWinter()">
+                  <option value="none">🔴 Bez zarządzania — import średnio, eksport tanio</option>
+                  <option value="basic">🟡 Podstawowe — nocne ładowanie, średnia sprzedaż</option>
+                  <option value="optimal" selected>🟢 HEMS Optymalne — off-peak + sprzedaż w szczycie</option>
+                </select>
+              </div>
             </div>
 
             <div class="card">
@@ -2689,7 +2792,10 @@ class SmartingHomePanel extends HTMLElement {
                     <th style="text-align:right; padding:6px 6px; color:#e74c3c; width:100px">Zużycie kWh</th>
                     <th style="text-align:right; padding:6px 6px; color:#f7b731; width:90px">PV kWh</th>
                     <th style="text-align:right; padding:6px 6px; color:#00d4ff; width:70px">Bilans</th>
-                    <th style="padding:6px 6px; width:120px"></th>
+                    <th style="text-align:right; padding:6px 6px; color:#e74c3c; width:70px; font-size:10px">Koszt zł</th>
+                    <th style="text-align:right; padding:6px 6px; color:#2ecc71; width:70px; font-size:10px">Przychód zł</th>
+                    <th style="text-align:right; padding:6px 6px; color:#f7b731; width:70px; font-size:10px">Bilans zł</th>
+                    <th style="padding:6px 6px; width:100px"></th>
                   </tr>
                 </thead>
                 <tbody id="wnt-table-body">
@@ -2700,6 +2806,9 @@ class SmartingHomePanel extends HTMLElement {
                     <td style="text-align:right; padding:8px 6px; font-weight:700; color:#e74c3c" id="wnt-sum-cons">—</td>
                     <td style="text-align:right; padding:8px 6px; font-weight:700; color:#f7b731" id="wnt-sum-pv">—</td>
                     <td style="text-align:right; padding:8px 6px; font-weight:800; font-size:13px" id="wnt-sum-bal">—</td>
+                    <td style="text-align:right; padding:8px 6px; font-weight:600; color:#e74c3c; font-size:10px" id="wnt-sum-cost">—</td>
+                    <td style="text-align:right; padding:8px 6px; font-weight:600; color:#2ecc71; font-size:10px" id="wnt-sum-rev">—</td>
+                    <td style="text-align:right; padding:8px 6px; font-weight:800; font-size:12px" id="wnt-sum-fbal">—</td>
                     <td></td>
                   </tr>
                 </tfoot>
@@ -2711,6 +2820,13 @@ class SmartingHomePanel extends HTMLElement {
           <div class="card" style="margin-bottom:12px">
             <div class="card-title">📊 Wykres: Produkcja PV vs Zużycie (miesięcznie)</div>
             <div id="wnt-chart" style="display:flex; align-items:flex-end; gap:4px; height:180px; padding:10px 0"></div>
+          </div>
+
+          <!-- Scenario comparison -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">💰 Porównanie scenariuszy zarządzania energią</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:8px">Jak wybór strategii zarządzania energią wpływa na Twój bilans finansowy rocznie.</div>
+            <div id="wnt-scenario-compare"></div>
           </div>
 
           <!-- Winter months focus -->
@@ -2936,7 +3052,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.8.5</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.9.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
