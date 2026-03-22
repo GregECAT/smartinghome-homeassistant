@@ -197,7 +197,7 @@ class AIAdvisor:
 Analyze the following system data and answer the user's question.
 Provide specific, actionable recommendations.
 Use Polish energy market knowledge (G13 tariff, RCE pricing, net-billing rules).
-Keep your response concise (max 200 words).
+Keep your response concise (max 500 words).
 Respond in the same language as the question.
 
 {context}
@@ -256,7 +256,7 @@ User question: {question}"""
 Analyze the following system data and answer the user's question.
 Provide specific, actionable recommendations.
 Use Polish energy market knowledge (G13 tariff, RCE pricing, net-billing rules).
-Keep your response concise (max 200 words).
+Keep your response concise (max 500 words).
 Respond in the same language as the question.
 
 {context}
