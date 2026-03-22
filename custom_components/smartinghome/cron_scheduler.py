@@ -160,7 +160,16 @@ class AICronScheduler:
 
                 if result and result_key:
                     now_str = datetime.now().strftime("%H:%M")
-                    provider = "gemini" if self._ai.gemini_available else "anthropic"
+                    settings = self._read_settings()
+                    default_prov = settings.get("default_ai_provider", "gemini")
+                    if default_prov == "anthropic" and self._ai.anthropic_available:
+                        provider = "anthropic"
+                    elif self._ai.gemini_available:
+                        provider = "gemini"
+                    elif self._ai.anthropic_available:
+                        provider = "anthropic"
+                    else:
+                        provider = "unknown"
                     entry = {
                         "text": result,
                         "timestamp": now_str,
