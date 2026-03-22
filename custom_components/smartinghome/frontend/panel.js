@@ -56,6 +56,7 @@ class SmartingHomePanel extends HTMLElement {
     this._activeTab = tab;
     this.shadowRoot.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
     this.shadowRoot.querySelectorAll(".tab-content").forEach(c => c.classList.toggle("active", c.dataset.tab === tab));
+    if (tab === 'winter') { this._initWinterTab(); this._loadWinterData(); }
   }
 
   /* ── Sensor mapping ─────────────────────── */
@@ -472,6 +473,155 @@ class SmartingHomePanel extends HTMLElement {
         el.innerHTML = '<div style="font-size:13px;line-height:1.5">' + txt + '</div><div style="font-size:9px;color:#64748b;margin-top:6px">\ud83e\udd16 AI ' + prov + ' \u2022 ' + ts + '</div>';
       }
     }
+  }
+  // ── Winter Tab (Zima na plusie) ──
+  _initWinterTab() {
+    const months = ['Styczeń','Luty','Marzec','Kwiecień','Maj','Czerwiec','Lipiec','Sierpień','Wrzesień','Październik','Listopad','Grudzień'];
+    const emojis = ['🥶','🥶','🌨️','🌤️','☀️','☀️','☀️','☀️','🌤️','🍂','🌧️','🥶'];
+    const tbody = this.shadowRoot.getElementById('wnt-table-body');
+    if (!tbody || tbody.children.length > 0) return;
+    const s = this._settings;
+    months.forEach((m, i) => {
+      const saved = (s.winter_consumption || [])[i] || '';
+      const isWinter = [0,1,2,9,10,11].includes(i);
+      const tr = document.createElement('tr');
+      tr.style.cssText = 'border-bottom:1px solid rgba(255,255,255,0.05);' + (isWinter ? 'background:rgba(0,150,255,0.04)' : '');
+      tr.innerHTML = '<td style="padding:5px 6px;color:#cbd5e1;font-size:11px">' + emojis[i] + ' ' + m + '</td>' +
+        '<td style="text-align:right;padding:5px 4px"><input type="number" data-month="' + i + '" class="wnt-cons-input" value="' + saved + '" placeholder="—" style="width:70px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:5px;color:#fff;padding:4px 6px;font-size:11px;text-align:right" onchange="this.getRootNode().host._recalcWinter()" /></td>' +
+        '<td style="text-align:right;padding:5px 6px;color:#f7b731;font-size:11px" data-pv="' + i + '">—</td>' +
+        '<td style="text-align:right;padding:5px 6px;font-weight:600;font-size:11px" data-bal="' + i + '">—</td>' +
+        '<td style="padding:5px 4px"><div style="background:rgba(255,255,255,0.06);border-radius:4px;height:8px;overflow:hidden"><div data-bar="' + i + '" style="height:100%;width:0%;border-radius:4px;transition:width 0.3s"></div></div></td>';
+      tbody.appendChild(tr);
+    });
+    if (s.winter_pv_kwp) { const k = this.shadowRoot.getElementById('wnt-pv-kwp'); if (k) k.value = s.winter_pv_kwp; }
+    if (s.winter_region) { const r = this.shadowRoot.getElementById('wnt-region'); if (r) r.value = s.winter_region; }
+    this._recalcWinter();
+  }
+
+  _recalcWinter() {
+    const solarDist = {
+      south: [0.03,0.04,0.08,0.10,0.13,0.14,0.16,0.13,0.09,0.05,0.03,0.02],
+      center:[0.03,0.04,0.08,0.10,0.13,0.14,0.15,0.13,0.09,0.05,0.03,0.03],
+      north: [0.02,0.04,0.07,0.10,0.14,0.15,0.16,0.13,0.09,0.05,0.03,0.02]
+    };
+    const yieldPerKwp = { south: 1050, center: 1000, north: 950 };
+    const kwp = parseFloat(this.shadowRoot.getElementById('wnt-pv-kwp')?.value) || 0;
+    const region = this.shadowRoot.getElementById('wnt-region')?.value || 'center';
+    const annualYield = kwp * (yieldPerKwp[region] || 1000);
+    const dist = solarDist[region] || solarDist.center;
+    const estEl = this.shadowRoot.getElementById('wnt-est-yearly');
+    if (estEl) estEl.textContent = kwp > 0 ? Math.round(annualYield) + ' kWh' : '— kWh';
+    const inputs = this.shadowRoot.querySelectorAll('.wnt-cons-input');
+    let totalCons = 0, totalPV = 0;
+    const monthData = [];
+    inputs.forEach((inp, i) => {
+      const cons = parseFloat(inp.value) || 0;
+      const pv = kwp > 0 ? Math.round(annualYield * dist[i]) : 0;
+      const bal = pv - cons;
+      totalCons += cons; totalPV += pv;
+      monthData.push({ cons, pv, bal, month: i });
+      const pvC = this.shadowRoot.querySelector('[data-pv="' + i + '"]');
+      const balC = this.shadowRoot.querySelector('[data-bal="' + i + '"]');
+      const barE = this.shadowRoot.querySelector('[data-bar="' + i + '"]');
+      if (pvC) pvC.textContent = pv > 0 ? pv : '—';
+      if (balC) { balC.textContent = cons > 0 ? (bal > 0 ? '+' + bal : '' + bal) : '—'; balC.style.color = bal >= 0 ? '#2ecc71' : '#e74c3c'; }
+      if (barE && cons > 0) { const p = Math.min((pv / Math.max(cons, 1)) * 100, 100); barE.style.width = p + '%'; barE.style.background = p >= 100 ? '#2ecc71' : p >= 60 ? '#f7b731' : '#e74c3c'; }
+    });
+    const totalBal = totalPV - totalCons;
+    this._setText('wnt-sum-cons', totalCons > 0 ? totalCons + ' kWh' : '—');
+    this._setText('wnt-sum-pv', totalPV > 0 ? totalPV + ' kWh' : '—');
+    const sBal = this.shadowRoot.getElementById('wnt-sum-bal');
+    if (sBal) { sBal.textContent = totalCons > 0 ? (totalBal > 0 ? '+' : '') + totalBal + ' kWh' : '—'; sBal.style.color = totalBal >= 0 ? '#2ecc71' : '#e74c3c'; }
+    this._setText('wnt-total-consumption', totalCons > 0 ? totalCons + ' kWh' : '— kWh');
+    this._setText('wnt-total-production', totalPV > 0 ? totalPV + ' kWh' : '— kWh');
+    const sn = this.shadowRoot.getElementById('wnt-balance-sign'); if (sn) sn.textContent = totalBal >= 0 ? '✅' : '⚠️';
+    const bx = this.shadowRoot.getElementById('wnt-balance-box');
+    const vl = this.shadowRoot.getElementById('wnt-balance-value');
+    const mg = this.shadowRoot.getElementById('wnt-balance-msg');
+    if (totalCons > 0 && kwp > 0) {
+      if (vl) { vl.textContent = (totalBal > 0 ? '+' : '') + totalBal + ' kWh'; vl.style.color = totalBal >= 0 ? '#2ecc71' : '#e74c3c'; }
+      if (bx) bx.style.background = totalBal >= 0 ? 'rgba(46,204,113,0.1)' : 'rgba(231,76,60,0.1)';
+      if (mg) { mg.textContent = totalBal >= 0 ? 'Nadwyżka: ' + totalBal + ' kWh/rok — JESTEŚ NA PLUSIE!' : 'Niedobór: ' + Math.abs(totalBal) + ' kWh/rok'; mg.style.color = totalBal >= 0 ? '#2ecc71' : '#f7b731'; }
+    }
+    const cov = totalCons > 0 && totalPV > 0 ? Math.round(totalPV / totalCons * 100) : 0;
+    const cb = this.shadowRoot.getElementById('wnt-coverage-bar'); if (cb) cb.style.width = Math.min(cov, 120) + '%';
+    const se = this.shadowRoot.getElementById('wnt-status-emoji');
+    const st = this.shadowRoot.getElementById('wnt-status-text');
+    const sd = this.shadowRoot.getElementById('wnt-status-desc');
+    if (cov === 0) { if (se) se.textContent = '❓'; if (st) st.textContent = 'Brak danych'; }
+    else if (cov >= 110) { if (se) se.textContent = '🏆'; if (st) { st.textContent = 'DOSKONALE!'; st.style.color = '#2ecc71'; } if (sd) sd.textContent = 'Pokrycie ' + cov + '% — nadwyżka!'; }
+    else if (cov >= 100) { if (se) se.textContent = '✅'; if (st) { st.textContent = 'NA PLUSIE!'; st.style.color = '#2ecc71'; } if (sd) sd.textContent = 'Pokrycie ' + cov + '%!'; }
+    else if (cov >= 80) { if (se) se.textContent = '👍'; if (st) { st.textContent = 'Prawie na plusie'; st.style.color = '#f7b731'; } if (sd) sd.textContent = 'Pokrycie ' + cov + '% — brakuje ' + (100-cov) + '%'; }
+    else if (cov >= 50) { if (se) se.textContent = '⚡'; if (st) { st.textContent = 'Wymaga uwagi'; st.style.color = '#e67e22'; } if (sd) sd.textContent = 'Pokrycie ' + cov + '%'; }
+    else { if (se) se.textContent = '🥶'; if (st) { st.textContent = 'Daleko od celu'; st.style.color = '#e74c3c'; } if (sd) sd.textContent = 'Pokrycie ' + cov + '%'; }
+    this._renderWinterChart(monthData);
+    this._renderWinterFocus(monthData);
+  }
+
+  _renderWinterChart(data) {
+    const ch = this.shadowRoot.getElementById('wnt-chart'); if (!ch) return;
+    const mx = Math.max(...data.map(d => Math.max(d.cons, d.pv)), 1);
+    const lb = ['Sty','Lut','Mar','Kwi','Maj','Cze','Lip','Sie','Wrz','Paź','Lis','Gru'];
+    ch.innerHTML = data.map((d, i) => {
+      const cH = d.cons > 0 ? Math.max((d.cons/mx)*160, 4) : 0;
+      const pH = d.pv > 0 ? Math.max((d.pv/mx)*160, 4) : 0;
+      return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px">' +
+        '<div style="display:flex;gap:2px;align-items:flex-end;height:160px">' +
+        '<div style="width:8px;height:' + cH + 'px;background:#e74c3c;border-radius:3px 3px 0 0;opacity:0.8" title="Zużycie: ' + d.cons + ' kWh"></div>' +
+        '<div style="width:8px;height:' + pH + 'px;background:#f7b731;border-radius:3px 3px 0 0;opacity:0.8" title="PV: ' + d.pv + ' kWh"></div>' +
+        '</div><div style="font-size:8px;color:#64748b">' + lb[i] + '</div></div>';
+    }).join('');
+  }
+
+  _renderWinterFocus(data) {
+    const ct = this.shadowRoot.getElementById('wnt-winter-cards');
+    const sg = this.shadowRoot.getElementById('wnt-suggestions');
+    if (!ct) return;
+    const wm = [9,10,11,0,1,2];
+    const wl = ['Październik','Listopad','Grudzień','Styczeń','Luty','Marzec'];
+    let deficit = 0; const tips = [];
+    ct.innerHTML = wm.map((mi, idx) => {
+      const d = data[mi]; const b = d.bal;
+      if (d.cons > 0) deficit += Math.max(-b, 0);
+      const c = b >= 0 ? '#2ecc71' : '#e74c3c';
+      return '<div style="background:' + (b >= 0 ? 'rgba(46,204,113,0.08)' : 'rgba(231,76,60,0.08)') + ';border:1px solid ' + c + '22;border-radius:10px;padding:10px;text-align:center">' +
+        '<div style="font-size:10px;color:#94a3b8">' + wl[idx] + '</div>' +
+        '<div style="font-size:18px;font-weight:800;color:' + c + ';margin-top:2px">' + (d.cons > 0 ? (b > 0 ? '+' + b : '' + b) : '—') + '</div>' +
+        '<div style="font-size:9px;color:#64748b">kWh</div>' +
+        '<div style="font-size:9px;color:' + c + ';margin-top:2px">' + (d.cons > 0 ? (b >= 0 ? 'nadwyżka' : 'niedobór') : '—') + '</div></div>';
+    }).join('');
+    if (deficit > 0) {
+      tips.push('🔴 Łączny niedobór zimowy (X-III): <strong>' + Math.round(deficit) + ' kWh</strong>');
+      tips.push('💡 Magazyn energii min. <strong>' + Math.round(deficit/180) + ' kWh</strong> pokryje deficyt');
+      tips.push('☀️ Lub zwiększ PV o <strong>' + (Math.round(deficit/200*10)/10) + ' kWp</strong>');
+      tips.push('🏠 LED, pompa ciepła COP 4+, izolacja — kluczowe zimą');
+      tips.push('💰 Taryfa G13 — ładuj baterię w nocy (off-peak), zużywaj w szczycie');
+    } else if (data.some(d => d.cons > 0)) {
+      tips.push('🏆 <strong>Brawo!</strong> Instalacja pokrywa zimowe zapotrzebowanie!');
+      tips.push('💰 Sprzedawaj nadwyżki po korzystnych cenach RCE');
+      tips.push('🔋 Magazyn energii = arbitraż cenowy + niezależność');
+    }
+    if (sg) sg.innerHTML = tips.length > 0 ? tips.join('<br>') : 'Wypełnij dane aby zobaczyć sugestie.';
+  }
+
+  _saveWinterData() {
+    const inputs = this.shadowRoot.querySelectorAll('.wnt-cons-input');
+    const cons = []; inputs.forEach(inp => cons.push(parseFloat(inp.value) || 0));
+    this._savePanelSettings({
+      winter_consumption: cons,
+      winter_pv_kwp: parseFloat(this.shadowRoot.getElementById('wnt-pv-kwp')?.value) || 0,
+      winter_region: this.shadowRoot.getElementById('wnt-region')?.value || 'center'
+    });
+    const st = this.shadowRoot.getElementById('wnt-save-status');
+    if (st) { st.textContent = '\u2705 Dane zimowe zapisane!'; setTimeout(() => { st.textContent = ''; }, 4000); }
+  }
+
+  _loadWinterData() {
+    const s = this._settings;
+    if (s.winter_consumption) { const ii = this.shadowRoot.querySelectorAll('.wnt-cons-input'); ii.forEach((inp, i) => { if (s.winter_consumption[i]) inp.value = s.winter_consumption[i]; }); }
+    if (s.winter_pv_kwp) { const k = this.shadowRoot.getElementById('wnt-pv-kwp'); if (k) k.value = s.winter_pv_kwp; }
+    if (s.winter_region) { const r = this.shadowRoot.getElementById('wnt-region'); if (r) r.value = s.winter_region; }
+    this._recalcWinter();
   }
 
   async _uploadInverterImage(file) {
@@ -1567,56 +1717,58 @@ class SmartingHomePanel extends HTMLElement {
       </style>
 
       <div class="panel-container">
-        <div class="header">
-          <div class="header-left">
-            <span style="font-size:22px">⚡</span>
-            <h1>Smarting HOME</h1>
-          </div>
-          <div class="header-right">
-            <span class="badge free" id="v-license">FREE</span>
-            <button class="gear-btn" title="Ustawienia" onclick="this.getRootNode().host._switchTab('settings')">⚙️</button>
-            <button class="fullscreen-btn" onclick="this.getRootNode().host._toggleFullscreen()">⊞ Pełny ekran</button>
-          </div>
-        </div>
-
-        <div class="tabs">
-          <button class="tab-btn active" data-tab="overview" onclick="this.getRootNode().host._switchTab('overview')">📊 Przegląd</button>
-          <button class="tab-btn" data-tab="energy" onclick="this.getRootNode().host._switchTab('energy')">⚡ Energia</button>
-          <button class="tab-btn" data-tab="tariff" onclick="this.getRootNode().host._switchTab('tariff')">💰 Taryfy & RCE</button>
-          <button class="tab-btn" data-tab="battery" onclick="this.getRootNode().host._switchTab('battery')">🔋 Bateria</button>
-          <button class="tab-btn" data-tab="hems" onclick="this.getRootNode().host._switchTab('hems')">🤖 HEMS</button>
-          <button class="tab-btn" data-tab="roi" onclick="this.getRootNode().host._switchTab('roi')">📈 Opłacalność</button>
-        </div>
-
-        <!-- ═══════ TAB: OVERVIEW ═══════ -->
-        <div class="tab-content active" data-tab="overview">
-
-          <!-- ☀️ Day Time / Sun Position Widget -->
-          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; padding:6px 10px; margin-bottom:6px; background:rgba(255,255,255,0.02); border-radius:10px; border:1px solid rgba(255,255,255,0.04)">
-            <!-- Date & Time -->
-            <div>
-              <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:1px" id="ov-date">—</div>
-              <div style="font-size:32px; font-weight:900; color:#fff; letter-spacing:-1px; line-height:1" id="ov-clock">--:--</div>
-              <div style="font-size:11px; color:#94a3b8; margin-top:2px" id="ov-day-name">—</div>
+        <!-- Top Row: Header+Tabs (2/3) + Sun Widget (1/3) -->
+        <div style="display:flex; align-items:stretch; background:rgba(255,255,255,0.03); border-bottom:1px solid rgba(255,255,255,0.06)">
+          <!-- Left: Header + Tabs -->
+          <div style="flex:2; min-width:0">
+            <div class="header" style="position:relative; border-bottom:none">
+              <div class="header-left">
+                <span style="font-size:22px">⚡</span>
+                <h1>Smarting HOME</h1>
+              </div>
+              <div class="header-right">
+                <span class="badge free" id="v-license">FREE</span>
+                <button class="gear-btn" title="Ustawienia" onclick="this.getRootNode().host._switchTab('settings')">⚙️</button>
+                <button class="fullscreen-btn" onclick="this.getRootNode().host._toggleFullscreen()">⊞ Pełny ekran</button>
+              </div>
             </div>
-            <!-- Sun Arc -->
-            <div style="position:relative; width:280px; height:90px; flex-shrink:0">
+            <div class="tabs" style="border-bottom:none">
+              <button class="tab-btn active" data-tab="overview" onclick="this.getRootNode().host._switchTab('overview')">📊 Przegląd</button>
+              <button class="tab-btn" data-tab="energy" onclick="this.getRootNode().host._switchTab('energy')">⚡ Energia</button>
+              <button class="tab-btn" data-tab="tariff" onclick="this.getRootNode().host._switchTab('tariff')">💰 Taryfy & RCE</button>
+              <button class="tab-btn" data-tab="battery" onclick="this.getRootNode().host._switchTab('battery')">🔋 Bateria</button>
+              <button class="tab-btn" data-tab="hems" onclick="this.getRootNode().host._switchTab('hems')">🤖 HEMS</button>
+              <button class="tab-btn" data-tab="roi" onclick="this.getRootNode().host._switchTab('roi')">📈 Opłacalność</button>
+              <button class="tab-btn" data-tab="winter" onclick="this.getRootNode().host._switchTab('winter')">❄️ Zima na plusie</button>
+            </div>
+          </div>
+          <!-- Right: Sun Widget (compact) -->
+          <div style="flex:1; display:flex; align-items:center; justify-content:center; gap:8px; padding:4px 10px; border-left:1px solid rgba(255,255,255,0.06); min-width:280px">
+            <div style="text-align:center">
+              <div style="font-size:8px; color:#64748b; text-transform:uppercase; letter-spacing:0.8px" id="ov-date">—</div>
+              <div style="font-size:24px; font-weight:900; color:#fff; letter-spacing:-1px; line-height:1" id="ov-clock">--:--</div>
+              <div style="font-size:9px; color:#94a3b8; margin-top:1px" id="ov-day-name">—</div>
+            </div>
+            <div style="position:relative; width:180px; height:70px; flex-shrink:0">
               <svg viewBox="0 0 200 105" style="width:100%; height:100%">
                 <path d="M 10,98 Q 100,-15 190,98" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="1.5" />
                 <path id="ov-sun-arc" d="M 10,98 Q 100,-15 190,98" fill="none" stroke="#f7b731" stroke-width="2.5" stroke-dasharray="290" stroke-dashoffset="290" />
                 <line x1="5" y1="98" x2="195" y2="98" stroke="rgba(255,255,255,0.08)" stroke-width="0.5" />
                 <circle id="ov-sun-dot" cx="100" cy="50" r="7" fill="#f7b731" style="filter:drop-shadow(0 0 8px #f7b731); transition: all 1s ease" />
               </svg>
-              <div style="position:absolute; bottom:2px; left:4px; font-size:10px; color:#f7b731">🌅 <span id="ov-sunrise">—</span></div>
-              <div style="position:absolute; bottom:2px; right:4px; font-size:10px; color:#e67e22; text-align:right">🌇 <span id="ov-sunset">—</span></div>
+              <div style="position:absolute; bottom:0; left:2px; font-size:8px; color:#f7b731">🌅 <span id="ov-sunrise">—</span></div>
+              <div style="position:absolute; bottom:0; right:2px; font-size:8px; color:#e67e22; text-align:right">🌇 <span id="ov-sunset">—</span></div>
             </div>
-            <!-- Day progress -->
-            <div style="text-align:right; min-width:100px">
-              <div style="font-size:9px; color:#64748b; text-transform:uppercase" id="ov-status-label">Dzień</div>
-              <div style="font-size:24px; font-weight:800; color:#f7b731" id="ov-daylight-pct">—%</div>
-              <div style="font-size:10px; color:#94a3b8" id="ov-daylight-left">—</div>
+            <div style="text-align:right; min-width:60px">
+              <div style="font-size:8px; color:#64748b; text-transform:uppercase" id="ov-status-label">Dzień</div>
+              <div style="font-size:18px; font-weight:800; color:#f7b731" id="ov-daylight-pct">—%</div>
+              <div style="font-size:8px; color:#94a3b8" id="ov-daylight-left">—</div>
             </div>
           </div>
+        </div>
+
+        <!-- ═══════ TAB: OVERVIEW ═══════ -->
+        <div class="tab-content active" data-tab="overview">
           <div class="flow-wrapper">
             <!-- ORTHOGONAL SVG OVERLAY -->
             <svg class="flow-svg-bg" viewBox="0 0 700 500" preserveAspectRatio="xMidYMid meet">
@@ -2374,6 +2526,125 @@ class SmartingHomePanel extends HTMLElement {
 
         </div>
 
+        <!-- ═══════ TAB: WINTER (Zima na plusie) ═══════ -->
+        <div class="tab-content" data-tab="winter">
+
+          <!-- Hero: Annual Balance -->
+          <div class="card" style="margin-bottom:12px; text-align:center; padding:20px; position:relative; overflow:hidden">
+            <div style="position:absolute; top:0; left:0; right:0; bottom:0; opacity:0.03; font-size:120px; display:flex; align-items:center; justify-content:center">❄️</div>
+            <div class="card-title" style="position:relative">❄️ Zima na plusie — Bilans roczny</div>
+            <div style="font-size:11px; color:#94a3b8; margin-bottom:14px; position:relative">Wprowadź dane zużycia z poprzedniego roku aby precyzyjnie planować zimę.</div>
+            <div style="display:grid; grid-template-columns:1fr auto 1fr; gap:16px; align-items:center; position:relative">
+              <div>
+                <div style="font-size:10px; color:#e74c3c; text-transform:uppercase; letter-spacing:1px">🏠 Roczne zużycie</div>
+                <div style="font-size:28px; font-weight:900; color:#e74c3c; margin-top:4px" id="wnt-total-consumption">— kWh</div>
+              </div>
+              <div style="font-size:32px; font-weight:900" id="wnt-balance-sign">=</div>
+              <div>
+                <div style="font-size:10px; color:#f7b731; text-transform:uppercase; letter-spacing:1px">☀️ Roczna produkcja PV</div>
+                <div style="font-size:28px; font-weight:900; color:#f7b731; margin-top:4px" id="wnt-total-production">— kWh</div>
+              </div>
+            </div>
+            <div style="margin-top:14px; padding:12px; border-radius:12px; position:relative" id="wnt-balance-box">
+              <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px" id="wnt-balance-label">Bilans roczny</div>
+              <div style="font-size:36px; font-weight:900; margin-top:4px" id="wnt-balance-value">— kWh</div>
+              <div style="font-size:11px; margin-top:2px" id="wnt-balance-msg">Wypełnij dane poniżej</div>
+            </div>
+          </div>
+
+          <!-- System sizing -->
+          <div class="grid-cards gc-2" style="margin-bottom:12px">
+            <div class="card">
+              <div class="card-title">⚙️ Parametry instalacji</div>
+              <div class="settings-field" style="margin-bottom:8px">
+                <label style="font-size:10px; color:#64748b; text-transform:uppercase">Moc instalacji PV (kWp)</label>
+                <input type="number" id="wnt-pv-kwp" value="" placeholder="np. 10" step="0.1" min="0" max="100"
+                  style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
+                  onchange="this.getRootNode().host._recalcWinter()" />
+              </div>
+              <div class="settings-field">
+                <label style="font-size:10px; color:#64748b; text-transform:uppercase">Lokalizacja (region Polski)</label>
+                <select id="wnt-region"
+                  style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:12px"
+                  onchange="this.getRootNode().host._recalcWinter()">
+                  <option value="south">Południe (Kraków, Rzeszów) — ~1050 kWh/kWp</option>
+                  <option value="center" selected>Centrum (Warszawa, Łódź) — ~1000 kWh/kWp</option>
+                  <option value="north">Północ (Gdańsk, Szczecin) — ~950 kWh/kWp</option>
+                </select>
+              </div>
+              <div style="font-size:10px; color:#64748b; margin-top:8px">Szacunkowa produkcja roczna: <span id="wnt-est-yearly" style="color:#f7b731; font-weight:600">— kWh</span></div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">📊 Status zimowej gotowości</div>
+              <div style="text-align:center; padding:10px">
+                <div style="font-size:60px; margin-bottom:4px" id="wnt-status-emoji">❓</div>
+                <div style="font-size:16px; font-weight:700; color:#fff" id="wnt-status-text">Brak danych</div>
+                <div style="font-size:11px; color:#94a3b8; margin-top:4px" id="wnt-status-desc">Wprowadź dane zużycia i parametry instalacji</div>
+              </div>
+              <div style="margin-top:8px; background:rgba(255,255,255,0.08); border-radius:6px; height:12px; overflow:hidden">
+                <div id="wnt-coverage-bar" style="height:100%; width:0%; background:linear-gradient(90deg,#e74c3c,#f7b731,#2ecc71); border-radius:6px; transition:width 0.5s"></div>
+              </div>
+              <div style="display:flex; justify-content:space-between; font-size:9px; color:#64748b; margin-top:2px">
+                <span>0%</span><span>Pokrycie PV</span><span>100%+</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Monthly table -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">📋 Miesięczne dane zużycia i produkcji</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:8px">Wpisz zużycie z rachunków za prąd (kWh/miesiąc). Produkcja PV obliczona automatycznie na podstawie mocy i regionu.</div>
+            <div style="overflow-x:auto">
+              <table style="width:100%; border-collapse:collapse; font-size:11px">
+                <thead>
+                  <tr style="border-bottom:1px solid rgba(255,255,255,0.1)">
+                    <th style="text-align:left; padding:6px 6px; color:#94a3b8; font-weight:600; width:90px">Miesiąc</th>
+                    <th style="text-align:right; padding:6px 6px; color:#e74c3c; width:100px">Zużycie kWh</th>
+                    <th style="text-align:right; padding:6px 6px; color:#f7b731; width:90px">PV kWh</th>
+                    <th style="text-align:right; padding:6px 6px; color:#00d4ff; width:70px">Bilans</th>
+                    <th style="padding:6px 6px; width:120px"></th>
+                  </tr>
+                </thead>
+                <tbody id="wnt-table-body">
+                </tbody>
+                <tfoot>
+                  <tr style="border-top:2px solid rgba(255,255,255,0.15)">
+                    <td style="padding:8px 6px; font-weight:700; color:#fff">RAZEM</td>
+                    <td style="text-align:right; padding:8px 6px; font-weight:700; color:#e74c3c" id="wnt-sum-cons">—</td>
+                    <td style="text-align:right; padding:8px 6px; font-weight:700; color:#f7b731" id="wnt-sum-pv">—</td>
+                    <td style="text-align:right; padding:8px 6px; font-weight:800; font-size:13px" id="wnt-sum-bal">—</td>
+                    <td></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+
+          <!-- Visual bar chart -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">📊 Wykres: Produkcja PV vs Zużycie (miesięcznie)</div>
+            <div id="wnt-chart" style="display:flex; align-items:flex-end; gap:4px; height:180px; padding:10px 0"></div>
+          </div>
+
+          <!-- Winter months focus -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">🥶 Miesiące zimowe (X–III) — Focus</div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:8px; margin-top:8px" id="wnt-winter-cards">
+            </div>
+            <div style="margin-top:12px; padding:10px; background:rgba(0,212,255,0.05); border:1px solid rgba(0,212,255,0.15); border-radius:10px">
+              <div style="font-size:12px; font-weight:600; color:#00d4ff; margin-bottom:4px">💡 Sugestie na zimę</div>
+              <div style="font-size:11px; color:#94a3b8; line-height:1.6" id="wnt-suggestions">
+                Wypełnij dane aby zobaczyć spersonalizowane sugestie.
+              </div>
+            </div>
+          </div>
+
+          <button class="save-btn" onclick="this.getRootNode().host._saveWinterData()" style="margin-bottom:10px">💾 Zapisz dane zimowe</button>
+          <div id="wnt-save-status" style="font-size:11px; color:#2ecc71; margin-bottom:10px"></div>
+
+        </div>
+
         <!-- ═══════ TAB: SETTINGS ═══════ -->
         <div class="tab-content" data-tab="settings">
           <div class="grid-cards gc-2">
@@ -2567,7 +2838,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.7.8</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.8.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
