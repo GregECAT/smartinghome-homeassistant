@@ -250,14 +250,26 @@ class SmartingHomePanel extends HTMLElement {
     const dow = now.getDay(); // 0=Sun, 6=Sat
     const month = now.getMonth(); // 0-based
     const isWeekend = (dow === 0 || dow === 6);
-    // Summer: Apr(3)-Sep(8), Winter: Oct(9)-Mar(2)
     const isSummer = (month >= 3 && month <= 8);
+    const tariff = this._settings.tariff_plan || "G13";
 
-    // G13 zone for each hour (0-23)
-    // Weekend: all off-peak
-    // Workday summer: 0-6=off, 7-12=morning, 13-18=off, 19-21=peak, 22-23=off
-    // Workday winter: 0-6=off, 7-12=morning, 13-15=off, 16-20=peak, 21-23=off
+    // Restore selector value
+    const sel = this.shadowRoot.getElementById("sel-tariff-plan");
+    if (sel && sel.value !== tariff) sel.value = tariff;
+
+    // Zone logic per tariff
     const getZone = (h) => {
+      if (tariff === "G11") return "flat";
+      if (tariff === "G12") {
+        if ((h >= 13 && h < 15) || h >= 22 || h < 6) return "off";
+        return "peak";
+      }
+      if (tariff === "G12w") {
+        if (isWeekend) return "off";
+        if ((h >= 13 && h < 15) || h >= 22 || h < 6) return "off";
+        return "peak";
+      }
+      // G13
       if (isWeekend) return "off";
       if (h >= 0 && h < 7) return "off";
       if (h >= 7 && h < 13) return "morning";
@@ -272,8 +284,12 @@ class SmartingHomePanel extends HTMLElement {
       }
     };
 
-    const colors = { off: "#2ecc71", morning: "#e67e22", peak: "#e74c3c" };
-    const labels = { off: "OFF-PEAK", morning: "PRZEDPOŁUDNIOWA", peak: "POPOŁUDNIOWA" };
+    const colors = { off: "#2ecc71", morning: "#e67e22", peak: "#e74c3c", flat: "#3b82f6" };
+    const labels = { off: "OFF-PEAK", morning: "PRZEDPOŁUDNIOWA", peak: "SZCZYT", flat: "STAŁA" };
+
+    // Update title
+    const titleEl = this.shadowRoot.getElementById("tariff-card-title");
+    if (titleEl) titleEl.textContent = `⏰ Taryfa ${tariff}`;
 
     // Render 24 segments
     const timeline = this.shadowRoot.getElementById("g13-timeline");
@@ -297,36 +313,56 @@ class SmartingHomePanel extends HTMLElement {
       }
     }
 
-    // Now marker position
+    // Now marker
     const marker = this.shadowRoot.getElementById("g13-now-marker");
     if (marker) {
       const pct = ((hour + minutes / 60) / 24) * 100;
       marker.style.left = `calc(${pct}% - 1px)`;
     }
 
-    // Current zone
+    // Current zone badge
     const currentZone = getZone(hour);
     const badge = this.shadowRoot.getElementById("v-g13-zone-badge");
     if (badge) {
       badge.textContent = labels[currentZone];
       badge.style.background = colors[currentZone];
-      badge.style.color = currentZone === "peak" ? "#fff" : "#000";
+      badge.style.color = (currentZone === "peak") ? "#fff" : "#000";
     }
 
     // Weekend badge
     const wkBadge = this.shadowRoot.getElementById("g13-weekend-badge");
-    if (wkBadge) wkBadge.style.display = isWeekend ? "inline" : "none";
+    if (wkBadge) {
+      const showWk = isWeekend && (tariff === "G13" || tariff === "G12w");
+      wkBadge.style.display = showWk ? "inline" : "none";
+    }
 
-    // Day type
+    // Day type label
     const dayType = this.shadowRoot.getElementById("g13-day-type");
-    if (dayType) dayType.textContent = isWeekend ? "(weekend — cały dzień off-peak)" : "(dzień roboczy)";
+    if (dayType) {
+      if (tariff === "G11") dayType.textContent = "(stała cena — brak stref)";
+      else if (isWeekend && (tariff === "G13" || tariff === "G12w")) dayType.textContent = "(weekend — cały dzień off-peak)";
+      else dayType.textContent = "(dzień roboczy)";
+    }
 
     // Season
     const seasonEl = this.shadowRoot.getElementById("v-g13-season");
     if (seasonEl) {
-      seasonEl.textContent = isSummer ? "☀️ Lato (kwi–wrz)" : "❄️ Zima (paź–mar)";
-      seasonEl.style.color = isSummer ? "#f7b731" : "#00d4ff";
+      if (tariff === "G13") {
+        seasonEl.textContent = isSummer ? "☀️ Lato (kwi–wrz)" : "❄️ Zima (paź–mar)";
+        seasonEl.style.color = isSummer ? "#f7b731" : "#00d4ff";
+        seasonEl.parentElement.style.display = "";
+      } else {
+        seasonEl.parentElement.style.display = "none";
+      }
     }
+  }
+
+  _saveTariffPlan() {
+    const sel = this.shadowRoot.getElementById("sel-tariff-plan");
+    if (!sel) return;
+    this._settings.tariff_plan = sel.value;
+    this._savePanelSettings({ tariff_plan: sel.value });
+    this._updateG13Timeline();
   }
 
   _saveApiKeys() {
@@ -469,7 +505,73 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); }
+
+  _updateSunWidget() {
+    const now = new Date();
+    const dayNames = ['Niedziela','Poniedziałek','Wtorek','Środa','Czwartek','Piątek','Sobota'];
+    const monthNames = ['stycznia','lutego','marca','kwietnia','maja','czerwca','lipca','sierpnia','września','października','listopada','grudnia'];
+
+    // Clock
+    this._setText("ov-clock", `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`);
+    this._setText("ov-date", `${now.getDate()} ${monthNames[now.getMonth()]} ${now.getFullYear()}`);
+    this._setText("ov-day-name", dayNames[now.getDay()]);
+
+    // Sun data from HA sun entity
+    const sunState = this._hass?.states?.["sun.sun"];
+    if (!sunState) return;
+    const attrs = sunState.attributes || {};
+    const riseStr = attrs.next_rising;
+    const setStr = attrs.next_setting;
+    // Parse today's sunrise/sunset
+    let sunrise, sunset;
+    if (riseStr) sunrise = new Date(riseStr);
+    if (setStr) sunset = new Date(setStr);
+    // If next_rising is tomorrow (after sunset), estimate today's sunrise
+    if (sunrise && sunset && sunrise > sunset) {
+      sunrise = new Date(sunrise.getTime() - 86400000);
+    }
+    if (!sunrise || !sunset) return;
+
+    const riseH = `${String(sunrise.getHours()).padStart(2,'0')}:${String(sunrise.getMinutes()).padStart(2,'0')}`;
+    const setH = `${String(sunset.getHours()).padStart(2,'0')}:${String(sunset.getMinutes()).padStart(2,'0')}`;
+    this._setText("ov-sunrise", riseH);
+    this._setText("ov-sunset", setH);
+
+    // Progress
+    const dayLen = sunset.getTime() - sunrise.getTime();
+    const elapsed = now.getTime() - sunrise.getTime();
+    const t = Math.max(0, Math.min(1, elapsed / dayLen)); // 0-1
+
+    this._setText("ov-daylight-pct", `${Math.round(t * 100)}%`);
+    const msLeft = sunset.getTime() - now.getTime();
+    if (msLeft > 0) {
+      const hLeft = Math.floor(msLeft / 3600000);
+      const mLeft = Math.floor((msLeft % 3600000) / 60000);
+      this._setText("ov-daylight-left", `${hLeft}h ${mLeft}m do zachodu`);
+    } else {
+      this._setText("ov-daylight-left", "po zachodzie ☾");
+    }
+
+    // Sun arc SVG animation (quadratic bezier: M10,95 Q100,-10 190,95)
+    const arc = this.shadowRoot.getElementById("ov-sun-arc");
+    if (arc) {
+      const dashLen = 280;
+      arc.setAttribute("stroke-dashoffset", String(dashLen * (1 - t)));
+    }
+    const dot = this.shadowRoot.getElementById("ov-sun-dot");
+    if (dot) {
+      // Quadratic bezier point: B(t) = (1-t)²P0 + 2(1-t)t·P1 + t²·P2
+      const p0 = {x:10, y:95}, p1 = {x:100, y:-10}, p2 = {x:190, y:95};
+      const cx = (1-t)*(1-t)*p0.x + 2*(1-t)*t*p1.x + t*t*p2.x;
+      const cy = (1-t)*(1-t)*p0.y + 2*(1-t)*t*p1.y + t*t*p2.y;
+      dot.setAttribute("cx", String(cx));
+      dot.setAttribute("cy", String(cy));
+      // Night: dim the dot
+      if (t <= 0 || t >= 1) { dot.setAttribute("fill", "#64748b"); dot.setAttribute("r", "4"); }
+      else { dot.setAttribute("fill", "#f7b731"); dot.setAttribute("r", "6"); }
+    }
+  }
 
   _updateFlow() {
     const pv = this._nm("pv_power") || 0;
@@ -1527,7 +1629,34 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
-          <!-- Daily financial KPIs -->
+          <!-- ☀️ Day Time / Sun Position Widget -->
+          <div class="card" style="margin-top:10px; margin-bottom:10px; padding:14px; position:relative; overflow:hidden">
+            <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px">
+              <!-- Date & Time -->
+              <div>
+                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:1px" id="ov-date">—</div>
+                <div style="font-size:36px; font-weight:900; color:#fff; letter-spacing:-1px; line-height:1" id="ov-clock">--:--</div>
+                <div style="font-size:11px; color:#94a3b8; margin-top:2px" id="ov-day-name">—</div>
+              </div>
+              <!-- Sun Arc -->
+              <div style="position:relative; width:180px; height:90px">
+                <svg viewBox="0 0 200 100" style="width:100%; height:100%">
+                  <path d="M 10,95 Q 100,-10 190,95" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="2" />
+                  <path id="ov-sun-arc" d="M 10,95 Q 100,-10 190,95" fill="none" stroke="#f7b731" stroke-width="2.5" stroke-dasharray="280" stroke-dashoffset="280" />
+                  <line x1="5" y1="95" x2="195" y2="95" stroke="rgba(255,255,255,0.1)" stroke-width="1" />
+                  <circle id="ov-sun-dot" cx="100" cy="50" r="6" fill="#f7b731" style="filter:drop-shadow(0 0 6px #f7b731); transition: all 1s ease" />
+                </svg>
+                <div style="position:absolute; bottom:0; left:0; font-size:9px; color:#f7b731">🌅 <span id="ov-sunrise">—</span></div>
+                <div style="position:absolute; bottom:0; right:0; font-size:9px; color:#e67e22; text-align:right">🌇 <span id="ov-sunset">—</span></div>
+              </div>
+              <!-- Day progress -->
+              <div style="text-align:right">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase">Dzień</div>
+                <div style="font-size:22px; font-weight:800; color:#f7b731" id="ov-daylight-pct">—%</div>
+                <div style="font-size:10px; color:#94a3b8" id="ov-daylight-left">— do zachodu</div>
+              </div>
+            </div>
+          </div>
           <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px; margin-top:10px">
             <div style="background:rgba(231,76,60,0.08); border-radius:10px; padding:10px; text-align:center">
               <div style="font-size:9px; color:#e74c3c; text-transform:uppercase; letter-spacing:0.5px">💸 Koszt importu</div>
@@ -1670,7 +1799,7 @@ class SmartingHomePanel extends HTMLElement {
           <!-- ROW 4: G13 + RCE Details -->
           <div class="grid-cards gc-2" style="margin-bottom:14px">
             <div class="card">
-              <div class="card-title">⏰ Taryfa G13 <span id="g13-weekend-badge" style="font-size:9px; background:#2ecc71; color:#000; padding:2px 6px; border-radius:4px; font-weight:700; margin-left:6px; display:none">WEEKEND</span></div>
+              <div class="card-title" id="tariff-card-title">⏰ Taryfa G13 <span id="g13-weekend-badge" style="font-size:9px; background:#2ecc71; color:#000; padding:2px 6px; border-radius:4px; font-weight:700; margin-left:6px; display:none">WEEKEND</span></div>
               <div class="dr"><span class="lb">Trwająca strefa</span><span id="v-g13-zone-badge" class="status-badge">—</span></div>
               <div class="dr"><span class="lb">Sezon</span><span class="vl" id="v-g13-season">—</span></div>
               <div class="dr"><span class="lb">Cena zakupu</span><span class="vl" id="v-g13-price-tab" style="font-weight:800">— zł/kWh</span></div>
@@ -2177,6 +2306,21 @@ class SmartingHomePanel extends HTMLElement {
               <div id="v-save-status" style="font-size:11px; color:#2ecc71; margin-top:8px"></div>
             </div>
 
+            <!-- ⚡ Tariff Plan -->
+            <div class="card" style="grid-column: 1 / -1">
+              <div class="card-title">⚡ Taryfa energetyczna</div>
+              <div style="font-size:11px; color:#94a3b8; margin-bottom:10px">Wybierz taryfę aby panel dynamicznie dostosował harmonogram stref cenowych, wskaźniki i rekomendacje.</div>
+              <div class="settings-field">
+                <label style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Plan taryfowy</label>
+                <select id="sel-tariff-plan" style="width:100%; max-width:400px; padding:10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px" onchange="this.getRootNode().host._saveTariffPlan()">
+                  <option value="G13">G13 — trzystrefowa (przedpołudniowa / popołudniowa / off-peak + weekendy)</option>
+                  <option value="G12w">G12w — dwustrefowa + weekendy (13-15 + 22-06 + weekendy taniej)</option>
+                  <option value="G12">G12 — dwustrefowa (13-15 + 22-06 taniej)</option>
+                  <option value="G11">G11 — jednostrefowa (stała cena cały czas)</option>
+                </select>
+              </div>
+            </div>
+
             <!-- 🖼️ Inverter Image Upload -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">🖼️ Zdjęcie falownika</div>
@@ -2255,7 +2399,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.7.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.7.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
