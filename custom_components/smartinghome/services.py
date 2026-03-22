@@ -1,7 +1,9 @@
 """Service handlers for Smarting HOME."""
 from __future__ import annotations
 
+import base64
 import logging
+from pathlib import Path
 
 import voluptuous as vol
 
@@ -27,6 +29,10 @@ from .license import LicenseManager
 
 _LOGGER = logging.getLogger(__name__)
 
+SERVICE_UPLOAD_IMAGE = "upload_inverter_image"
+SERVICE_SAVE_SETTINGS = "save_settings"
+SERVICE_TEST_API_KEY = "test_api_key"
+
 SET_MODE_SCHEMA = vol.Schema(
     {
         vol.Required("mode"): vol.In([m.value for m in HEMSMode]),
@@ -47,6 +53,26 @@ ASK_AI_SCHEMA = vol.Schema(
         vol.Optional("provider", default="auto"): vol.In(
             ["auto", "gemini", "anthropic"]
         ),
+    }
+)
+
+UPLOAD_IMAGE_SCHEMA = vol.Schema(
+    {
+        vol.Required("filename"): cv.string,
+        vol.Required("data"): cv.string,
+    }
+)
+
+SAVE_SETTINGS_SCHEMA = vol.Schema(
+    {
+        vol.Optional("gemini_api_key", default=""): cv.string,
+        vol.Optional("anthropic_api_key", default=""): cv.string,
+    }
+)
+
+TEST_API_KEY_SCHEMA = vol.Schema(
+    {
+        vol.Required("provider"): vol.In(["gemini", "anthropic"]),
     }
 )
 
@@ -95,7 +121,6 @@ async def async_setup_services(
         provider = call.data.get("provider", "auto")
         data = coordinator.data or {}
 
-        # Build AI context from coordinator data
         ai_data = {
             "pv_power": data.get("sensor.pv_power"),
             "grid_power": data.get("sensor.meter_active_power_total"),
@@ -117,14 +142,17 @@ async def async_setup_services(
             "autarky": data.get("goodwe_autarky_today"),
         }
 
-        if provider == "gemini" or (provider == "auto" and ai_advisor.gemini_available):
+        if provider == "gemini" or (
+            provider == "auto" and ai_advisor.gemini_available
+        ):
             response = await ai_advisor.ask_gemini(question, ai_data)
-        elif provider == "anthropic" or (provider == "auto" and ai_advisor.anthropic_available):
+        elif provider == "anthropic" or (
+            provider == "auto" and ai_advisor.anthropic_available
+        ):
             response = await ai_advisor.ask_anthropic(question, ai_data)
         else:
             response = "No AI provider available."
 
-        # Fire an event with the response
         hass.bus.async_fire(
             f"{DOMAIN}_ai_response",
             {"question": question, "response": response, "provider": provider},
@@ -149,13 +177,71 @@ async def async_setup_services(
         }
 
         report = await ai_advisor.generate_daily_report(ai_data)
+        hass.bus.async_fire(f"{DOMAIN}_daily_report", {"report": report})
+
+    # ── New services: upload, save_settings, test_api_key ──
+
+    async def handle_upload_inverter_image(call: ServiceCall) -> None:
+        """Decode base64 image and save to www/smartinghome/inverter.png."""
+        filename = call.data["filename"]
+        data_b64 = call.data["data"]
+
+        ext = Path(filename).suffix.lower() or ".png"
+        out_name = f"inverter{ext}"
+
+        www_dir = Path(hass.config.path("www")) / "smartinghome"
+        www_dir.mkdir(parents=True, exist_ok=True)
+        dest = www_dir / out_name
+
+        try:
+            img_bytes = base64.b64decode(data_b64)
+            dest.write_bytes(img_bytes)
+            size_kb = len(img_bytes) / 1024
+            _LOGGER.info(
+                "Inverter image saved: %s (%.1f KB)", dest, size_kb
+            )
+        except Exception as err:
+            _LOGGER.error("Failed to save inverter image: %s", err)
+
+    async def handle_save_settings(call: ServiceCall) -> None:
+        """Update config entry with new API keys."""
+        gemini_key = call.data.get("gemini_api_key", "")
+        anthropic_key = call.data.get("anthropic_api_key", "")
+
+        new_data = {**entry.data}
+        if gemini_key:
+            new_data[CONF_GEMINI_API_KEY] = gemini_key
+        if anthropic_key:
+            new_data[CONF_ANTHROPIC_API_KEY] = anthropic_key
+
+        hass.config_entries.async_update_entry(entry, data=new_data)
+
+        if gemini_key:
+            ai_advisor._gemini_api_key = gemini_key
+        if anthropic_key:
+            ai_advisor._anthropic_api_key = anthropic_key
+
+        _LOGGER.info("API keys updated via panel settings")
+
+    async def handle_test_api_key(call: ServiceCall) -> None:
+        """Test if an API key is valid by making a minimal request."""
+        provider = call.data["provider"]
+        try:
+            if provider == "gemini":
+                valid = await ai_advisor.test_gemini_key()
+            else:
+                valid = await ai_advisor.test_anthropic_key()
+            status = "valid" if valid else "invalid"
+        except Exception:
+            status = "invalid"
 
         hass.bus.async_fire(
-            f"{DOMAIN}_daily_report",
-            {"report": report},
+            f"{DOMAIN}_api_key_test",
+            {"provider": provider, "status": status},
         )
+        _LOGGER.info("API key test for %s: %s", provider, status)
 
-    # Register services
+    # Register all services
     hass.services.async_register(
         DOMAIN, SERVICE_SET_MODE, handle_set_mode, schema=SET_MODE_SCHEMA
     )
@@ -175,8 +261,20 @@ async def async_setup_services(
     hass.services.async_register(
         DOMAIN, SERVICE_GENERATE_REPORT, handle_generate_report
     )
+    hass.services.async_register(
+        DOMAIN, SERVICE_UPLOAD_IMAGE, handle_upload_inverter_image,
+        schema=UPLOAD_IMAGE_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SAVE_SETTINGS, handle_save_settings,
+        schema=SAVE_SETTINGS_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_TEST_API_KEY, handle_test_api_key,
+        schema=TEST_API_KEY_SCHEMA,
+    )
 
-    _LOGGER.info("Registered %d Smarting HOME services", 6)
+    _LOGGER.info("Registered %d Smarting HOME services", 9)
 
 
 async def async_unload_services(hass: HomeAssistant) -> None:
@@ -188,5 +286,8 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_SET_EXPORT_LIMIT,
         SERVICE_ASK_AI,
         SERVICE_GENERATE_REPORT,
+        SERVICE_UPLOAD_IMAGE,
+        SERVICE_SAVE_SETTINGS,
+        SERVICE_TEST_API_KEY,
     ]:
         hass.services.async_remove(DOMAIN, service)

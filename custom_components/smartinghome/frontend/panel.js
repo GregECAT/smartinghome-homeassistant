@@ -34,15 +34,20 @@ class SmartingHomePanel extends HTMLElement {
 
   _toggleFullscreen() {
     const c = this.shadowRoot.querySelector(".panel-container");
-    const isFS = document.fullscreenElement||document.webkitFullscreenElement||document.mozFullScreenElement||document.msFullscreenElement;
-    if (!isFS) {
+    const nativeFS = document.fullscreenElement||document.webkitFullscreenElement||document.mozFullScreenElement||document.msFullscreenElement;
+    if (!nativeFS && !this._isFullscreen) {
+      // Enter fullscreen
       const rfs = c.requestFullscreen||c.webkitRequestFullscreen||c.mozRequestFullScreen||c.msRequestFullscreen;
       if (rfs) rfs.call(c).catch(()=>{});
-      else { c.classList.toggle("css-fullscreen", true); this._isFullscreen = true; const btn = this.shadowRoot.querySelector(".fullscreen-btn"); if(btn) btn.textContent="⊡ Zamknij"; }
+      else { c.classList.add("css-fullscreen"); this._isFullscreen = true; const btn = this.shadowRoot.querySelector(".fullscreen-btn"); if(btn) btn.textContent="⊡ Zamknij"; }
     } else {
-      const efs = document.exitFullscreen||document.webkitExitFullscreen||document.mozCancelFullScreen||document.msExitFullscreen;
-      if (efs) efs.call(document).catch(()=>{});
-      else { c.classList.remove("css-fullscreen"); this._isFullscreen = false; const btn = this.shadowRoot.querySelector(".fullscreen-btn"); if(btn) btn.textContent="⊞ Pełny ekran"; }
+      // Exit fullscreen
+      if (nativeFS) {
+        const efs = document.exitFullscreen||document.webkitExitFullscreen||document.mozCancelFullScreen||document.msExitFullscreen;
+        if (efs) efs.call(document).catch(()=>{});
+      }
+      c.classList.remove("css-fullscreen"); this._isFullscreen = false;
+      const btn = this.shadowRoot.querySelector(".fullscreen-btn"); if(btn) btn.textContent="⊞ Pełny ekran";
     }
   }
   _switchTab(tab) {
@@ -720,7 +725,6 @@ class SmartingHomePanel extends HTMLElement {
           <button class="tab-btn" data-tab="tariff" onclick="this.getRootNode().host._switchTab('tariff')">💰 Taryfy & RCE</button>
           <button class="tab-btn" data-tab="battery" onclick="this.getRootNode().host._switchTab('battery')">🔋 Bateria</button>
           <button class="tab-btn" data-tab="hems" onclick="this.getRootNode().host._switchTab('hems')">🤖 HEMS</button>
-          <button class="tab-btn" data-tab="settings" onclick="this.getRootNode().host._switchTab('settings')">⚙️ Ustawienia</button>
         </div>
 
         <!-- ═══════ TAB: OVERVIEW ═══════ -->
@@ -1045,7 +1049,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.4</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.5</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
