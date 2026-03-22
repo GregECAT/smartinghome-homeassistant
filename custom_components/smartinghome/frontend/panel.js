@@ -491,22 +491,38 @@ class SmartingHomePanel extends HTMLElement {
   _updateHEMSFromAI() {
     const s = this._settings;
     if (s.ai_hems_advice && s.ai_hems_advice.text) {
+      const html = this._renderMarkdown(s.ai_hems_advice.text);
+      const prov = s.ai_hems_advice.provider || '';
+      const ts = s.ai_hems_advice.timestamp || '';
+      const content = '<div style="font-size:13px;line-height:1.6">' + html + '</div><div style="font-size:9px;color:#64748b;margin-top:6px">\ud83e\udd16 AI ' + prov + ' \u2022 ' + ts + '</div>';
+      // Update overview tab
       const el = this.shadowRoot.getElementById("v-hems-rec");
-      if (el) {
-        const html = this._renderMarkdown(s.ai_hems_advice.text);
-        const prov = s.ai_hems_advice.provider || '';
-        const ts = s.ai_hems_advice.timestamp || '';
-        el.innerHTML = '<div style="font-size:13px;line-height:1.6">' + html + '</div><div style="font-size:9px;color:#64748b;margin-top:6px">\ud83e\udd16 AI ' + prov + ' \u2022 ' + ts + '</div>';
-        this._aiHemsLoaded = true;
-      }
+      if (el) { el.innerHTML = content; this._aiHemsLoaded = true; }
+      // Update tariff tab
+      const elT = this.shadowRoot.getElementById("v-hems-rec-tariff");
+      if (elT) { elT.innerHTML = content; this._aiTariffLoaded = true; }
+      // Update HEMS tab
+      const elH = this.shadowRoot.getElementById("v-hems-rec-hems");
+      if (elH) { elH.innerHTML = content; this._aiHemsTabLoaded = true; }
     }
     if (s.ai_daily_report && s.ai_daily_report.text) {
-      const el = this.shadowRoot.getElementById("v-hems-rec-tab");
-      if (el) {
-        const html = this._renderMarkdown(s.ai_daily_report.text);
-        const prov = s.ai_daily_report.provider || '';
-        const ts = s.ai_daily_report.timestamp || '';
-        el.innerHTML = '<div style="font-size:13px;line-height:1.6">' + html + '</div><div style="font-size:9px;color:#64748b;margin-top:6px">\ud83e\udd16 AI ' + prov + ' \u2022 ' + ts + '</div>';
+      // Daily report goes to a separate element if exists
+      const html = this._renderMarkdown(s.ai_daily_report.text);
+      const prov = s.ai_daily_report.provider || '';
+      const ts = s.ai_daily_report.timestamp || '';
+      const content = '<div style="font-size:13px;line-height:1.6">' + html + '</div><div style="font-size:9px;color:#64748b;margin-top:6px">\ud83e\udd16 AI ' + prov + ' \u2022 ' + ts + '</div>';
+      // If no HEMS advice loaded yet, use daily report as fallback
+      if (!this._aiHemsLoaded) {
+        const el = this.shadowRoot.getElementById("v-hems-rec");
+        if (el) { el.innerHTML = content; this._aiHemsLoaded = true; }
+      }
+      if (!this._aiTariffLoaded) {
+        const elT = this.shadowRoot.getElementById("v-hems-rec-tariff");
+        if (elT) { elT.innerHTML = content; this._aiTariffLoaded = true; }
+      }
+      if (!this._aiHemsTabLoaded) {
+        const elH = this.shadowRoot.getElementById("v-hems-rec-hems");
+        if (elH) { elH.innerHTML = content; this._aiHemsTabLoaded = true; }
       }
     }
   }
@@ -1282,8 +1298,10 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-cheapest-tomorrow", this._s("sensor.rce_pse_najtansze_okno_czasowe_jutro") || "—");
     this._setText("v-expensive-tomorrow", this._s("sensor.rce_pse_najdrozsze_okno_czasowe_jutro") || "—");
 
-    // HEMS Recommendation (tariff tab)
-    this._setText("v-hems-rec-tab", this._s("sensor.hems_rce_recommendation") || this._s("sensor.smartinghome_hems_recommendation") || "—");
+    // HEMS Recommendation (tariff tab) — skip if AI content already loaded
+    if (!this._aiTariffLoaded) {
+      this._setText("v-hems-rec-tariff", this._s("sensor.hems_rce_recommendation") || this._s("sensor.smartinghome_hems_recommendation") || "—");
+    }
 
     // Economics
     const savings = this._n("sensor.g13_self_consumption_savings_today") ?? this._n("sensor.smartinghome_self_consumption_savings_today");
@@ -1440,8 +1458,10 @@ class SmartingHomePanel extends HTMLElement {
       if (netEl) netEl.style.color = netG >= 0 ? "#2ecc71" : "#e74c3c";
     }
     
-    // AI Rec Tab
-    this._setText("v-hems-rec-tab", this._s("sensor.smartinghome_hems_recommendation") || "Brak danych z asystenta AI.");
+    // AI Rec Tab — skip if AI content already loaded
+    if (!this._aiHemsTabLoaded) {
+      this._setText("v-hems-rec-hems", this._s("sensor.smartinghome_hems_recommendation") || "Brak danych z asystenta AI.");
+    }
     
     // Voltage Bars update
     const v1 = this._fm("voltage_l1"); this._setText("v-e-v1", `${v1} V`);
@@ -1572,9 +1592,9 @@ class SmartingHomePanel extends HTMLElement {
         /* Corner layout: PV top-left, Home top-right, Inv center-up, Batt bottom-left, Grid bottom-right */
         .pv-area { grid-column: 1; grid-row: 1; }
         .home-area { grid-column: 3; grid-row: 1; }
-        .inv-area { grid-column: 2; grid-row: 1 / 3; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-        .batt-area { grid-column: 1; grid-row: 2 / 4; align-self: start; margin-top: 16px; }
-        .grid-area { grid-column: 3; grid-row: 2 / 4; align-self: start; margin-top: 16px; }
+        .inv-area { grid-column: 2; grid-row: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .batt-area { grid-column: 1; grid-row: 2 / 4; align-self: center; }
+        .grid-area { grid-column: 3; grid-row: 2 / 4; align-self: center; }
         .summary-area { grid-column: 1 / 4; grid-row: 4; }
 
         /* PV string boxes */
@@ -2176,7 +2196,7 @@ class SmartingHomePanel extends HTMLElement {
               <div style="font-size:20px">⚡</div>
               <div>
                 <div style="font-size:10px; color:#f7b731; text-transform:uppercase; font-weight:700">Rekomendacja HEMS</div>
-                <div style="font-size:14px; font-weight:600; color:#fff; margin-top:2px" id="v-hems-rec-tab">—</div>
+                <div style="font-size:14px; font-weight:600; color:#fff; margin-top:2px" id="v-hems-rec-tariff">—</div>
               </div>
             </div>
           </div>
@@ -2437,7 +2457,7 @@ class SmartingHomePanel extends HTMLElement {
               <div class="card-title">🤖 AI Energy Advisor</div>
               <div style="display:flex; gap:10px; align-items:flex-start;">
                 <div style="font-size:28px; filter:drop-shadow(0 0 5px rgba(0,212,255,0.5));">🤖</div>
-                <div class="recommendation" style="flex:1" id="v-hems-rec-tab">Ładowanie porady z asystenta...</div>
+                <div class="recommendation" style="flex:1" id="v-hems-rec-hems">Ładowanie porady z asystenta...</div>
               </div>
             </div>
             <div class="card" style="grid-column: 1 / -1">
@@ -2913,7 +2933,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.8.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.8.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
