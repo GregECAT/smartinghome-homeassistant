@@ -379,17 +379,20 @@ class SmartingHomePanel extends HTMLElement {
     const geminiModel = this.shadowRoot.getElementById("sel-gemini-model")?.value || "gemini-2.5-flash";
     const anthropicModel = this.shadowRoot.getElementById("sel-anthropic-model")?.value || "claude-sonnet-4.6-20260301";
     if (this._hass) {
-      this._hass.callService("smartinghome", "save_settings", {
-        gemini_api_key: gemini,
-        anthropic_api_key: anthropic,
-      });
+      // Only send keys that the user actually typed in (non-empty)
+      const saveData = {};
+      if (gemini) saveData.gemini_api_key = gemini;
+      if (anthropic) saveData.anthropic_api_key = anthropic;
+      if (Object.keys(saveData).length > 0) {
+        this._hass.callService("smartinghome", "save_settings", saveData);
+      }
       const updates = { gemini_model: geminiModel, anthropic_model: anthropicModel };
       if (gemini) updates.gemini_key_status = "saved";
       if (anthropic) updates.anthropic_key_status = "saved";
       this._savePanelSettings(updates);
       this._updateKeyStatus();
       const st = this.shadowRoot.getElementById("v-save-status");
-      if (st) { st.textContent = "✅ Klucze i modele zapisane pomyślnie!"; setTimeout(() => { st.textContent = ""; }, 4000); }
+      if (st) { st.textContent = "✅ Modele zapisane" + (Object.keys(saveData).length > 0 ? " + klucze zaktualizowane!" : "!"); setTimeout(() => { st.textContent = ""; }, 4000); }
     }
   }
 
@@ -2431,7 +2434,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.7.6</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.7.7</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
