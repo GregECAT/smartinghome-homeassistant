@@ -168,8 +168,8 @@ DEFAULT_SENSOR_MAP: Final = {
     "grid_frequency": "sensor.on_grid_frequency",
     # Daily totals
     "pv_today": "sensor.today_s_pv_generation",
-    "grid_import_today": "sensor.grid_import_daily",
-    "grid_export_today": "sensor.grid_export_daily",
+    "grid_import_today": "sensor.grid_export_daily",  # GoodWe: grid exports to you = your import
+    "grid_export_today": "sensor.grid_import_daily",  # GoodWe: grid imports from you = your export
     "battery_charge_today": "sensor.today_battery_charge",
     "battery_discharge_today": "sensor.today_battery_discharge",
     # Inverter
