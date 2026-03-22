@@ -796,6 +796,96 @@ class SmartingHomePanel extends HTMLElement {
       socBarTab.style.background = soc > 50 ? "#2ecc71" : soc > 20 ? "#f39c12" : "#e74c3c";
     }
 
+    // Battery Tab: Live parameters
+    this._setText("v-batt-v-tab", `${this._fm("battery_voltage")} V`);
+    this._setText("v-batt-a-tab", `${this._fm("battery_current")} A`);
+    this._setText("v-batt-temp-tab", `${this._fm("battery_temp")}°C`);
+    const battPower = this._nm("battery_power") || 0;
+    this._setText("v-batt-p-tab", this._pw(Math.abs(battPower)));
+
+    // Dynamic status box
+    const statusBox = this.shadowRoot.getElementById("batt-status-box");
+    const statusDot = this.shadowRoot.getElementById("batt-status-dot");
+    const statusText = this.shadowRoot.getElementById("batt-status-text");
+    const statusPower = this.shadowRoot.getElementById("batt-status-power");
+    if (statusBox && statusDot && statusText && statusPower) {
+      statusPower.textContent = this._pw(Math.abs(battPower));
+      if (battPower > 10) {
+        // Discharging (GoodWe BT: positive = discharge)
+        statusBox.style.background = "rgba(243,156,18,0.1)";
+        statusDot.style.background = "#f39c12";
+        statusText.textContent = "ROZŁADOWANIE ↓";
+        statusText.style.color = "#f39c12";
+        statusPower.style.color = "#f39c12";
+      } else if (battPower < -10) {
+        // Charging
+        statusBox.style.background = "rgba(46,204,113,0.1)";
+        statusDot.style.background = "#2ecc71";
+        statusText.textContent = "ŁADOWANIE ↑";
+        statusText.style.color = "#2ecc71";
+        statusPower.style.color = "#2ecc71";
+      } else {
+        statusBox.style.background = "rgba(100,116,139,0.1)";
+        statusDot.style.background = "#64748b";
+        statusText.textContent = "STANDBY";
+        statusText.style.color = "#64748b";
+        statusPower.style.color = "#64748b";
+      }
+    }
+
+    // Work mode & battery mode
+    this._setText("v-work-mode-tab", this._s("sensor.work_mode") || this._s("select.goodwe_tryb_pracy_falownika") || "—");
+    this._setText("v-batt-mode-tab", this._s("sensor.battery_mode") || "—");
+
+    // DOD & charge rate
+    const dod = this._n("number.goodwe_depth_of_discharge_on_grid");
+    this._setText("v-batt-dod-tab", dod !== null ? `${dod}%` : "—%");
+    this._setText("v-batt-charge-rate-tab", "18.5 A");
+
+    // Daily charge/discharge
+    const chargeToday = this._nm("battery_charge_today") || 0;
+    const dischargeToday = this._nm("battery_discharge_today") || 0;
+    this._setText("v-batt-charge-tab", `${chargeToday.toFixed(1)} kWh`);
+    this._setText("v-batt-discharge-tab", `${dischargeToday.toFixed(1)} kWh`);
+
+    // Cycles estimate (1 cycle = 10.2 kWh)
+    const cycles = (dischargeToday / 10.2).toFixed(1);
+    this._setText("v-batt-cycles-tab", cycles);
+
+    // Efficiency (discharge/charge * 100)
+    const efficiency = chargeToday > 0 ? Math.min(100, (dischargeToday / chargeToday) * 100) : 0;
+    this._setText("v-batt-efficiency-tab", `${efficiency.toFixed(0)}%`);
+
+    // Warnings
+    const warning = this._s("sensor.warning_code") || "0";
+    const warnEl = this.shadowRoot.getElementById("v-batt-warning-tab");
+    if (warnEl) {
+      if (warning === "0" || warning === "unavailable") { warnEl.textContent = "Brak"; warnEl.style.color = "#2ecc71"; }
+      else { warnEl.textContent = `Kod: ${warning}`; warnEl.style.color = "#e74c3c"; }
+    }
+
+    // Arbitrage: RCE spread & prices
+    const arbRceMin = this._n("sensor.rce_pse_min_today") ?? this._n("sensor.smartinghome_rce_min_today");
+    const arbRceMax = this._n("sensor.rce_pse_max_today") ?? this._n("sensor.smartinghome_rce_max_today");
+    if (arbRceMin !== null && arbRceMax !== null) {
+      this._setText("v-arb-spread", `${(arbRceMax - arbRceMin).toFixed(2)} zł`);
+      this._setText("v-arb-buy-price", `${(arbRceMin / 1000).toFixed(4)} zł`);
+      this._setText("v-arb-sell-price", `${(arbRceMax / 1000).toFixed(4)} zł`);
+    }
+
+    // Premium/Free tier detection for arbitrage
+    const arbCta = this.shadowRoot.getElementById("arb-premium-cta");
+    const arbActive = this.shadowRoot.getElementById("arb-premium-active");
+    if (arbCta && arbActive) {
+      if (tier === "PRO" || tier === "ENTERPRISE") {
+        arbCta.style.display = "none";
+        arbActive.style.display = "block";
+      } else {
+        arbCta.style.display = "block";
+        arbActive.style.display = "none";
+      }
+    }
+
     // PV Surplus — calculate from live values (pv - load)
     const pvSurplusVal = this._n("sensor.smartinghome_pv_surplus_power");
     if (pvSurplusVal !== null) {
@@ -1547,22 +1637,173 @@ class SmartingHomePanel extends HTMLElement {
 
         <!-- ═══════ TAB: BATTERY ═══════ -->
         <div class="tab-content" data-tab="battery">
-          <div class="grid-cards gc-2">
+
+          <!-- ROW 1: SOC + Live Parameters -->
+          <div class="grid-cards gc-2" style="margin-bottom:12px">
             <div class="card">
-              <div class="card-title">🔋 Pojemność LiFePO4</div>
-              <div style="display:flex; align-items:baseline; gap:8px; margin-bottom:8px;">
-                 <div style="font-size:28px; font-weight:800; color:#fff" id="v-soc-tab">—%</div>
-                 <div style="font-size:14px; color:#94a3b8" id="v-battery-energy-tab">— kWh</div>
+              <div class="card-title">🔋 Stan baterii</div>
+              <div style="display:flex; align-items:center; gap:16px; margin-bottom:10px">
+                <div>
+                  <div style="font-size:40px; font-weight:900; color:#fff" id="v-soc-tab">—%</div>
+                  <div style="font-size:13px; color:#94a3b8" id="v-battery-energy-tab">— kWh dostępne</div>
+                </div>
+                <div style="flex:1">
+                  <div class="soc-bar" style="height:16px; margin-bottom:4px"><div class="soc-fill" id="soc-fill-tab" style="width:0%"></div></div>
+                  <div style="display:flex; justify-content:space-between; font-size:9px; color:#64748b">
+                    <span>0%</span><span>50%</span><span>100%</span>
+                  </div>
+                </div>
               </div>
-              <div class="soc-bar" style="height:12px; margin-bottom:12px"><div class="soc-fill" id="soc-fill-tab" style="width:0%"></div></div>
-              <div class="dr" style="border-top:1px solid rgba(255,255,255,0.05)"><span class="lb">Czas pracy</span><span class="vl" id="v-battery-runtime-tab">—</span></div>
+              <!-- Dynamic status -->
+              <div style="display:flex; align-items:center; gap:8px; padding:8px 12px; border-radius:8px; margin-bottom:8px" id="batt-status-box">
+                <div style="width:10px; height:10px; border-radius:50%; animation:pulse 1.5s infinite" id="batt-status-dot"></div>
+                <div style="font-size:13px; font-weight:700" id="batt-status-text">STANDBY</div>
+                <div style="font-size:13px; font-weight:800; margin-left:auto" id="batt-status-power">— W</div>
+              </div>
+              <div class="dr"><span class="lb">Czas pracy (est.)</span><span class="vl" id="v-battery-runtime-tab">—</span></div>
+              <div class="dr"><span class="lb">Tryb falownika</span><span class="vl" id="v-work-mode-tab">—</span></div>
+              <div class="dr"><span class="lb">Tryb baterii</span><span class="vl" id="v-batt-mode-tab">—</span></div>
             </div>
-            <div class="card" id="arbitrage-card">
-              <div class="card-title">💰 Rozszerzony Arbitraż</div>
-              <div class="dr"><span class="lb">Potencjał zarobku</span><span class="vl" id="v-arbitrage-tab" style="color:#2ecc71; font-size:22px">— PLN</span></div>
-              <div style="font-size:11px; color:#8899aa; margin-top:10px;">Zarobek z cyklu G13 ładowania w Off-Peak i rozładowywania podczas popołudniowego szczytu.</div>
+
+            <div class="card">
+              <div class="card-title">⚡ Parametry na żywo</div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:10px">
+                <div style="background:rgba(0,212,255,0.08); border-radius:10px; padding:10px; text-align:center">
+                  <div style="font-size:9px; color:#00d4ff; text-transform:uppercase">Napięcie</div>
+                  <div style="font-size:22px; font-weight:800; color:#fff; margin-top:2px" id="v-batt-v-tab">— V</div>
+                </div>
+                <div style="background:rgba(247,183,49,0.08); border-radius:10px; padding:10px; text-align:center">
+                  <div style="font-size:9px; color:#f7b731; text-transform:uppercase">Prąd</div>
+                  <div style="font-size:22px; font-weight:800; color:#fff; margin-top:2px" id="v-batt-a-tab">— A</div>
+                </div>
+                <div style="background:rgba(231,76,60,0.08); border-radius:10px; padding:10px; text-align:center">
+                  <div style="font-size:9px; color:#e74c3c; text-transform:uppercase">Temperatura</div>
+                  <div style="font-size:22px; font-weight:800; color:#fff; margin-top:2px" id="v-batt-temp-tab">— °C</div>
+                </div>
+                <div style="background:rgba(46,204,113,0.08); border-radius:10px; padding:10px; text-align:center">
+                  <div style="font-size:9px; color:#2ecc71; text-transform:uppercase">Moc</div>
+                  <div style="font-size:22px; font-weight:800; color:#fff; margin-top:2px" id="v-batt-p-tab">— W</div>
+                </div>
+              </div>
+              <div class="dr"><span class="lb">DOD on-grid</span><span class="vl" id="v-batt-dod-tab">—%</span></div>
+              <div class="dr"><span class="lb">Prąd ładowania (maks.)</span><span class="vl" id="v-batt-charge-rate-tab">— A</span></div>
+              <div class="dr"><span class="lb">Pojemność nominalna</span><span class="vl">10.2 kWh (LiFePO4)</span></div>
             </div>
           </div>
+
+          <!-- ROW 2: Daily Statistics -->
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:8px; margin-bottom:12px">
+            <div class="card" style="text-align:center; padding:14px 8px">
+              <div style="font-size:9px; color:#2ecc71; text-transform:uppercase; letter-spacing:0.5px">↑ Ładowanie dziś</div>
+              <div style="font-size:22px; font-weight:800; color:#2ecc71; margin-top:4px" id="v-batt-charge-tab">— kWh</div>
+            </div>
+            <div class="card" style="text-align:center; padding:14px 8px">
+              <div style="font-size:9px; color:#f39c12; text-transform:uppercase; letter-spacing:0.5px">↓ Rozładowanie dziś</div>
+              <div style="font-size:22px; font-weight:800; color:#f39c12; margin-top:4px" id="v-batt-discharge-tab">— kWh</div>
+            </div>
+            <div class="card" style="text-align:center; padding:14px 8px">
+              <div style="font-size:9px; color:#00d4ff; text-transform:uppercase; letter-spacing:0.5px">🔄 Cykli dziś</div>
+              <div style="font-size:22px; font-weight:800; color:#00d4ff; margin-top:4px" id="v-batt-cycles-tab">—</div>
+            </div>
+            <div class="card" style="text-align:center; padding:14px 8px">
+              <div style="font-size:9px; color:#a855f7; text-transform:uppercase; letter-spacing:0.5px">⚡ Sprawność</div>
+              <div style="font-size:22px; font-weight:800; color:#a855f7; margin-top:4px" id="v-batt-efficiency-tab">—%</div>
+            </div>
+          </div>
+
+          <!-- ROW 3: Battery Health -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">🏥 Zdrowie baterii</div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:10px; margin-top:8px">
+              <div>
+                <div class="dr"><span class="lb">Technologia</span><span class="vl" style="color:#2ecc71">LiFePO4 (Lynx Home U)</span></div>
+                <div class="dr"><span class="lb">Pojemność</span><span class="vl">10.2 kWh</span></div>
+                <div class="dr"><span class="lb">DOD maks.</span><span class="vl">95% (min SOC 5%)</span></div>
+                <div class="dr"><span class="lb">Żywotność gwar.</span><span class="vl">6000+ cykli</span></div>
+              </div>
+              <div>
+                <div class="dr"><span class="lb">Napięcie nominalne</span><span class="vl">51.2 V</span></div>
+                <div class="dr"><span class="lb">Prąd ładowania maks.</span><span class="vl">18.5 A</span></div>
+                <div class="dr"><span class="lb">Zakres temp. pracy</span><span class="vl">0°C – 50°C</span></div>
+                <div class="dr"><span class="lb">Ostrzeżenia</span><span class="vl" id="v-batt-warning-tab" style="color:#2ecc71">Brak</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ROW 4: Expanded Arbitrage -->
+          <div class="card" style="margin-bottom:12px" id="arbitrage-card">
+            <div class="card-title">💰 Rozszerzony Arbitraż Energii</div>
+            <div style="margin-bottom:12px">
+              <div style="font-size:12px; color:#94a3b8; line-height:1.6">
+                Arbitraż polega na ładowaniu baterii gdy energia jest najtańsza (noc, off-peak G13) i rozładowywaniu podczas szczytu popołudniowego lub sprzedaży po najwyższej cenie RCE.
+              </div>
+            </div>
+
+            <!-- Arbitrage KPIs -->
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:8px; margin-bottom:12px">
+              <div style="background:rgba(46,204,113,0.08); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#2ecc71; text-transform:uppercase">Potencjał zarobku</div>
+                <div style="font-size:22px; font-weight:800; color:#2ecc71; margin-top:2px" id="v-arbitrage-tab">— zł</div>
+                <div style="font-size:9px; color:#64748b">na cykl</div>
+              </div>
+              <div style="background:rgba(0,212,255,0.08); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#00d4ff; text-transform:uppercase">Spread RCE</div>
+                <div style="font-size:22px; font-weight:800; color:#00d4ff; margin-top:2px" id="v-arb-spread">— zł</div>
+                <div style="font-size:9px; color:#64748b">max−min dziś</div>
+              </div>
+              <div style="background:rgba(247,183,49,0.08); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#f7b731; text-transform:uppercase">Cena ładowania</div>
+                <div style="font-size:22px; font-weight:800; color:#f7b731; margin-top:2px" id="v-arb-buy-price">— zł</div>
+                <div style="font-size:9px; color:#64748b">zł/kWh off-peak</div>
+              </div>
+              <div style="background:rgba(231,76,60,0.08); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#e74c3c; text-transform:uppercase">Cena sprzedaży</div>
+                <div style="font-size:22px; font-weight:800; color:#e74c3c; margin-top:2px" id="v-arb-sell-price">— zł</div>
+                <div style="font-size:9px; color:#64748b">zł/kWh peak</div>
+              </div>
+            </div>
+
+            <!-- G13 Strategy -->
+            <div style="background:rgba(255,255,255,0.03); border-radius:10px; padding:12px; margin-bottom:12px">
+              <div style="font-size:11px; font-weight:700; color:#f7b731; margin-bottom:6px">📋 Strategia G13 + RCE</div>
+              <div style="font-size:11px; color:#cbd5e1; line-height:1.6">
+                <strong style="color:#2ecc71">⏰ 22:00–06:00</strong> — Ładuj baterię (off-peak, najtańsza strefa)<br>
+                <strong style="color:#e74c3c">⏰ 07:00–13:00</strong> — Rozładowuj na dom (peak poranny)<br>
+                <strong style="color:#f7b731">⏰ 13:00–17:00</strong> — PV ładuje baterię + eksport nadwyżki<br>
+                <strong style="color:#e74c3c">⏰ 17:00–22:00</strong> — Rozładowuj na dom (peak wieczorny, najdrożej!)
+              </div>
+            </div>
+
+            <!-- Automatyczny arbitraż — Premium feature -->
+            <div style="background:linear-gradient(135deg, rgba(247,183,49,0.08), rgba(231,76,60,0.05)); border:1px solid rgba(247,183,49,0.2); border-radius:12px; padding:16px" id="arb-premium-box">
+              <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px">
+                <div style="font-size:18px">🚀</div>
+                <div style="font-size:13px; font-weight:800; color:#f7b731">Automatyczny Arbitraż AI</div>
+                <div style="font-size:9px; background:#f7b731; color:#000; padding:2px 6px; border-radius:4px; font-weight:700; margin-left:auto" id="arb-premium-badge">PREMIUM</div>
+              </div>
+              <div style="font-size:11px; color:#cbd5e1; line-height:1.7; margin-bottom:10px" id="arb-premium-desc">
+                <div style="margin-bottom:6px">Automatyczny system arbitrażu oparty na AI analizuje:</div>
+                <div>✅ Prognozę cen RCE na 24h do przodu</div>
+                <div>✅ Prognozę produkcji PV (Forecast.Solar)</div>
+                <div>✅ Wzorce zużycia domu (ML)</div>
+                <div>✅ Optymalizację cykli DOD dla żywotności baterii</div>
+                <div>✅ Automatyczne przełączanie trybów falownika</div>
+                <div>✅ Raport oszczędności i rekomendacje</div>
+              </div>
+              <div id="arb-premium-cta" style="display:none; text-align:center; margin-top:8px">
+                <button style="background:linear-gradient(135deg,#f7b731,#e74c3c); color:#fff; border:none; border-radius:8px; padding:10px 24px; font-size:12px; font-weight:700; cursor:pointer; letter-spacing:0.5px">
+                  ⭐ Przejdź na PREMIUM — odblokuj pełny arbitraż
+                </button>
+                <div style="font-size:9px; color:#64748b; margin-top:4px">Aktywacja przez klucz licencyjny w Ustawieniach</div>
+              </div>
+              <div id="arb-premium-active" style="display:none">
+                <div class="dr"><span class="lb">Status automatyzacji</span><span class="vl" style="color:#2ecc71" id="v-arb-auto-status">Aktywny ✅</span></div>
+                <div class="dr"><span class="lb">Następna akcja</span><span class="vl" id="v-arb-next-action">—</span></div>
+                <div class="dr"><span class="lb">Zarobek z arbitrażu dziś</span><span class="vl" style="color:#2ecc71" id="v-arb-profit-today">— zł</span></div>
+              </div>
+            </div>
+          </div>
+
         </div>
 
         <!-- ═══════ TAB: HEMS ═══════ -->
@@ -1847,7 +2088,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.9</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.7.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
