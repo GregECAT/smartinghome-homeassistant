@@ -102,6 +102,8 @@ class SmartingHomePanel extends HTMLElement {
         const aSel = this.shadowRoot.getElementById('sel-anthropic-model');
         if (gSel && this._settings.gemini_model) gSel.value = this._settings.gemini_model;
         if (aSel && this._settings.anthropic_model) aSel.value = this._settings.anthropic_model;
+        // Re-apply PV labels and all data after settings loaded
+        if (this._hass) this._updateAll();
       }
     } catch(e) { /* file not yet created */ }
   }
@@ -429,8 +431,8 @@ class SmartingHomePanel extends HTMLElement {
     if (upgradeBox) upgradeBox.style.display = (tier === "PRO" || tier === "ENTERPRISE") ? "none" : "block";
     // Settings: API key status
     this._updateKeyStatus();
-    // RCE / Tariff
-    const g13Zone = this._s("sensor.smartinghome_g13_current_zone") || "—";
+    // RCE / Tariff — G13 Zone Badge
+    const g13Zone = this._s("sensor.smartinghome_g13_current_zone") || this._s("sensor.g13_current_zone") || "—";
     const g13Badge = this.shadowRoot.getElementById("v-g13-zone-badge");
     if (g13Badge) {
       g13Badge.textContent = g13Zone.toUpperCase();
@@ -438,13 +440,105 @@ class SmartingHomePanel extends HTMLElement {
       g13Badge.className = `status-badge ${isPeak ? 'peak' : 'offpeak'}`;
     }
     
-    this._setText("v-g13-price-tab", `${this._f("sensor.smartinghome_g13_buy_price", 2)} PLN`);
-    this._setText("v-rce-price-tab", `${this._f("sensor.smartinghome_rce_sell_price", 2)} PLN`);
+    // G13 Price
+    const g13Price = this._n("sensor.smartinghome_g13_buy_price") ?? this._n("sensor.g13_buy_price");
+    this._setText("v-g13-price-tab", g13Price !== null ? `${g13Price.toFixed(2)} zł/kWh` : "— zł/kWh");
     
-    const rceTrend = this._s("sensor.smartinghome_rce_price_trend") || "—";
-    this._setText("v-rce-trend-tab", rceTrend === "rosnie" ? "📈 Rośnie" : rceTrend === "spada" ? "📉 Spada" : "➖ Stabilny");
+    // RCE Sell price
+    const rceSell = this._n("sensor.smartinghome_rce_sell_price") ?? this._n("sensor.rce_sell_price");
+    this._setText("v-rce-sell", rceSell !== null ? `${rceSell.toFixed(4)} zł/kWh` : "— zł/kWh");
     
-    this._setText("v-rce-avg-tab", `${this._f("sensor.smartinghome_rce_average_today", 2)} PLN`);
+    // Spread G13↔RCE
+    if (g13Price !== null && rceSell !== null) {
+      const spread = g13Price - rceSell;
+      const spreadEl = this.shadowRoot.getElementById("v-spread");
+      if (spreadEl) {
+        spreadEl.textContent = `${spread.toFixed(2)} zł`;
+        spreadEl.style.color = spread > 0 ? "#e74c3c" : "#2ecc71";
+      }
+    }
+
+    // RCE Now (big card, zł/kWh)
+    const rceNowKwh = this._n("sensor.rce_pse_cena_za_kwh") ?? rceSell;
+    const rceNowMwh = this._n("sensor.rce_pse_cena");
+    const rceNowEl = this.shadowRoot.getElementById("v-rce-now");
+    if (rceNowEl && rceNowKwh !== null) {
+      rceNowEl.textContent = `${rceNowKwh.toFixed(2)} zł`;
+      rceNowEl.style.color = rceNowKwh > 0.6 ? "#2ecc71" : rceNowKwh > 0.3 ? "#f7b731" : "#e74c3c";
+    }
+    this._setText("v-rce-now-mwh", rceNowMwh !== null ? `${rceNowMwh.toFixed(0)} PLN/MWh` : "— PLN/MWh");
+
+    // RCE +1h, +2h, +3h
+    const rce1h = this._n("sensor.rce_sell_price_next_hour") ?? this._n("sensor.smartinghome_rce_sell_price_next_hour");
+    const rce2h = this._n("sensor.rce_sell_price_2h") ?? this._n("sensor.smartinghome_rce_sell_price_2h");
+    const rce3h = this._n("sensor.rce_sell_price_3h") ?? this._n("sensor.smartinghome_rce_sell_price_3h");
+    this._setText("v-rce-1h", rce1h !== null ? rce1h.toFixed(2) : "—");
+    this._setText("v-rce-2h", rce2h !== null ? rce2h.toFixed(2) : "—");
+    this._setText("v-rce-3h", rce3h !== null ? rce3h.toFixed(2) : "—");
+
+    // RCE Statistics
+    const rceAvg = this._n("sensor.rce_average_today") ?? this._n("sensor.smartinghome_rce_average_today");
+    const rceMin = this._n("sensor.rce_min_today") ?? this._n("sensor.smartinghome_rce_min_today");
+    const rceMax = this._n("sensor.rce_max_today") ?? this._n("sensor.smartinghome_rce_max_today");
+    this._setText("v-rce-avg2", rceAvg !== null ? rceAvg.toFixed(2) : "—");
+    this._setText("v-rce-min", rceMin !== null ? rceMin.toFixed(2) : "—");
+    this._setText("v-rce-max", rceMax !== null ? rceMax.toFixed(2) : "—");
+
+    // vs Średnia
+    const rceVsAvg = this._n("sensor.rce_pse_aktualna_vs_srednia_dzisiaj");
+    const vsAvgEl = this.shadowRoot.getElementById("v-rce-vs-avg");
+    if (vsAvgEl && rceVsAvg !== null) {
+      vsAvgEl.textContent = `${rceVsAvg > 0 ? '+' : ''}${rceVsAvg.toFixed(1)}%`;
+      vsAvgEl.style.color = rceVsAvg > 10 ? "#2ecc71" : rceVsAvg < -10 ? "#e74c3c" : "#f7b731";
+      this._setText("v-rce-vs-label", rceVsAvg > 0 ? "powyżej średniej" : "poniżej średniej");
+    }
+
+    // Trend
+    const rceTrend = this._s("sensor.smartinghome_rce_price_trend") || this._s("sensor.rce_price_trend") || "—";
+    const trendEl = this.shadowRoot.getElementById("v-rce-trend2");
+    if (trendEl) {
+      if (rceTrend === "rosnie") { trendEl.textContent = "📈"; this._setText("v-rce-trend-label", "Rośnie — warto czekać"); }
+      else if (rceTrend === "spada") { trendEl.textContent = "📉"; this._setText("v-rce-trend-label", "Spada"); }
+      else { trendEl.textContent = "➖"; this._setText("v-rce-trend-label", "Stabilny"); }
+    }
+
+    // Time Windows
+    this._setText("v-cheapest-window", this._s("sensor.rce_pse_najtansze_okno_czasowe_dzisiaj") || "—");
+    this._setText("v-expensive-window", this._s("sensor.rce_pse_najdrozsze_okno_czasowe_dzisiaj") || "—");
+    this._setText("v-kompas", this._s("sensor.rce_pse_kompas_energetyczny_dzisiaj") || "—");
+
+    // RCE Grade
+    const rceGrade = this._s("sensor.rce_good_sell") || this._s("sensor.smartinghome_rce_good_sell") || "—";
+    const gradeEl = this.shadowRoot.getElementById("v-rce-grade");
+    if (gradeEl) {
+      const gradeMap = { excellent: { t: "🟢 EXCELLENT", c: "#2ecc71" }, good: { t: "🟡 GOOD", c: "#f7b731" }, poor: { t: "🟠 POOR", c: "#e67e22" }, terrible: { t: "🔴 TERRIBLE", c: "#e74c3c" } };
+      const g = gradeMap[rceGrade.toLowerCase()] || { t: rceGrade.toUpperCase(), c: "#94a3b8" };
+      gradeEl.textContent = g.t; gradeEl.style.color = g.c;
+    }
+
+    // RCE median + tomorrow stats
+    const rceMedianMwh = this._n("sensor.rce_pse_mediana_cen_dzisiaj");
+    this._setText("v-rce-median", rceMedianMwh !== null ? `${(rceMedianMwh / 1000 * 1.23).toFixed(4)} zł` : "— zł");
+    const rceAvgTomorrowMwh = this._n("sensor.rce_pse_srednia_cena_jutro");
+    this._setText("v-rce-avg-tomorrow", rceAvgTomorrowMwh !== null ? `${(rceAvgTomorrowMwh / 1000 * 1.23).toFixed(4)} zł` : "— zł");
+    const rceTomorrowVs = this._n("sensor.rce_pse_jutro_vs_dzisiaj_srednia");
+    this._setText("v-rce-tomorrow-vs", rceTomorrowVs !== null ? `${rceTomorrowVs > 0 ? '+' : ''}${rceTomorrowVs.toFixed(1)}%` : "—%");
+    this._setText("v-cheapest-tomorrow", this._s("sensor.rce_pse_najtansze_okno_czasowe_jutro") || "—");
+    this._setText("v-expensive-tomorrow", this._s("sensor.rce_pse_najdrozsze_okno_czasowe_jutro") || "—");
+
+    // HEMS Recommendation (tariff tab)
+    this._setText("v-hems-rec-tab", this._s("sensor.hems_rce_recommendation") || this._s("sensor.smartinghome_hems_recommendation") || "—");
+
+    // Economics
+    const savings = this._n("sensor.g13_self_consumption_savings_today") ?? this._n("sensor.smartinghome_self_consumption_savings_today");
+    const expRev = this._n("sensor.g13_export_revenue_today") ?? this._n("sensor.smartinghome_export_revenue_today");
+    const impCost = this._n("sensor.g13_import_cost_today") ?? this._n("sensor.smartinghome_import_cost_today");
+    const netBal = this._n("sensor.g13_net_balance_today") ?? this._n("sensor.smartinghome_net_balance_today");
+    this._setText("v-savings", savings !== null ? savings.toFixed(2) : "—");
+    this._setText("v-export-rev", expRev !== null ? expRev.toFixed(2) : "—");
+    this._setText("v-import-cost", impCost !== null ? impCost.toFixed(2) : "—");
+    const netEl = this.shadowRoot.getElementById("v-net-balance");
+    if (netEl && netBal !== null) { netEl.textContent = netBal.toFixed(2); netEl.style.color = netBal >= 0 ? "#2ecc71" : "#e74c3c"; }
     
     const ftoday = this._f("sensor.smartinghome_pv_forecast_today_total");
     const ftomor = this._f("sensor.smartinghome_pv_forecast_tomorrow_total");
@@ -1032,19 +1126,146 @@ class SmartingHomePanel extends HTMLElement {
 
         <!-- ═══════ TAB: TARIFF & RCE ═══════ -->
         <div class="tab-content" data-tab="tariff">
-          <div class="grid-cards gc-2">
+
+          <!-- ROW 1: RCE Price Cards -->
+          <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px">
+            <div class="card" style="text-align:center; padding:14px 8px">
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:1px">RCE teraz</div>
+              <div style="font-size:28px; font-weight:800; margin:4px 0" id="v-rce-now">—</div>
+              <div style="font-size:10px; color:#94a3b8" id="v-rce-now-mwh">— PLN/MWh</div>
+            </div>
+            <div class="card" style="text-align:center; padding:14px 8px">
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:1px">RCE +1h</div>
+              <div style="font-size:22px; font-weight:700; margin:4px 0; color:#a0aec0" id="v-rce-1h">—</div>
+              <div style="font-size:10px; color:#94a3b8">zł/kWh</div>
+            </div>
+            <div class="card" style="text-align:center; padding:14px 8px">
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:1px">RCE +2h</div>
+              <div style="font-size:22px; font-weight:700; margin:4px 0; color:#a0aec0" id="v-rce-2h">—</div>
+              <div style="font-size:10px; color:#94a3b8">zł/kWh</div>
+            </div>
+            <div class="card" style="text-align:center; padding:14px 8px">
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:1px">RCE +3h</div>
+              <div style="font-size:22px; font-weight:700; margin:4px 0; color:#a0aec0" id="v-rce-3h">—</div>
+              <div style="font-size:10px; color:#94a3b8">zł/kWh</div>
+            </div>
+          </div>
+
+          <!-- ROW 2: RCE Stats + Trend -->
+          <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px">
+            <div class="card" style="text-align:center; padding:12px 8px">
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase">Średnia dziś</div>
+              <div style="font-size:18px; font-weight:700; color:#00d4ff; margin-top:4px" id="v-rce-avg2">—</div>
+              <div style="font-size:10px; color:#94a3b8">zł/kWh</div>
+            </div>
+            <div class="card" style="text-align:center; padding:12px 8px">
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase">Min / Max</div>
+              <div style="font-size:14px; font-weight:700; margin-top:6px"><span style="color:#2ecc71" id="v-rce-min">—</span> <span style="color:#64748b">/</span> <span style="color:#e74c3c" id="v-rce-max">—</span></div>
+              <div style="font-size:10px; color:#94a3b8">zł/kWh</div>
+            </div>
+            <div class="card" style="text-align:center; padding:12px 8px">
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase">vs Średnia</div>
+              <div style="font-size:18px; font-weight:700; margin-top:4px" id="v-rce-vs-avg">—%</div>
+              <div style="font-size:10px; color:#94a3b8" id="v-rce-vs-label">—</div>
+            </div>
+            <div class="card" style="text-align:center; padding:12px 8px">
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase">Trend</div>
+              <div style="font-size:18px; font-weight:700; margin-top:4px" id="v-rce-trend2">—</div>
+              <div style="font-size:10px; color:#94a3b8" id="v-rce-trend-label">—</div>
+            </div>
+          </div>
+
+          <!-- ROW 3: Time Windows + G13 Zone -->
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:14px">
+            <div class="card" style="padding:14px; border-left:3px solid #2ecc71">
+              <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px">
+                <div style="width:10px; height:10px; border-radius:50%; background:#2ecc71"></div>
+                <div style="font-size:10px; color:#2ecc71; text-transform:uppercase; font-weight:700">Najtaniej dziś</div>
+              </div>
+              <div style="font-size:18px; font-weight:800; color:#fff" id="v-cheapest-window">—</div>
+            </div>
+            <div class="card" style="padding:14px; border-left:3px solid #e74c3c">
+              <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px">
+                <div style="width:10px; height:10px; border-radius:50%; background:#e74c3c"></div>
+                <div style="font-size:10px; color:#e74c3c; text-transform:uppercase; font-weight:700">Najdrożej dziś</div>
+              </div>
+              <div style="font-size:18px; font-weight:800; color:#fff" id="v-expensive-window">—</div>
+            </div>
+            <div class="card" style="padding:14px; border-left:3px solid #00d4ff">
+              <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px">
+                <div style="width:10px; height:10px; border-radius:50%; background:#00d4ff"></div>
+                <div style="font-size:10px; color:#00d4ff; text-transform:uppercase; font-weight:700">Kompas PSE</div>
+              </div>
+              <div style="font-size:16px; font-weight:700; color:#fff" id="v-kompas">—</div>
+            </div>
+          </div>
+
+          <!-- ROW 4: G13 + RCE Details -->
+          <div class="grid-cards gc-2" style="margin-bottom:14px">
             <div class="card">
               <div class="card-title">⏰ Taryfa G13</div>
               <div class="dr"><span class="lb">Trwająca strefa</span><span id="v-g13-zone-badge" class="status-badge">—</span></div>
-              <div class="dr"><span class="lb">Cena zakupu</span><span class="vl" id="v-g13-price-tab">— PLN</span></div>
+              <div class="dr"><span class="lb">Cena zakupu</span><span class="vl" id="v-g13-price-tab" style="font-weight:800">— zł/kWh</span></div>
+              <div class="dr"><span class="lb">Cena sprzedaży RCE</span><span class="vl" id="v-rce-sell" style="color:#2ecc71">— zł/kWh</span></div>
+              <div class="dr"><span class="lb">Spread G13↔RCE</span><span class="vl" id="v-spread" style="font-weight:700">— zł</span></div>
+              <div style="margin-top:10px; padding:8px; border-radius:6px; background:rgba(255,255,255,0.03)">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:6px">Harmonogram G13 (dziś)</div>
+                <div style="display:flex; gap:2px; height:18px; border-radius:4px; overflow:hidden" id="g13-strip">
+                  <div style="flex:7; background:#2ecc71; position:relative" title="00:00-07:00 Off-peak"><span style="position:absolute;left:2px;top:1px;font-size:7px;color:#000;font-weight:700">00</span></div>
+                  <div style="flex:6; background:#e67e22" title="07:00-13:00 Przedpoł."><span style="position:absolute;left:2px;top:1px;font-size:7px;color:#000;font-weight:700">07</span></div>
+                  <div style="flex:3; background:#2ecc71" title="13:00-16:00 Off-peak"><span style="position:absolute;left:2px;top:1px;font-size:7px;color:#000;font-weight:700">13</span></div>
+                  <div style="flex:5; background:#e74c3c" title="16:00-21:00 Popołud."><span style="position:absolute;left:2px;top:1px;font-size:7px;color:#fff;font-weight:700">16</span></div>
+                  <div style="flex:3; background:#2ecc71" title="21:00-00:00 Off-peak"><span style="position:absolute;left:2px;top:1px;font-size:7px;color:#000;font-weight:700">21</span></div>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:8px; color:#64748b; margin-top:2px"><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>
+              </div>
             </div>
             <div class="card">
               <div class="card-title">📈 Rynek RCE PSE</div>
-              <div class="dr"><span class="lb">Cena sprzedaży</span><span class="vl" id="v-rce-price-tab">— PLN</span></div>
-              <div class="dr"><span class="lb">Trend</span><span class="vl" id="v-rce-trend-tab">—</span></div>
-              <div class="dr"><span class="lb">Średnia dzienna</span><span class="vl" id="v-rce-avg-tab">— PLN</span></div>
+              <div class="dr"><span class="lb">Ocena RCE</span><span class="vl" id="v-rce-grade" style="font-weight:800">—</span></div>
+              <div class="dr"><span class="lb">Mediana dziś</span><span class="vl" id="v-rce-median">— zł</span></div>
+              <div class="dr"><span class="lb">Średnia jutro</span><span class="vl" id="v-rce-avg-tomorrow">— zł</span></div>
+              <div class="dr"><span class="lb">Jutro vs dziś</span><span class="vl" id="v-rce-tomorrow-vs">—%</span></div>
+              <div class="dr"><span class="lb">Najtaniej jutro</span><span class="vl" id="v-cheapest-tomorrow">—</span></div>
+              <div class="dr"><span class="lb">Najdrożej jutro</span><span class="vl" id="v-expensive-tomorrow">—</span></div>
             </div>
           </div>
+
+          <!-- ROW 5: HEMS Recommendation -->
+          <div class="card" style="margin-bottom:14px; border-left:3px solid #f7b731; padding:14px">
+            <div style="display:flex; align-items:center; gap:8px">
+              <div style="font-size:20px">⚡</div>
+              <div>
+                <div style="font-size:10px; color:#f7b731; text-transform:uppercase; font-weight:700">Rekomendacja HEMS</div>
+                <div style="font-size:14px; font-weight:600; color:#fff; margin-top:2px" id="v-hems-rec-tab">—</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ROW 6: Economics -->
+          <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:10px">
+            <div class="card" style="text-align:center; padding:12px 8px">
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase">Oszczędności</div>
+              <div style="font-size:20px; font-weight:800; color:#2ecc71; margin-top:6px" id="v-savings">—</div>
+              <div style="font-size:10px; color:#94a3b8">zł dziś</div>
+            </div>
+            <div class="card" style="text-align:center; padding:12px 8px">
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase">Przychód eksport</div>
+              <div style="font-size:20px; font-weight:800; color:#00d4ff; margin-top:6px" id="v-export-rev">—</div>
+              <div style="font-size:10px; color:#94a3b8">zł dziś</div>
+            </div>
+            <div class="card" style="text-align:center; padding:12px 8px">
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase">Koszt importu</div>
+              <div style="font-size:20px; font-weight:800; color:#e74c3c; margin-top:6px" id="v-import-cost">—</div>
+              <div style="font-size:10px; color:#94a3b8">zł dziś</div>
+            </div>
+            <div class="card" style="text-align:center; padding:12px 8px">
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase">Bilans netto</div>
+              <div style="font-size:20px; font-weight:800; margin-top:6px" id="v-net-balance">—</div>
+              <div style="font-size:10px; color:#94a3b8">zł dziś</div>
+            </div>
+          </div>
+
         </div>
 
         <!-- ═══════ TAB: BATTERY ═══════ -->
@@ -1212,7 +1433,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
