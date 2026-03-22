@@ -565,7 +565,7 @@ AI_CLAUDE_MODELS: Final = {
     "claude-sonnet-4.6-20260301": "Claude Sonnet 4.6 (szybki)",
     "claude-opus-4.6-20260301": "Claude Opus 4.6 (najpotężniejszy)",
 }
-AI_MAX_TOKENS: Final = 4096
+AI_MAX_TOKENS: Final = 8192
 AI_TEMPERATURE: Final = 0.3
 AI_RATE_LIMIT_CALLS: Final = 30  # per hour
 AI_RATE_LIMIT_WINDOW: Final = 3600  # seconds
