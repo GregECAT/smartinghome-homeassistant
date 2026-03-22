@@ -225,10 +225,18 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-hems-rec", this._s("sensor.smartinghome_hems_recommendation") || "Brak danych");
     // License
     const badge = this.shadowRoot.getElementById("v-license");
+    const tier = (this._s("sensor.smartinghome_license_tier") || "FREE").toUpperCase();
     if (badge) {
-      const tier = (this._s("sensor.smartinghome_license_tier") || "FREE").toUpperCase();
       badge.textContent = tier;
       badge.className = `badge ${tier === "PRO" ? "pro" : "free"}`;
+    }
+    // Settings tab: PRO gating
+    const proFields = this.shadowRoot.getElementById("settings-pro-fields");
+    const freeMsg = this.shadowRoot.getElementById("settings-free-msg");
+    if (proFields && freeMsg) {
+      const isPro = tier === "PRO" || tier === "ENTERPRISE";
+      proFields.style.display = isPro ? "block" : "none";
+      freeMsg.style.display = isPro ? "none" : "block";
     }
     // RCE / Tariff
     const g13Zone = this._s("sensor.smartinghome_g13_current_zone") || "—";
@@ -859,20 +867,26 @@ class SmartingHomePanel extends HTMLElement {
           <div class="grid-cards gc-2">
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">🔑 Klucze API — AI Advisor</div>
-              <div class="settings-field">
-                <label>Google Gemini API Key</label>
-                <input type="password" id="inp-gemini-key" placeholder="AIza..." />
+              <div id="settings-pro-fields">
+                <div class="settings-field">
+                  <label>Google Gemini API Key</label>
+                  <input type="password" id="inp-gemini-key" placeholder="AIza..." />
+                </div>
+                <div class="settings-field">
+                  <label>Anthropic Claude API Key</label>
+                  <input type="password" id="inp-anthropic-key" placeholder="sk-ant-..." />
+                </div>
+                <button class="save-btn" onclick="this.getRootNode().host._saveApiKeys()">💾 Zapisz klucze API</button>
+                <div id="v-save-status" style="font-size:11px; color:#2ecc71; margin-top:8px"></div>
               </div>
-              <div class="settings-field">
-                <label>Anthropic Claude API Key</label>
-                <input type="password" id="inp-anthropic-key" placeholder="sk-ant-..." />
+              <div id="settings-free-msg" style="display:none; padding:14px; border-radius:10px; background:rgba(231,76,60,0.08); border:1px solid rgba(231,76,60,0.2); margin-top:8px">
+                <div style="font-size:13px; color:#e74c3c; font-weight:700">🔒 Funkcja dostępna tylko w wersji PRO</div>
+                <div style="font-size:12px; color:#94a3b8; margin-top:4px">AI Advisor wymaga licencji PRO. <a href="https://smartinghome.pl/buy" target="_blank" style="color:#00d4ff">Kup licencję →</a></div>
               </div>
-              <button class="save-btn" onclick="this.getRootNode().host._saveApiKeys()">💾 Zapisz klucze API</button>
-              <div id="v-save-status" style="font-size:11px; color:#2ecc71; margin-top:8px"></div>
             </div>
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.4.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.0</span></div>
               <div class="dr"><span class="lb">Zdjęcie falownika</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
             </div>
