@@ -126,6 +126,8 @@ class SmartingHomePanel extends HTMLElement {
         this._loadCronSettings();
         // Show AI-powered HEMS advice if available
         this._updateHEMSFromAI();
+        // Render AI logs
+        this._renderAILogs();
         // Subscribe to live AI cron updates
         if (this._hass && !this._cronSub) {
           this._cronSub = this._hass.connection.subscribeEvents((ev) => {
@@ -133,10 +135,12 @@ class SmartingHomePanel extends HTMLElement {
             if (d.result_key) this._settings[d.result_key] = { text: d.text, timestamp: d.timestamp, provider: d.provider };
             this._updateHEMSFromAI();
             this._updateCronStatus();
+            this._renderAILogs();
           }, "smartinghome_ai_cron_update");
         }
         // Re-apply PV labels and all data after settings loaded
         if (this._hass) this._updateAll();
+        this._renderWeatherForecast();
       }
     } catch(e) { /* file not yet created */ }
   }
@@ -440,6 +444,104 @@ class SmartingHomePanel extends HTMLElement {
     this._savePanelSettings(updates);
     const st = this.shadowRoot.getElementById("v-cron-save-status");
     if (st) { st.textContent = "\u2705 Harmonogram zapisany! Restart HA wymagany."; setTimeout(() => { st.textContent = ""; }, 6000); }
+  }
+
+  _renderAILogs() {
+    const el = this.shadowRoot.getElementById("ai-logs-body");
+    if (!el) return;
+    const logs = this._settings.ai_logs || [];
+    if (logs.length === 0) {
+      el.innerHTML = '<div style="text-align:center; color:#64748b; padding:20px; font-size:12px">Brak logów AI. Logi pojawią się po pierwszym uruchomieniu AI Cron.</div>';
+      return;
+    }
+    const statusMap = { ok: ['✅', '#2ecc71'], truncated: ['⚠️', '#f39c12'], error: ['❌', '#e74c3c'] };
+    const jobMap = { hems: '💡 HEMS', report: '📊 Raport', anomaly: '🔍 Anomalie' };
+    const rows = logs.slice().reverse().map(l => {
+      const [ico, clr] = statusMap[l.status] || ['❓', '#64748b'];
+      const jobLabel = jobMap[l.job] || l.job;
+      return `<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">
+        <td style="padding:6px 8px; font-size:10px; color:#94a3b8">${l.date} ${l.time}</td>
+        <td style="padding:6px 8px; font-size:11px">${jobLabel}</td>
+        <td style="padding:6px 8px; font-size:11px; color:#00d4ff">${l.provider}</td>
+        <td style="padding:6px 8px; font-size:11px; text-align:right">${l.chars}</td>
+        <td style="padding:6px 8px; font-size:11px; color:${clr}">${ico} ${l.status}${l.error ? ' — ' + l.error.substring(0, 60) : ''}</td>
+      </tr>`;
+    }).join('');
+    el.innerHTML = `<table style="width:100%; border-collapse:collapse">
+      <thead><tr style="border-bottom:1px solid rgba(255,255,255,0.1)">
+        <th style="text-align:left; padding:6px 8px; font-size:9px; color:#64748b; text-transform:uppercase">Data</th>
+        <th style="text-align:left; padding:6px 8px; font-size:9px; color:#64748b; text-transform:uppercase">Typ</th>
+        <th style="text-align:left; padding:6px 8px; font-size:9px; color:#64748b; text-transform:uppercase">Dostawca</th>
+        <th style="text-align:right; padding:6px 8px; font-size:9px; color:#64748b; text-transform:uppercase">Znaki</th>
+        <th style="text-align:left; padding:6px 8px; font-size:9px; color:#64748b; text-transform:uppercase">Status</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+    // Update count
+    const cnt = this.shadowRoot.getElementById("ai-logs-count");
+    if (cnt) cnt.textContent = `${logs.length} wpisów`;
+  }
+
+  _clearAILogs() {
+    this._settings.ai_logs = [];
+    this._savePanelSettings({ ai_logs: [] });
+    this._renderAILogs();
+    const st = this.shadowRoot.getElementById("ai-logs-status");
+    if (st) { st.textContent = "🗑️ Logi wyczyszczone!"; setTimeout(() => { st.textContent = ""; }, 3000); }
+  }
+
+  _renderWeatherForecast() {
+    const el = this.shadowRoot.getElementById("weather-forecast-strip");
+    if (!el || !this._hass?.states) return;
+    const conditionEmoji = (txt) => {
+      if (!txt) return '❓';
+      const t = txt.toLowerCase();
+      if (t.includes('słonecz') || t.includes('bezchmurn') || t.includes('jasn')) return '☀️';
+      if (t.includes('przejaśn') || t.includes('częściowo')) return '⛅';
+      if (t.includes('zachmurz') || t.includes('chmur') || t.includes('pochmurn')) return '🌥️';
+      if (t.includes('deszcz') || t.includes('opady')) return '🌧️';
+      if (t.includes('śnieg') || t.includes('mróz')) return '❄️';
+      if (t.includes('burz') || t.includes('grzmot')) return '⛈️';
+      if (t.includes('mgł') || t.includes('zamglen')) return '🌫️';
+      return '🌤️';
+    };
+    const dayNames = ['Dziś', 'Jutro'];
+    const now = new Date();
+    for (let i = 2; i < 5; i++) {
+      const d = new Date(now); d.setDate(d.getDate() + i);
+      dayNames.push(d.toLocaleDateString('pl-PL', { weekday: 'short' }));
+    }
+    const s = (id) => this._hass.states[id]?.state;
+    const cards = [];
+    for (let i = 0; i < 5; i++) {
+      const sun = s(`sensor.dom_godziny_sloneczne_dzien_${i}`);
+      const uv = s(`sensor.dom_indeks_uv_dzien_${i}`);
+      const temp = s(`sensor.dom_maksymalna_temperatura_realfeel_dzien_${i}`);
+      const cond = s(`sensor.dom_warunki_pogodowe_dzien_${i}`);
+      const wind = s(`sensor.dom_predkosc_wiatru_dzien_${i}`);
+      if (!sun && !temp) continue;
+      const emoji = conditionEmoji(cond);
+      const uvColor = parseInt(uv) >= 6 ? '#e74c3c' : parseInt(uv) >= 3 ? '#f39c12' : '#2ecc71';
+      const sunColor = parseFloat(sun) >= 5 ? '#f7b731' : parseFloat(sun) >= 2 ? '#f39c12' : '#e74c3c';
+      cards.push(`<div style="flex:1; min-width:100px; padding:10px 8px; text-align:center; background:rgba(255,255,255,0.03); border-radius:10px; border:1px solid rgba(255,255,255,0.06)${i === 0 ? '; border-color:rgba(0,212,255,0.2); background:rgba(0,212,255,0.05)' : ''}">
+        <div style="font-size:10px; font-weight:700; color:${i === 0 ? '#00d4ff' : '#94a3b8'}; text-transform:uppercase; letter-spacing:0.5px">${dayNames[i]}</div>
+        <div style="font-size:24px; margin:4px 0">${emoji}</div>
+        <div style="font-size:16px; font-weight:800; color:#fff">${temp ? Math.round(parseFloat(temp)) + '°' : '—'}</div>
+        <div style="font-size:9px; color:#94a3b8; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100px">${cond || '—'}</div>
+        <div style="margin-top:6px; display:flex; justify-content:center; gap:8px">
+          <div style="font-size:10px"><span style="color:${sunColor}; font-weight:700">${sun || '—'}h</span> <span style="color:#64748b">☀️</span></div>
+        </div>
+        <div style="display:flex; justify-content:center; gap:8px; margin-top:2px">
+          <div style="font-size:10px"><span style="color:${uvColor}; font-weight:600">UV ${uv || '—'}</span></div>
+          ${wind ? `<div style="font-size:10px; color:#64748b">💨 ${Math.round(parseFloat(wind))}</div>` : ''}
+        </div>
+      </div>`);
+    }
+    if (cards.length === 0) {
+      el.innerHTML = '<div style="text-align:center; color:#64748b; padding:12px; font-size:11px">Brak danych AccuWeather. Zainstaluj integrację AccuWeather w HA.</div>';
+      return;
+    }
+    el.innerHTML = cards.join('');
   }
 
   _loadCronSettings() {
@@ -889,7 +991,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); }
 
   _updateSunWidget() {
     const now = new Date();
@@ -2120,6 +2222,14 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
+          <!-- 🌤️ AccuWeather Forecast -->
+          <div class="card" style="margin-top:10px">
+            <div class="card-title">🌤️ Prognoza pogody — AccuWeather</div>
+            <div id="weather-forecast-strip" style="display:flex; gap:8px; overflow-x:auto; padding:4px 0">
+              <div style="text-align:center; color:#64748b; padding:12px; font-size:11px; width:100%">Ładowanie prognozy...</div>
+            </div>
+          </div>
+
           <!-- HEMS Recommendation -->
           <div class="card" style="margin-top:10px">
             <div class="card-title">💡 Rekomendacja HEMS</div>
@@ -2964,6 +3074,22 @@ class SmartingHomePanel extends HTMLElement {
               <div id="v-cron-save-status" style="font-size:11px; color:#2ecc71; margin-top:6px"></div>
             </div>
 
+            <!-- 📝 AI Logs -->
+            <div class="card" style="grid-column: 1 / -1">
+              <div class="card-title">📝 Logi AI</div>
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px">
+                <div style="font-size:11px; color:#94a3b8">Historia wywołań AI Advisor — status, czas i rozmiar odpowiedzi.</div>
+                <div style="display:flex; align-items:center; gap:8px">
+                  <span style="font-size:10px; color:#64748b" id="ai-logs-count">—</span>
+                  <button style="padding:4px 10px; background:rgba(231,76,60,0.1); border:1px solid rgba(231,76,60,0.2); border-radius:6px; color:#e74c3c; font-size:10px; font-weight:600; cursor:pointer" onclick="this.getRootNode().host._clearAILogs()">🗑️ Wyczyść</button>
+                </div>
+              </div>
+              <div id="ai-logs-body" style="max-height:300px; overflow-y:auto; border-radius:8px; background:rgba(0,0,0,0.2)">
+                <div style="text-align:center; color:#64748b; padding:20px; font-size:12px">Ładowanie logów...</div>
+              </div>
+              <div id="ai-logs-status" style="font-size:11px; color:#2ecc71; margin-top:6px"></div>
+            </div>
+
             <!-- ⚡ Tariff Plan -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">⚡ Taryfa energetyczna</div>
@@ -3057,7 +3183,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.9.4</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

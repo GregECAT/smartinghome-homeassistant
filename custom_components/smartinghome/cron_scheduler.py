@@ -188,6 +188,7 @@ class AICronScheduler:
 
                 if result and result_key:
                     now_str = datetime.now().strftime("%H:%M")
+                    now_date = datetime.now().strftime("%Y-%m-%d")
                     settings = self._read_settings()
                     default_prov = settings.get("default_ai_provider", "gemini")
                     if default_prov == "anthropic" and self._ai.anthropic_available:
@@ -198,13 +199,36 @@ class AICronScheduler:
                         provider = "anthropic"
                     else:
                         provider = "unknown"
+
+                    # Determine status
+                    is_error = result.startswith("Gemini error") or result.startswith("Anthropic error") or result.startswith("No response")
+                    is_truncated = len(result) > 100 and not result.rstrip().endswith((".", "!", "?", ")", "]", "```"))
+                    status = "error" if is_error else "truncated" if is_truncated else "ok"
+
                     entry = {
                         "text": result,
                         "timestamp": now_str,
                         "provider": provider,
-                        "date": datetime.now().strftime("%Y-%m-%d"),
+                        "date": now_date,
                     }
                     self._update_settings({result_key: entry})
+
+                    # --- AI Logs ---
+                    log_entry = {
+                        "date": now_date,
+                        "time": now_str,
+                        "job": job_type,
+                        "provider": provider,
+                        "chars": len(result),
+                        "status": status,
+                    }
+                    logs = settings.get("ai_logs", [])
+                    logs.append(log_entry)
+                    # Auto-trim to last 50 entries
+                    max_logs = int(settings.get("ai_logs_max", 50))
+                    if len(logs) > max_logs:
+                        logs = logs[-max_logs:]
+                    self._update_settings({"ai_logs": logs})
 
                     # Fire HA bus event for live frontend update
                     self.hass.bus.async_fire(
@@ -212,13 +236,33 @@ class AICronScheduler:
                         {"job": job_type, "result_key": result_key, **entry},
                     )
                     _LOGGER.info(
-                        "AI Cron '%s' complete (%s, %d chars)",
-                        job_type, provider, len(result),
+                        "AI Cron '%s' complete (%s, %d chars, status=%s)",
+                        job_type, provider, len(result), status,
                     )
 
             except asyncio.CancelledError:
                 return
             except Exception as err:
                 _LOGGER.error("AI Cron '%s' error: %s", job_type, err)
+                # Log errors too
+                try:
+                    settings = self._read_settings()
+                    logs = settings.get("ai_logs", [])
+                    logs.append({
+                        "date": datetime.now().strftime("%Y-%m-%d"),
+                        "time": datetime.now().strftime("%H:%M"),
+                        "job": job_type,
+                        "provider": "—",
+                        "chars": 0,
+                        "status": "error",
+                        "error": str(err)[:200],
+                    })
+                    max_logs = int(settings.get("ai_logs_max", 50))
+                    if len(logs) > max_logs:
+                        logs = logs[-max_logs:]
+                    self._update_settings({"ai_logs": logs})
+                except Exception:
+                    pass
 
             await asyncio.sleep(interval_min * 60)
+
