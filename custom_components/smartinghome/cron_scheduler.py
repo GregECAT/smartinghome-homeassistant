@@ -98,8 +98,9 @@ class AICronScheduler:
             "forecast_remaining": raw.get("pv_forecast_remaining_today_total"),
             "forecast_tomorrow": raw.get("pv_forecast_tomorrow_total"),
             "autarky": raw.get("goodwe_autarky_today"),
-            "import_cost": raw.get("g13_import_cost_today"),
-            "export_revenue": raw.get("g13_export_revenue_today"),
+            # GoodWe swap: g13_import_cost has export revenue, and vice versa
+            "import_cost": raw.get("g13_export_revenue_today"),
+            "export_revenue": raw.get("g13_import_cost_today"),
             "savings": raw.get("g13_self_consumption_savings_today"),
             **weather_data,
             **self._calc_hems_score(raw),

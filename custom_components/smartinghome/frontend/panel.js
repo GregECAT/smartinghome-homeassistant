@@ -203,8 +203,9 @@ class SmartingHomePanel extends HTMLElement {
 
     // Energy
     const pvVal = p === "day" ? (this._n("sensor.today_s_pv_generation") ?? 0) : (this._n(`sensor.pv_${s}`) ?? 0);
-    const impVal = this._n(`sensor.grid_import_${s}`) ?? 0;
-    const expVal = this._n(`sensor.grid_export_${s}`) ?? 0;
+    // GoodWe naming: grid_import = grid imports FROM you = YOUR EXPORT; grid_export = grid exports TO you = YOUR IMPORT
+    const impVal = this._n(`sensor.grid_export_${s}`) ?? 0;  // YOUR import (grid exports TO you)
+    const expVal = this._n(`sensor.grid_import_${s}`) ?? 0;  // YOUR export (grid imports FROM you)
     const selfUse = Math.max(0, pvVal - expVal);
 
     this._setText("roi-pv", `${pvVal.toFixed(1)} kWh`);
@@ -213,8 +214,9 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("roi-selfuse", `${selfUse.toFixed(1)} kWh`);
 
     // Financial (G13 sensors)
-    const costVal = p === "day" ? (this._n("sensor.g13_import_cost_today") ?? 0) : (this._n(`sensor.g13_import_cost_${s}`) ?? 0);
-    const revVal = p === "day" ? (this._n("sensor.g13_export_revenue_today") ?? 0) : (this._n(`sensor.g13_export_revenue_${s}`) ?? 0);
+    // GoodWe swap: g13_import_cost actually has export revenue, and vice versa
+    const costVal = p === "day" ? (this._n("sensor.g13_export_revenue_today") ?? 0) : (this._n(`sensor.g13_export_revenue_${s}`) ?? 0);
+    const revVal = p === "day" ? (this._n("sensor.g13_import_cost_today") ?? 0) : (this._n(`sensor.g13_import_cost_${s}`) ?? 0);
     const savVal = p === "day" ? (this._n("sensor.g13_self_consumption_savings_today") ?? 0) : (this._n(`sensor.g13_self_consumption_savings_${s}`) ?? 0);
     const balVal = p === "day" ? (this._n("sensor.g13_net_balance_today") ?? 0) : (this._n(`sensor.g13_net_balance_${s}`) ?? 0);
 
@@ -1497,8 +1499,9 @@ class SmartingHomePanel extends HTMLElement {
     // ROI Tab
     this._updateRoi();
     // Overview daily financial KPIs
-    const ovCost = this._n("sensor.g13_import_cost_today") ?? this._n("sensor.g13_import_cost_daily") ?? 0;
-    const ovRev = this._n("sensor.g13_export_revenue_today") ?? this._n("sensor.g13_export_revenue_daily") ?? 0;
+    // GoodWe swap: g13_import_cost actually has export revenue, and vice versa
+    const ovCost = this._n("sensor.g13_export_revenue_today") ?? this._n("sensor.g13_export_revenue_daily") ?? 0;
+    const ovRev = this._n("sensor.g13_import_cost_today") ?? this._n("sensor.g13_import_cost_daily") ?? 0;
     const ovSav = this._n("sensor.g13_self_consumption_savings_today") ?? this._n("sensor.g13_self_consumption_savings_daily") ?? 0;
     const ovBal = this._n("sensor.g13_net_balance_today") ?? this._n("sensor.g13_net_balance_daily") ?? (ovRev + ovSav - ovCost);
     this._setText("ov-cost", `${ovCost.toFixed(2)} zł`);
@@ -1610,9 +1613,10 @@ class SmartingHomePanel extends HTMLElement {
     }
 
     // Economics
+    // GoodWe swap: g13_import_cost has export revenue, and vice versa
     const savings = this._n("sensor.g13_self_consumption_savings_today") ?? this._n("sensor.smartinghome_self_consumption_savings_today");
-    const expRev = this._n("sensor.g13_export_revenue_today") ?? this._n("sensor.smartinghome_export_revenue_today");
-    const impCost = this._n("sensor.g13_import_cost_today") ?? this._n("sensor.smartinghome_import_cost_today");
+    const expRev = this._n("sensor.g13_import_cost_today") ?? this._n("sensor.smartinghome_export_revenue_today");
+    const impCost = this._n("sensor.g13_export_revenue_today") ?? this._n("sensor.smartinghome_import_cost_today");
     const netBal = this._n("sensor.g13_net_balance_today") ?? this._n("sensor.smartinghome_net_balance_today");
     this._setText("v-savings", savings !== null ? savings.toFixed(2) : "—");
     this._setText("v-export-rev", expRev !== null ? expRev.toFixed(2) : "—");
@@ -3322,7 +3326,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.4</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
