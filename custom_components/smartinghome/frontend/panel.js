@@ -986,7 +986,7 @@ class SmartingHomePanel extends HTMLElement {
   _updateFlow() {
     const pv = this._nm("pv_power") || 0;
     const load = this._nm("load_power") || 0;
-    const grid = this._nm("grid_power") || 0;
+    const grid = -1 * (this._nm("grid_power") || 0);  // GoodWe: +export/-import → invert to +import/-export
     const batt = this._nm("battery_power") || 0;
     const soc = this._nm("battery_soc") || 0;
 
@@ -3051,7 +3051,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.9.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.9.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
