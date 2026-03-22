@@ -9,7 +9,9 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     AI_GEMINI_MODEL,
+    AI_GEMINI_MODELS,
     AI_CLAUDE_MODEL,
+    AI_CLAUDE_MODELS,
     AI_MAX_TOKENS,
     AI_TEMPERATURE,
     AI_RATE_LIMIT_CALLS,
@@ -39,11 +41,15 @@ class AIAdvisor:
         hass: HomeAssistant,
         gemini_api_key: str = "",
         anthropic_api_key: str = "",
+        gemini_model: str = "",
+        anthropic_model: str = "",
     ) -> None:
         """Initialize the AI Advisor."""
         self.hass = hass
         self._gemini_key = gemini_api_key
         self._anthropic_key = anthropic_api_key
+        self._gemini_model = gemini_model or AI_GEMINI_MODEL
+        self._anthropic_model = anthropic_model or AI_CLAUDE_MODEL
         self._call_timestamps: list[float] = []
         self._gemini_client: Any = None
         self._anthropic_client: Any = None
@@ -62,6 +68,40 @@ class AIAdvisor:
     def any_available(self) -> bool:
         """Return True if any AI provider is available."""
         return self.gemini_available or self.anthropic_available
+
+    async def test_gemini_key(self) -> bool:
+        """Test if the Gemini API key is valid."""
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=self._gemini_key)
+            model = genai.GenerativeModel(self._gemini_model)
+            resp = await self.hass.async_add_executor_job(
+                lambda: model.generate_content(
+                    "Reply with OK",
+                    generation_config=genai.types.GenerationConfig(max_output_tokens=10),
+                )
+            )
+            return bool(resp.text)
+        except Exception as err:
+            _LOGGER.error("Gemini key test failed: %s", err)
+            return False
+
+    async def test_anthropic_key(self) -> bool:
+        """Test if the Anthropic API key is valid."""
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=self._anthropic_key)
+            resp = await self.hass.async_add_executor_job(
+                lambda: client.messages.create(
+                    model=self._anthropic_model,
+                    max_tokens=10,
+                    messages=[{"role": "user", "content": "Reply with OK"}],
+                )
+            )
+            return bool(resp.content)
+        except Exception as err:
+            _LOGGER.error("Anthropic key test failed: %s", err)
+            return False
 
     def _check_rate_limit(self) -> bool:
         """Check if we're within rate limits."""
@@ -140,7 +180,7 @@ class AIAdvisor:
 
             if not self._gemini_client:
                 genai.configure(api_key=self._gemini_key)
-                self._gemini_client = genai.GenerativeModel(AI_GEMINI_MODEL)
+                self._gemini_client = genai.GenerativeModel(self._gemini_model)
 
             context = self._build_context(data)
             prompt = f"""You are an expert energy management advisor for a home solar+battery system in Poland.
@@ -209,7 +249,7 @@ User question: {question}"""
 
             response = await self.hass.async_add_executor_job(
                 lambda: self._anthropic_client.messages.create(
-                    model=AI_CLAUDE_MODEL,
+                    model=self._anthropic_model,
                     max_tokens=AI_MAX_TOKENS,
                     temperature=AI_TEMPERATURE,
                     messages=[{"role": "user", "content": prompt}],
