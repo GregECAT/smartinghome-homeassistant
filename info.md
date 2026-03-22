@@ -12,16 +12,14 @@ Smarting HOME turns your Home Assistant into an **autonomous energy command cent
 
 ### ✨ Highlights
 
-| Feature | Details |
-|---------|---------|
-| 🧠 **3-Layer HEMS** | G13 schedule + RCE dynamic pricing + SOC safety |
-| 🤖 **AI Advisor** | Google Gemini & Anthropic Claude integration |
-| 📊 **46 Entities** | 33 sensors, 3 binary sensors, 5 switches, 2 selects, 3 numbers |
-| 💰 **Night Arbitrage** | Buy at 0.63 PLN → sell at 1.50 PLN = **~177 PLN/month** |
-| 🛡️ **Safety** | Voltage cascade (252/253/254V), SOC emergency protection |
-| 🎨 **Dashboards** | 3 pre-configured Lovelace dashboards |
-| 📋 **Blueprints** | 7 ready-to-use automation templates |
-| 🌍 **Bilingual** | English + Polish (EN/PL) |
+- 🧠 **3-Layer HEMS**: G13 schedule + RCE dynamic pricing + SOC safety
+- 🤖 **AI Advisor**: Google Gemini & Anthropic Claude integration
+- 📊 **46 Entities**: 33 sensors, 3 binary sensors, 5 switches, 2 selects, 3 numbers
+- 💰 **Night Arbitrage**: Buy at 0.63 PLN → sell at 1.50 PLN = **~177 PLN/month**
+- 🛡️ **Safety**: Voltage cascade (252/253/254V), SOC emergency protection
+- 🎨 **Dashboards**: 3 pre-configured Lovelace dashboards
+- 📋 **Blueprints**: 7 ready-to-use automation templates
+- 🌍 **Bilingual**: English + Polish (EN/PL)
 
 ### 🔧 Compatible With
 
@@ -34,11 +32,9 @@ Smarting HOME turns your Home Assistant into an **autonomous energy command cent
 
 This is a **paid integration** — [buy a license at smartinghome.pl](https://smartinghome.pl/buy)
 
-| Tier | Price | Features |
-|------|-------|----------|
-| **DEMO** | Free | 10 sensors, basic monitoring |
-| **PRO** | Paid | All features, AI advisor, blueprints |
-| **ENTERPRISE** | Paid | Multi-site, priority support |
+- **DEMO (Free)**: 10 sensors, basic monitoring
+- **PRO (Paid)**: All features, AI advisor, blueprints
+- **ENTERPRISE (Paid)**: Multi-site, priority support
 
 ### 👨‍💻 Author
 

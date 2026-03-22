@@ -59,6 +59,7 @@ class SmartingHomePanel extends HTMLElement {
     grid_import_today:"sensor.grid_import_daily", grid_export_today:"sensor.grid_export_daily",
     battery_charge_today:"sensor.today_battery_charge", battery_discharge_today:"sensor.today_battery_discharge",
     inverter_power:"sensor.active_power", inverter_temp:"sensor.inverter_temperature_air",
+    inverter_model:"sensor.inverter_model",
     weather_temp:"", weather_humidity:"", weather_cloud_cover:"",
   };
   _m(k) {
@@ -154,9 +155,31 @@ class SmartingHomePanel extends HTMLElement {
     this._flow("fl-pv-inv", pv > 10, pv);
     this._flow("fl-inv-load", load > 10, load);
     this._flow("fl-grid-inv", grid > 10, grid);
-    this._flow("fl-inv-grid", grid < -10, Math.abs(grid), true);
+    this._flow("fl-inv-grid", grid < -10, Math.abs(grid));
     this._flow("fl-inv-batt", batt > 10, batt);
-    this._flow("fl-batt-inv", batt < -10, Math.abs(batt), true);
+    this._flow("fl-batt-inv", batt < -10, Math.abs(batt));
+
+    // Dynamic Inverter Image Logic
+    let imgName = "goodwe"; // domyślnie GoodWe
+    const invModel = (this._s(this._m("inverter_model")) || "").toLowerCase();
+    const userChoice = (this._s("input_select.smartinghome_inverter_model") || "").toLowerCase();
+
+    if (invModel.includes("deye") || userChoice.includes("deye")) {
+      imgName = "deye";
+    } else if (invModel.includes("goodwe") || userChoice.includes("goodwe")) {
+      imgName = "goodwe";
+    }
+
+    const imgEl = this.shadowRoot.getElementById("v-inv-img");
+    if (imgEl && imgEl.getAttribute("data-model") !== imgName) {
+      // Re-enable image if it was hidden by error previously
+      imgEl.style.display = "block";
+      const iconEl = this.shadowRoot.getElementById("v-inv-icon");
+      if (iconEl) iconEl.style.display = "none";
+      
+      imgEl.src = `/local/smartinghome/${imgName}.png`;
+      imgEl.setAttribute("data-model", imgName);
+    }
   }
 
   _flow(id, active, power, reverse = false) {
@@ -183,18 +206,71 @@ class SmartingHomePanel extends HTMLElement {
       badge.className = `badge ${tier === "PRO" ? "pro" : "free"}`;
     }
     // RCE / Tariff
-    this._setText("v-g13-zone", this._s("sensor.smartinghome_g13_current_zone") || "—");
-    this._setText("v-g13-price", `${this._f("sensor.smartinghome_g13_buy_price", 2)} PLN`);
-    this._setText("v-rce-price", `${this._f("sensor.smartinghome_rce_sell_price", 2)} PLN`);
-    this._setText("v-rce-trend", this._s("sensor.smartinghome_rce_price_trend") || "—");
-    this._setText("v-rce-avg", `${this._f("sensor.smartinghome_rce_average_today", 2)} PLN`);
-    this._setText("v-forecast-today", `${this._f("sensor.smartinghome_pv_forecast_today_total")} kWh`);
-    this._setText("v-forecast-tomorrow", `${this._f("sensor.smartinghome_pv_forecast_tomorrow_total")} kWh`);
-    this._setText("v-battery-energy", `${this._f("sensor.smartinghome_battery_energy_available")} kWh`);
-    this._setText("v-battery-runtime", this._s("sensor.smartinghome_battery_runtime") || "—");
-    this._setText("v-arbitrage", `${this._f("sensor.smartinghome_battery_arbitrage_potential")} PLN`);
+    const g13Zone = this._s("sensor.smartinghome_g13_current_zone") || "—";
+    const g13Badge = this.shadowRoot.getElementById("v-g13-zone-badge");
+    if (g13Badge) {
+      g13Badge.textContent = g13Zone.toUpperCase();
+      const isPeak = g13Zone.toLowerCase().includes("szczytow") && !g13Zone.toLowerCase().includes("poza");
+      g13Badge.className = `status-badge ${isPeak ? 'peak' : 'offpeak'}`;
+    }
+    
+    this._setText("v-g13-price-tab", `${this._f("sensor.smartinghome_g13_buy_price", 2)} PLN`);
+    this._setText("v-rce-price-tab", `${this._f("sensor.smartinghome_rce_sell_price", 2)} PLN`);
+    
+    const rceTrend = this._s("sensor.smartinghome_rce_price_trend") || "—";
+    this._setText("v-rce-trend-tab", rceTrend === "rosnie" ? "📈 Rośnie" : rceTrend === "spada" ? "📉 Spada" : "➖ Stabilny");
+    
+    this._setText("v-rce-avg-tab", `${this._f("sensor.smartinghome_rce_average_today", 2)} PLN`);
+    
+    const ftoday = this._f("sensor.smartinghome_pv_forecast_today_total");
+    const ftomor = this._f("sensor.smartinghome_pv_forecast_tomorrow_total");
+    this._setText("v-forecast-today", `${ftoday} kWh`);
+    this._setText("v-forecast-tomorrow", `${ftomor} kWh`);
+    this._setText("v-forecast-today-tab", `${ftoday} kWh`);
+    this._setText("v-forecast-tomorrow-tab", `${ftomor} kWh`);
+    
+    const battEnergy = this._f("sensor.smartinghome_battery_energy_available");
+    this._setText("v-battery-energy-tab", `${battEnergy} kWh`);
+    
+    const rt = (this._s("sensor.smartinghome_battery_runtime") || "—");
+    this._setText("v-battery-runtime-tab", rt);
+    
+    const arbitrage = this._n("sensor.smartinghome_battery_arbitrage_potential") || 0;
+    this._setText("v-arbitrage-tab", `${arbitrage.toFixed(2)} PLN`);
+    const arbCard = this.shadowRoot.getElementById("arbitrage-card");
+    if (arbCard) {
+      if (arbitrage > 0) arbCard.classList.add("glow-card");
+      else arbCard.classList.remove("glow-card");
+    }
+    
+    const soc = this._nm("battery_soc") || 0;
+    this._setText("v-soc-tab", `${Math.round(soc)}%`);
+    const socBarTab = this.shadowRoot.getElementById("soc-fill-tab");
+    if (socBarTab) {
+      socBarTab.style.width = `${Math.min(100, Math.max(0, soc))}%`;
+      socBarTab.style.background = soc > 50 ? "#2ecc71" : soc > 20 ? "#f39c12" : "#e74c3c";
+    }
+
     this._setText("v-surplus", `${this._f("sensor.smartinghome_pv_surplus_power", 0)} W`);
     this._setText("v-net-grid", `${this._f("sensor.smartinghome_net_grid_today")} kWh`);
+    
+    // AI Rec Tab
+    this._setText("v-hems-rec-tab", this._s("sensor.smartinghome_hems_recommendation") || "Brak danych z asystenta AI.");
+    
+    // Voltage Bars update
+    const v1 = this._fm("voltage_l1"); this._setText("v-e-v1", `${v1} V`);
+    const v2 = this._fm("voltage_l2"); this._setText("v-e-v2", `${v2} V`);
+    const v3 = this._fm("voltage_l3"); this._setText("v-e-v3", `${v3} V`);
+    this._setText("v-e-freq", `${this._fm("grid_frequency", 2)} Hz`);
+    [1, 2, 3].forEach(i => {
+      const v = this._nm(`voltage_l${i}`);
+      const bar = this.shadowRoot.getElementById(`vb-l${i}`);
+      if (bar && v) {
+        let pct = ((v - 200) / 60) * 100;
+        bar.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+        bar.style.background = v > 253 ? "#e74c3c" : v < 207 ? "#f39c12" : "#2ecc71";
+      }
+    });
   }
 
   /* ── Render ─────────────────────────────── */
@@ -267,13 +343,20 @@ class SmartingHomePanel extends HTMLElement {
 
         /* Node boxes */
         .node {
-          background: rgba(255,255,255,0.03);
-          border: 1px solid rgba(255,255,255,0.08);
-          border-radius: 14px;
-          padding: 14px;
+          background: rgba(20, 30, 48, 0.4);
+          backdrop-filter: blur(12px);
+          -webkit-backdrop-filter: blur(12px);
+          border: 1px solid rgba(255,255,255,0.1);
+          box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+          border-radius: 16px;
+          padding: 18px;
           position: relative;
+          transition: all 0.3s ease;
         }
-        .node:hover { border-color: rgba(0,212,255,0.2); }
+        .node:hover {
+          border-color: rgba(0,212,255,0.3);
+          box-shadow: 0 12px 40px 0 rgba(0, 212, 255, 0.15);
+        }
         .node-title {
           font-size: 10px; font-weight: 700; text-transform: uppercase;
           letter-spacing: 1px; color: #64748b; margin-bottom: 8px;
@@ -309,16 +392,30 @@ class SmartingHomePanel extends HTMLElement {
 
         /* Inverter center */
         .inv-box {
-          width: 120px; height: 100px;
-          background: rgba(255,255,255,0.06);
-          border: 1px solid rgba(255,255,255,0.15);
-          border-radius: 14px;
+          width: 125px; height: 105px;
+          background: rgba(20, 30, 48, 0.5);
+          backdrop-filter: blur(12px);
+          -webkit-backdrop-filter: blur(12px);
+          border: 1px solid rgba(255,255,255,0.2);
+          box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3), inset 0 0 20px rgba(0, 212, 255, 0.05);
+          border-radius: 18px;
           display: flex; flex-direction: column;
           align-items: center; justify-content: center;
           position: relative;
+          transition: all 0.3s ease;
+        }
+        .inv-box:hover {
+          border-color: rgba(0, 212, 255, 0.5);
+          box-shadow: 0 12px 40px 0 rgba(0, 212, 255, 0.25), inset 0 0 20px rgba(0, 212, 255, 0.1);
+          transform: translateY(-2px);
+        }
+        .inv-box img {
+          max-width: 80px; max-height: 60px;
+          object-fit: contain; margin-bottom: 5px;
+          filter: drop-shadow(0px 4px 10px rgba(0,0,0,0.5));
         }
         .inv-icon { font-size: 36px; }
-        .inv-label { font-size: 9px; color: #8899aa; text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+        .inv-label { font-size: 9px; color: #a0aec0; text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; }
 
         /* Animated flow connectors */
         .flow-connector {
@@ -382,35 +479,57 @@ class SmartingHomePanel extends HTMLElement {
         .summary-item .si-val { font-size: 16px; font-weight: 700; color: #fff; }
 
         /* ── Cards (for other tabs) ── */
-        .grid-cards { display: grid; gap: 12px; }
-        .gc-2 { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
-        .gc-3 { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+        .grid-cards { display: grid; gap: 14px; }
+        .gc-2 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+        .gc-3 { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
         .card {
-          background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06);
-          border-radius: 14px; padding: 16px;
+          background: rgba(20, 30, 48, 0.4);
+          backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+          border: 1px solid rgba(255,255,255,0.1);
+          border-radius: 16px; padding: 18px;
+          box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+          transition: all 0.3s ease;
         }
-        .card:hover { border-color: rgba(0,212,255,0.15); }
+        .card:hover { border-color: rgba(0,212,255,0.3); box-shadow: 0 8px 32px rgba(0, 212, 255, 0.1); }
+        .card.glow-card { border-color: rgba(46, 204, 113, 0.4); box-shadow: 0 0 20px rgba(46, 204, 113, 0.15); }
+        
         .card-title {
-          font-size: 11px; font-weight: 600; text-transform: uppercase;
-          letter-spacing: 1px; color: #64748b; margin-bottom: 8px;
+          font-size: 11px; font-weight: 700; text-transform: uppercase;
+          letter-spacing: 1px; color: #a0aec0; margin-bottom: 12px;
+          display: flex; align-items: center; gap: 6px;
         }
-        .dr { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+        .dr { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
         .dr:last-child { border-bottom: none; }
         .dr .lb { color: #94a3b8; font-size: 12px; }
-        .dr .vl { color: #fff; font-weight: 600; font-size: 12px; }
+        .dr .vl { color: #fff; font-weight: 700; font-size: 13px; }
 
+        /* Voltage bar */
+        .v-bar-container { flex: 1; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; margin: 0 10px; overflow: hidden; }
+        .v-bar-fill { height: 100%; border-radius: 3px; background: #2ecc71; transition: width 0.5s; width: 0%; }
+        
+        /* Chat bubble */
         .recommendation {
-          background: linear-gradient(135deg, rgba(0,212,255,0.08), rgba(0,230,118,0.08));
-          border: 1px solid rgba(0,212,255,0.15); border-radius: 10px;
-          padding: 12px; font-size: 13px; line-height: 1.5;
+          background: rgba(46, 204, 113, 0.08);
+          border-left: 3px solid #2ecc71;
+          border-radius: 0 12px 12px 12px;
+          padding: 14px; font-size: 13px; line-height: 1.6;
+          color: #e2e8f0; margin-top: 5px; position: relative;
         }
-        .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+        
+        /* Dynamic badgets for Taryfa & RCE */
+        .status-badge {
+          display: inline-block; padding: 3px 8px; border-radius: 6px; font-size:11px; font-weight:700;
+        }
+        .status-badge.peak { background: rgba(231,76,60,0.2); color: #e74c3c; border: 1px solid rgba(231,76,60,0.3); }
+        .status-badge.offpeak { background: rgba(46,204,113,0.2); color: #2ecc71; border: 1px solid rgba(46,204,113,0.3); }
+
+        .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
         .action-btn {
-          padding: 7px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);
-          background: rgba(255,255,255,0.04); color: #e0e6ed; font-size: 11px;
-          cursor: pointer; flex: 1; min-width: 70px; text-align: center;
+          padding: 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1);
+          background: rgba(255,255,255,0.05); color: #e0e6ed; font-size: 12px; font-weight: 600;
+          cursor: pointer; text-align: center; transition: all 0.2s;
         }
-        .action-btn:hover { background: rgba(0,212,255,0.12); border-color: rgba(0,212,255,0.25); }
+        .action-btn:hover { background: rgba(0,212,255,0.15); border-color: rgba(0,212,255,0.3); transform: translateY(-1px); }
 
         @media (max-width: 800px) {
           .flow-grid { grid-template-columns: 1fr 1fr; grid-template-rows: auto; }
@@ -505,7 +624,8 @@ class SmartingHomePanel extends HTMLElement {
               </svg>
 
               <div class="inv-box">
-                <div class="inv-icon">⚡</div>
+                <img id="v-inv-img" src="/local/smartinghome/goodwe.png" alt="Inverter" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" />
+                <div class="inv-icon" id="v-inv-icon" style="display:none">⚡</div>
                 <div class="inv-label">Falownik</div>
               </div>
               <div style="text-align:center; margin-top:6px">
@@ -607,22 +727,34 @@ class SmartingHomePanel extends HTMLElement {
         <div class="tab-content" data-tab="energy">
           <div class="grid-cards gc-3">
             <div class="card">
-              <div class="card-title">⚡ Napięcie sieci</div>
-              <div class="dr"><span class="lb">L1</span><span class="vl" id="v-e-v1">— V</span></div>
-              <div class="dr"><span class="lb">L2</span><span class="vl" id="v-e-v2">— V</span></div>
-              <div class="dr"><span class="lb">L3</span><span class="vl" id="v-e-v3">— V</span></div>
-              <div class="dr"><span class="lb">Częstotliwość</span><span class="vl" id="v-e-freq">— Hz</span></div>
+              <div class="card-title">⚡ Napięcie sieci 3F</div>
+              <div class="dr">
+                <span class="lb">L1</span>
+                <div class="v-bar-container"><div class="v-bar-fill" id="vb-l1"></div></div>
+                <span class="vl" id="v-e-v1">— V</span>
+              </div>
+              <div class="dr">
+                <span class="lb">L2</span>
+                <div class="v-bar-container"><div class="v-bar-fill" id="vb-l2"></div></div>
+                <span class="vl" id="v-e-v2">— V</span>
+              </div>
+              <div class="dr">
+                <span class="lb">L3</span>
+                <div class="v-bar-container"><div class="v-bar-fill" id="vb-l3"></div></div>
+                <span class="vl" id="v-e-v3">— V</span>
+              </div>
+              <div class="dr" style="margin-top:4px"><span class="lb">Częstotliwość</span><span class="vl" id="v-e-freq">— Hz</span></div>
             </div>
             <div class="card">
               <div class="card-title">☀️ Prognoza PV</div>
-              <div class="dr"><span class="lb">Dzisiaj</span><span class="vl" id="v-forecast-today">— kWh</span></div>
-              <div class="dr"><span class="lb">Jutro</span><span class="vl" id="v-forecast-tomorrow">— kWh</span></div>
+              <div class="dr"><span class="lb">Dzisiaj</span><span class="vl" id="v-forecast-today-tab">— kWh</span></div>
+              <div class="dr"><span class="lb">Jutro</span><span class="vl" id="v-forecast-tomorrow-tab">— kWh</span></div>
             </div>
             <div class="card">
               <div class="card-title">🔧 Szybkie akcje</div>
-              <div class="actions" style="margin-top:0">
-                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','force_charge')">🔋 Ładuj</button>
-                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','force_discharge')">⚡ Rozładuj</button>
+              <div class="actions">
+                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','force_charge')">🔋 Wymuś Ład.</button>
+                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','force_discharge')">⚡ Wymuś Rozład.</button>
               </div>
             </div>
           </div>
@@ -633,14 +765,14 @@ class SmartingHomePanel extends HTMLElement {
           <div class="grid-cards gc-2">
             <div class="card">
               <div class="card-title">⏰ Taryfa G13</div>
-              <div class="dr"><span class="lb">Strefa</span><span class="vl" id="v-g13-zone">—</span></div>
-              <div class="dr"><span class="lb">Cena zakupu</span><span class="vl" id="v-g13-price">— PLN</span></div>
+              <div class="dr"><span class="lb">Trwająca strefa</span><span id="v-g13-zone-badge" class="status-badge">—</span></div>
+              <div class="dr"><span class="lb">Cena zakupu</span><span class="vl" id="v-g13-price-tab">— PLN</span></div>
             </div>
             <div class="card">
-              <div class="card-title">📈 RCE PSE</div>
-              <div class="dr"><span class="lb">Cena sprzedaży</span><span class="vl" id="v-rce-price">— PLN</span></div>
-              <div class="dr"><span class="lb">Trend</span><span class="vl" id="v-rce-trend">—</span></div>
-              <div class="dr"><span class="lb">Średnia dziś</span><span class="vl" id="v-rce-avg">— PLN</span></div>
+              <div class="card-title">📈 Rynek RCE PSE</div>
+              <div class="dr"><span class="lb">Cena sprzedaży</span><span class="vl" id="v-rce-price-tab">— PLN</span></div>
+              <div class="dr"><span class="lb">Trend</span><span class="vl" id="v-rce-trend-tab">—</span></div>
+              <div class="dr"><span class="lb">Średnia dzienna</span><span class="vl" id="v-rce-avg-tab">— PLN</span></div>
             </div>
           </div>
         </div>
@@ -649,13 +781,18 @@ class SmartingHomePanel extends HTMLElement {
         <div class="tab-content" data-tab="battery">
           <div class="grid-cards gc-2">
             <div class="card">
-              <div class="card-title">🔋 Stan baterii</div>
-              <div class="dr"><span class="lb">Dostępna energia</span><span class="vl" id="v-battery-energy">— kWh</span></div>
-              <div class="dr"><span class="lb">Czas pracy</span><span class="vl" id="v-battery-runtime">—</span></div>
+              <div class="card-title">🔋 Pojemność LiFePO4</div>
+              <div style="display:flex; align-items:baseline; gap:8px; margin-bottom:8px;">
+                 <div style="font-size:28px; font-weight:800; color:#fff" id="v-soc-tab">—%</div>
+                 <div style="font-size:14px; color:#94a3b8" id="v-battery-energy-tab">— kWh</div>
+              </div>
+              <div class="soc-bar" style="height:12px; margin-bottom:12px"><div class="soc-fill" id="soc-fill-tab" style="width:0%"></div></div>
+              <div class="dr" style="border-top:1px solid rgba(255,255,255,0.05)"><span class="lb">Czas pracy</span><span class="vl" id="v-battery-runtime-tab">—</span></div>
             </div>
-            <div class="card">
-              <div class="card-title">💰 Arbitraż</div>
-              <div class="dr"><span class="lb">Potencjał</span><span class="vl" id="v-arbitrage">— PLN</span></div>
+            <div class="card" id="arbitrage-card">
+              <div class="card-title">💰 Rozszerzony Arbitraż</div>
+              <div class="dr"><span class="lb">Potencjał zarobku</span><span class="vl" id="v-arbitrage-tab" style="color:#2ecc71; font-size:22px">— PLN</span></div>
+              <div style="font-size:11px; color:#8899aa; margin-top:10px;">Zarobek z cyklu G13 ładowania w Off-Peak i rozładowywania podczas popołudniowego szczytu.</div>
             </div>
           </div>
         </div>
@@ -663,18 +800,21 @@ class SmartingHomePanel extends HTMLElement {
         <!-- ═══════ TAB: HEMS ═══════ -->
         <div class="tab-content" data-tab="hems">
           <div class="grid-cards gc-2">
-            <div class="card">
-              <div class="card-title">🤖 Sterowanie HEMS</div>
-              <div class="actions" style="margin-top:0">
-                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'auto'})">🤖 Auto</button>
-                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'sell'})">💰 Sprzedaj</button>
-                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'charge'})">🔋 Ładuj</button>
-                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'peak_save'})">🏠 Szczyt</button>
+            <div class="card" style="grid-column: 1 / -1">
+              <div class="card-title">🤖 AI Energy Advisor</div>
+              <div style="display:flex; gap:10px; align-items:flex-start;">
+                <div style="font-size:28px; filter:drop-shadow(0 0 5px rgba(0,212,255,0.5));">🤖</div>
+                <div class="recommendation" style="flex:1" id="v-hems-rec-tab">Ładowanie porady z asystenta...</div>
               </div>
             </div>
-            <div class="card">
-              <div class="card-title">💡 Rekomendacja AI</div>
-              <div class="recommendation" id="v-hems-rec-2">Ładowanie danych...</div>
+            <div class="card" style="grid-column: 1 / -1">
+              <div class="card-title">⚙️ Sterowanie Ręczne Trybem HEMS</div>
+              <div class="actions">
+                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'auto'})">🔄 Tryb Auto</button>
+                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'sell'})">💰 Max Sprzedaż</button>
+                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'charge'})">🔋 Zmuś Ładowanie</button>
+                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'peak_save'})">🏠 Szczyt (Z domu)</button>
+              </div>
             </div>
           </div>
         </div>
