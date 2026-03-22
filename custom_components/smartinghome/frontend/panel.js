@@ -471,24 +471,42 @@ class SmartingHomePanel extends HTMLElement {
     });
   }
 
+  _renderMarkdown(text) {
+    if (!text) return '';
+    let html = text
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/```([\s\S]*?)```/g, '<pre style="background:rgba(255,255,255,0.05);padding:8px;border-radius:6px;font-size:11px;overflow-x:auto;margin:6px 0"><code>$1</code></pre>')
+      .replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:3px;font-size:11px">$1</code>')
+      .replace(/### (.+)/g, '<div style="font-size:13px;font-weight:700;color:#00d4ff;margin:10px 0 4px">$1</div>')
+      .replace(/## (.+)/g, '<div style="font-size:14px;font-weight:700;color:#fff;margin:10px 0 4px">$1</div>')
+      .replace(/# (.+)/g, '<div style="font-size:15px;font-weight:800;color:#fff;margin:10px 0 4px">$1</div>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong style="color:#fff">$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/^[\-\*] (.+)/gm, '<div style="padding-left:12px;position:relative"><span style="position:absolute;left:0;color:#00d4ff">•</span> $1</div>')
+      .replace(/^(\d+)\. (.+)/gm, '<div style="padding-left:16px;position:relative"><span style="position:absolute;left:0;color:#f7b731;font-weight:600">$1.</span> $2</div>')
+      .replace(/\n/g, '<br>');
+    return html;
+  }
+
   _updateHEMSFromAI() {
     const s = this._settings;
     if (s.ai_hems_advice && s.ai_hems_advice.text) {
       const el = this.shadowRoot.getElementById("v-hems-rec");
       if (el) {
-        const txt = s.ai_hems_advice.text.replace(/\n/g, '<br>');
+        const html = this._renderMarkdown(s.ai_hems_advice.text);
         const prov = s.ai_hems_advice.provider || '';
         const ts = s.ai_hems_advice.timestamp || '';
-        el.innerHTML = '<div style="font-size:13px;line-height:1.5">' + txt + '</div><div style="font-size:9px;color:#64748b;margin-top:6px">\ud83e\udd16 AI ' + prov + ' \u2022 ' + ts + '</div>';
+        el.innerHTML = '<div style="font-size:13px;line-height:1.6">' + html + '</div><div style="font-size:9px;color:#64748b;margin-top:6px">\ud83e\udd16 AI ' + prov + ' \u2022 ' + ts + '</div>';
+        this._aiHemsLoaded = true;
       }
     }
     if (s.ai_daily_report && s.ai_daily_report.text) {
       const el = this.shadowRoot.getElementById("v-hems-rec-tab");
       if (el) {
-        const txt = s.ai_daily_report.text.replace(/\n/g, '<br>');
+        const html = this._renderMarkdown(s.ai_daily_report.text);
         const prov = s.ai_daily_report.provider || '';
         const ts = s.ai_daily_report.timestamp || '';
-        el.innerHTML = '<div style="font-size:13px;line-height:1.5">' + txt + '</div><div style="font-size:9px;color:#64748b;margin-top:6px">\ud83e\udd16 AI ' + prov + ' \u2022 ' + ts + '</div>';
+        el.innerHTML = '<div style="font-size:13px;line-height:1.6">' + html + '</div><div style="font-size:9px;color:#64748b;margin-top:6px">\ud83e\udd16 AI ' + prov + ' \u2022 ' + ts + '</div>';
       }
     }
   }
@@ -871,6 +889,12 @@ class SmartingHomePanel extends HTMLElement {
     // PV
     this._setText("v-pv", this._pw(pv));
     this._setText("v-pv-today", `${this._fm("pv_today")} kWh`);
+    // PV total kWh summary
+    const pvTotalKwhEl = this.shadowRoot.getElementById("v-pv-total-kwh");
+    const pvTodayVal = this._nm("pv_today");
+    if (pvTotalKwhEl && pvTodayVal !== null) {
+      pvTotalKwhEl.textContent = `⚡ Łączna produkcja dziś: ${pvTodayVal.toFixed(1)} kWh`;
+    }
     // Dynamic PV node coloring: green if PV >= load, orange if not
     const pvNode = this.shadowRoot.getElementById("pv-node");
     const pvBig = this.shadowRoot.getElementById("v-pv");
@@ -890,6 +914,12 @@ class SmartingHomePanel extends HTMLElement {
       this._setText(`v-pv${i}-p`, p !== null ? this._pw(p) : "—");
       this._setText(`v-pv${i}-v`, `${this._fm(`pv${i}_voltage`)} V`);
       this._setText(`v-pv${i}-a`, `${this._fm(`pv${i}_current`)} A`);
+      // Per-string kWh estimate
+      const kwhEl = this.shadowRoot.getElementById(`v-pv${i}-kwh`);
+      if (kwhEl && pvTodayVal !== null && p !== null && pv > 0) {
+        const ratio = p / (pv || 1);
+        kwhEl.textContent = `↑ ${(pvTodayVal * ratio).toFixed(1)} kWh`;
+      }
       // Custom label
       const labelEl = this.shadowRoot.getElementById(`pv${i}-label`);
       if (labelEl && pvLabels[`pv${i}`]) labelEl.textContent = pvLabels[`pv${i}`];
@@ -897,6 +927,13 @@ class SmartingHomePanel extends HTMLElement {
 
     // Home / Load
     this._setText("v-load", this._pw(load));
+    // Load daily kWh
+    const loadTodayEl = this.shadowRoot.getElementById("v-load-today");
+    const loadTodayVal = this._nm("load_today") || this._s("sensor.today_load") || null;
+    if (loadTodayEl) {
+      const val = typeof loadTodayVal === 'number' ? loadTodayVal : parseFloat(loadTodayVal);
+      if (!isNaN(val)) loadTodayEl.textContent = `📊 Dziś: ${val.toFixed(1)} kWh`;
+    }
     this._setText("v-load-l1", `L1: ${this._fm("power_l1", 0)} W`);
     this._setText("v-load-l2", `L2: ${this._fm("power_l2", 0)} W`);
     this._setText("v-load-l3", `L3: ${this._fm("power_l3", 0)} W`);
@@ -1119,8 +1156,10 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   _updateStats() {
-    // HEMS recommendation
-    this._setText("v-hems-rec", this._s("sensor.smartinghome_hems_recommendation") || "Brak danych");
+    // HEMS recommendation — only overwrite if no AI content loaded
+    if (!this._aiHemsLoaded) {
+      this._setText("v-hems-rec", this._s("sensor.smartinghome_hems_recommendation") || "Brak danych");
+    }
     // License
     const badge = this.shadowRoot.getElementById("v-license");
     const tier = (this._s("sensor.smartinghome_license_tier") || "FREE").toUpperCase();
@@ -1530,12 +1569,12 @@ class SmartingHomePanel extends HTMLElement {
           text-transform: uppercase; margin-top: 2px;
         }
 
-        /* Corner layout: PV top-left, Home top-right, Inv center, Batt bottom-left, Grid bottom-right */
+        /* Corner layout: PV top-left, Home top-right, Inv center-up, Batt bottom-left, Grid bottom-right */
         .pv-area { grid-column: 1; grid-row: 1; }
         .home-area { grid-column: 3; grid-row: 1; }
-        .inv-area { grid-column: 2; grid-row: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-        .batt-area { grid-column: 1; grid-row: 2 / 4; align-self: center; }
-        .grid-area { grid-column: 3; grid-row: 2 / 4; align-self: center; }
+        .inv-area { grid-column: 2; grid-row: 1 / 3; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .batt-area { grid-column: 1; grid-row: 2 / 4; align-self: start; margin-top: 16px; }
+        .grid-area { grid-column: 3; grid-row: 2 / 4; align-self: start; margin-top: 16px; }
         .summary-area { grid-column: 1 / 4; grid-row: 4; }
 
         /* PV string boxes */
@@ -1795,40 +1834,38 @@ class SmartingHomePanel extends HTMLElement {
         <div class="tab-content active" data-tab="overview">
           <div class="flow-wrapper">
             <!-- ORTHOGONAL SVG OVERLAY -->
-            <svg class="flow-svg-bg" viewBox="0 0 700 500" preserveAspectRatio="xMidYMid meet">
+            <svg class="flow-svg-bg" viewBox="0 0 700 480" preserveAspectRatio="xMidYMid meet">
               <!-- PV (top-left) → Inverter (center): right then down -->
-              <path class="fl-line" d="M 150,90 H 350 V 220" />
+              <path class="fl-line" d="M 150,90 H 350 V 180" />
               <g id="fl-pv-inv" class="fl-dot solar" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 150,90 H 350 V 220" />
+                <animateMotion dur="2s" repeatCount="indefinite" path="M 150,90 H 350 V 180" />
               </g>
               <!-- Inverter → Home (top-right): up then right -->
-              <path class="fl-line" d="M 350,220 V 90 H 550" />
+              <path class="fl-line" d="M 350,180 V 90 H 550" />
               <g id="fl-inv-load" class="fl-dot load-flow" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 350,220 V 90 H 550" />
+                <animateMotion dur="2s" repeatCount="indefinite" path="M 350,180 V 90 H 550" />
               </g>
-              <!-- Inverter → Battery (bottom-left): left -->
-              <path class="fl-line" d="M 300,280 H 150" />
+              <!-- Battery → Inverter: down from battery, horizontal, then up to inverter -->
+              <path class="fl-line" d="M 150,340 V 410 H 350 V 260" />
               <g id="fl-inv-batt" class="fl-dot batt-charge" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 300,280 H 150" />
+                <animateMotion dur="2s" repeatCount="indefinite" path="M 350,260 V 410 H 150 V 340" />
               </g>
-              <!-- Battery → Inverter: right -->
               <g id="fl-batt-inv" class="fl-dot batt-discharge" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 150,280 H 300" />
+                <animateMotion dur="2s" repeatCount="indefinite" path="M 150,340 V 410 H 350 V 260" />
               </g>
-              <!-- Grid (bottom-right) → Inverter: left -->
-              <path class="fl-line" d="M 400,280 H 550" />
+              <!-- Grid → Inverter: down from grid, horizontal, then up to inverter -->
+              <path class="fl-line" d="M 550,340 V 410 H 350 V 260" />
               <g id="fl-grid-inv" class="fl-dot grid-in" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 550,280 H 400" />
+                <animateMotion dur="2s" repeatCount="indefinite" path="M 550,340 V 410 H 350 V 260" />
               </g>
-              <!-- Inverter → Grid: right -->
               <g id="fl-inv-grid" class="fl-dot grid-out" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 400,280 H 550" />
+                <animateMotion dur="2s" repeatCount="indefinite" path="M 350,260 V 410 H 550 V 340" />
               </g>
             </svg>
 
@@ -1840,9 +1877,10 @@ class SmartingHomePanel extends HTMLElement {
                   <div class="node-title">☀️ Produkcja PV</div>
                   <div class="node-big" style="color:#f7b731" id="v-pv">— W</div>
                   <div class="node-sub" id="v-pv-today">— kWh dziś</div>
+                  <div style="font-size:10px; color:#f7b731; margin-top:2px; font-weight:600" id="v-pv-total-kwh"></div>
                   <div class="pv-strings" style="display:flex; gap:6px; flex-wrap:wrap; margin-top:10px">
-                    <div class="pv-string" id="pv1-box"><div class="pv-name" id="pv1-label" onclick="this.getRootNode().host._editPvLabel(1)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV1</div><div class="pv-val" id="v-pv1-p">—</div><div class="pv-detail"><span id="v-pv1-v">— V</span> · <span id="v-pv1-a">— A</span></div></div>
-                    <div class="pv-string" id="pv2-box"><div class="pv-name" id="pv2-label" onclick="this.getRootNode().host._editPvLabel(2)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV2</div><div class="pv-val" id="v-pv2-p">—</div><div class="pv-detail"><span id="v-pv2-v">— V</span> · <span id="v-pv2-a">— A</span></div></div>
+                    <div class="pv-string" id="pv1-box"><div class="pv-name" id="pv1-label" onclick="this.getRootNode().host._editPvLabel(1)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV1</div><div class="pv-val" id="v-pv1-p">—</div><div class="pv-detail"><span id="v-pv1-v">— V</span> · <span id="v-pv1-a">— A</span></div><div style="font-size:9px; color:#94a3b8; margin-top:2px" id="v-pv1-kwh"></div></div>
+                    <div class="pv-string" id="pv2-box"><div class="pv-name" id="pv2-label" onclick="this.getRootNode().host._editPvLabel(2)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV2</div><div class="pv-val" id="v-pv2-p">—</div><div class="pv-detail"><span id="v-pv2-v">— V</span> · <span id="v-pv2-a">— A</span></div><div style="font-size:9px; color:#94a3b8; margin-top:2px" id="v-pv2-kwh"></div></div>
                     <div class="pv-string" id="pv3-box" style="display:none"><div class="pv-name" id="pv3-label" onclick="this.getRootNode().host._editPvLabel(3)" style="cursor:pointer">PV3</div><div class="pv-val" id="v-pv3-p">—</div><div class="pv-detail"><span id="v-pv3-v">—</span></div></div>
                     <div class="pv-string" id="pv4-box" style="display:none"><div class="pv-name" id="pv4-label" onclick="this.getRootNode().host._editPvLabel(4)" style="cursor:pointer">PV4</div><div class="pv-val" id="v-pv4-p">—</div><div class="pv-detail"><span id="v-pv4-v">—</span></div></div>
                   </div>
@@ -1856,6 +1894,7 @@ class SmartingHomePanel extends HTMLElement {
                     <div style="flex:1">
                       <div class="node-title">🏠 Zużycie</div>
                       <div class="node-big" id="v-load">— W</div>
+                      <div style="font-size:11px; color:#2ecc71; margin-top:3px; font-weight:600" id="v-load-today"></div>
                       <div class="node-detail" style="margin-top:8px">
                         <div id="v-load-l1">L1: — W</div><div id="v-load-l2">L2: — W</div><div id="v-load-l3">L3: — W</div>
                       </div>
@@ -2874,7 +2913,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.8.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.8.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

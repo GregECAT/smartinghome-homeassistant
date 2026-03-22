@@ -223,6 +223,7 @@ class SmartingHomeConfigFlow(
                         {
                             TariffType.G11: "G11 — Flat rate",
                             TariffType.G12: "G12 — Two-zone",
+                            TariffType.G12W: "G12w — Two-zone + weekends",
                             TariffType.G13: "G13 — Three-zone (recommended)",
                         }
                     ),
@@ -470,6 +471,7 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
                         {
                             TariffType.G11: "G11 — Flat rate",
                             TariffType.G12: "G12 — Two-zone",
+                            TariffType.G12W: "G12w — Two-zone + weekends",
                             TariffType.G13: "G13 — Three-zone",
                         }
                     ),
@@ -516,6 +518,7 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
                 {
                     TariffType.G11: "G11 — Flat rate",
                     TariffType.G12: "G12 — Two-zone",
+                    TariffType.G12W: "G12w — Two-zone + weekends",
                     TariffType.G13: "G13 — Three-zone",
                 }
             ),
