@@ -521,55 +521,81 @@ class SmartingHomePanel extends HTMLElement {
     const sunState = this._hass?.states?.["sun.sun"];
     if (!sunState) return;
     const attrs = sunState.attributes || {};
-    const riseStr = attrs.next_rising;
-    const setStr = attrs.next_setting;
-    // Parse today's sunrise/sunset
-    let sunrise, sunset;
-    if (riseStr) sunrise = new Date(riseStr);
-    if (setStr) sunset = new Date(setStr);
-    // If next_rising is tomorrow (after sunset), estimate today's sunrise
-    if (sunrise && sunset && sunrise > sunset) {
-      sunrise = new Date(sunrise.getTime() - 86400000);
+    const isDay = sunState.state === "above_horizon";
+    const nextRising = attrs.next_rising ? new Date(attrs.next_rising) : null;
+    const nextSetting = attrs.next_setting ? new Date(attrs.next_setting) : null;
+    if (!nextRising || !nextSetting) return;
+
+    // Calculate today's sunrise/sunset
+    let todaySunrise, todaySunset;
+    if (isDay) {
+      // During day: next_setting = today's sunset, next_rising = tomorrow's sunrise
+      todaySunset = nextSetting;
+      todaySunrise = new Date(nextRising.getTime() - 86400000); // yesterday's scheme → today's
+    } else {
+      // At night: next_rising = tomorrow's sunrise, next_setting = tomorrow's sunset
+      todaySunrise = nextRising;
+      todaySunset = nextSetting;
     }
-    if (!sunrise || !sunset) return;
 
-    const riseH = `${String(sunrise.getHours()).padStart(2,'0')}:${String(sunrise.getMinutes()).padStart(2,'0')}`;
-    const setH = `${String(sunset.getHours()).padStart(2,'0')}:${String(sunset.getMinutes()).padStart(2,'0')}`;
-    this._setText("ov-sunrise", riseH);
-    this._setText("ov-sunset", setH);
+    const fmt = (d) => `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 
-    // Progress
-    const dayLen = sunset.getTime() - sunrise.getTime();
-    const elapsed = now.getTime() - sunrise.getTime();
-    const t = Math.max(0, Math.min(1, elapsed / dayLen)); // 0-1
+    if (isDay) {
+      // ☀️ DAYTIME
+      this._setText("ov-sunrise", fmt(todaySunrise));
+      this._setText("ov-sunset", fmt(todaySunset));
 
-    this._setText("ov-daylight-pct", `${Math.round(t * 100)}%`);
-    const msLeft = sunset.getTime() - now.getTime();
-    if (msLeft > 0) {
+      const dayLen = todaySunset.getTime() - todaySunrise.getTime();
+      const elapsed = now.getTime() - todaySunrise.getTime();
+      const t = Math.max(0, Math.min(1, elapsed / dayLen));
+
+      this._setText("ov-daylight-pct", `${Math.round(t * 100)}%`);
+      const msLeft = todaySunset.getTime() - now.getTime();
       const hLeft = Math.floor(msLeft / 3600000);
       const mLeft = Math.floor((msLeft % 3600000) / 60000);
       this._setText("ov-daylight-left", `${hLeft}h ${mLeft}m do zachodu`);
-    } else {
-      this._setText("ov-daylight-left", "po zachodzie ☾");
-    }
+      const statusLabel = this.shadowRoot.getElementById("ov-status-label");
+      if (statusLabel) { statusLabel.textContent = "☀️ Dzień"; statusLabel.style.color = "#f7b731"; }
 
-    // Sun arc SVG animation (quadratic bezier: M10,95 Q100,-10 190,95)
-    const arc = this.shadowRoot.getElementById("ov-sun-arc");
-    if (arc) {
-      const dashLen = 280;
-      arc.setAttribute("stroke-dashoffset", String(dashLen * (1 - t)));
-    }
-    const dot = this.shadowRoot.getElementById("ov-sun-dot");
-    if (dot) {
-      // Quadratic bezier point: B(t) = (1-t)²P0 + 2(1-t)t·P1 + t²·P2
-      const p0 = {x:10, y:95}, p1 = {x:100, y:-10}, p2 = {x:190, y:95};
-      const cx = (1-t)*(1-t)*p0.x + 2*(1-t)*t*p1.x + t*t*p2.x;
-      const cy = (1-t)*(1-t)*p0.y + 2*(1-t)*t*p1.y + t*t*p2.y;
-      dot.setAttribute("cx", String(cx));
-      dot.setAttribute("cy", String(cy));
-      // Night: dim the dot
-      if (t <= 0 || t >= 1) { dot.setAttribute("fill", "#64748b"); dot.setAttribute("r", "4"); }
-      else { dot.setAttribute("fill", "#f7b731"); dot.setAttribute("r", "6"); }
+      // Arc animation — bezier M10,98 Q100,-15 190,98
+      const arc = this.shadowRoot.getElementById("ov-sun-arc");
+      if (arc) arc.setAttribute("stroke-dashoffset", String(290 * (1 - t)));
+
+      const dot = this.shadowRoot.getElementById("ov-sun-dot");
+      if (dot) {
+        const p0 = {x:10, y:98}, p1 = {x:100, y:-15}, p2 = {x:190, y:98};
+        const cx = (1-t)*(1-t)*p0.x + 2*(1-t)*t*p1.x + t*t*p2.x;
+        const cy = (1-t)*(1-t)*p0.y + 2*(1-t)*t*p1.y + t*t*p2.y;
+        dot.setAttribute("cx", String(cx));
+        dot.setAttribute("cy", String(cy));
+        dot.setAttribute("fill", "#f7b731");
+        dot.setAttribute("r", "7");
+      }
+    } else {
+      // 🌙 NIGHTTIME
+      this._setText("ov-sunrise", fmt(todaySunrise));
+      this._setText("ov-sunset", fmt(todaySunset));
+
+      const msToRise = todaySunrise.getTime() - now.getTime();
+      const hToRise = Math.floor(msToRise / 3600000);
+      const mToRise = Math.floor((msToRise % 3600000) / 60000);
+      this._setText("ov-daylight-pct", "☾");
+      this._setText("ov-daylight-left", `${hToRise}h ${mToRise}m do wschodu`);
+      const statusLabel = this.shadowRoot.getElementById("ov-status-label");
+      if (statusLabel) { statusLabel.textContent = "🌙 Noc"; statusLabel.style.color = "#64748b"; }
+
+      // Arc: empty (no daylight progress)
+      const arc = this.shadowRoot.getElementById("ov-sun-arc");
+      if (arc) arc.setAttribute("stroke-dashoffset", "290");
+
+      // Dot: dim, at right horizon (set position)
+      const dot = this.shadowRoot.getElementById("ov-sun-dot");
+      if (dot) {
+        dot.setAttribute("cx", "190");
+        dot.setAttribute("cy", "98");
+        dot.setAttribute("fill", "#475569");
+        dot.setAttribute("r", "5");
+      }
     }
   }
 
@@ -1475,6 +1501,33 @@ class SmartingHomePanel extends HTMLElement {
 
         <!-- ═══════ TAB: OVERVIEW ═══════ -->
         <div class="tab-content active" data-tab="overview">
+
+          <!-- ☀️ Day Time / Sun Position Widget -->
+          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; padding:10px 14px; margin-bottom:8px; background:rgba(255,255,255,0.02); border-radius:12px; border:1px solid rgba(255,255,255,0.04)">
+            <!-- Date & Time -->
+            <div>
+              <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:1px" id="ov-date">—</div>
+              <div style="font-size:38px; font-weight:900; color:#fff; letter-spacing:-1px; line-height:1" id="ov-clock">--:--</div>
+              <div style="font-size:12px; color:#94a3b8; margin-top:3px" id="ov-day-name">—</div>
+            </div>
+            <!-- Sun Arc -->
+            <div style="position:relative; width:280px; height:140px; flex-shrink:0">
+              <svg viewBox="0 0 200 105" style="width:100%; height:100%">
+                <path d="M 10,98 Q 100,-15 190,98" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="1.5" />
+                <path id="ov-sun-arc" d="M 10,98 Q 100,-15 190,98" fill="none" stroke="#f7b731" stroke-width="2.5" stroke-dasharray="290" stroke-dashoffset="290" />
+                <line x1="5" y1="98" x2="195" y2="98" stroke="rgba(255,255,255,0.08)" stroke-width="0.5" />
+                <circle id="ov-sun-dot" cx="100" cy="50" r="7" fill="#f7b731" style="filter:drop-shadow(0 0 8px #f7b731); transition: all 1s ease" />
+              </svg>
+              <div style="position:absolute; bottom:2px; left:4px; font-size:10px; color:#f7b731">🌅 <span id="ov-sunrise">—</span></div>
+              <div style="position:absolute; bottom:2px; right:4px; font-size:10px; color:#e67e22; text-align:right">🌇 <span id="ov-sunset">—</span></div>
+            </div>
+            <!-- Day progress -->
+            <div style="text-align:right; min-width:100px">
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase" id="ov-status-label">Dzień</div>
+              <div style="font-size:24px; font-weight:800; color:#f7b731" id="ov-daylight-pct">—%</div>
+              <div style="font-size:10px; color:#94a3b8" id="ov-daylight-left">—</div>
+            </div>
+          </div>
           <div class="flow-wrapper">
             <!-- ORTHOGONAL SVG OVERLAY -->
             <svg class="flow-svg-bg" viewBox="0 0 700 500" preserveAspectRatio="xMidYMid meet">
@@ -1626,35 +1679,6 @@ class SmartingHomePanel extends HTMLElement {
             <div class="summary-item">
               <div class="si-label">📊 Saldo sieci</div>
               <div class="si-val" id="v-net-grid">— kWh</div>
-            </div>
-          </div>
-
-          <!-- ☀️ Day Time / Sun Position Widget -->
-          <div class="card" style="margin-top:10px; margin-bottom:10px; padding:14px; position:relative; overflow:hidden">
-            <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px">
-              <!-- Date & Time -->
-              <div>
-                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:1px" id="ov-date">—</div>
-                <div style="font-size:36px; font-weight:900; color:#fff; letter-spacing:-1px; line-height:1" id="ov-clock">--:--</div>
-                <div style="font-size:11px; color:#94a3b8; margin-top:2px" id="ov-day-name">—</div>
-              </div>
-              <!-- Sun Arc -->
-              <div style="position:relative; width:180px; height:90px">
-                <svg viewBox="0 0 200 100" style="width:100%; height:100%">
-                  <path d="M 10,95 Q 100,-10 190,95" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="2" />
-                  <path id="ov-sun-arc" d="M 10,95 Q 100,-10 190,95" fill="none" stroke="#f7b731" stroke-width="2.5" stroke-dasharray="280" stroke-dashoffset="280" />
-                  <line x1="5" y1="95" x2="195" y2="95" stroke="rgba(255,255,255,0.1)" stroke-width="1" />
-                  <circle id="ov-sun-dot" cx="100" cy="50" r="6" fill="#f7b731" style="filter:drop-shadow(0 0 6px #f7b731); transition: all 1s ease" />
-                </svg>
-                <div style="position:absolute; bottom:0; left:0; font-size:9px; color:#f7b731">🌅 <span id="ov-sunrise">—</span></div>
-                <div style="position:absolute; bottom:0; right:0; font-size:9px; color:#e67e22; text-align:right">🌇 <span id="ov-sunset">—</span></div>
-              </div>
-              <!-- Day progress -->
-              <div style="text-align:right">
-                <div style="font-size:9px; color:#64748b; text-transform:uppercase">Dzień</div>
-                <div style="font-size:22px; font-weight:800; color:#f7b731" id="ov-daylight-pct">—%</div>
-                <div style="font-size:10px; color:#94a3b8" id="ov-daylight-left">— do zachodu</div>
-              </div>
             </div>
           </div>
           <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px; margin-top:10px">
@@ -2399,7 +2423,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.7.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.7.4</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
