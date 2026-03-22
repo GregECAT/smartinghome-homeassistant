@@ -12,7 +12,7 @@
   <a href="https://hacs.xyz"><img src="https://img.shields.io/badge/HACS-Custom-41BDF5?style=for-the-badge&logo=homeassistantcommunitystore&logoColor=white" alt="HACS" /></a>
   <a href="https://www.home-assistant.io"><img src="https://img.shields.io/badge/Home%20Assistant-2025.1+-18BCF2?style=for-the-badge&logo=homeassistant&logoColor=white" alt="Home Assistant" /></a>
   <a href="https://smartinghome.pl"><img src="https://img.shields.io/badge/License-Commercial-E74C3C?style=for-the-badge&logo=keycdn&logoColor=white" alt="License" /></a>
-  <img src="https://img.shields.io/badge/Version-1.3.1-2ECC71?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/Version-1.4.0-2ECC71?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
 </p>
 
@@ -105,13 +105,11 @@
 
 ## 🔧 Supported Hardware
 
-| Component | Supported Models | Communication |
-|-----------|-----------------|---------------|
-| **Inverter** | GoodWe BT series (3-phase hybrid) | UDP / Modbus RS485 |
-| **Battery** | Lynx Home U 10.2 kWh (LiFePO4) | Via inverter |
-| **Grid** | Polish market — Tauron, Enea, PGE, Energa | G13 / G11 / C-tariff |
-| **Market Data** | RCE PSE dynamic pricing | REST API |
-| **Forecast** | Solcast / Forecast.Solar | HA integration |
+- **Inverter**: GoodWe BT series (3-phase hybrid) — *UDP / Modbus RS485*
+- **Battery**: Lynx Home U 10.2 kWh (LiFePO4) — *Via inverter*
+- **Grid**: Polish market (Tauron, Enea, PGE, Energa) — *G13 / G11 / C-tariff*
+- **Market Data**: RCE PSE dynamic pricing — *REST API*
+- **Forecast**: Solcast / Forecast.Solar — *HA integration*
 
 ---
 
@@ -335,14 +333,12 @@ service: smartinghome.generate_report
 
 ## 🔧 Services
 
-| Service | Description | License |
-|---------|-------------|---------|
-| `smartinghome.set_mode` | Set HEMS operating mode (auto/sell/charge/peak_save/night_arbitrage/emergency/manual) | DEMO+ |
-| `smartinghome.force_charge` | Force battery charging at max current (18.5A) | DEMO+ |
-| `smartinghome.force_discharge` | Force battery discharge (block charging) | DEMO+ |
-| `smartinghome.set_export_limit` | Set grid export power limit (0–16000W) | PRO+ |
-| `smartinghome.ask_ai_advisor` | Query AI energy advisor with a question | PRO+ |
-| `smartinghome.generate_report` | Generate AI-powered daily energy report | PRO+ |
+- ⚙️ **`smartinghome.set_mode`**<br/>Set HEMS operating mode (auto/sell/charge/peak_save/night_arbitrage/emergency/manual) *(DEMO+)*
+- 🔋 **`smartinghome.force_charge`**<br/>Force battery charging at max current (18.5A) *(DEMO+)*
+- ⚡ **`smartinghome.force_discharge`**<br/>Force battery discharge (block charging) *(DEMO+)*
+- 🔌 **`smartinghome.set_export_limit`**<br/>Set grid export power limit (0–16000W) *(PRO+)*
+- 🤖 **`smartinghome.ask_ai_advisor`**<br/>Query AI energy advisor with a question *(PRO+)*
+- 📊 **`smartinghome.generate_report`**<br/>Generate AI-powered daily energy report *(PRO+)*
 
 ---
 
@@ -350,16 +346,14 @@ service: smartinghome.generate_report
 
 7 ready-to-use automation blueprints included:
 
-| Blueprint | Layer | Schedule | Description |
-|-----------|-------|----------|-------------|
-| ☀️ Morning Sell Mode | W1 | 07:00 weekdays | Block charging, enable max export |
-| 🔋 Midday Charge Mode | W1 | 13:00 weekdays | Enable battery charging from PV |
-| 🌙 Night Arbitrage | W1 | 23:00 daily | Off-peak charge for peak discharge |
-| 💰 RCE Cheapest Window | W2 | Dynamic | Auto-charge during cheapest prices |
-| 🔥 RCE Expensive Alert | W2 | Dynamic | Alert during peak prices |
-| ☀️ PV Surplus Cascade | W3 | Dynamic | Progressive load activation (2/3/4 kW) |
-| ⚡ Voltage Protection | W3 | Dynamic | Cascade protection (252/253/254V) |
-| ⚠️ SOC Emergency | W3 | Dynamic | Emergency charge when SOC < 20% |
+- ☀️ **Morning Sell Mode** `[Layer W1]`<br/>*Schedule: 07:00 weekdays* — Block charging, enable max export.
+- 🔋 **Midday Charge Mode** `[Layer W1]`<br/>*Schedule: 13:00 weekdays* — Enable battery charging from PV.
+- 🌙 **Night Arbitrage** `[Layer W1]`<br/>*Schedule: 23:00 daily* — Off-peak charge for peak discharge.
+- 💰 **RCE Cheapest Window** `[Layer W2]`<br/>*Schedule: Dynamic* — Auto-charge during cheapest prices.
+- 🔥 **RCE Expensive Alert** `[Layer W2]`<br/>*Schedule: Dynamic* — Alert during peak prices.
+- ☀️ **PV Surplus Cascade** `[Layer W3]`<br/>*Schedule: Dynamic* — Progressive load activation (2/3/4 kW).
+- ⚡ **Voltage Protection** `[Layer W3]`<br/>*Schedule: Dynamic* — Cascade protection (252/253/254V).
+- ⚠️ **SOC Emergency** `[Layer W3]`<br/>*Schedule: Dynamic* — Emergency charge when SOC < 20%.
 
 All blueprints are located in `custom_components/smartinghome/blueprints/`.
 
