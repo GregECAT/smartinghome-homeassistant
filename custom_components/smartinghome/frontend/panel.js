@@ -100,16 +100,36 @@ class SmartingHomePanel extends HTMLElement {
   async _uploadInverterImage(file) {
     if (!file) return;
     const st = this.shadowRoot.getElementById("v-upload-status");
+    const preview = this.shadowRoot.getElementById("upload-preview");
+    const sizeInfo = this.shadowRoot.getElementById("upload-size-info");
     if (st) st.textContent = "⏳ Wgrywanie...";
+    // Show file info
+    const sizeMB = (file.size / 1024 / 1024).toFixed(2);
+    if (sizeInfo) sizeInfo.textContent = `📄 ${file.name} • ${sizeMB} MB • ${file.type}`;
     try {
       const reader = new FileReader();
       reader.onload = () => {
+        // Show preview
+        if (preview) {
+          preview.src = reader.result;
+          preview.style.display = 'block';
+        }
         if (this._hass) {
           this._hass.callService("smartinghome", "upload_inverter_image", {
             filename: file.name,
             data: reader.result.split(",")[1],
           });
-          if (st) { st.textContent = "✅ Zdjęcie wgrane! Odśwież panel."; setTimeout(() => { st.textContent = ""; }, 6000); }
+          if (st) {
+            st.innerHTML = '✅ Zdjęcie wgrane! <span style="color:#94a3b8">Odśwież panel (Ctrl+Shift+R) aby zobaczyć w Przeglądzie.</span>';
+          }
+          // Update overview image immediately
+          const invImg = this.shadowRoot.getElementById("v-inv-img");
+          if (invImg) {
+            invImg.src = `/local/smartinghome/inverter.png?t=${Date.now()}`;
+            invImg.style.display = 'block';
+            const iconEl = this.shadowRoot.getElementById("v-inv-icon");
+            if (iconEl) iconEl.style.display = 'none';
+          }
         }
       };
       reader.readAsDataURL(file);
@@ -247,12 +267,21 @@ class SmartingHomePanel extends HTMLElement {
 
     const imgEl = this.shadowRoot.getElementById("v-inv-img");
     if (imgEl && imgEl.getAttribute("data-model") !== imgName) {
-      // Re-enable image if it was hidden by error previously
       imgEl.style.display = "block";
       const iconEl = this.shadowRoot.getElementById("v-inv-icon");
       if (iconEl) iconEl.style.display = "none";
-      
-      imgEl.src = `/local/smartinghome/${imgName}.png`;
+      // Try brand image first, fallback to inverter.png
+      const brandUrl = `/local/smartinghome/${imgName}.png`;
+      const fallbackUrl = `/local/smartinghome/inverter.png`;
+      imgEl.onerror = function() {
+        if (this.src.includes(imgName)) {
+          this.src = fallbackUrl;
+        } else {
+          this.style.display = 'none';
+          if (iconEl) iconEl.style.display = 'block';
+        }
+      };
+      imgEl.src = brandUrl + '?t=' + Date.now();
       imgEl.setAttribute("data-model", imgName);
     }
   }
@@ -755,7 +784,7 @@ class SmartingHomePanel extends HTMLElement {
               <!-- ⚡ INVERTER -->
               <div class="inv-area">
                 <div class="inv-box">
-                  <img id="v-inv-img" src="/local/smartinghome/goodwe.png" alt="Inverter" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" />
+                  <img id="v-inv-img" src="/local/smartinghome/goodwe.png" alt="Inverter" style="max-width:140px; max-height:100px; object-fit:contain" />
                   <div id="v-inv-icon" style="display:none; text-align:center">
                     <div class="inv-icon">⚡</div>
                     <div style="font-size:8px; color:#f39c12; line-height:1.2; margin-top:2px">Wgraj<br>goodwe.png lub deye.png<br>do /config/www/smartinghome/</div>
@@ -970,16 +999,31 @@ class SmartingHomePanel extends HTMLElement {
             <!-- 🖼️ Inverter Image Upload -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">🖼️ Zdjęcie falownika</div>
-              <div style="font-size:11px; color:#94a3b8; margin-bottom:10px">Wgraj zdjęcie falownika, które będzie wyświetlane w panelu Przegląd.</div>
-              <div class="upload-zone" onclick="this.nextElementSibling.click()">
+              <div style="font-size:11px; color:#94a3b8; margin-bottom:10px">Wgraj zdjęcie falownika, które będzie wyświetlane w panelu Przegląd na środku diagramu przepływów.</div>
+
+              <!-- Preview -->
+              <div style="text-align:center; margin-bottom:12px">
+                <img id="upload-preview" style="display:none; max-width:160px; max-height:120px; border-radius:10px; border:1px solid rgba(255,255,255,0.1); background:repeating-conic-gradient(#1e293b 0% 25%, #0f172a 0% 50%) 50% / 16px 16px" />
+                <div id="upload-size-info" style="font-size:10px; color:#64748b; margin-top:4px"></div>
+              </div>
+
+              <!-- Upload zone -->
+              <div class="upload-zone" onclick="this.parentElement.querySelector('input[type=file]').click()" style="cursor:pointer">
                 <div style="font-size:32px; margin-bottom:6px">📂</div>
                 <div style="font-size:12px; color:#a0aec0">Kliknij aby wybrać plik PNG/JPG</div>
-                <div style="font-size:10px; color:#64748b; margin-top:4px">Plik zostanie zapisany jako <code style="color:#00d4ff">/config/www/smartinghome/inverter.png</code></div>
               </div>
               <input type="file" accept="image/png,image/jpeg" style="display:none" onchange="this.getRootNode().host._uploadInverterImage(this.files[0])" />
               <div id="v-upload-status" style="font-size:11px; color:#2ecc71; margin-top:8px"></div>
-              <div style="margin-top:10px; font-size:10px; color:#64748b">
-                <strong>Alternatywnie:</strong> ręcznie skopiuj plik <code style="color:#f39c12">goodwe.png</code> lub <code style="color:#f39c12">deye.png</code> do katalogu <code style="color:#00d4ff">/config/www/smartinghome/</code> na serwerze HA.
+
+              <!-- Recommendations -->
+              <div style="margin-top:12px; padding:10px; border-radius:8px; background:rgba(0,212,255,0.04); border:1px solid rgba(0,212,255,0.1)">
+                <div style="font-size:11px; font-weight:700; color:#00d4ff; margin-bottom:6px">💡 Zalecenia</div>
+                <div style="font-size:10px; color:#94a3b8; line-height:1.6">
+                  • <strong>Format:</strong> PNG z przezroczystym tłem (transparent) — najlepszy efekt<br>
+                  • <strong>Rozmiar:</strong> 200–400px szerokości, proporcjonalne<br>
+                  • <strong>Nazwa pliku:</strong> <code style="color:#f39c12">goodwe.png</code> lub <code style="color:#f39c12">deye.png</code> (auto-detekcja marki) lub <code style="color:#f39c12">inverter.png</code> (uniwersalne)<br>
+                  • <strong>Ścieżka na serwerze:</strong> <code style="color:#00d4ff">/config/www/smartinghome/</code>
+                </div>
               </div>
             </div>
 
@@ -1001,7 +1045,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.4</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
