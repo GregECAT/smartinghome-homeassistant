@@ -118,6 +118,37 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
 
+  _updateKeyStatus() {
+    const geminiStatus = this._s("sensor.smartinghome_gemini_key_status");
+    const anthropicStatus = this._s("sensor.smartinghome_anthropic_key_status");
+    const geminiInd = this.shadowRoot.getElementById("key-status-gemini");
+    const anthropicInd = this.shadowRoot.getElementById("key-status-anthropic");
+    if (geminiInd) {
+      if (geminiStatus === "valid") { geminiInd.textContent = "✅ Klucz zweryfikowany"; geminiInd.style.color = "#2ecc71"; }
+      else if (geminiStatus === "invalid") { geminiInd.textContent = "❌ Klucz nieprawidłowy"; geminiInd.style.color = "#e74c3c"; }
+      else if (geminiStatus === "saved") { geminiInd.textContent = "💾 Klucz zapisany (niesprawdzony)"; geminiInd.style.color = "#f39c12"; }
+      else { geminiInd.textContent = "— Brak klucza"; geminiInd.style.color = "#64748b"; }
+    }
+    if (anthropicInd) {
+      if (anthropicStatus === "valid") { anthropicInd.textContent = "✅ Klucz zweryfikowany"; anthropicInd.style.color = "#2ecc71"; }
+      else if (anthropicStatus === "invalid") { anthropicInd.textContent = "❌ Klucz nieprawidłowy"; anthropicInd.style.color = "#e74c3c"; }
+      else if (anthropicStatus === "saved") { anthropicInd.textContent = "💾 Klucz zapisany (niesprawdzony)"; anthropicInd.style.color = "#f39c12"; }
+      else { anthropicInd.textContent = "— Brak klucza"; anthropicInd.style.color = "#64748b"; }
+    }
+  }
+
+  _testApiKey(provider) {
+    const btn = this.shadowRoot.getElementById(`test-btn-${provider}`);
+    if (btn) { btn.textContent = "⏳ Testowanie..."; btn.disabled = true; }
+    if (this._hass) {
+      this._hass.callService("smartinghome", "test_api_key", { provider });
+      setTimeout(() => {
+        this._updateKeyStatus();
+        if (btn) { btn.textContent = "🧪 Testuj"; btn.disabled = false; }
+      }, 5000);
+    }
+  }
+
   // Smart unit formatting
   _pw(w) {
     if (w === null || isNaN(w)) return "—";
@@ -254,6 +285,8 @@ class SmartingHomePanel extends HTMLElement {
     // Settings: show upgrade prompt for FREE users
     const upgradeBox = this.shadowRoot.getElementById("settings-upgrade-box");
     if (upgradeBox) upgradeBox.style.display = (tier === "PRO" || tier === "ENTERPRISE") ? "none" : "block";
+    // Settings: API key status
+    this._updateKeyStatus();
     // RCE / Tariff
     const g13Zone = this._s("sensor.smartinghome_g13_current_zone") || "—";
     const g13Badge = this.shadowRoot.getElementById("v-g13-zone-badge");
@@ -595,6 +628,16 @@ class SmartingHomePanel extends HTMLElement {
           font-weight: 700; font-size: 13px; cursor: pointer; transition: all 0.2s;
         }
         .save-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(0,212,255,0.3); }
+        .test-btn {
+          padding: 6px 14px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.12);
+          background: rgba(255,255,255,0.04); color: #a0aec0; font-size: 11px;
+          cursor: pointer; transition: all 0.2s; font-family: inherit;
+        }
+        .test-btn:hover { background: rgba(0,212,255,0.1); border-color: rgba(0,212,255,0.3); color: #00d4ff; }
+        .test-btn:disabled { opacity: 0.5; cursor: wait; }
+        .key-row { display: flex; gap: 8px; align-items: center; }
+        .key-row input { flex: 1; }
+        .key-status { font-size: 11px; margin-top: 3px; margin-bottom: 8px; }
         .gear-btn {
           background: none; border: none; font-size: 20px; cursor: pointer;
           padding: 4px 8px; border-radius: 6px; transition: all 0.2s;
@@ -906,11 +949,19 @@ class SmartingHomePanel extends HTMLElement {
               <div style="font-size:11px; color:#94a3b8; margin-bottom:10px">Podaj klucze API aby włączyć AI Advisor — inteligentne porady dotyczące zarządzania energią.</div>
               <div class="settings-field">
                 <label>Google Gemini API Key</label>
-                <input type="password" id="inp-gemini-key" placeholder="AIza..." />
+                <div class="key-row">
+                  <input type="password" id="inp-gemini-key" placeholder="AIza..." />
+                  <button class="test-btn" id="test-btn-gemini" onclick="this.getRootNode().host._testApiKey('gemini')">🧪 Testuj</button>
+                </div>
+                <div class="key-status" id="key-status-gemini">— Brak klucza</div>
               </div>
               <div class="settings-field">
                 <label>Anthropic Claude API Key</label>
-                <input type="password" id="inp-anthropic-key" placeholder="sk-ant-..." />
+                <div class="key-row">
+                  <input type="password" id="inp-anthropic-key" placeholder="sk-ant-..." />
+                  <button class="test-btn" id="test-btn-anthropic" onclick="this.getRootNode().host._testApiKey('anthropic')">🧪 Testuj</button>
+                </div>
+                <div class="key-status" id="key-status-anthropic">— Brak klucza</div>
               </div>
               <button class="save-btn" onclick="this.getRootNode().host._saveApiKeys()">💾 Zapisz klucze API</button>
               <div id="v-save-status" style="font-size:11px; color:#2ecc71; margin-top:8px"></div>
@@ -950,7 +1001,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
