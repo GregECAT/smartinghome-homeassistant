@@ -97,11 +97,42 @@ async def async_setup_services(
     entry = coordinator.entry
     device_id = entry.data.get("device_id", "")
 
+    # Helper functions for settings.json (defined first so they can be used below)
+    def _get_settings_path(h: HomeAssistant) -> Path:
+        """Return path to settings.json."""
+        d = Path(h.config.path("www")) / "smartinghome"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / SETTINGS_FILE
+
+    def _read_settings(h: HomeAssistant) -> dict:
+        """Read settings from JSON."""
+        p = _get_settings_path(h)
+        if p.exists():
+            try:
+                return json.loads(p.read_text())
+            except Exception:
+                return {}
+        return {}
+
+    def _update_settings_file(h: HomeAssistant, updates: dict) -> None:
+        """Merge updates into settings.json."""
+        current = _read_settings(h)
+        current.update(updates)
+        p = _get_settings_path(h)
+        p.write_text(json.dumps(current, indent=2, ensure_ascii=False))
+        _LOGGER.debug("Settings updated: %s", list(updates.keys()))
+
     energy_mgr = EnergyManager(hass, device_id)
+
+    # Try to load keys from settings.json first (more reliable than config_entry)
+    _settings_keys = _read_settings(hass)
+    _gemini_key_init = entry.data.get(CONF_GEMINI_API_KEY, "") or _settings_keys.get("gemini_api_key", "")
+    _anthropic_key_init = entry.data.get(CONF_ANTHROPIC_API_KEY, "") or _settings_keys.get("anthropic_api_key", "")
+
     ai_advisor = AIAdvisor(
         hass,
-        gemini_api_key=entry.data.get(CONF_GEMINI_API_KEY, ""),
-        anthropic_api_key=entry.data.get(CONF_ANTHROPIC_API_KEY, ""),
+        gemini_api_key=_gemini_key_init,
+        anthropic_api_key=_anthropic_key_init,
     )
 
     async def handle_set_mode(call: ServiceCall) -> None:
@@ -217,33 +248,29 @@ async def async_setup_services(
             _LOGGER.error("Failed to save image: %s", err)
 
     async def handle_save_settings(call: ServiceCall) -> None:
-        """Update config entry with new API keys."""
+        """Update API keys — store in config_entry AND settings.json."""
         gemini_key = call.data.get("gemini_api_key", "")
         anthropic_key = call.data.get("anthropic_api_key", "")
 
         new_data = {**entry.data}
+        updates = {}
+
         if gemini_key:
             new_data[CONF_GEMINI_API_KEY] = gemini_key
+            ai_advisor._gemini_key = gemini_key
+            updates["gemini_api_key"] = gemini_key
+            updates["gemini_key_status"] = "saved"
+            updates["gemini_key_masked"] = gemini_key[:6] + "***" + gemini_key[-4:] if len(gemini_key) > 10 else "***"
         if anthropic_key:
             new_data[CONF_ANTHROPIC_API_KEY] = anthropic_key
+            ai_advisor._anthropic_key = anthropic_key
+            updates["anthropic_api_key"] = anthropic_key
+            updates["anthropic_key_status"] = "saved"
+            updates["anthropic_key_masked"] = anthropic_key[:7] + "***" + anthropic_key[-4:] if len(anthropic_key) > 11 else "***"
 
         hass.config_entries.async_update_entry(entry, data=new_data)
-
-        if gemini_key:
-            ai_advisor._gemini_key = gemini_key
-        if anthropic_key:
-            ai_advisor._anthropic_key = anthropic_key
-
-        # Also persist key status and masked version to settings.json
-        status_updates = {}
-        if gemini_key:
-            status_updates["gemini_key_status"] = "saved"
-            status_updates["gemini_key_masked"] = gemini_key[:6] + "***" + gemini_key[-4:] if len(gemini_key) > 10 else "***"
-        if anthropic_key:
-            status_updates["anthropic_key_status"] = "saved"
-            status_updates["anthropic_key_masked"] = anthropic_key[:7] + "***" + anthropic_key[-4:] if len(anthropic_key) > 11 else "***"
-        if status_updates:
-            _update_settings_file(hass, status_updates)
+        if updates:
+            _update_settings_file(hass, updates)
 
         _LOGGER.info("API keys updated via panel settings")
 
@@ -251,15 +278,28 @@ async def async_setup_services(
         """Test if an API key is valid by making a minimal request."""
         provider = call.data["provider"]
         test_key = call.data.get("api_key", "")
+
+        # If no key provided in the call, try reading from stored settings
+        if not test_key:
+            stored = _read_settings(hass)
+            if provider == "gemini":
+                test_key = stored.get("gemini_api_key", "") or ai_advisor._gemini_key
+            else:
+                test_key = stored.get("anthropic_api_key", "") or ai_advisor._anthropic_key
+
+        if not test_key:
+            hass.bus.async_fire(
+                f"{DOMAIN}_api_key_test",
+                {"provider": provider, "status": "invalid"},
+            )
+            return
+
         try:
             if provider == "gemini":
-                # Use provided key if given, otherwise use stored one
-                if test_key:
-                    ai_advisor._gemini_key = test_key
+                ai_advisor._gemini_key = test_key
                 valid = await ai_advisor.test_gemini_key()
             else:
-                if test_key:
-                    ai_advisor._anthropic_key = test_key
+                ai_advisor._anthropic_key = test_key
                 valid = await ai_advisor.test_anthropic_key()
             status = "valid" if valid else "invalid"
         except Exception:
@@ -272,30 +312,6 @@ async def async_setup_services(
         # Also save to settings.json
         _update_settings_file(hass, {f"{provider}_key_status": status})
         _LOGGER.info("API key test for %s: %s", provider, status)
-
-    def _get_settings_path(h: HomeAssistant) -> Path:
-        """Return path to settings.json."""
-        d = Path(h.config.path("www")) / "smartinghome"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / SETTINGS_FILE
-
-    def _read_settings(h: HomeAssistant) -> dict:
-        """Read settings from JSON."""
-        p = _get_settings_path(h)
-        if p.exists():
-            try:
-                return json.loads(p.read_text())
-            except Exception:
-                return {}
-        return {}
-
-    def _update_settings_file(h: HomeAssistant, updates: dict) -> None:
-        """Merge updates into settings.json."""
-        current = _read_settings(h)
-        current.update(updates)
-        p = _get_settings_path(h)
-        p.write_text(json.dumps(current, indent=2, ensure_ascii=False))
-        _LOGGER.debug("Settings updated: %s", list(updates.keys()))
 
     async def handle_save_panel_settings(call: ServiceCall) -> None:
         """Save arbitrary panel settings to settings.json."""
