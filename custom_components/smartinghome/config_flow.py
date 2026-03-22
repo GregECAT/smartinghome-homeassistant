@@ -29,12 +29,16 @@ from .const import (
     CONF_MODBUS_SLAVE,
     CONF_UPDATE_INTERVAL,
     CONF_SENSOR_MAP,
+    CONF_INVERTER_BRAND,
     DEFAULT_GOODWE_DEVICE_ID,
     DEFAULT_MODBUS_PORT,
     DEFAULT_MODBUS_SLAVE,
     DEFAULT_UPDATE_INTERVAL,
     DEFAULT_SENSOR_MAP,
+    DEFAULT_SENSOR_MAP_DEYE,
     SENSOR_MAP_KEYS,
+    INVERTER_BRAND_GOODWE,
+    INVERTER_BRAND_DEYE,
     LICENSE_MODE_FREE,
     LICENSE_MODE_PRO,
     TariffType,
@@ -43,6 +47,13 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _get_defaults_for_brand(brand: str) -> dict:
+    """Return sensor map defaults based on inverter brand."""
+    if brand == INVERTER_BRAND_DEYE:
+        return DEFAULT_SENSOR_MAP_DEYE
+    return DEFAULT_SENSOR_MAP
 
 
 class SmartingHomeConfigFlow(
@@ -232,11 +243,14 @@ class SmartingHomeConfigFlow(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Step 4: Sensor mapping — select entities for each logical sensor."""
+        brand = self._data.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE)
+        defaults = _get_defaults_for_brand(brand)
+
         if user_input is not None:
             # Store sensor map
             sensor_map = {}
             for key in SENSOR_MAP_KEYS:
-                sensor_map[key] = user_input.get(key, DEFAULT_SENSOR_MAP.get(key, ""))
+                sensor_map[key] = user_input.get(key, defaults.get(key, ""))
             self._data[CONF_SENSOR_MAP] = sensor_map
 
             # If PRO mode, show AI step; if FREE, create entry now
@@ -259,14 +273,19 @@ class SmartingHomeConfigFlow(
                 data=self._data,
             )
 
-        # Build schema with entity selectors
+        # Build schema with entity selectors — all 35 sensors
         schema_dict = {}
         for key, _desc in SENSOR_MAP_KEYS.items():
-            schema_dict[vol.Optional(key, default=DEFAULT_SENSOR_MAP.get(key, ""))] = (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="sensor")
+            default_val = defaults.get(key, "")
+            if default_val:
+                schema_dict[vol.Optional(key, default=default_val)] = (
+                    selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="sensor")
+                    )
                 )
-            )
+            else:
+                # Optional sensors with no default — use text input
+                schema_dict[vol.Optional(key, default="")] = str
 
         return self.async_show_form(
             step_id="sensors",
@@ -362,7 +381,9 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
     ) -> FlowResult:
         """Sensor mapping step in Options Flow."""
         current = self._config_entry.data
-        current_map = current.get(CONF_SENSOR_MAP, DEFAULT_SENSOR_MAP)
+        brand = current.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE)
+        brand_defaults = _get_defaults_for_brand(brand)
+        current_map = current.get(CONF_SENSOR_MAP, brand_defaults)
 
         if user_input is not None:
             sensor_map = {}
@@ -377,11 +398,15 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
 
         schema_dict = {}
         for key, _desc in SENSOR_MAP_KEYS.items():
-            schema_dict[vol.Optional(key, default=current_map.get(key, DEFAULT_SENSOR_MAP.get(key, "")))] = (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="sensor")
+            current_val = current_map.get(key, brand_defaults.get(key, ""))
+            if current_val:
+                schema_dict[vol.Optional(key, default=current_val)] = (
+                    selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="sensor")
+                    )
                 )
-            )
+            else:
+                schema_dict[vol.Optional(key, default="")] = str
 
         return self.async_show_form(
             step_id="sensors",
