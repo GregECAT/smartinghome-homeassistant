@@ -393,9 +393,38 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-inv-p", this._pw(this._nm("inverter_power")));
     this._setText("v-inv-t", `${this._fm("inverter_temp")}°C`);
 
-    // Autarky / Self-consumption
-    this._setText("v-autarky", `${this._f("sensor.smartinghome_autarky_today", 0)}%`);
-    this._setText("v-selfcons", `${this._f("sensor.smartinghome_self_consumption_today", 0)}%`);
+    // Autarky / Self-consumption — calculate from existing data or use smartinghome sensors
+    const autarkyVal = this._n("sensor.smartinghome_autarky_today");
+    if (autarkyVal !== null) {
+      this._setText("v-autarky", `${autarkyVal.toFixed(0)}%`);
+    } else {
+      // Autarky = (1 - grid_import / total_consumption) × 100
+      const impToday = this._nm("grid_import_today") || 0;
+      const loadTotal = (this._nm("pv_power") || 0) > 0 ? ((this._nm("load_power") || 0) > 0 ? (this._nm("load_power") || 1) : 1) : 1;
+      // Use daily data: pv_today + batt_discharge - batt_charge + import = total consumption; autarky = (total - import) / total
+      const pvToday = parseFloat(this._fm("pv_today")) || 0;
+      if (pvToday > 0 || impToday > 0) {
+        const totalConsumed = pvToday + impToday; // simplified: total consumption ≈ pv generated + imported
+        const autarky = totalConsumed > 0 ? Math.min(100, Math.max(0, ((totalConsumed - impToday) / totalConsumed) * 100)) : 0;
+        this._setText("v-autarky", `${autarky.toFixed(0)}%`);
+      } else {
+        this._setText("v-autarky", "—%");
+      }
+    }
+    const selfConsVal = this._n("sensor.smartinghome_self_consumption_today");
+    if (selfConsVal !== null) {
+      this._setText("v-selfcons", `${selfConsVal.toFixed(0)}%`);
+    } else {
+      // Self-consumption = (1 - grid_export / pv_generation) × 100
+      const expToday = this._nm("grid_export_today") || 0;
+      const pvGen = parseFloat(this._fm("pv_today")) || 0;
+      if (pvGen > 0) {
+        const selfCons = Math.min(100, Math.max(0, ((pvGen - expToday) / pvGen) * 100));
+        this._setText("v-selfcons", `${selfCons.toFixed(0)}%`);
+      } else {
+        this._setText("v-selfcons", "—%");
+      }
+    }
 
     // Weather — read from HA weather entity attributes
     const weatherEntities = ["weather.home", "weather.forecast_home", "weather.openweathermap"];
@@ -1531,7 +1560,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.6</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.7</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
