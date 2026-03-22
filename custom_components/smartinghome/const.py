@@ -29,44 +29,191 @@ CONF_MODBUS_PORT: Final = "modbus_port"
 CONF_MODBUS_SLAVE: Final = "modbus_slave"
 CONF_UPDATE_INTERVAL: Final = "update_interval"
 CONF_SENSOR_MAP: Final = "sensor_map"
+CONF_INVERTER_BRAND: Final = "inverter_brand"
 
 # License mode values
 LICENSE_MODE_FREE: Final = "free"
 LICENSE_MODE_PRO: Final = "pro"
 
+# Inverter brands
+INVERTER_BRAND_GOODWE: Final = "goodwe"
+INVERTER_BRAND_DEYE: Final = "deye"
+INVERTER_BRAND_OTHER: Final = "other"
+
 # =============================================================================
-# Sensor Mapping — universal entity configuration
+# Sensor Mapping — universal entity configuration (35 sensors)
 # =============================================================================
-SENSOR_MAP_KEYS: Final = {
+
+# ── Core sensors (required for power flow) ──
+SENSOR_MAP_CORE: Final = {
     "pv_power": "Total PV power (W)",
     "load_power": "House load / consumption (W)",
     "grid_power": "Grid power (W, + import / − export)",
     "battery_power": "Battery power (W, + charge / − discharge)",
     "battery_soc": "Battery state of charge (%)",
+}
+
+# ── PV Strings ──
+SENSOR_MAP_PV: Final = {
+    "pv1_power": "PV String 1 — power (W)",
+    "pv1_voltage": "PV String 1 — voltage (V)",
+    "pv1_current": "PV String 1 — current (A)",
+    "pv2_power": "PV String 2 — power (W)",
+    "pv2_voltage": "PV String 2 — voltage (V)",
+    "pv2_current": "PV String 2 — current (A)",
+    "pv3_power": "PV String 3 — power (W)",
+    "pv4_power": "PV String 4 — power (W)",
+}
+
+# ── Battery extended ──
+SENSOR_MAP_BATTERY: Final = {
+    "battery_voltage": "Battery voltage (V)",
+    "battery_current": "Battery current (A)",
+    "battery_temp": "Battery temperature (°C)",
+    "battery_capacity_kwh": "Battery capacity (kWh)",
+}
+
+# ── Grid extended ──
+SENSOR_MAP_GRID: Final = {
+    "voltage_l1": "Grid voltage L1 (V)",
+    "voltage_l2": "Grid voltage L2 (V)",
+    "voltage_l3": "Grid voltage L3 (V)",
+    "current_l1": "Grid current L1 (A)",
+    "current_l2": "Grid current L2 (A)",
+    "current_l3": "Grid current L3 (A)",
+    "power_l1": "Grid power L1 (W)",
+    "power_l2": "Grid power L2 (W)",
+    "power_l3": "Grid power L3 (W)",
+    "grid_frequency": "Grid frequency (Hz)",
+}
+
+# ── Daily totals ──
+SENSOR_MAP_DAILY: Final = {
     "pv_today": "PV generation today (kWh)",
     "grid_import_today": "Grid import today (kWh)",
     "grid_export_today": "Grid export today (kWh)",
     "battery_charge_today": "Battery charge today (kWh)",
     "battery_discharge_today": "Battery discharge today (kWh)",
-    "voltage_l1": "Grid voltage L1 (V)",
-    "voltage_l2": "Grid voltage L2 (V)",
-    "voltage_l3": "Grid voltage L3 (V)",
 }
 
+# ── Inverter ──
+SENSOR_MAP_INVERTER: Final = {
+    "inverter_power": "Inverter output power (W)",
+    "inverter_temp": "Inverter temperature (°C)",
+}
+
+# ── Weather ──
+SENSOR_MAP_WEATHER: Final = {
+    "weather_temp": "Outside temperature (°C)",
+    "weather_humidity": "Outside humidity (%)",
+    "weather_cloud_cover": "Cloud cover (%)",
+}
+
+# Combined map (all 35 keys)
+SENSOR_MAP_KEYS: Final = {
+    **SENSOR_MAP_CORE,
+    **SENSOR_MAP_PV,
+    **SENSOR_MAP_BATTERY,
+    **SENSOR_MAP_GRID,
+    **SENSOR_MAP_DAILY,
+    **SENSOR_MAP_INVERTER,
+    **SENSOR_MAP_WEATHER,
+}
+
+# ── GoodWe defaults ──
 DEFAULT_SENSOR_MAP: Final = {
+    # Core
     "pv_power": "sensor.pv_power",
     "load_power": "sensor.load",
     "grid_power": "sensor.meter_active_power_total",
     "battery_power": "sensor.battery_power",
     "battery_soc": "sensor.battery_state_of_charge",
+    # PV Strings
+    "pv1_power": "sensor.pv1_power",
+    "pv1_voltage": "sensor.pv1_voltage",
+    "pv1_current": "sensor.pv1_current",
+    "pv2_power": "sensor.pv2_power",
+    "pv2_voltage": "sensor.pv2_voltage",
+    "pv2_current": "sensor.pv2_current",
+    "pv3_power": "",
+    "pv4_power": "",
+    # Battery extended
+    "battery_voltage": "sensor.battery_voltage",
+    "battery_current": "sensor.battery_current",
+    "battery_temp": "sensor.battery_temperature",
+    "battery_capacity_kwh": "",
+    # Grid extended
+    "voltage_l1": "sensor.on_grid_l1_voltage",
+    "voltage_l2": "sensor.on_grid_l2_voltage",
+    "voltage_l3": "sensor.on_grid_l3_voltage",
+    "current_l1": "sensor.on_grid_l1_current",
+    "current_l2": "sensor.on_grid_l2_current",
+    "current_l3": "sensor.on_grid_l3_current",
+    "power_l1": "sensor.on_grid_l1_power",
+    "power_l2": "sensor.on_grid_l2_power",
+    "power_l3": "sensor.on_grid_l3_power",
+    "grid_frequency": "sensor.on_grid_frequency",
+    # Daily totals
     "pv_today": "sensor.today_s_pv_generation",
     "grid_import_today": "sensor.grid_import_daily",
     "grid_export_today": "sensor.grid_export_daily",
     "battery_charge_today": "sensor.today_battery_charge",
     "battery_discharge_today": "sensor.today_battery_discharge",
-    "voltage_l1": "sensor.on_grid_l1_voltage",
-    "voltage_l2": "sensor.on_grid_l2_voltage",
-    "voltage_l3": "sensor.on_grid_l3_voltage",
+    # Inverter
+    "inverter_power": "sensor.active_power",
+    "inverter_temp": "sensor.inverter_temperature_air",
+    # Weather (user fills in)
+    "weather_temp": "",
+    "weather_humidity": "",
+    "weather_cloud_cover": "",
+}
+
+# ── Deye defaults ──
+DEFAULT_SENSOR_MAP_DEYE: Final = {
+    # Core
+    "pv_power": "sensor.deye_pv_power",
+    "load_power": "sensor.deye_load_power",
+    "grid_power": "sensor.deye_total_grid_power",
+    "battery_power": "sensor.deye_battery_power",
+    "battery_soc": "sensor.deye_battery_soc",
+    # PV Strings
+    "pv1_power": "sensor.deye_pv1_power",
+    "pv1_voltage": "sensor.deye_pv1_voltage",
+    "pv1_current": "sensor.deye_pv1_current",
+    "pv2_power": "sensor.deye_pv2_power",
+    "pv2_voltage": "sensor.deye_pv2_voltage",
+    "pv2_current": "sensor.deye_pv2_current",
+    "pv3_power": "sensor.deye_pv3_power",
+    "pv4_power": "sensor.deye_pv4_power",
+    # Battery extended
+    "battery_voltage": "sensor.deye_battery_voltage",
+    "battery_current": "sensor.deye_battery_current",
+    "battery_temp": "sensor.deye_battery_temperature",
+    "battery_capacity_kwh": "",
+    # Grid extended
+    "voltage_l1": "sensor.deye_grid_l1_voltage",
+    "voltage_l2": "sensor.deye_grid_l2_voltage",
+    "voltage_l3": "sensor.deye_grid_l3_voltage",
+    "current_l1": "sensor.deye_grid_l1_current",
+    "current_l2": "sensor.deye_grid_l2_current",
+    "current_l3": "sensor.deye_grid_l3_current",
+    "power_l1": "sensor.deye_grid_l1_power",
+    "power_l2": "sensor.deye_grid_l2_power",
+    "power_l3": "sensor.deye_grid_l3_power",
+    "grid_frequency": "sensor.deye_grid_frequency",
+    # Daily totals
+    "pv_today": "sensor.deye_day_pv_energy",
+    "grid_import_today": "sensor.deye_day_grid_import",
+    "grid_export_today": "sensor.deye_day_grid_export",
+    "battery_charge_today": "sensor.deye_day_battery_charge",
+    "battery_discharge_today": "sensor.deye_day_battery_discharge",
+    # Inverter
+    "inverter_power": "sensor.deye_active_power",
+    "inverter_temp": "sensor.deye_dc_temperature",
+    # Weather (user fills in)
+    "weather_temp": "",
+    "weather_humidity": "",
+    "weather_cloud_cover": "",
 }
 
 # =============================================================================
