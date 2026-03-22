@@ -57,6 +57,32 @@ class AICronScheduler:
         self._tasks: list[asyncio.Task] = []
         self._running = False
 
+    def _map_data(self, raw: dict) -> dict:
+        """Map coordinator data keys to AI-expected simple keys."""
+        return {
+            "pv_power": raw.get("sensor.pv_power"),
+            "grid_power": raw.get("sensor.meter_active_power_total"),
+            "battery_soc": raw.get("sensor.battery_state_of_charge"),
+            "battery_power": raw.get("sensor.battery_power"),
+            "load": raw.get("sensor.load"),
+            "pv_surplus": raw.get("hems_pv_surplus_power"),
+            "g13_zone": raw.get("g13_current_zone"),
+            "g13_price": raw.get("g13_buy_price"),
+            "rce_price": raw.get("sensor.rce_pse_cena"),
+            "rce_sell": raw.get("rce_sell_price"),
+            "rce_trend": raw.get("rce_price_trend"),
+            "rce_level": raw.get("rce_good_sell"),
+            "battery_available": raw.get("goodwe_battery_energy_available"),
+            "battery_runtime": raw.get("goodwe_battery_runtime"),
+            "forecast_today": raw.get("pv_forecast_today_total"),
+            "forecast_remaining": raw.get("pv_forecast_remaining_today_total"),
+            "forecast_tomorrow": raw.get("pv_forecast_tomorrow_total"),
+            "autarky": raw.get("goodwe_autarky_today"),
+            "import_cost": raw.get("g13_import_cost_today"),
+            "export_revenue": raw.get("g13_export_revenue_today"),
+            "savings": raw.get("g13_self_consumption_savings_today"),
+        }
+
     def _get_settings_path(self) -> Path:
         """Return path to settings.json."""
         d = Path(self.hass.config.path("www")) / "smartinghome"
@@ -137,11 +163,13 @@ class AICronScheduler:
                     await asyncio.sleep(interval_min * 60)
                     continue
 
-                data = self._get_data()
-                if not data:
+                raw_data = self._get_data()
+                if not raw_data:
                     _LOGGER.debug("AI Cron '%s' skipped — no data", job_type)
                     await asyncio.sleep(interval_min * 60)
                     continue
+
+                data = self._map_data(raw_data)
 
                 _LOGGER.info("AI Cron running: %s", job_type)
 

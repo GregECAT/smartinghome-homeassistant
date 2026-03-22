@@ -1592,7 +1592,7 @@ class SmartingHomePanel extends HTMLElement {
         /* Corner layout: PV top-left, Home top-right, Inv center-up, Batt bottom-left, Grid bottom-right */
         .pv-area { grid-column: 1; grid-row: 1; }
         .home-area { grid-column: 3; grid-row: 1; }
-        .inv-area { grid-column: 2; grid-row: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .inv-area { grid-column: 2; grid-row: 1 / 3; display: flex; flex-direction: column; align-items: center; justify-content: center; }
         .batt-area { grid-column: 1; grid-row: 2 / 4; align-self: center; }
         .grid-area { grid-column: 3; grid-row: 2 / 4; align-self: center; }
         .summary-area { grid-column: 1 / 4; grid-row: 4; }
@@ -1800,7 +1800,7 @@ class SmartingHomePanel extends HTMLElement {
       </style>
 
       <div class="panel-container">
-        <!-- Top Row: Header+Tabs (2/3) + Sun Widget (1/3) -->
+        <!-- Top Row: Logo+Tabs (left) + Sun Widget (mid) + Buttons (right) -->
         <div style="display:flex; align-items:stretch; background:rgba(255,255,255,0.03); border-bottom:1px solid rgba(255,255,255,0.06)">
           <!-- Left: Header + Tabs -->
           <div style="flex:2; min-width:0">
@@ -1825,7 +1825,7 @@ class SmartingHomePanel extends HTMLElement {
               <button class="tab-btn" data-tab="winter" onclick="this.getRootNode().host._switchTab('winter')">❄️ Zima na plusie</button>
             </div>
           </div>
-          <!-- Right: Sun Widget (compact) -->
+          <!-- Center: Sun Widget (compact) -->
           <div style="flex:1; display:flex; align-items:center; justify-content:center; gap:8px; padding:4px 10px; border-left:1px solid rgba(255,255,255,0.06); min-width:280px">
             <div style="text-align:center">
               <div style="font-size:8px; color:#64748b; text-transform:uppercase; letter-spacing:0.8px" id="ov-date">—</div>
@@ -2933,7 +2933,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.8.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.8.4</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
