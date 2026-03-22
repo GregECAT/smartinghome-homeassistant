@@ -59,6 +59,26 @@ class AICronScheduler:
 
     def _map_data(self, raw: dict) -> dict:
         """Map coordinator data keys to AI-expected simple keys."""
+        # Try to get weather data from HA states
+        weather_data = {}
+        try:
+            weather_entity = self.hass.states.get("weather.dom")
+            if weather_entity:
+                weather_data["weather_temp"] = weather_entity.attributes.get("temperature")
+                weather_data["weather_clouds"] = weather_entity.attributes.get("cloud_coverage")
+                weather_data["weather_condition"] = weather_entity.state
+            realfeel = self.hass.states.get("sensor.dom_temperatura_realfeel")
+            if realfeel:
+                weather_data["weather_realfeel"] = realfeel.state
+            sun_hours = self.hass.states.get("sensor.dom_godziny_sloneczne_dzien_0")
+            if sun_hours:
+                weather_data["sun_hours_today"] = sun_hours.state
+            uv = self.hass.states.get("sensor.dom_indeks_uv_dzien_0")
+            if uv:
+                weather_data["uv_index"] = uv.state
+        except Exception:
+            pass
+
         return {
             "pv_power": raw.get("sensor.pv_power"),
             "grid_power": raw.get("sensor.meter_active_power_total"),
@@ -81,6 +101,7 @@ class AICronScheduler:
             "import_cost": raw.get("g13_import_cost_today"),
             "export_revenue": raw.get("g13_export_revenue_today"),
             "savings": raw.get("g13_self_consumption_savings_today"),
+            **weather_data,
         }
 
     def _get_settings_path(self) -> Path:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -135,8 +136,19 @@ class AIAdvisor:
 
     def _build_context(self, data: dict[str, Any]) -> str:
         """Build context string from current energy data."""
+        now = datetime.now()
+        day_names_pl = ['Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota', 'Niedziela']
+        month_names_pl = ['', 'styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec',
+                          'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień']
+        season = 'zima' if now.month in (12, 1, 2) else 'wiosna' if now.month in (3, 4, 5) else 'lato' if now.month in (6, 7, 8) else 'jesień'
         lines = [
             "=== SMARTING HOME — ENERGY SYSTEM STATUS ===",
+            "",
+            "## Date & Time",
+            f"- Date: {now.strftime('%Y-%m-%d')} ({day_names_pl[now.weekday()]})",
+            f"- Time: {now.strftime('%H:%M')}",
+            f"- Month: {month_names_pl[now.month]} {now.year}",
+            f"- Season: {season}",
             "",
             "## Current State",
             f"- PV Power: {data.get('pv_power', 0)} W",
@@ -145,6 +157,14 @@ class AIAdvisor:
             f"- Battery Power: {data.get('battery_power', 0)} W (+charge, -discharge)",
             f"- Home Load: {data.get('load', 0)} W",
             f"- PV Surplus: {data.get('pv_surplus', 0)} W",
+            "",
+            "## Weather",
+            f"- Temperature: {data.get('weather_temp', 'N/A')}°C",
+            f"- RealFeel: {data.get('weather_realfeel', 'N/A')}°C",
+            f"- Cloud Coverage: {data.get('weather_clouds', 'N/A')}%",
+            f"- Conditions: {data.get('weather_condition', 'N/A')}",
+            f"- Sun Hours Today: {data.get('sun_hours_today', 'N/A')} h",
+            f"- UV Index: {data.get('uv_index', 'N/A')}",
             "",
             "## Tariff (G13 Tauron 2026)",
             f"- Current Zone: {data.get('g13_zone', 'unknown')}",
@@ -197,7 +217,7 @@ class AIAdvisor:
 Analyze the following system data and answer the user's question.
 Provide specific, actionable recommendations.
 Use Polish energy market knowledge (G13 tariff, RCE pricing, net-billing rules).
-Keep your response concise (max 800 words).
+Provide complete, actionable recommendations. Do NOT truncate your response.
 Respond in the same language as the question.
 
 {context}
@@ -262,7 +282,7 @@ User question: {question}"""
 Analyze the following system data and answer the user's question.
 Provide specific, actionable recommendations.
 Use Polish energy market knowledge (G13 tariff, RCE pricing, net-billing rules).
-Keep your response concise (max 800 words).
+Provide complete, actionable recommendations. Do NOT truncate your response.
 Respond in the same language as the question.
 
 {context}

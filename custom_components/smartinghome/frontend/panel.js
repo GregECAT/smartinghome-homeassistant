@@ -74,7 +74,7 @@ class SmartingHomePanel extends HTMLElement {
     power_l1:"sensor.on_grid_l1_power", power_l2:"sensor.on_grid_l2_power", power_l3:"sensor.on_grid_l3_power",
     grid_frequency:"sensor.on_grid_frequency",
     pv_today:"sensor.today_s_pv_generation",
-    grid_import_today:"sensor.grid_import_daily", grid_export_today:"sensor.grid_export_daily",
+    grid_import_today:"sensor.grid_export_daily", grid_export_today:"sensor.grid_import_daily",
     battery_charge_today:"sensor.today_battery_charge", battery_discharge_today:"sensor.today_battery_discharge",
     inverter_power:"sensor.active_power", inverter_temp:"sensor.inverter_temperature_air",
     inverter_model:"sensor.inverter_model",
@@ -1517,6 +1517,18 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-forecast-today-tab", `${ftoday} kWh`);
     this._setText("v-forecast-tomorrow-tab", `${ftomor} kWh`);
     
+    // AccuWeather data for Energy tab
+    const wEntity = this._hass?.states?.["weather.dom"];
+    if (wEntity) {
+      this._setText("v-energy-temp", `${wEntity.attributes?.temperature ?? '—'}°C`);
+      this._setText("v-energy-clouds", `${wEntity.attributes?.cloud_coverage ?? '—'}%`);
+      this._setText("v-energy-condition", wEntity.state || '—');
+    }
+    this._setText("v-energy-realfeel", `${this._s("sensor.dom_temperatura_realfeel") || '—'}°C`);
+    this._setText("v-energy-sunhours", `${this._s("sensor.dom_godziny_sloneczne_dzien_0") || '—'} h`);
+    this._setText("v-energy-uv", this._s("sensor.dom_indeks_uv_dzien_0") || '—');
+    this._setText("v-energy-wind", `${this._s("sensor.dom_predkosc_wiatru_dzien_0") || '—'} km/h`);
+    
     const battEnergy = this._f("sensor.smartinghome_battery_energy_available");
     this._setText("v-battery-energy-tab", `${battEnergy} kWh`);
     
@@ -2260,9 +2272,18 @@ class SmartingHomePanel extends HTMLElement {
               <div class="dr" style="margin-top:4px"><span class="lb">Częstotliwość</span><span class="vl" id="v-e-freq">— Hz</span></div>
             </div>
             <div class="card">
-              <div class="card-title">☀️ Prognoza PV</div>
-              <div class="dr"><span class="lb">Dzisiaj</span><span class="vl" id="v-forecast-today-tab">— kWh</span></div>
-              <div class="dr"><span class="lb">Jutro</span><span class="vl" id="v-forecast-tomorrow-tab">— kWh</span></div>
+              <div class="card-title">☀️ Prognoza PV & Pogoda</div>
+              <div class="dr"><span class="lb">PV Dzisiaj</span><span class="vl" id="v-forecast-today-tab">— kWh</span></div>
+              <div class="dr"><span class="lb">PV Jutro</span><span class="vl" id="v-forecast-tomorrow-tab">— kWh</span></div>
+              <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.06)">
+                <div class="dr"><span class="lb">🌡️ Temperatura</span><span class="vl" id="v-energy-temp">—</span></div>
+                <div class="dr"><span class="lb">🌡️ RealFeel</span><span class="vl" id="v-energy-realfeel">—</span></div>
+                <div class="dr"><span class="lb">☁️ Zachmurzenie</span><span class="vl" id="v-energy-clouds">—</span></div>
+                <div class="dr"><span class="lb">🌤️ Warunki</span><span class="vl" id="v-energy-condition">—</span></div>
+                <div class="dr"><span class="lb">☀️ Godziny słon. dziś</span><span class="vl" id="v-energy-sunhours">—</span></div>
+                <div class="dr"><span class="lb">🔆 UV Index</span><span class="vl" id="v-energy-uv">—</span></div>
+                <div class="dr"><span class="lb">💨 Wiatr</span><span class="vl" id="v-energy-wind">—</span></div>
+              </div>
             </div>
             <div class="card">
               <div class="card-title">🔧 Szybkie akcje</div>
@@ -3183,7 +3204,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
