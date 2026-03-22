@@ -243,6 +243,92 @@ class SmartingHomePanel extends HTMLElement {
     });
   }
 
+  _updateG13Timeline() {
+    const now = new Date();
+    const hour = now.getHours();
+    const minutes = now.getMinutes();
+    const dow = now.getDay(); // 0=Sun, 6=Sat
+    const month = now.getMonth(); // 0-based
+    const isWeekend = (dow === 0 || dow === 6);
+    // Summer: Apr(3)-Sep(8), Winter: Oct(9)-Mar(2)
+    const isSummer = (month >= 3 && month <= 8);
+
+    // G13 zone for each hour (0-23)
+    // Weekend: all off-peak
+    // Workday summer: 0-6=off, 7-12=morning, 13-18=off, 19-21=peak, 22-23=off
+    // Workday winter: 0-6=off, 7-12=morning, 13-15=off, 16-20=peak, 21-23=off
+    const getZone = (h) => {
+      if (isWeekend) return "off";
+      if (h >= 0 && h < 7) return "off";
+      if (h >= 7 && h < 13) return "morning";
+      if (isSummer) {
+        if (h >= 13 && h < 19) return "off";
+        if (h >= 19 && h < 22) return "peak";
+        return "off";
+      } else {
+        if (h >= 13 && h < 16) return "off";
+        if (h >= 16 && h < 21) return "peak";
+        return "off";
+      }
+    };
+
+    const colors = { off: "#2ecc71", morning: "#e67e22", peak: "#e74c3c" };
+    const labels = { off: "OFF-PEAK", morning: "PRZEDPOŁUDNIOWA", peak: "POPOŁUDNIOWA" };
+
+    // Render 24 segments
+    const timeline = this.shadowRoot.getElementById("g13-timeline");
+    if (timeline) {
+      timeline.innerHTML = "";
+      for (let h = 0; h < 24; h++) {
+        const z = getZone(h);
+        const seg = document.createElement("div");
+        seg.style.cssText = `flex:1; background:${colors[z]}; position:relative; transition:opacity 0.3s`;
+        seg.title = `${String(h).padStart(2,'0')}:00 — ${labels[z]}`;
+        if (h === hour) { seg.style.opacity = "1"; seg.style.boxShadow = "inset 0 0 0 1px #fff"; }
+        else { seg.style.opacity = "0.7"; }
+        if (h % 3 === 0) {
+          const lbl = document.createElement("span");
+          lbl.style.cssText = "position:absolute;left:1px;top:2px;font-size:6px;font-weight:700;color:#000;line-height:1";
+          lbl.textContent = String(h).padStart(2,'0');
+          if (z === "peak") lbl.style.color = "#fff";
+          seg.appendChild(lbl);
+        }
+        timeline.appendChild(seg);
+      }
+    }
+
+    // Now marker position
+    const marker = this.shadowRoot.getElementById("g13-now-marker");
+    if (marker) {
+      const pct = ((hour + minutes / 60) / 24) * 100;
+      marker.style.left = `calc(${pct}% - 1px)`;
+    }
+
+    // Current zone
+    const currentZone = getZone(hour);
+    const badge = this.shadowRoot.getElementById("v-g13-zone-badge");
+    if (badge) {
+      badge.textContent = labels[currentZone];
+      badge.style.background = colors[currentZone];
+      badge.style.color = currentZone === "peak" ? "#fff" : "#000";
+    }
+
+    // Weekend badge
+    const wkBadge = this.shadowRoot.getElementById("g13-weekend-badge");
+    if (wkBadge) wkBadge.style.display = isWeekend ? "inline" : "none";
+
+    // Day type
+    const dayType = this.shadowRoot.getElementById("g13-day-type");
+    if (dayType) dayType.textContent = isWeekend ? "(weekend — cały dzień off-peak)" : "(dzień roboczy)";
+
+    // Season
+    const seasonEl = this.shadowRoot.getElementById("v-g13-season");
+    if (seasonEl) {
+      seasonEl.textContent = isSummer ? "☀️ Lato (kwi–wrz)" : "❄️ Zima (paź–mar)";
+      seasonEl.style.color = isSummer ? "#f7b731" : "#00d4ff";
+    }
+  }
+
   _saveApiKeys() {
     const gemini = this.shadowRoot.getElementById("inp-gemini-key")?.value || "";
     const anthropic = this.shadowRoot.getElementById("inp-anthropic-key")?.value || "";
@@ -383,7 +469,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); }
 
   _updateFlow() {
     const pv = this._nm("pv_power") || 0;
@@ -1584,21 +1670,25 @@ class SmartingHomePanel extends HTMLElement {
           <!-- ROW 4: G13 + RCE Details -->
           <div class="grid-cards gc-2" style="margin-bottom:14px">
             <div class="card">
-              <div class="card-title">⏰ Taryfa G13</div>
+              <div class="card-title">⏰ Taryfa G13 <span id="g13-weekend-badge" style="font-size:9px; background:#2ecc71; color:#000; padding:2px 6px; border-radius:4px; font-weight:700; margin-left:6px; display:none">WEEKEND</span></div>
               <div class="dr"><span class="lb">Trwająca strefa</span><span id="v-g13-zone-badge" class="status-badge">—</span></div>
+              <div class="dr"><span class="lb">Sezon</span><span class="vl" id="v-g13-season">—</span></div>
               <div class="dr"><span class="lb">Cena zakupu</span><span class="vl" id="v-g13-price-tab" style="font-weight:800">— zł/kWh</span></div>
               <div class="dr"><span class="lb">Cena sprzedaży RCE</span><span class="vl" id="v-rce-sell" style="color:#2ecc71">— zł/kWh</span></div>
               <div class="dr"><span class="lb">Spread G13↔RCE</span><span class="vl" id="v-spread" style="font-weight:700">— zł</span></div>
+              <!-- Dynamic G13 Timeline -->
               <div style="margin-top:10px; padding:8px; border-radius:6px; background:rgba(255,255,255,0.03)">
-                <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:6px">Harmonogram G13 (dziś)</div>
-                <div style="display:flex; gap:2px; height:18px; border-radius:4px; overflow:hidden" id="g13-strip">
-                  <div style="flex:7; background:#2ecc71; position:relative" title="00:00-07:00 Off-peak"><span style="position:absolute;left:2px;top:1px;font-size:7px;color:#000;font-weight:700">00</span></div>
-                  <div style="flex:6; background:#e67e22" title="07:00-13:00 Przedpoł."><span style="position:absolute;left:2px;top:1px;font-size:7px;color:#000;font-weight:700">07</span></div>
-                  <div style="flex:3; background:#2ecc71" title="13:00-16:00 Off-peak"><span style="position:absolute;left:2px;top:1px;font-size:7px;color:#000;font-weight:700">13</span></div>
-                  <div style="flex:5; background:#e74c3c" title="16:00-21:00 Popołud."><span style="position:absolute;left:2px;top:1px;font-size:7px;color:#fff;font-weight:700">16</span></div>
-                  <div style="flex:3; background:#2ecc71" title="21:00-00:00 Off-peak"><span style="position:absolute;left:2px;top:1px;font-size:7px;color:#000;font-weight:700">21</span></div>
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:6px">Harmonogram G13 <span id="g13-day-type" style="color:#f7b731">(dzień roboczy)</span></div>
+                <div style="position:relative">
+                  <div style="display:flex; gap:1px; height:22px; border-radius:4px; overflow:hidden" id="g13-timeline"></div>
+                  <div id="g13-now-marker" style="position:absolute; top:-4px; width:2px; height:30px; background:#fff; border-radius:1px; z-index:10; transition:left 0.3s"></div>
                 </div>
-                <div style="display:flex; justify-content:space-between; font-size:8px; color:#64748b; margin-top:2px"><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>
+                <div style="display:flex; justify-content:space-between; font-size:8px; color:#64748b; margin-top:2px"><span>0</span><span>3</span><span>6</span><span>9</span><span>12</span><span>15</span><span>18</span><span>21</span><span>24</span></div>
+                <div style="display:flex; gap:8px; margin-top:6px; font-size:9px; flex-wrap:wrap">
+                  <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#2ecc71;vertical-align:middle"></span> Off-peak (najtaniej)</span>
+                  <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#e67e22;vertical-align:middle"></span> Przedpołudniowa</span>
+                  <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#e74c3c;vertical-align:middle"></span> Popołudniowa (najdrożej)</span>
+                </div>
               </div>
             </div>
             <div class="card">
@@ -1609,6 +1699,17 @@ class SmartingHomePanel extends HTMLElement {
               <div class="dr"><span class="lb">Jutro vs dziś</span><span class="vl" id="v-rce-tomorrow-vs">—%</span></div>
               <div class="dr"><span class="lb">Najtaniej jutro</span><span class="vl" id="v-cheapest-tomorrow">—</span></div>
               <div class="dr"><span class="lb">Najdrożej jutro</span><span class="vl" id="v-expensive-tomorrow">—</span></div>
+              <!-- Net-billing strategy -->
+              <div style="margin-top:10px; padding:8px; border-radius:6px; background:rgba(255,255,255,0.03)">
+                <div style="font-size:9px; color:#f7b731; text-transform:uppercase; font-weight:700; margin-bottom:4px">💰 Strategia RCE Net-Billing</div>
+                <div style="font-size:10px; color:#cbd5e1; line-height:1.5">
+                  <div>🌞 <strong style="color:#e74c3c">10–16h</strong> = ❌ NIE sprzedawaj (0.10–0.30 zł)</div>
+                  <div>🌇 <strong style="color:#2ecc71">17–22h</strong> = 💰 SPRZEDAWAJ (0.60–1.20 zł)</div>
+                  <div>🌙 <strong style="color:#00d4ff">22–06h</strong> = ⚡ ładuj baterię (G13 off-peak)</div>
+                  <div>🌅 <strong style="color:#f7b731">06–09h</strong> = 📈 rosnące ceny (0.50–0.90 zł)</div>
+                  <div style="margin-top:4px; color:#94a3b8; font-size:9px">Sprzedaż: RCE × 1.23 (współcz. prosumencki 2026)</div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1624,7 +1725,7 @@ class SmartingHomePanel extends HTMLElement {
           </div>
 
           <!-- ROW 6: Economics -->
-          <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:10px">
+          <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px">
             <div class="card" style="text-align:center; padding:12px 8px">
               <div style="font-size:9px; color:#64748b; text-transform:uppercase">Oszczędności</div>
               <div style="font-size:20px; font-weight:800; color:#2ecc71; margin-top:6px" id="v-savings">—</div>
@@ -1644,6 +1745,58 @@ class SmartingHomePanel extends HTMLElement {
               <div style="font-size:9px; color:#64748b; text-transform:uppercase">Bilans netto</div>
               <div style="font-size:20px; font-weight:800; margin-top:6px" id="v-net-balance">—</div>
               <div style="font-size:10px; color:#94a3b8">zł dziś</div>
+            </div>
+          </div>
+
+          <!-- ROW 7: Tauron 2026 Pricing Table -->
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-title">📋 Cennik Tauron 2026 — porównanie taryf</div>
+            <div style="overflow-x:auto">
+              <table style="width:100%; border-collapse:collapse; font-size:10px; color:#cbd5e1">
+                <thead>
+                  <tr style="border-bottom:1px solid rgba(255,255,255,0.1)">
+                    <th style="text-align:left; padding:6px; color:#64748b; font-weight:700">Taryfa</th>
+                    <th style="text-align:center; padding:6px; color:#64748b">2000 kWh</th>
+                    <th style="text-align:center; padding:6px; color:#64748b">4000 kWh</th>
+                    <th style="text-align:center; padding:6px; color:#64748b">6000 kWh</th>
+                    <th style="text-align:center; padding:6px; color:#64748b">Godziny taniej</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style="border-bottom:1px solid rgba(255,255,255,0.05)">
+                    <td style="padding:6px; font-weight:700">G11</td>
+                    <td style="text-align:center; padding:6px">1.22 zł</td>
+                    <td style="text-align:center; padding:6px">1.12 zł</td>
+                    <td style="text-align:center; padding:6px">1.07 zł</td>
+                    <td style="text-align:center; padding:6px; color:#94a3b8">brak — stała</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid rgba(255,255,255,0.05)">
+                    <td style="padding:6px; font-weight:700">G12</td>
+                    <td style="text-align:center; padding:6px">0.97 zł</td>
+                    <td style="text-align:center; padding:6px">0.87 zł</td>
+                    <td style="text-align:center; padding:6px">0.82 zł</td>
+                    <td style="text-align:center; padding:6px; color:#2ecc71">13–15 + 22–06</td>
+                  </tr>
+                  <tr style="border-bottom:1px solid rgba(255,255,255,0.05)">
+                    <td style="padding:6px; font-weight:700">G12w</td>
+                    <td style="text-align:center; padding:6px">0.99 zł</td>
+                    <td style="text-align:center; padding:6px">0.90 zł</td>
+                    <td style="text-align:center; padding:6px">0.85 zł</td>
+                    <td style="text-align:center; padding:6px; color:#2ecc71">13–15 + 22–06 + weekendy</td>
+                  </tr>
+                  <tr style="background:rgba(46,204,113,0.06)">
+                    <td style="padding:6px; font-weight:800; color:#2ecc71">G13 ✓</td>
+                    <td style="text-align:center; padding:6px; font-weight:800; color:#2ecc71">0.97 zł</td>
+                    <td style="text-align:center; padding:6px; font-weight:800; color:#2ecc71">0.87 zł</td>
+                    <td style="text-align:center; padding:6px; font-weight:800; color:#2ecc71">0.83 zł</td>
+                    <td style="text-align:center; padding:6px; color:#2ecc71; font-weight:700">85% off-peak + weekendy</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div style="font-size:9px; color:#64748b; margin-top:6px; line-height:1.4">
+              * Ceny brutto za kWh (sprzedaż + dystrybucja). G13: 5% przedpołudniowa, 10% popołudniowa, 85% off-peak.<br>
+              Weekendy i święta = cały dzień off-peak (najtańsza strefa).
             </div>
           </div>
 
@@ -2102,7 +2255,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.7.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.7.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
