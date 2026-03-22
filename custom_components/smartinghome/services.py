@@ -77,6 +77,7 @@ SAVE_SETTINGS_SCHEMA = vol.Schema(
 TEST_API_KEY_SCHEMA = vol.Schema(
     {
         vol.Required("provider"): vol.In(["gemini", "anthropic"]),
+        vol.Optional("api_key", default=""): cv.string,
     }
 )
 
@@ -192,26 +193,28 @@ async def async_setup_services(
     # ── New services: upload, save_settings, test_api_key ──
 
     async def handle_upload_inverter_image(call: ServiceCall) -> None:
-        """Decode base64 image and save to www/smartinghome/inverter.png."""
+        """Decode base64 image and save to www/smartinghome/."""
         filename = call.data["filename"]
         data_b64 = call.data["data"]
 
-        ext = Path(filename).suffix.lower() or ".png"
-        out_name = f"inverter{ext}"
+        # Use the provided filename directly (e.g. home.png, inverter.png)
+        safe_name = Path(filename).name  # strip any path components
+        if not safe_name:
+            safe_name = "inverter.png"
 
         www_dir = Path(hass.config.path("www")) / "smartinghome"
         www_dir.mkdir(parents=True, exist_ok=True)
-        dest = www_dir / out_name
+        dest = www_dir / safe_name
 
         try:
             img_bytes = base64.b64decode(data_b64)
             dest.write_bytes(img_bytes)
             size_kb = len(img_bytes) / 1024
             _LOGGER.info(
-                "Inverter image saved: %s (%.1f KB)", dest, size_kb
+                "Image saved: %s (%.1f KB)", dest, size_kb
             )
         except Exception as err:
-            _LOGGER.error("Failed to save inverter image: %s", err)
+            _LOGGER.error("Failed to save image: %s", err)
 
     async def handle_save_settings(call: ServiceCall) -> None:
         """Update config entry with new API keys."""
@@ -231,15 +234,30 @@ async def async_setup_services(
         if anthropic_key:
             ai_advisor._anthropic_api_key = anthropic_key
 
+        # Also persist key status to settings.json so frontend can show it after refresh
+        status_updates = {}
+        if gemini_key:
+            status_updates["gemini_key_status"] = "saved"
+        if anthropic_key:
+            status_updates["anthropic_key_status"] = "saved"
+        if status_updates:
+            _update_settings_file(hass, status_updates)
+
         _LOGGER.info("API keys updated via panel settings")
 
     async def handle_test_api_key(call: ServiceCall) -> None:
         """Test if an API key is valid by making a minimal request."""
         provider = call.data["provider"]
+        test_key = call.data.get("api_key", "")
         try:
             if provider == "gemini":
+                # Use provided key if given, otherwise use stored one
+                if test_key:
+                    ai_advisor._gemini_api_key = test_key
                 valid = await ai_advisor.test_gemini_key()
             else:
+                if test_key:
+                    ai_advisor._anthropic_api_key = test_key
                 valid = await ai_advisor.test_anthropic_key()
             status = "valid" if valid else "invalid"
         except Exception:

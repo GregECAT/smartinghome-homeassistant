@@ -229,8 +229,22 @@ class SmartingHomePanel extends HTMLElement {
   _testApiKey(provider) {
     const btn = this.shadowRoot.getElementById(`test-btn-${provider}`);
     if (btn) { btn.textContent = "⏳ Testowanie..."; btn.disabled = true; }
+    // Read key from input field so we test what the user actually entered
+    const keyInput = this.shadowRoot.getElementById(`inp-${provider}-key`);
+    const keyValue = keyInput?.value || "";
+    if (!keyValue) {
+      const ind = this.shadowRoot.getElementById(`key-status-${provider}`);
+      if (ind) { ind.textContent = "❌ Podaj klucz API"; ind.style.color = "#e74c3c"; }
+      if (btn) { btn.textContent = "🧪 Testuj"; btn.disabled = false; }
+      return;
+    }
     if (this._hass) {
-      this._hass.callService("smartinghome", "test_api_key", { provider });
+      // First save the key, then test it
+      this._hass.callService("smartinghome", "save_settings", {
+        [`${provider}_api_key`]: keyValue,
+      });
+      // Then test with the key
+      this._hass.callService("smartinghome", "test_api_key", { provider, api_key: keyValue });
       if (!this._testSub) {
         this._testSub = this._hass.connection.subscribeEvents((ev) => {
           const d = ev.data;
@@ -240,7 +254,7 @@ class SmartingHomePanel extends HTMLElement {
           if (b) { b.textContent = "🧪 Testuj"; b.disabled = false; }
         }, "smartinghome_api_key_test");
       }
-      setTimeout(() => { if (btn) { btn.textContent = "🧪 Testuj"; btn.disabled = false; } }, 10000);
+      setTimeout(() => { if (btn) { btn.textContent = "🧪 Testuj"; btn.disabled = false; } }, 15000);
     }
   }
 
@@ -1000,8 +1014,8 @@ class SmartingHomePanel extends HTMLElement {
                         <div id="v-load-l1">L1: — W</div><div id="v-load-l2">L2: — W</div><div id="v-load-l3">L3: — W</div>
                       </div>
                     </div>
-                    <div style="flex-shrink:0; max-width:90px">
-                      <img id="v-home-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/grafika-domu.png" alt="Dom" style="width:100%; max-height:80px; object-fit:contain; opacity:0.85; border-radius:8px" />
+                    <div style="flex-shrink:0; max-width:120px">
+                      <img id="v-home-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/grafika-domu.png" alt="Dom" style="width:100%; max-height:100px; object-fit:contain; opacity:0.85; border-radius:8px" />
                     </div>
                   </div>
                 </div>
@@ -1047,13 +1061,20 @@ class SmartingHomePanel extends HTMLElement {
               <!-- 🔌 GRID / SIEĆ (right, below Home) -->
               <div class="grid-area">
                 <div class="node" id="grid-node" style="border-color: rgba(231,76,60,0.15); transition: border-color 0.5s, box-shadow 0.5s">
-                  <div class="node-title">🔌 Sieć</div>
-                  <div class="node-big" id="v-grid">— W</div>
-                  <div class="node-dir" id="v-grid-dir" style="color:#e74c3c"></div>
-                  <div class="node-detail" style="margin-top:6px">
-                    <div><span id="v-grid-v1">— V</span> · <span id="v-grid-v2">— V</span> · <span id="v-grid-v3">— V</span></div>
-                    <div id="v-grid-freq">— Hz</div>
-                    <div style="margin-top:4px"><span style="color:#e74c3c">↓</span> <span id="v-grid-import">— kWh</span>&nbsp;<span style="color:#2ecc71">↑</span> <span id="v-grid-export">— kWh</span></div>
+                  <div style="display:flex; align-items:flex-start; gap:10px">
+                    <div style="flex-shrink:0; max-width:50px">
+                      <img id="v-grid-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/slup-energetyka.png" alt="Sieć" style="width:100%; max-height:70px; object-fit:contain; opacity:0.8" />
+                    </div>
+                    <div style="flex:1">
+                      <div class="node-title">🔌 Sieć</div>
+                      <div class="node-big" id="v-grid">— W</div>
+                      <div class="node-dir" id="v-grid-dir" style="color:#e74c3c"></div>
+                      <div class="node-detail" style="margin-top:6px">
+                        <div><span id="v-grid-v1">— V</span> · <span id="v-grid-v2">— V</span> · <span id="v-grid-v3">— V</span></div>
+                        <div id="v-grid-freq">— Hz</div>
+                        <div style="margin-top:4px"><span style="color:#e74c3c">↓</span> <span id="v-grid-import">— kWh</span>&nbsp;<span style="color:#2ecc71">↑</span> <span id="v-grid-export">— kWh</span></div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1433,7 +1454,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
