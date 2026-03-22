@@ -553,8 +553,17 @@ SERVICE_GENERATE_REPORT: Final = "generate_report"
 # =============================================================================
 # AI Advisor
 # =============================================================================
-AI_GEMINI_MODEL: Final = "gemini-2.0-flash"
-AI_CLAUDE_MODEL: Final = "claude-sonnet-4-20250514"
+AI_GEMINI_MODEL: Final = "gemini-2.5-flash"  # default
+AI_GEMINI_MODELS: Final = {
+    "gemini-2.5-flash": "Gemini 2.5 Flash (szybki, darmowy tier)",
+    "gemini-2.5-pro": "Gemini 2.5 Pro (zaawansowany)",
+    "gemini-3.1": "Gemini 3.1 (najnowszy)",
+}
+AI_CLAUDE_MODEL: Final = "claude-sonnet-4.6-20260301"  # default
+AI_CLAUDE_MODELS: Final = {
+    "claude-sonnet-4.6-20260301": "Claude Sonnet 4.6 (szybki)",
+    "claude-opus-4.6-20260301": "Claude Opus 4.6 (najpotężniejszy)",
+}
 AI_MAX_TOKENS: Final = 2048
 AI_TEMPERATURE: Final = 0.3
 AI_RATE_LIMIT_CALLS: Final = 30  # per hour

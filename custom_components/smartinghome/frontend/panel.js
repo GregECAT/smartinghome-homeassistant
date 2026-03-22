@@ -94,7 +94,15 @@ class SmartingHomePanel extends HTMLElement {
   async _loadSettings() {
     try {
       const r = await fetch('/local/smartinghome/settings.json?t=' + Date.now());
-      if (r.ok) { this._settings = await r.json(); this._updateKeyStatus(); }
+      if (r.ok) {
+        this._settings = await r.json();
+        this._updateKeyStatus();
+        // Restore model selections
+        const gSel = this.shadowRoot.getElementById('sel-gemini-model');
+        const aSel = this.shadowRoot.getElementById('sel-anthropic-model');
+        if (gSel && this._settings.gemini_model) gSel.value = this._settings.gemini_model;
+        if (aSel && this._settings.anthropic_model) aSel.value = this._settings.anthropic_model;
+      }
     } catch(e) { /* file not yet created */ }
   }
 
@@ -122,18 +130,20 @@ class SmartingHomePanel extends HTMLElement {
   _saveApiKeys() {
     const gemini = this.shadowRoot.getElementById("inp-gemini-key")?.value || "";
     const anthropic = this.shadowRoot.getElementById("inp-anthropic-key")?.value || "";
+    const geminiModel = this.shadowRoot.getElementById("sel-gemini-model")?.value || "gemini-2.5-flash";
+    const anthropicModel = this.shadowRoot.getElementById("sel-anthropic-model")?.value || "claude-sonnet-4.6-20260301";
     if (this._hass) {
       this._hass.callService("smartinghome", "save_settings", {
         gemini_api_key: gemini,
         anthropic_api_key: anthropic,
       });
-      const updates = {};
+      const updates = { gemini_model: geminiModel, anthropic_model: anthropicModel };
       if (gemini) updates.gemini_key_status = "saved";
       if (anthropic) updates.anthropic_key_status = "saved";
       this._savePanelSettings(updates);
       this._updateKeyStatus();
       const st = this.shadowRoot.getElementById("v-save-status");
-      if (st) { st.textContent = "✅ Klucze zapisane pomyślnie!"; setTimeout(() => { st.textContent = ""; }, 4000); }
+      if (st) { st.textContent = "✅ Klucze i modele zapisane pomyślnie!"; setTimeout(() => { st.textContent = ""; }, 4000); }
     }
   }
 
@@ -1057,7 +1067,24 @@ class SmartingHomePanel extends HTMLElement {
                 </div>
                 <div class="key-status" id="key-status-anthropic">— Brak klucza</div>
               </div>
-              <button class="save-btn" onclick="this.getRootNode().host._saveApiKeys()">💾 Zapisz klucze API</button>
+              <div style="display:flex; gap:16px; flex-wrap:wrap; margin-top:14px">
+                <div class="settings-field" style="flex:1; min-width:200px">
+                  <label style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">🤖 Model Gemini</label>
+                  <select id="sel-gemini-model" style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:12px">
+                    <option value="gemini-2.5-flash">Gemini 2.5 Flash (szybki)</option>
+                    <option value="gemini-2.5-pro">Gemini 2.5 Pro (zaawansowany)</option>
+                    <option value="gemini-3.1">Gemini 3.1 (najnowszy)</option>
+                  </select>
+                </div>
+                <div class="settings-field" style="flex:1; min-width:200px">
+                  <label style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">🤖 Model Claude</label>
+                  <select id="sel-anthropic-model" style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:12px">
+                    <option value="claude-sonnet-4.6-20260301">Sonnet 4.6 (szybki)</option>
+                    <option value="claude-opus-4.6-20260301">Opus 4.6 (najpotężniejszy)</option>
+                  </select>
+                </div>
+              </div>
+              <button class="save-btn" onclick="this.getRootNode().host._saveApiKeys()">💾 Zapisz klucze API i model</button>
               <div id="v-save-status" style="font-size:11px; color:#2ecc71; margin-top:8px"></div>
             </div>
 
@@ -1111,7 +1138,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.9</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
