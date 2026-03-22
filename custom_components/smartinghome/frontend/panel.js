@@ -1644,7 +1644,6 @@ class SmartingHomePanel extends HTMLElement {
           grid-template-columns: 1fr 1fr 1fr;
           grid-template-rows: auto auto auto;
           gap: 12px; min-height: 540px;
-          align-items: start;
         }
 
         /* Node boxes */
@@ -1680,7 +1679,7 @@ class SmartingHomePanel extends HTMLElement {
         /* Corner layout: PV top-left, Home top-right, Inv center-up, Batt bottom-left, Grid bottom-right */
         .pv-area { grid-column: 1; grid-row: 1; }
         .home-area { grid-column: 3; grid-row: 1; }
-        .inv-area { grid-column: 2; grid-row: 1 / 4; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .inv-area { grid-column: 2; grid-row: 1 / 4; display: flex; flex-direction: column; align-items: center; justify-content: center; align-self: center; }
         .batt-area { grid-column: 1; grid-row: 2 / 4; align-self: center; }
         .grid-area { grid-column: 3; grid-row: 2 / 4; align-self: center; }
         .summary-area { grid-column: 1 / 4; grid-row: 4; }
@@ -3052,7 +3051,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.9.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.9.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
