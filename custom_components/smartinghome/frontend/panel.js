@@ -296,6 +296,8 @@ class SmartingHomePanel extends HTMLElement {
             const iconEl = this.shadowRoot.getElementById("v-inv-icon");
             if (iconEl) iconEl.style.display = 'none';
           }
+          this._settings.custom_inverter_image = true;
+          this._savePanelSettings({ custom_inverter_image: true });
         }
       };
       reader.readAsDataURL(file);
@@ -320,6 +322,8 @@ class SmartingHomePanel extends HTMLElement {
           if (st) { st.innerHTML = '✅ Zdjęcie domu wgrane! <span style="color:#94a3b8">Odśwież panel.</span>'; }
           const homeImg = this.shadowRoot.getElementById("v-home-img");
           if (homeImg) { homeImg.src = `/local/smartinghome/home.png?t=${Date.now()}`; homeImg.style.display = 'block'; }
+          this._settings.custom_home_image = true;
+          this._savePanelSettings({ custom_home_image: true });
         }
       };
       reader.readAsDataURL(file);
@@ -583,18 +587,23 @@ class SmartingHomePanel extends HTMLElement {
       imgEl.setAttribute("data-model", imgName);
       const iconEl = this.shadowRoot.getElementById("v-inv-icon");
       const remoteFallback = `https://smartinghome.pl/wp-content/uploads/2026/03/${imgName === 'deye' ? 'Deye-1' : 'GoodWe-1'}.png`;
-      const localBrand = `/local/smartinghome/${imgName}.png`;
-      const localGeneric = `/local/smartinghome/inverter.png`;
-      // Silent fetch chain — no 404 console errors
-      (async () => {
-        for (const url of [localBrand, localGeneric]) {
-          try { const r = await fetch(url, {method:'HEAD'}); if (r.ok) { imgEl.src = url + '?t=' + Date.now(); imgEl.style.display = 'block'; if (iconEl) iconEl.style.display = 'none'; return; } } catch(e) {}
-        }
-        // Remote fallback
+      // Only try local paths if user has uploaded a custom image
+      if (this._settings.custom_inverter_image) {
+        const localBrand = `/local/smartinghome/${imgName}.png`;
+        const localGeneric = `/local/smartinghome/inverter.png`;
+        (async () => {
+          for (const url of [localBrand, localGeneric]) {
+            try { const r = await fetch(url, {method:'HEAD'}); if (r.ok) { imgEl.src = url + '?t=' + Date.now(); imgEl.style.display = 'block'; if (iconEl) iconEl.style.display = 'none'; return; } } catch(e) {}
+          }
+          imgEl.src = remoteFallback;
+          imgEl.style.display = 'block';
+          if (iconEl) iconEl.style.display = 'none';
+        })();
+      } else {
         imgEl.src = remoteFallback;
         imgEl.style.display = 'block';
         if (iconEl) iconEl.style.display = 'none';
-      })();
+      }
     }
   }
 
@@ -617,15 +626,20 @@ class SmartingHomePanel extends HTMLElement {
     const imgEl = this.shadowRoot.getElementById("v-home-img");
     if (!imgEl || imgEl.getAttribute("data-loaded") === "1") return;
     imgEl.setAttribute("data-loaded", "1");
-    const localPath = '/local/smartinghome/home.png';
     const remoteFallback = 'https://smartinghome.pl/wp-content/uploads/2026/03/grafika-domu.png';
-    (async () => {
-      try {
-        const r = await fetch(localPath, {method:'HEAD'});
-        if (r.ok) { imgEl.src = localPath + '?t=' + Date.now(); return; }
-      } catch(e) {}
+    // Only try local path if user has uploaded a custom home image
+    if (this._settings.custom_home_image) {
+      const localPath = '/local/smartinghome/home.png';
+      (async () => {
+        try {
+          const r = await fetch(localPath, {method:'HEAD'});
+          if (r.ok) { imgEl.src = localPath + '?t=' + Date.now(); return; }
+        } catch(e) {}
+        imgEl.src = remoteFallback;
+      })();
+    } else {
       imgEl.src = remoteFallback;
-    })();
+    }
   }
 
   _updateStats() {
@@ -2088,7 +2102,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.7.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.7.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
