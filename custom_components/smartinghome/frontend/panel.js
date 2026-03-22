@@ -188,6 +188,30 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
 
+  _uploadHomeImage(file) {
+    if (!file) return;
+    const preview = this.shadowRoot.getElementById('home-upload-preview');
+    const st = this.shadowRoot.getElementById('v-home-upload-status');
+    try {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (preview) { preview.src = reader.result; preview.style.display = 'block'; }
+        if (this._hass) {
+          this._hass.callService("smartinghome", "upload_inverter_image", {
+            filename: "home.png",
+            data: reader.result.split(",")[1],
+          });
+          if (st) { st.innerHTML = '✅ Zdjęcie domu wgrane! <span style="color:#94a3b8">Odśwież panel.</span>'; }
+          const homeImg = this.shadowRoot.getElementById("v-home-img");
+          if (homeImg) { homeImg.src = `/local/smartinghome/home.png?t=${Date.now()}`; homeImg.style.display = 'block'; }
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch (e) {
+      if (st) st.textContent = "❌ Błąd wgrywania: " + e.message;
+    }
+  }
+
   _updateKeyStatus() {
     ["gemini", "anthropic"].forEach(p => {
       const ind = this.shadowRoot.getElementById(`key-status-${p}`);
@@ -225,7 +249,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); }
 
   _updateFlow() {
     const pv = this._nm("pv_power") || 0;
@@ -344,7 +368,7 @@ class SmartingHomePanel extends HTMLElement {
     if (imgEl && imgEl.getAttribute("data-model") !== imgName) {
       imgEl.setAttribute("data-model", imgName);
       const iconEl = this.shadowRoot.getElementById("v-inv-icon");
-      const remoteFallback = `https://smartinghome.pl/wp-content/uploads/2026/03/${imgName === 'deye' ? 'Deye' : 'GoodWe'}.png`;
+      const remoteFallback = `https://smartinghome.pl/wp-content/uploads/2026/03/${imgName === 'deye' ? 'Deye-1' : 'GoodWe-1'}.png`;
       const localBrand = `/local/smartinghome/${imgName}.png`;
       const localGeneric = `/local/smartinghome/inverter.png`;
       // Silent fetch chain — no 404 console errors
@@ -373,6 +397,21 @@ class SmartingHomePanel extends HTMLElement {
     } else {
       el.style.display = "none";
     }
+  }
+
+  _updateHomeImage() {
+    const imgEl = this.shadowRoot.getElementById("v-home-img");
+    if (!imgEl || imgEl.getAttribute("data-loaded") === "1") return;
+    imgEl.setAttribute("data-loaded", "1");
+    const localPath = '/local/smartinghome/home.png';
+    const remoteFallback = 'https://smartinghome.pl/wp-content/uploads/2026/03/grafika-domu.png';
+    (async () => {
+      try {
+        const r = await fetch(localPath, {method:'HEAD'});
+        if (r.ok) { imgEl.src = localPath + '?t=' + Date.now(); return; }
+      } catch(e) {}
+      imgEl.src = remoteFallback;
+    })();
   }
 
   _updateStats() {
@@ -859,10 +898,17 @@ class SmartingHomePanel extends HTMLElement {
               <!-- 🏠 ZUZYCIE (top right) -->
               <div class="home-area">
                 <div class="node" style="border-color: rgba(46,204,113,0.2)">
-                  <div class="node-title">🏠 Zużycie</div>
-                  <div class="node-big" id="v-load">— W</div>
-                  <div class="node-detail" style="margin-top:8px">
-                    <div id="v-load-l1">L1: — W</div><div id="v-load-l2">L2: — W</div><div id="v-load-l3">L3: — W</div>
+                  <div style="display:flex; align-items:flex-start; gap:12px">
+                    <div style="flex:1">
+                      <div class="node-title">🏠 Zużycie</div>
+                      <div class="node-big" id="v-load">— W</div>
+                      <div class="node-detail" style="margin-top:8px">
+                        <div id="v-load-l1">L1: — W</div><div id="v-load-l2">L2: — W</div><div id="v-load-l3">L3: — W</div>
+                      </div>
+                    </div>
+                    <div style="flex-shrink:0; max-width:90px">
+                      <img id="v-home-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/grafika-domu.png" alt="Dom" style="width:100%; max-height:80px; object-fit:contain; opacity:0.85; border-radius:8px" />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -887,7 +933,7 @@ class SmartingHomePanel extends HTMLElement {
               <!-- ⚡ INVERTER (center) -->
               <div class="inv-area">
                 <div class="inv-box">
-                  <img id="v-inv-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/GoodWe.png" alt="Inverter" style="max-width:160px; max-height:120px; object-fit:contain" />
+                  <img id="v-inv-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/GoodWe-1.png" alt="Inverter" style="max-width:160px; max-height:120px; object-fit:contain" />
                   <div id="v-inv-icon" style="display:none; text-align:center">
                     <div class="inv-icon">⚡</div>
                     <div style="font-size:8px; color:#f39c12; line-height:1.2; margin-top:2px">Wgraj zdjęcie<br>w ⚙️ Ustawieniach</div>
@@ -1120,6 +1166,34 @@ class SmartingHomePanel extends HTMLElement {
               </div>
             </div>
 
+            <!-- 🏠 House Image Upload -->
+            <div class="card" style="grid-column: 1 / -1">
+              <div class="card-title">🏠 Zdjęcie domu</div>
+              <div style="font-size:11px; color:#94a3b8; margin-bottom:10px">Wgraj zdjęcie swojego domu, które pojawi się w sekcji Zużycie na diagramie przepływów.</div>
+
+              <div style="text-align:center; margin-bottom:12px">
+                <img id="home-upload-preview" style="display:none; max-width:160px; max-height:100px; border-radius:10px; border:1px solid rgba(255,255,255,0.1); background:repeating-conic-gradient(#1e293b 0% 25%, #0f172a 0% 50%) 50% / 16px 16px" />
+              </div>
+
+              <div class="upload-zone" onclick="this.parentElement.querySelector('input[type=file].home-file').click()" style="cursor:pointer">
+                <div style="font-size:32px; margin-bottom:6px">🏡</div>
+                <div style="font-size:12px; color:#a0aec0">Kliknij aby wybrać zdjęcie domu PNG/JPG</div>
+              </div>
+              <input type="file" accept="image/png,image/jpeg" class="home-file" style="display:none" onchange="this.getRootNode().host._uploadHomeImage(this.files[0])" />
+              <div id="v-home-upload-status" style="font-size:11px; color:#2ecc71; margin-top:8px"></div>
+
+              <div style="margin-top:12px; padding:10px; border-radius:8px; background:rgba(46,204,113,0.04); border:1px solid rgba(46,204,113,0.1)">
+                <div style="font-size:11px; font-weight:700; color:#2ecc71; margin-bottom:6px">💡 Zalecenia</div>
+                <div style="font-size:10px; color:#94a3b8; line-height:1.6">
+                  • <strong>Domyślna grafika:</strong> wczytywana automatycznie z smartinghome.pl<br>
+                  • <strong>Format:</strong> PNG z przezroczystym tłem — najlepszy efekt<br>
+                  • <strong>Rozmiar:</strong> 400–600px szerokości<br>
+                  • <strong>Nazwa pliku:</strong> <code style="color:#f39c12">home.png</code><br>
+                  • <strong>Ścieżka:</strong> <code style="color:#00d4ff">/config/www/smartinghome/</code>
+                </div>
+              </div>
+            </div>
+
             <!-- ⭐ Upgrade Prompt (FREE only) -->
             <div class="card" style="grid-column: 1 / -1" id="settings-upgrade-box">
               <div class="upgrade-box">
@@ -1138,7 +1212,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
