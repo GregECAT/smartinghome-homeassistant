@@ -197,7 +197,7 @@ class AIAdvisor:
 Analyze the following system data and answer the user's question.
 Provide specific, actionable recommendations.
 Use Polish energy market knowledge (G13 tariff, RCE pricing, net-billing rules).
-Keep your response concise (max 500 words).
+Keep your response concise (max 800 words).
 Respond in the same language as the question.
 
 {context}
@@ -224,9 +224,15 @@ User question: {question}"""
                         result = await resp.json()
                         candidates = result.get("candidates", [])
                         if candidates:
+                            finish_reason = candidates[0].get("finishReason", "UNKNOWN")
+                            _LOGGER.debug("Gemini finish_reason: %s", finish_reason)
+                            if finish_reason == "MAX_TOKENS":
+                                _LOGGER.warning("Gemini response truncated (MAX_TOKENS). Consider increasing AI_MAX_TOKENS.")
                             parts = candidates[0].get("content", {}).get("parts", [])
                             if parts:
-                                return parts[0].get("text", "No response text.")
+                                text = parts[0].get("text", "No response text.")
+                                _LOGGER.debug("Gemini response length: %d chars", len(text))
+                                return text
                         return "No response from Gemini."
                     err_text = await resp.text()
                     _LOGGER.error("Gemini API HTTP %s: %s", resp.status, err_text)
@@ -256,7 +262,7 @@ User question: {question}"""
 Analyze the following system data and answer the user's question.
 Provide specific, actionable recommendations.
 Use Polish energy market knowledge (G13 tariff, RCE pricing, net-billing rules).
-Keep your response concise (max 500 words).
+Keep your response concise (max 800 words).
 Respond in the same language as the question.
 
 {context}
