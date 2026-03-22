@@ -680,19 +680,87 @@ class SmartingHomePanel extends HTMLElement {
 
   _renderMarkdown(text) {
     if (!text) return '';
-    let html = text
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/```([\s\S]*?)```/g, '<pre style="background:rgba(255,255,255,0.05);padding:8px;border-radius:6px;font-size:11px;overflow-x:auto;margin:6px 0"><code>$1</code></pre>')
-      .replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:3px;font-size:11px">$1</code>')
-      .replace(/### (.+)/g, '<div style="font-size:13px;font-weight:700;color:#00d4ff;margin:10px 0 4px">$1</div>')
-      .replace(/## (.+)/g, '<div style="font-size:14px;font-weight:700;color:#fff;margin:10px 0 4px">$1</div>')
-      .replace(/# (.+)/g, '<div style="font-size:15px;font-weight:800;color:#fff;margin:10px 0 4px">$1</div>')
-      .replace(/\*\*(.+?)\*\*/g, '<strong style="color:#fff">$1</strong>')
-      .replace(/\*(.+?)\*/g, '<em>$1</em>')
-      .replace(/^[\-\*] (.+)/gm, '<div style="padding-left:12px;position:relative"><span style="position:absolute;left:0;color:#00d4ff">•</span> $1</div>')
-      .replace(/^(\d+)\. (.+)/gm, '<div style="padding-left:16px;position:relative"><span style="position:absolute;left:0;color:#f7b731;font-weight:600">$1.</span> $2</div>')
-      .replace(/\n/g, '<br>');
-    return html;
+    // Escape HTML first
+    let t = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    // ── Code blocks
+    t = t.replace(/```([\s\S]*?)```/g, '<pre style="background:rgba(0,212,255,0.06);border:1px solid rgba(0,212,255,0.15);padding:10px 12px;border-radius:8px;font-size:11px;font-family:monospace;overflow-x:auto;margin:8px 0;color:#94a3b8"><code>$1</code></pre>');
+    t = t.replace(/`([^`]+)`/g, '<code style="background:rgba(0,212,255,0.1);color:#00d4ff;padding:1px 5px;border-radius:4px;font-size:11px">$1</code>');
+
+    // ── Tables: | col | col |
+    t = t.replace(/(\|.+\|[\r\n]+\|[-| :]+\|[\r\n]+((\|.+\|[\r\n]*)+))/g, (match) => {
+      const rows = match.trim().split('\n').filter(r => r.trim());
+      if (rows.length < 2) return match;
+      const headers = rows[0].split('|').filter(c => c.trim()).map(c => c.trim());
+      const dataRows = rows.slice(2);
+      let th = headers.map(h => `<th style="padding:6px 10px;text-align:left;font-weight:700;color:#00d4ff;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid rgba(255,255,255,0.1)">${h}</th>`).join('');
+      let tbody = dataRows.map(r => {
+        const cells = r.split('|').filter(c => c.trim()).map(c => c.trim());
+        return '<tr>' + cells.map(c => `<td style="padding:5px 10px;font-size:12px;color:#cbd5e1;border-bottom:1px solid rgba(255,255,255,0.04)">${c}</td>`).join('') + '</tr>';
+      }).join('');
+      return `<table style="width:100%;border-collapse:collapse;margin:8px 0;background:rgba(255,255,255,0.02);border-radius:8px;overflow:hidden"><thead><tr>${th}</tr></thead><tbody>${tbody}</tbody></table>`;
+    });
+
+    // ── Blockquotes → Callout boxes
+    t = t.replace(/^&gt; (.+)/gm, (match, content) => {
+      let color = '#00d4ff', bg = 'rgba(0,212,255,0.06)', icon = '💡';
+      if (content.match(/⚠️|uwag|ostrzeż/i)) { color = '#f7b731'; bg = 'rgba(247,183,49,0.08)'; icon = '⚠️'; }
+      else if (content.match(/❌|kryty|niebezp|nie rób/i)) { color = '#e74c3c'; bg = 'rgba(231,76,60,0.08)'; icon = '🚫'; }
+      else if (content.match(/✅|zalec|dobr|tak/i)) { color = '#2ecc71'; bg = 'rgba(46,204,113,0.08)'; icon = '✅'; }
+      return `<div style="background:${bg};border-left:3px solid ${color};padding:8px 12px;border-radius:0 8px 8px 0;margin:6px 0;font-size:12px;color:#e2e8f0">${content}</div>`;
+    });
+
+    // ── Horizontal rules → section dividers
+    t = t.replace(/^---+$/gm, '<div style="height:1px;background:linear-gradient(90deg,transparent,rgba(0,212,255,0.3),transparent);margin:12px 0"></div>');
+
+    // ── H1: Main title with gradient
+    t = t.replace(/^# (.+)$/gm, '<div style="font-size:16px;font-weight:800;color:#fff;margin:8px 0;padding-bottom:6px;border-bottom:2px solid rgba(0,212,255,0.3)">$1</div>');
+
+    // ── H2: Section cards with colored border
+    t = t.replace(/^## (.+)$/gm, (match, title) => {
+      let borderColor = '#00d4ff';
+      if (title.match(/bateria|battery|akumulator/i)) borderColor = '#2ecc71';
+      else if (title.match(/sieć|grid|import|eksport/i)) borderColor = '#f7b731';
+      else if (title.match(/analiz|diagnoz|status|stan/i)) borderColor = '#3498db';
+      else if (title.match(/rekomend|zalec|porad|sugest/i)) borderColor = '#9b59b6';
+      else if (title.match(/koszt|cena|taryf|finans|ekonom/i)) borderColor = '#e74c3c';
+      else if (title.match(/PV|solar|słone|fotow/i)) borderColor = '#f39c12';
+      return `<div style="font-size:14px;font-weight:700;color:#fff;margin:14px 0 6px;padding:8px 12px;background:rgba(255,255,255,0.03);border-left:3px solid ${borderColor};border-radius:0 8px 8px 0">${title}</div>`;
+    });
+
+    // ── H3: Sub-section headers
+    t = t.replace(/^### (.+)$/gm, '<div style="font-size:12px;font-weight:700;color:#00d4ff;margin:10px 0 4px;padding-left:8px;border-left:2px solid rgba(0,212,255,0.3)">$1</div>');
+
+    // ── Bold with emoji badges
+    t = t.replace(/\*\*(✅[^*]+)\*\*/g, '<span style="display:inline-block;background:rgba(46,204,113,0.12);color:#2ecc71;padding:2px 8px;border-radius:6px;font-weight:700;font-size:11px;margin:1px 0">$1</span>');
+    t = t.replace(/\*\*(⚠️[^*]+)\*\*/g, '<span style="display:inline-block;background:rgba(247,183,49,0.12);color:#f7b731;padding:2px 8px;border-radius:6px;font-weight:700;font-size:11px;margin:1px 0">$1</span>');
+    t = t.replace(/\*\*(❌[^*]+)\*\*/g, '<span style="display:inline-block;background:rgba(231,76,60,0.12);color:#e74c3c;padding:2px 8px;border-radius:6px;font-weight:700;font-size:11px;margin:1px 0">$1</span>');
+    t = t.replace(/\*\*(💡[^*]+)\*\*/g, '<span style="display:inline-block;background:rgba(0,212,255,0.12);color:#00d4ff;padding:2px 8px;border-radius:6px;font-weight:700;font-size:11px;margin:1px 0">$1</span>');
+    t = t.replace(/\*\*Rekomendacja:\s*(.+?)\*\*/g, '<span style="display:inline-block;background:rgba(155,89,182,0.15);color:#c39bd3;padding:3px 10px;border-radius:6px;font-weight:700;font-size:12px;margin:2px 0">🎯 $1</span>');
+    t = t.replace(/\*\*Uzasadnienie:\s*(.+?)\*\*/g, '<div style="font-size:11px;color:#94a3b8;padding-left:10px;border-left:2px solid rgba(255,255,255,0.06);margin:3px 0">$1</div>');
+
+    // ── Remaining bold/italic
+    t = t.replace(/\*\*(.+?)\*\*/g, '<strong style="color:#fff;font-weight:700">$1</strong>');
+    t = t.replace(/\*(.+?)\*/g, '<em style="color:#94a3b8">$1</em>');
+
+    // ── Numbered list items → step cards
+    t = t.replace(/^(\d+)\.\s+(.+)/gm, (match, num, content) => {
+      const colors = ['#00d4ff', '#2ecc71', '#f7b731', '#e74c3c', '#9b59b6', '#3498db'];
+      const c = colors[(parseInt(num) - 1) % colors.length];
+      return `<div style="display:flex;gap:10px;align-items:flex-start;margin:8px 0;padding:8px 10px;background:rgba(255,255,255,0.02);border-radius:8px">
+        <div style="min-width:28px;height:28px;background:${c};border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;color:#0f172a;flex-shrink:0">${num}</div>
+        <div style="flex:1;font-size:12px;color:#e2e8f0;line-height:1.5;padding-top:4px">${content}</div>
+      </div>`;
+    });
+
+    // ── Bullet points
+    t = t.replace(/^[\-\*] (.+)/gm, '<div style="display:flex;gap:8px;align-items:flex-start;padding:2px 0 2px 4px"><span style="color:#00d4ff;font-size:8px;margin-top:5px">●</span><span style="font-size:12px;color:#cbd5e1">$1</span></div>');
+
+    // ── Line breaks
+    t = t.replace(/\n\n/g, '<div style="margin:8px 0"></div>');
+    t = t.replace(/\n/g, '<br>');
+
+    return t;
   }
 
   _updateHEMSFromAI() {
@@ -3326,7 +3394,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.4</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.5</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
