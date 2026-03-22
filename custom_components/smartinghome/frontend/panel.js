@@ -1161,11 +1161,17 @@ class SmartingHomePanel extends HTMLElement {
       }
     }
 
-    // Weather — read from HA weather entity attributes
-    const weatherEntities = ["weather.home", "weather.forecast_home", "weather.openweathermap"];
+    // Weather — auto-discover weather entity from HA
+    const weatherPriority = ["weather.dom", "weather.home", "weather.accuweather", "weather.forecast_home", "weather.openweathermap"];
     let weatherState = null;
-    for (const we of weatherEntities) {
+    // Try priority list first
+    for (const we of weatherPriority) {
       if (this._hass?.states[we]) { weatherState = this._hass.states[we]; break; }
+    }
+    // Fallback: find any weather.* entity
+    if (!weatherState && this._hass?.states) {
+      const wk = Object.keys(this._hass.states).find(k => k.startsWith('weather.'));
+      if (wk) weatherState = this._hass.states[wk];
     }
     if (weatherState) {
       const wTemp = weatherState.attributes?.temperature;
@@ -3051,7 +3057,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.9.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.9.4</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
