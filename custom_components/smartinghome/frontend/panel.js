@@ -102,6 +102,14 @@ class SmartingHomePanel extends HTMLElement {
         const aSel = this.shadowRoot.getElementById('sel-anthropic-model');
         if (gSel && this._settings.gemini_model) gSel.value = this._settings.gemini_model;
         if (aSel && this._settings.anthropic_model) aSel.value = this._settings.anthropic_model;
+        // Show masked keys as placeholders
+        const gInp = this.shadowRoot.getElementById('inp-gemini-key');
+        const aInp = this.shadowRoot.getElementById('inp-anthropic-key');
+        if (gInp && this._settings.gemini_key_masked) gInp.placeholder = this._settings.gemini_key_masked;
+        if (aInp && this._settings.anthropic_key_masked) aInp.placeholder = this._settings.anthropic_key_masked;
+        // Restore tariff plan
+        const tSel = this.shadowRoot.getElementById('sel-tariff-plan');
+        if (tSel && this._settings.tariff_plan) tSel.value = this._settings.tariff_plan;
         // Re-apply PV labels and all data after settings loaded
         if (this._hass) this._updateAll();
       }
@@ -1503,15 +1511,15 @@ class SmartingHomePanel extends HTMLElement {
         <div class="tab-content active" data-tab="overview">
 
           <!-- ☀️ Day Time / Sun Position Widget -->
-          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; padding:10px 14px; margin-bottom:8px; background:rgba(255,255,255,0.02); border-radius:12px; border:1px solid rgba(255,255,255,0.04)">
+          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; padding:6px 10px; margin-bottom:6px; background:rgba(255,255,255,0.02); border-radius:10px; border:1px solid rgba(255,255,255,0.04)">
             <!-- Date & Time -->
             <div>
-              <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:1px" id="ov-date">—</div>
-              <div style="font-size:38px; font-weight:900; color:#fff; letter-spacing:-1px; line-height:1" id="ov-clock">--:--</div>
-              <div style="font-size:12px; color:#94a3b8; margin-top:3px" id="ov-day-name">—</div>
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:1px" id="ov-date">—</div>
+              <div style="font-size:32px; font-weight:900; color:#fff; letter-spacing:-1px; line-height:1" id="ov-clock">--:--</div>
+              <div style="font-size:11px; color:#94a3b8; margin-top:2px" id="ov-day-name">—</div>
             </div>
             <!-- Sun Arc -->
-            <div style="position:relative; width:280px; height:140px; flex-shrink:0">
+            <div style="position:relative; width:280px; height:90px; flex-shrink:0">
               <svg viewBox="0 0 200 105" style="width:100%; height:100%">
                 <path d="M 10,98 Q 100,-15 190,98" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="1.5" />
                 <path id="ov-sun-arc" d="M 10,98 Q 100,-15 190,98" fill="none" stroke="#f7b731" stroke-width="2.5" stroke-dasharray="290" stroke-dashoffset="290" />
@@ -2423,7 +2431,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.7.4</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.7.5</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

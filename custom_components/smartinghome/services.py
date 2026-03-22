@@ -234,12 +234,14 @@ async def async_setup_services(
         if anthropic_key:
             ai_advisor._anthropic_key = anthropic_key
 
-        # Also persist key status to settings.json so frontend can show it after refresh
+        # Also persist key status and masked version to settings.json
         status_updates = {}
         if gemini_key:
             status_updates["gemini_key_status"] = "saved"
+            status_updates["gemini_key_masked"] = gemini_key[:6] + "***" + gemini_key[-4:] if len(gemini_key) > 10 else "***"
         if anthropic_key:
             status_updates["anthropic_key_status"] = "saved"
+            status_updates["anthropic_key_masked"] = anthropic_key[:7] + "***" + anthropic_key[-4:] if len(anthropic_key) > 11 else "***"
         if status_updates:
             _update_settings_file(hass, status_updates)
 
