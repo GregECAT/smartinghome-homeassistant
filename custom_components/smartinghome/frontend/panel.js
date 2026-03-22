@@ -735,7 +735,7 @@ class SmartingHomePanel extends HTMLElement {
 
         /* Inverter center */
         .inv-box {
-          width: 125px; height: 105px;
+          width: 150px; height: 140px;
           background: rgba(20, 30, 48, 0.5);
           backdrop-filter: blur(12px);
           -webkit-backdrop-filter: blur(12px);
@@ -753,7 +753,7 @@ class SmartingHomePanel extends HTMLElement {
           transform: translateY(-2px);
         }
         .inv-box img {
-          max-width: 80px; max-height: 60px;
+          max-width: 100px; max-height: 80px;
           object-fit: contain; margin-bottom: 5px;
           filter: drop-shadow(0px 4px 10px rgba(0,0,0,0.5));
         }
@@ -1041,7 +1041,7 @@ class SmartingHomePanel extends HTMLElement {
               <!-- ⚡ INVERTER (center) -->
               <div class="inv-area">
                 <div class="inv-box">
-                  <img id="v-inv-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/GoodWe-1.png" alt="Inverter" style="max-width:160px; max-height:120px; object-fit:contain" />
+                  <img id="v-inv-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/GoodWe-1.png" alt="Inverter" style="max-width:120px; max-height:90px; object-fit:contain" />
                   <div id="v-inv-icon" style="display:none; text-align:center">
                     <div class="inv-icon">⚡</div>
                     <div style="font-size:8px; color:#f39c12; line-height:1.2; margin-top:2px">Wgraj zdjęcie<br>w ⚙️ Ustawieniach</div>
@@ -1062,9 +1062,6 @@ class SmartingHomePanel extends HTMLElement {
               <div class="grid-area">
                 <div class="node" id="grid-node" style="border-color: rgba(231,76,60,0.15); transition: border-color 0.5s, box-shadow 0.5s">
                   <div style="display:flex; align-items:flex-start; gap:10px">
-                    <div style="flex-shrink:0; max-width:50px">
-                      <img id="v-grid-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/slup-energetyka.png" alt="Sieć" style="width:100%; max-height:70px; object-fit:contain; opacity:0.8" />
-                    </div>
                     <div style="flex:1">
                       <div class="node-title">🔌 Sieć</div>
                       <div class="node-big" id="v-grid">— W</div>
@@ -1074,6 +1071,9 @@ class SmartingHomePanel extends HTMLElement {
                         <div id="v-grid-freq">— Hz</div>
                         <div style="margin-top:4px"><span style="color:#e74c3c">↓</span> <span id="v-grid-import">— kWh</span>&nbsp;<span style="color:#2ecc71">↑</span> <span id="v-grid-export">— kWh</span></div>
                       </div>
+                    </div>
+                    <div style="flex-shrink:0; max-width:55px">
+                      <img id="v-grid-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/slup-energetyka-1.png" alt="Sieć" style="width:100%; max-height:80px; object-fit:contain; opacity:0.85" />
                     </div>
                   </div>
                 </div>
@@ -1454,7 +1454,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.6.4</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

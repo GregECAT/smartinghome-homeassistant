@@ -82,3 +82,79 @@ generate_report:
   description: >-
     Generate an AI-powered daily energy report.
     Requires PRO license. Response is fired as a smartinghome_daily_report event.
+
+upload_inverter_image:
+  name: Upload Image
+  description: >-
+    Upload a base64-encoded image to the smartinghome www directory.
+    Used for inverter, house, and grid images.
+  fields:
+    filename:
+      name: Filename
+      description: "Target filename (e.g. inverter.png, home.png, grid.png)"
+      required: true
+      example: "inverter.png"
+      selector:
+        text:
+    data:
+      name: Base64 Data
+      description: "Base64-encoded image data"
+      required: true
+      selector:
+        text:
+
+save_settings:
+  name: Save API Settings
+  description: >-
+    Save API keys for AI providers (Google Gemini, Anthropic Claude).
+    Keys are stored in the HA config entry.
+  fields:
+    gemini_api_key:
+      name: Gemini API Key
+      description: "Google Gemini API key"
+      required: false
+      default: ""
+      selector:
+        text:
+    anthropic_api_key:
+      name: Anthropic API Key
+      description: "Anthropic Claude API key"
+      required: false
+      default: ""
+      selector:
+        text:
+
+test_api_key:
+  name: Test API Key
+  description: >-
+    Test if an API key is valid by making a minimal request.
+    Results are fired as a smartinghome_api_key_test event.
+  fields:
+    provider:
+      name: Provider
+      description: "AI provider to test"
+      required: true
+      selector:
+        select:
+          options:
+            - "gemini"
+            - "anthropic"
+    api_key:
+      name: API Key
+      description: "Optional API key to test (if empty, uses stored key)"
+      required: false
+      default: ""
+      selector:
+        text:
+
+save_panel_settings:
+  name: Save Panel Settings
+  description: >-
+    Save panel UI settings to settings.json (PV labels, model selections, etc).
+  fields:
+    settings:
+      name: Settings JSON
+      description: "JSON string with settings to save"
+      required: true
+      selector:
+        text:
