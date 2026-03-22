@@ -11,6 +11,7 @@ class SmartingHomePanel extends HTMLElement {
     this._hass = null;
     this._activeTab = "overview";
     this._isFullscreen = false;
+    this._settings = {};
   }
 
   set hass(hass) {
@@ -22,6 +23,7 @@ class SmartingHomePanel extends HTMLElement {
 
   connectedCallback() {
     this._render();
+    this._loadSettings();
     ["fullscreenchange","webkitfullscreenchange","mozfullscreenchange","MSFullscreenChange"].forEach(ev => {
       document.addEventListener(ev, () => {
         this._isFullscreen = !!(document.fullscreenElement||document.webkitFullscreenElement||document.mozFullScreenElement||document.msFullscreenElement);
@@ -89,13 +91,29 @@ class SmartingHomePanel extends HTMLElement {
   _setText(id, val) { const el = this.shadowRoot.getElementById(id); if (el) el.textContent = val; }
   _callService(domain, service, data = {}) { if (this._hass) this._hass.callService(domain, service, data); }
 
+  async _loadSettings() {
+    try {
+      const r = await fetch('/local/smartinghome/settings.json?t=' + Date.now());
+      if (r.ok) { this._settings = await r.json(); this._updateKeyStatus(); }
+    } catch(e) { /* file not yet created */ }
+  }
+
+  _savePanelSettings(updates) {
+    Object.assign(this._settings, updates);
+    if (this._hass) {
+      this._hass.callService("smartinghome", "save_panel_settings", {
+        settings: JSON.stringify(updates)
+      });
+    }
+  }
+
   _editPvLabel(idx) {
-    const labels = JSON.parse(localStorage.getItem("sh_pv_labels") || "{}");
-    const current = labels[`pv${idx}`] || `PV${idx}`;
+    const current = (this._settings.pv_labels || {})[`pv${idx}`] || `PV${idx}`;
     const newLabel = prompt(`Zmień etykietę PV${idx}:`, current);
     if (newLabel !== null && newLabel.trim()) {
+      const labels = this._settings.pv_labels || {};
       labels[`pv${idx}`] = newLabel.trim();
-      localStorage.setItem("sh_pv_labels", JSON.stringify(labels));
+      this._savePanelSettings({ pv_labels: labels });
       const el = this.shadowRoot.getElementById(`pv${idx}-label`);
       if (el) el.textContent = newLabel.trim();
     }
@@ -109,8 +127,10 @@ class SmartingHomePanel extends HTMLElement {
         gemini_api_key: gemini,
         anthropic_api_key: anthropic,
       });
-      if (gemini) localStorage.setItem("sh_gemini_status", "saved");
-      if (anthropic) localStorage.setItem("sh_anthropic_status", "saved");
+      const updates = {};
+      if (gemini) updates.gemini_key_status = "saved";
+      if (anthropic) updates.anthropic_key_status = "saved";
+      this._savePanelSettings(updates);
       this._updateKeyStatus();
       const st = this.shadowRoot.getElementById("v-save-status");
       if (st) { st.textContent = "✅ Klucze zapisane pomyślnie!"; setTimeout(() => { st.textContent = ""; }, 4000); }
@@ -162,7 +182,7 @@ class SmartingHomePanel extends HTMLElement {
     ["gemini", "anthropic"].forEach(p => {
       const ind = this.shadowRoot.getElementById(`key-status-${p}`);
       if (!ind) return;
-      const s = localStorage.getItem(`sh_${p}_status`);
+      const s = this._settings[`${p}_key_status`];
       if (s === "valid") { ind.textContent = "✅ Klucz zweryfikowany"; ind.style.color = "#2ecc71"; }
       else if (s === "invalid") { ind.textContent = "❌ Klucz nieprawidłowy"; ind.style.color = "#e74c3c"; }
       else if (s === "saved") { ind.textContent = "💾 Klucz zapisany (niesprawdzony)"; ind.style.color = "#f39c12"; }
@@ -178,7 +198,7 @@ class SmartingHomePanel extends HTMLElement {
       if (!this._testSub) {
         this._testSub = this._hass.connection.subscribeEvents((ev) => {
           const d = ev.data;
-          localStorage.setItem(`sh_${d.provider}_status`, d.status);
+          this._settings[`${d.provider}_key_status`] = d.status;
           this._updateKeyStatus();
           const b = this.shadowRoot.getElementById(`test-btn-${d.provider}`);
           if (b) { b.textContent = "🧪 Testuj"; b.disabled = false; }
@@ -208,7 +228,7 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-pv", this._pw(pv));
     this._setText("v-pv-today", `${this._fm("pv_today")} kWh`);
     // PV Strings
-    const pvLabels = JSON.parse(localStorage.getItem("sh_pv_labels") || "{}");
+    const pvLabels = (this._settings.pv_labels) || {};
     for (let i = 1; i <= 4; i++) {
       const p = this._nm(`pv${i}_power`);
       const box = this.shadowRoot.getElementById(`pv${i}-box`);
@@ -1069,7 +1089,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.7</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.5.8</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

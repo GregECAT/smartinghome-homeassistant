@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from pathlib import Path
 
@@ -32,6 +33,9 @@ _LOGGER = logging.getLogger(__name__)
 SERVICE_UPLOAD_IMAGE = "upload_inverter_image"
 SERVICE_SAVE_SETTINGS = "save_settings"
 SERVICE_TEST_API_KEY = "test_api_key"
+SERVICE_SAVE_PANEL_SETTINGS = "save_panel_settings"
+
+SETTINGS_FILE = "settings.json"
 
 SET_MODE_SCHEMA = vol.Schema(
     {
@@ -73,6 +77,12 @@ SAVE_SETTINGS_SCHEMA = vol.Schema(
 TEST_API_KEY_SCHEMA = vol.Schema(
     {
         vol.Required("provider"): vol.In(["gemini", "anthropic"]),
+    }
+)
+
+SAVE_PANEL_SETTINGS_SCHEMA = vol.Schema(
+    {
+        vol.Required("settings"): cv.string,
     }
 )
 
@@ -239,7 +249,44 @@ async def async_setup_services(
             f"{DOMAIN}_api_key_test",
             {"provider": provider, "status": status},
         )
+        # Also save to settings.json
+        _update_settings_file(hass, {f"{provider}_key_status": status})
         _LOGGER.info("API key test for %s: %s", provider, status)
+
+    def _get_settings_path(h: HomeAssistant) -> Path:
+        """Return path to settings.json."""
+        d = Path(h.config.path("www")) / "smartinghome"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / SETTINGS_FILE
+
+    def _read_settings(h: HomeAssistant) -> dict:
+        """Read settings from JSON."""
+        p = _get_settings_path(h)
+        if p.exists():
+            try:
+                return json.loads(p.read_text())
+            except Exception:
+                return {}
+        return {}
+
+    def _update_settings_file(h: HomeAssistant, updates: dict) -> None:
+        """Merge updates into settings.json."""
+        current = _read_settings(h)
+        current.update(updates)
+        p = _get_settings_path(h)
+        p.write_text(json.dumps(current, indent=2, ensure_ascii=False))
+        _LOGGER.debug("Settings updated: %s", list(updates.keys()))
+
+    async def handle_save_panel_settings(call: ServiceCall) -> None:
+        """Save arbitrary panel settings to settings.json."""
+        raw = call.data["settings"]
+        try:
+            incoming = json.loads(raw)
+        except Exception as err:
+            _LOGGER.error("Invalid JSON in save_panel_settings: %s", err)
+            return
+        _update_settings_file(hass, incoming)
+        _LOGGER.info("Panel settings saved: %s", list(incoming.keys()))
 
     # Register all services
     hass.services.async_register(
@@ -273,8 +320,12 @@ async def async_setup_services(
         DOMAIN, SERVICE_TEST_API_KEY, handle_test_api_key,
         schema=TEST_API_KEY_SCHEMA,
     )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SAVE_PANEL_SETTINGS, handle_save_panel_settings,
+        schema=SAVE_PANEL_SETTINGS_SCHEMA,
+    )
 
-    _LOGGER.info("Registered %d Smarting HOME services", 9)
+    _LOGGER.info("Registered %d Smarting HOME services", 10)
 
 
 async def async_unload_services(hass: HomeAssistant) -> None:
@@ -289,5 +340,6 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_UPLOAD_IMAGE,
         SERVICE_SAVE_SETTINGS,
         SERVICE_TEST_API_KEY,
+        SERVICE_SAVE_PANEL_SETTINGS,
     ]:
         hass.services.async_remove(DOMAIN, service)
