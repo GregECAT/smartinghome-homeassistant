@@ -79,9 +79,42 @@ class AICronScheduler:
         except Exception:
             pass
 
+        # ── G13 finance sensors (HA entities, not in coordinator raw) ──
+        finance_data = {}
+        try:
+            # GoodWe swap: g13_import_cost has export revenue, and vice versa
+            ic_state = self.hass.states.get("sensor.g13_export_revenue_today")
+            er_state = self.hass.states.get("sensor.g13_import_cost_today")
+            sv_state = self.hass.states.get("sensor.g13_self_consumption_savings_today")
+            finance_data["import_cost"] = float(ic_state.state) if ic_state and ic_state.state not in ("unknown", "unavailable") else None
+            finance_data["export_revenue"] = float(er_state.state) if er_state and er_state.state not in ("unknown", "unavailable") else None
+            sav_val = float(sv_state.state) if sv_state and sv_state.state not in ("unknown", "unavailable") else 0
+            # Fallback: compute savings from self-consumed PV energy × G13 price
+            if sav_val == 0:
+                pv_gen = float(raw.get("sensor.today_s_pv_generation") or 0)
+                exp_kWh = float(raw.get("sensor.grid_import_daily") or 0)  # GoodWe: grid_import = our export
+                self_consumed = max(pv_gen - exp_kWh, 0)
+                g13_price = float(raw.get("g13_buy_price") or 0.87)
+                sav_val = round(self_consumed * g13_price, 2) if self_consumed > 0 else 0
+            finance_data["savings"] = sav_val
+        except Exception:
+            finance_data["import_cost"] = None
+            finance_data["export_revenue"] = None
+            finance_data["savings"] = 0
+
+        # ── Grid power sign fix for AI context ──
+        # GoodWe: positive = export, but AI expects positive = import
+        grid_raw = raw.get("sensor.meter_active_power_total")
+        grid_for_ai = None
+        if grid_raw is not None:
+            try:
+                grid_for_ai = -float(grid_raw)  # Invert: positive = import for AI
+            except (ValueError, TypeError):
+                grid_for_ai = None
+
         return {
             "pv_power": raw.get("sensor.pv_power"),
-            "grid_power": raw.get("sensor.meter_active_power_total"),
+            "grid_power": grid_for_ai,
             "battery_soc": raw.get("sensor.battery_state_of_charge"),
             "battery_power": raw.get("sensor.battery_power"),
             "load": raw.get("sensor.load"),
@@ -98,10 +131,7 @@ class AICronScheduler:
             "forecast_remaining": raw.get("pv_forecast_remaining_today_total"),
             "forecast_tomorrow": raw.get("pv_forecast_tomorrow_total"),
             "autarky": raw.get("goodwe_autarky_today"),
-            # GoodWe swap: g13_import_cost has export revenue, and vice versa
-            "import_cost": raw.get("g13_export_revenue_today"),
-            "export_revenue": raw.get("g13_import_cost_today"),
-            "savings": raw.get("g13_self_consumption_savings_today"),
+            **finance_data,
             **weather_data,
             **self._calc_hems_score(raw),
         }
