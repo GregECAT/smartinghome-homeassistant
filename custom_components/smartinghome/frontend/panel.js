@@ -1575,7 +1575,15 @@ class SmartingHomePanel extends HTMLElement {
     // GoodWe swap: g13_import_cost actually has export revenue, and vice versa
     const ovCost = this._n("sensor.g13_export_revenue_today") ?? this._n("sensor.g13_export_revenue_daily") ?? 0;
     const ovRev = this._n("sensor.g13_import_cost_today") ?? this._n("sensor.g13_import_cost_daily") ?? 0;
-    const ovSav = this._n("sensor.g13_self_consumption_savings_today") ?? this._n("sensor.g13_self_consumption_savings_daily") ?? 0;
+    let ovSav = this._n("sensor.g13_self_consumption_savings_today") ?? this._n("sensor.g13_self_consumption_savings_daily") ?? 0;
+    // Fallback: compute savings from self-consumed PV × G13 avg price when sensor is 0
+    if (ovSav === 0) {
+      const pvToday = this._n("sensor.today_s_pv_generation") ?? 0;
+      // GoodWe swap: grid_import_daily = our export
+      const expKWh = this._n("sensor.grid_import_daily") ?? 0;
+      const selfConsumed = Math.max(pvToday - expKWh, 0);
+      if (selfConsumed > 0) ovSav = selfConsumed * 0.87; // G13 avg price
+    }
     // Always compute balance from corrected components (backend sensor has swapped sign)
     const ovBal = ovRev + ovSav - ovCost;
     this._setText("ov-cost", `${ovCost.toFixed(2)} zł`);
@@ -3479,7 +3487,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.7</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.8</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
