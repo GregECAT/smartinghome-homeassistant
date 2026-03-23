@@ -664,14 +664,15 @@ SERVICE_GENERATE_REPORT: Final = "generate_report"
 # =============================================================================
 AI_GEMINI_MODEL: Final = "gemini-2.5-flash"  # default
 AI_GEMINI_MODELS: Final = {
-    "gemini-2.5-flash": "Gemini 2.5 Flash (szybki, darmowy tier)",
-    "gemini-2.5-pro": "Gemini 2.5 Pro (zaawansowany)",
-    "gemini-3.1": "Gemini 3.1 (najnowszy)",
+    "gemini-2.5-flash": "Gemini 2.5 Flash (bardzo szybki)",
+    "gemini-2.0-flash": "Gemini 2.0 Flash (szybki)",
+    "gemini-1.5-pro": "Gemini 1.5 Pro (zaawansowany)",
 }
-AI_CLAUDE_MODEL: Final = "claude-sonnet-4.6-20260301"  # default
+AI_CLAUDE_MODEL: Final = "claude-3-7-sonnet-20250219"  # default
 AI_CLAUDE_MODELS: Final = {
-    "claude-sonnet-4.6-20260301": "Claude Sonnet 4.6 (szybki)",
-    "claude-opus-4.6-20260301": "Claude Opus 4.6 (najpotężniejszy)",
+    "claude-3-7-sonnet-20250219": "Claude 3.7 Sonnet (najnowszy)",
+    "claude-3-5-sonnet-20241022": "Claude 3.5 Sonnet (zaawansowany)",
+    "claude-3-5-haiku-20241022": "Claude 3.5 Haiku (szybki)",
 }
 AI_MAX_TOKENS: Final = 8192
 AI_TEMPERATURE: Final = 0.3

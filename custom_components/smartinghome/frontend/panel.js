@@ -477,7 +477,7 @@ class SmartingHomePanel extends HTMLElement {
     const geminiVal = this.shadowRoot.getElementById("inp-gemini-key")?.value || "";
     const anthropicVal = this.shadowRoot.getElementById("inp-anthropic-key")?.value || "";
     const geminiModel = this.shadowRoot.getElementById("sel-gemini-model")?.value || "gemini-2.5-flash";
-    const anthropicModel = this.shadowRoot.getElementById("sel-anthropic-model")?.value || "claude-sonnet-4.6-20260301";
+    const anthropicModel = this.shadowRoot.getElementById("sel-anthropic-model")?.value || "claude-3-7-sonnet-20250219";
     const defaultProvider = this.shadowRoot.getElementById("sel-default-provider")?.value || "gemini";
     if (this._hass) {
       // Build ONE unified payload — keys + models + provider (all in save_settings)
@@ -3571,16 +3571,17 @@ class SmartingHomePanel extends HTMLElement {
                 <div class="settings-field" style="flex:1; min-width:200px">
                   <label style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">🤖 Model Gemini</label>
                   <select id="sel-gemini-model" style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:12px">
-                    <option value="gemini-2.5-flash">Gemini 2.5 Flash (szybki)</option>
-                    <option value="gemini-2.5-pro">Gemini 2.5 Pro (zaawansowany)</option>
-                    <option value="gemini-3.1">Gemini 3.1 (najnowszy)</option>
+                    <option value="gemini-2.5-flash">Gemini 2.5 Flash (bardzo szybki)</option>
+                    <option value="gemini-2.0-flash">Gemini 2.0 Flash (szybki)</option>
+                    <option value="gemini-1.5-pro">Gemini 1.5 Pro (zaawansowany)</option>
                   </select>
                 </div>
                 <div class="settings-field" style="flex:1; min-width:200px">
                   <label style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">🤖 Model Claude</label>
                   <select id="sel-anthropic-model" style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:12px">
-                    <option value="claude-sonnet-4.6-20260301">Sonnet 4.6 (szybki)</option>
-                    <option value="claude-opus-4.6-20260301">Opus 4.6 (najpotężniejszy)</option>
+                    <option value="claude-3-7-sonnet-20250219">Claude 3.7 Sonnet (najnowszy)</option>
+                    <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet (zaawansowany)</option>
+                    <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku (szybki)</option>
                   </select>
                 </div>
               </div>
@@ -3780,7 +3781,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.11</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.12</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
