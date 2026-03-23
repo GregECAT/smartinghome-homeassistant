@@ -242,25 +242,85 @@ class SmartingHomePanel extends HTMLElement {
     if (aBar) aBar.style.width = `${autarky}%`;
     if (scBar) scBar.style.width = `${selfCons}%`;
 
-    // ROI calculation
+    // ROI calculation — 3 scenarios
     const invest = this._settings.roi_investment || 0;
     const invInput = this.shadowRoot.getElementById("roi-invest-input");
     if (invInput && !invInput.matches(":focus") && invest) invInput.value = invest;
 
-    // Estimate yearly savings from current period data
+    // Estimate yearly energy values from current period
     const multiplier = { day: 365, week: 52, month: 12, year: 1 };
-    const yearlySavings = (balVal > 0 ? balVal : (revVal + savVal - costVal)) * multiplier[p];
-    this._setText("roi-yearly-savings", `${yearlySavings.toFixed(0)} zł/rok`);
+    const yearlyPV = pvVal * multiplier[p];
+    const yearlyImport = impVal * multiplier[p];
+    const yearlyExport = expVal * multiplier[p];
+    const yearlySelfUse = selfUse * multiplier[p];
 
-    if (invest > 0 && yearlySavings > 0) {
-      const paybackYears = invest / yearlySavings;
-      this._setText("roi-payback", `~${paybackYears.toFixed(1)} lat`);
-      const pctDone = Math.min(100, (1 / paybackYears) * 100); // how much paid back in 1 year
-      const pbBar = this.shadowRoot.getElementById("roi-payback-bar");
-      if (pbBar) pbBar.style.width = `${pctDone}%`;
-      this._setText("roi-payback-pct", `${pctDone.toFixed(0)}% rocznie`);
-    } else {
-      this._setText("roi-payback", invest > 0 ? "— (brak danych)" : "— (podaj koszt)");
+    // Label
+    const periodLabels = { day: "dzień", week: "tydzień", month: "miesiąc", year: "rok" };
+    this._setText("roi-period-label", `Baza: ${periodLabels[p]} × ${multiplier[p]}`);
+
+    // 3 scenarios
+    const scenarios = this._winterScenarios();
+    const keys = ["none", "basic", "optimal"];
+    const colors = ["#e74c3c", "#f7b731", "#2ecc71"];
+    const borders = ["rgba(231,76,60,0.2)", "rgba(247,183,49,0.2)", "rgba(46,204,113,0.3)"];
+    const bgs = ["rgba(231,76,60,0.06)", "rgba(247,183,49,0.06)", "rgba(46,204,113,0.08)"];
+    const badges = ["", "", "✅ REKOMENDOWANE"];
+
+    const ct = this.shadowRoot.getElementById("roi-scenario-cards");
+    if (ct && yearlyPV > 0) {
+      const results = keys.map((k, i) => {
+        const s = scenarios[k];
+        const importCost = yearlyImport * s.importPrice;
+        const exportRev = yearlyExport * s.exportPrice;
+        const selfSavings = yearlySelfUse * s.importPrice;
+        const yearlySav = exportRev + selfSavings - importCost;
+        const payback = invest > 0 && yearlySav > 0 ? invest / yearlySav : null;
+        const profit25 = invest > 0 ? yearlySav * 25 - invest : yearlySav * 25;
+        return { key: k, label: s.label, desc: s.desc, importCost, exportRev, selfSavings, yearlySav, payback, profit25, importPrice: s.importPrice, exportPrice: s.exportPrice };
+      });
+
+      ct.innerHTML = results.map((r, i) => {
+        const paybackStr = r.payback ? `~${r.payback.toFixed(1)} lat` : (invest > 0 ? "∞ (strata)" : "— (podaj koszt)");
+        const paybackPct = r.payback ? Math.min(100, (25 / r.payback) * (100 / 25)) : 0;
+        const paybackColor = r.payback ? (r.payback <= 8 ? "#2ecc71" : r.payback <= 15 ? "#f7b731" : "#e74c3c") : "#e74c3c";
+        return `<div style="background:${bgs[i]}; border:1px solid ${borders[i]}; border-radius:14px; padding:16px; position:relative; overflow:hidden">
+          ${badges[i] ? `<div style="position:absolute; top:8px; right:8px; font-size:8px; color:${colors[i]}; font-weight:700; letter-spacing:0.5px">${badges[i]}</div>` : ""}
+          <div style="font-size:13px; font-weight:700; color:${colors[i]}; margin-bottom:4px">${r.label}</div>
+          <div style="font-size:9px; color:#64748b; margin-bottom:12px; line-height:1.4">${r.desc}</div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:10px; margin-bottom:10px">
+            <div style="color:#64748b">Import:</div><div style="color:#e74c3c; font-weight:600">${r.importPrice.toFixed(2)} zł/kWh</div>
+            <div style="color:#64748b">Eksport:</div><div style="color:#2ecc71; font-weight:600">${r.exportPrice.toFixed(2)} zł/kWh</div>
+          </div>
+          <div style="border-top:1px solid rgba(255,255,255,0.06); padding-top:8px">
+            <div style="font-size:9px; color:#64748b">Oszczędności roczne (autokonsumpcja)</div>
+            <div style="font-size:16px; font-weight:700; color:#00d4ff">${r.selfSavings.toFixed(0)} zł</div>
+            <div style="font-size:9px; color:#64748b; margin-top:6px">Przychód z eksportu</div>
+            <div style="font-size:16px; font-weight:700; color:#2ecc71">+${r.exportRev.toFixed(0)} zł</div>
+            <div style="font-size:9px; color:#64748b; margin-top:6px">Koszt importu</div>
+            <div style="font-size:16px; font-weight:700; color:#e74c3c">-${r.importCost.toFixed(0)} zł</div>
+          </div>
+          <div style="margin-top:10px; padding:10px; border-radius:10px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.06)">
+            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Bilans roczny netto</div>
+            <div style="font-size:24px; font-weight:900; color:${r.yearlySav >= 0 ? "#2ecc71" : "#e74c3c"}">${r.yearlySav >= 0 ? "+" : ""}${r.yearlySav.toFixed(0)} zł</div>
+          </div>
+          ${invest > 0 ? `
+          <div style="margin-top:10px">
+            <div style="display:flex; justify-content:space-between; font-size:9px; color:#64748b; margin-bottom:4px">
+              <span>Zwrot inwestycji</span>
+              <span style="color:${paybackColor}; font-weight:700">${paybackStr}</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.08); border-radius:6px; height:8px; overflow:hidden">
+              <div style="height:100%; width:${paybackPct}%; background:linear-gradient(90deg, ${paybackColor}, ${colors[i]}); border-radius:6px; transition:width 0.5s"></div>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:9px; color:#64748b; margin-top:6px">
+              <span>Zysk w 25 lat</span>
+              <span style="color:${r.profit25 >= 0 ? "#2ecc71" : "#e74c3c"}; font-weight:700">${r.profit25 >= 0 ? "+" : ""}${Math.round(r.profit25).toLocaleString("pl-PL")} zł</span>
+            </div>
+          </div>` : ""}
+        </div>`;
+      }).join("");
+    } else if (ct && yearlyPV === 0) {
+      ct.innerHTML = '<div style="text-align:center; padding:20px; color:#64748b; font-size:11px">Brak danych PV — zmień okres na \"Miesiąc\" lub \"Rok\" aby zobaczyć porównanie.</div>';
     }
 
     // Summary table — all periods
@@ -3054,18 +3114,21 @@ class SmartingHomePanel extends HTMLElement {
                 <div id="roi-selfcons-bar" style="height:100%; width:0%; background:#00d4ff; border-radius:6px; transition:width 0.5s"></div>
               </div>
             </div>
-            <div class="card">
-              <div class="card-title">🏗️ Zwrot inwestycji (ROI)</div>
-              <div class="dr">
-                <span class="lb">Koszt instalacji</span>
-                <span class="vl"><input id="roi-invest-input" type="number" value="" placeholder="np. 45000" style="width:80px; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); border-radius:6px; color:#fff; padding:4px 8px; font-size:12px; text-align:right" onchange="this.getRootNode().host._saveRoiInvestment(this.value)"> zł</span>
-              </div>
-              <div class="dr"><span class="lb">Oszczędności roczne (est.)</span><span class="vl" id="roi-yearly-savings">— zł</span></div>
-              <div class="dr"><span class="lb">Zwrot inwestycji</span><span class="vl" id="roi-payback" style="color:#f7b731; font-weight:700">— lat</span></div>
-              <div style="margin-top:8px; background:rgba(255,255,255,0.08); border-radius:6px; height:10px; overflow:hidden">
-                <div id="roi-payback-bar" style="height:100%; width:0%; background:linear-gradient(90deg,#f7b731,#2ecc71); border-radius:6px; transition:width 0.5s"></div>
-              </div>
-              <div style="font-size:9px; color:#64748b; text-align:right; margin-top:2px" id="roi-payback-pct">0%</div>
+          </div>
+
+          <!-- ROW 3b: ROI — 3 Scenario Comparison -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">🏗️ Zwrot inwestycji (ROI) — Porównanie scenariuszy</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:10px">Jak strategia zarządzania energią wpływa na Twój zwrot z inwestycji i zyski w perspektywie 25 lat.</div>
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px; padding:10px; background:rgba(255,255,255,0.03); border-radius:8px; border:1px solid rgba(255,255,255,0.06)">
+              <span style="font-size:11px; color:#94a3b8; white-space:nowrap">💰 Koszt instalacji</span>
+              <input id="roi-invest-input" type="number" value="" placeholder="np. 45000" style="width:100px; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); border-radius:6px; color:#fff; padding:6px 10px; font-size:13px; text-align:right" onchange="this.getRootNode().host._saveRoiInvestment(this.value)">
+              <span style="font-size:12px; color:#94a3b8">zł</span>
+              <div style="flex:1"></div>
+              <span style="font-size:10px; color:#64748b" id="roi-period-label">Baza: —</span>
+            </div>
+            <div class="g3" id="roi-scenario-cards">
+              <div style="text-align:center; padding:20px; color:#64748b; font-size:11px">Podaj koszt instalacji aby zobaczyć porównanie scenariuszy.</div>
             </div>
           </div>
 
@@ -3487,7 +3550,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.8</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.9</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
