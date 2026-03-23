@@ -668,11 +668,11 @@ AI_GEMINI_MODELS: Final = {
     "gemini-2.5-pro": "Gemini 2.5 Pro (zaawansowany)",
     "gemini-3-flash-preview": "Gemini 3 Flash (Preview)",
 }
-AI_CLAUDE_MODEL: Final = "claude-sonnet-4.6-20260217"  # default — released Feb 17 2026
+AI_CLAUDE_MODEL: Final = "claude-sonnet-4-6-20260217"  # default — released Feb 17 2026
 AI_CLAUDE_MODELS: Final = {
-    "claude-sonnet-4.6-20260217": "Claude Sonnet 4.6 (szybki)",
-    "claude-opus-4.6-20260205": "Claude Opus 4.6 (najpotężniejszy)",
-    "claude-haiku-4.5-20251015": "Claude Haiku 4.5 (najtańszy)",
+    "claude-sonnet-4-6-20260217": "Claude Sonnet 4.6 (szybki)",
+    "claude-opus-4-6-20260205": "Claude Opus 4.6 (najpotężniejszy)",
+    "claude-haiku-3-5-20241022": "Claude Haiku 3.5 (najtańszy)",
 }
 AI_MAX_TOKENS: Final = 8192
 AI_TEMPERATURE: Final = 0.3
