@@ -89,7 +89,8 @@
           "inverter_brand": "🔌 Inverter Brand",
           "sensors": "🔌 Sensor Mapping",
           "ecowitt": "🌦️ Ecowitt Weather Station",
-          "api_keys": "🔑 API Keys (AI Advisor)"
+          "api_keys": "🔑 API Keys (AI Advisor)",
+          "downgrade": "🔓 Usuń licencję PRO (przejdź na FREE)"
         }
       },
       "upgrade": {
@@ -135,6 +136,13 @@
           "voltage_l1": "⚡ Napięcie L1 (V)",
           "voltage_l2": "⚡ Napięcie L2 (V)",
           "voltage_l3": "⚡ Napięcie L3 (V)"
+        }
+      },
+      "downgrade": {
+        "title": "🔓 Usuń licencję PRO",
+        "description": "Uwaga! Po potwierdzeniu:\n• Licencja PRO zostanie usunięta\n• Integracja przejdzie na plan FREE\n• Funkcje PRO (pełny HEMS, AI) zostaną wyłączone\n\nAby ponownie aktywować PRO, wpisz klucz w opcjach.",
+        "data": {
+          "confirm_downgrade": "✅ Tak, chcę przejść na plan FREE"
         }
       }
     }
