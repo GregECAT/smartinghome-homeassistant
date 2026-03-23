@@ -486,7 +486,7 @@ class SmartingHomePanel extends HTMLElement {
     const geminiVal = this.shadowRoot.getElementById("inp-gemini-key")?.value || "";
     const anthropicVal = this.shadowRoot.getElementById("inp-anthropic-key")?.value || "";
     const geminiModel = this.shadowRoot.getElementById("sel-gemini-model")?.value || "gemini-2.5-flash";
-    const anthropicModel = this.shadowRoot.getElementById("sel-anthropic-model")?.value || "claude-3-7-sonnet-20250219";
+    const anthropicModel = this.shadowRoot.getElementById("sel-anthropic-model")?.value || "claude-sonnet-4.6-20260217";
     const defaultProvider = this.shadowRoot.getElementById("sel-default-provider")?.value || "gemini";
     if (this._hass) {
       // Build ONE unified payload — keys + models + provider (all in save_settings)
@@ -3671,17 +3671,17 @@ class SmartingHomePanel extends HTMLElement {
                 <div class="settings-field" style="flex:1; min-width:200px">
                   <label style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">🤖 Model Gemini</label>
                   <select id="sel-gemini-model" style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:12px">
-                    <option value="gemini-2.5-flash">Gemini 2.5 Flash (bardzo szybki)</option>
-                    <option value="gemini-2.0-flash">Gemini 2.0 Flash (szybki)</option>
-                    <option value="gemini-1.5-pro">Gemini 1.5 Pro (zaawansowany)</option>
+                    <option value="gemini-2.5-flash">Gemini 2.5 Flash (szybki, domyślny)</option>
+                    <option value="gemini-2.5-pro">Gemini 2.5 Pro (zaawansowany)</option>
+                    <option value="gemini-3-flash-preview">Gemini 3 Flash (Preview)</option>
                   </select>
                 </div>
                 <div class="settings-field" style="flex:1; min-width:200px">
                   <label style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">🤖 Model Claude</label>
                   <select id="sel-anthropic-model" style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:12px">
-                    <option value="claude-3-7-sonnet-20250219">Claude 3.7 Sonnet (najnowszy)</option>
-                    <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet (zaawansowany)</option>
-                    <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku (szybki)</option>
+                    <option value="claude-sonnet-4.6-20260217">Claude Sonnet 4.6 (szybki)</option>
+                    <option value="claude-opus-4.6-20260205">Claude Opus 4.6 (najpotężniejszy)</option>
+                    <option value="claude-haiku-4.5-20251015">Claude Haiku 4.5 (najtańszy)</option>
                   </select>
                 </div>
               </div>
