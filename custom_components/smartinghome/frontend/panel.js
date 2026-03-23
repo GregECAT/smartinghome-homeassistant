@@ -1770,15 +1770,15 @@ class SmartingHomePanel extends HTMLElement {
     svg.setAttribute('viewBox', `0 0 ${wr.width} ${wr.height}`);
     svg.removeAttribute('preserveAspectRatio');
     
-    const edgeOff = 15; // consistent offset from node edge
     const getNode = (id) => {
       const el = this.shadowRoot.getElementById(id);
       if(!el) return null;
       const r = el.getBoundingClientRect();
+      const off = r.height * 0.20;
       return {
         x: r.left - wr.left + r.width/2,
-        top: r.top - wr.top + edgeOff,
-        bot: r.top - wr.top + r.height - edgeOff,
+        top: r.top - wr.top + off,
+        bot: r.top - wr.top + r.height - off,
         cy: r.top - wr.top + r.height/2
       };
     };
