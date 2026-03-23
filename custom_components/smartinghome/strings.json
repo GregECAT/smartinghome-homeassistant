@@ -128,7 +128,8 @@
           "settings": "⚙️ PRO Settings",
           "inverter_brand": "🔌 Inverter Brand",
           "sensors": "🔌 Sensor Mapping",
-          "ecowitt": "🌦️ Ecowitt Weather Station"
+          "ecowitt": "🌦️ Ecowitt Weather Station",
+          "api_keys": "🔑 API Keys (AI Advisor)"
         }
       },
       "upgrade": {
@@ -146,9 +147,15 @@
         "data": {
           "tariff": "Tariff Type",
           "rce_enabled": "Enable RCE PSE",
-          "gemini_api_key": "Google Gemini API Key",
-          "anthropic_api_key": "Anthropic Claude API Key",
           "update_interval": "Update Interval (seconds)"
+        }
+      },
+      "api_keys": {
+        "title": "🔑 API Keys — AI Advisor",
+        "description": "Enter your API keys for AI energy advisor.\nGet Gemini key at: https://aistudio.google.com/apikey\nGet Claude key at: https://console.anthropic.com/settings/keys",
+        "data": {
+          "gemini_api_key": "🤖 Google Gemini API Key",
+          "anthropic_api_key": "🤖 Anthropic Claude API Key"
         }
       },
       "sensors": {
