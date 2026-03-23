@@ -72,6 +72,11 @@ SAVE_SETTINGS_SCHEMA = vol.Schema(
     {
         vol.Optional("gemini_api_key"): cv.string,
         vol.Optional("anthropic_api_key"): cv.string,
+        vol.Optional("gemini_model"): cv.string,
+        vol.Optional("anthropic_model"): cv.string,
+        vol.Optional("default_ai_provider"): cv.string,
+        vol.Optional("gemini_key_status"): cv.string,
+        vol.Optional("anthropic_key_status"): cv.string,
     }
 )
 
@@ -249,9 +254,12 @@ async def async_setup_services(
             _LOGGER.error("Failed to save image: %s", err)
 
     async def handle_save_settings(call: ServiceCall) -> None:
-        """Update API keys — store in config_entry AND settings.json."""
+        """Update API keys + model settings — store in config_entry AND settings.json."""
         gemini_key = call.data.get("gemini_api_key")
         anthropic_key = call.data.get("anthropic_api_key")
+        gemini_model = call.data.get("gemini_model")
+        anthropic_model = call.data.get("anthropic_model")
+        default_provider = call.data.get("default_ai_provider")
 
         new_data = {**entry.data}
         updates = {}
@@ -272,12 +280,28 @@ async def async_setup_services(
             updates["anthropic_key_masked"] = anthropic_key[:7] + "***" + anthropic_key[-4:] if len(anthropic_key) > 11 else "***"
             changed = True
 
+        # Update model selections on advisor
+        if gemini_model:
+            ai_advisor._gemini_model = gemini_model
+            updates["gemini_model"] = gemini_model
+        if anthropic_model:
+            ai_advisor._anthropic_model = anthropic_model
+            updates["anthropic_model"] = anthropic_model
+        if default_provider:
+            updates["default_ai_provider"] = default_provider
+
+        # Pass through status fields from frontend
+        for status_key in ("gemini_key_status", "anthropic_key_status"):
+            val = call.data.get(status_key)
+            if val is not None:
+                updates[status_key] = val
+
         if changed:
             hass.config_entries.async_update_entry(entry, data=new_data)
         if updates:
             _update_settings_file(hass, updates)
 
-        _LOGGER.info("API keys updated via panel settings (changed=%s)", changed)
+        _LOGGER.info("API keys/models updated via panel (changed=%s, updates=%s)", changed, list(updates.keys()))
 
     async def handle_test_api_key(call: ServiceCall) -> None:
         """Test if an API key is valid by making a minimal request."""
@@ -291,6 +315,15 @@ async def async_setup_services(
                 test_key = stored.get("gemini_api_key", "") or ai_advisor._gemini_key
             else:
                 test_key = stored.get("anthropic_api_key", "") or ai_advisor._anthropic_key
+
+        # Also refresh model from settings (user may have changed it in panel)
+        stored_for_model = _read_settings(hass)
+        gm = stored_for_model.get("gemini_model", "")
+        am = stored_for_model.get("anthropic_model", "")
+        if gm:
+            ai_advisor._gemini_model = gm
+        if am:
+            ai_advisor._anthropic_model = am
 
         if not test_key:
             hass.bus.async_fire(
