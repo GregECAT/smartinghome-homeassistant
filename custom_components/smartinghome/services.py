@@ -309,9 +309,17 @@ async def async_setup_services(
         if not test_key:
             stored = _read_settings(hass)
             if provider == "gemini":
-                test_key = stored.get("gemini_api_key", "") or ai_advisor._gemini_key
+                test_key = (
+                    stored.get("gemini_api_key", "")
+                    or entry.data.get(CONF_GEMINI_API_KEY, "")
+                    or ai_advisor._gemini_key
+                )
             else:
-                test_key = stored.get("anthropic_api_key", "") or ai_advisor._anthropic_key
+                test_key = (
+                    stored.get("anthropic_api_key", "")
+                    or entry.data.get(CONF_ANTHROPIC_API_KEY, "")
+                    or ai_advisor._anthropic_key
+                )
             _LOGGER.info(
                 "Test %s: key from settings (len=%d, prefix=%s)",
                 provider, len(test_key), test_key[:8] + "..." if len(test_key) > 8 else test_key
@@ -324,6 +332,10 @@ async def async_setup_services(
         if gm:
             ai_advisor._gemini_model = gm
         if am:
+            # Migrate old dot-format model IDs to dash-format
+            am = am.replace("claude-sonnet-4.6", "claude-sonnet-4-6")
+            am = am.replace("claude-opus-4.6", "claude-opus-4-6")
+            am = am.replace("claude-haiku-4.5", "claude-haiku-3-5")
             ai_advisor._anthropic_model = am
         _LOGGER.info(
             "Test %s: model=%s",
