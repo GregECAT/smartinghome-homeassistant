@@ -1770,24 +1770,29 @@ class SmartingHomePanel extends HTMLElement {
     svg.setAttribute('viewBox', `0 0 ${wr.width} ${wr.height}`);
     svg.removeAttribute('preserveAspectRatio');
     
-    const getC = (id) => {
+    const edgeOff = 15; // consistent offset from node edge
+    const getNode = (id) => {
       const el = this.shadowRoot.getElementById(id);
       if(!el) return null;
       const r = el.getBoundingClientRect();
-      const hw = (r.width > 440) ? 220 : r.width/2; 
-      return { x: r.left - wr.left + r.width/2, y: r.top - wr.top + r.height/2 };
+      return {
+        x: r.left - wr.left + r.width/2,
+        top: r.top - wr.top + edgeOff,
+        bot: r.top - wr.top + r.height - edgeOff,
+        cy: r.top - wr.top + r.height/2
+      };
     };
     
-    const pv = getC('pv-node');
-    const load = getC('home-node');
-    const batt = getC('batt-node');
-    const grid = getC('grid-node');
+    const pv = getNode('pv-node');
+    const load = getNode('home-node');
+    const batt = getNode('batt-node');
+    const grid = getNode('grid-node');
     
     const invEl = this.shadowRoot.querySelector('.inv-box');
-    let inv = {x: wr.width/2, y: wr.height/2};
+    let inv = {x: wr.width/2, top: wr.height*0.35, bot: wr.height*0.55};
     if (invEl) {
       const ir = invEl.getBoundingClientRect();
-      inv = { x: ir.left - wr.left + ir.width/2, y: ir.top - wr.top + ir.height/2 };
+      inv = { x: ir.left - wr.left + ir.width/2, top: ir.top - wr.top, bot: ir.top - wr.top + ir.height };
     }
     
     if(!pv || !load || !batt || !grid) return;
@@ -1812,26 +1817,26 @@ class SmartingHomePanel extends HTMLElement {
       }
     };
     
-    updateLine('line-pv-inv', ['anim-pv-inv', 'anim-pv-inv-bolt'], pv.x, pv.y, inv.x, inv.y, 'H');
-    updateLine('line-inv-load', ['anim-inv-load'], inv.x, inv.y, load.x, load.y, 'V');
-    updateLine('line-batt-inv', [], batt.x, batt.y, inv.x, inv.y, 'B'); 
+    updateLine('line-pv-inv', ['anim-pv-inv', 'anim-pv-inv-bolt'], pv.x, pv.top, inv.x, inv.top, 'H');
+    updateLine('line-inv-load', ['anim-inv-load'], inv.x, inv.top, load.x, load.top, 'V');
+    updateLine('line-batt-inv', [], batt.x, batt.bot, inv.x, inv.bot, 'B'); 
     
-    const rpBatt = mkPath(batt.x, batt.y, inv.x, inv.y, 'B'); 
+    const rpBatt = mkPath(batt.x, batt.bot, inv.x, inv.bot, 'B'); 
     const amBattInv = this.shadowRoot.getElementById('anim-batt-inv');
     if(amBattInv) amBattInv.setAttribute('path', rpBatt);
     
-    const pInvBatt = mkPath(inv.x, inv.y, batt.x, batt.y, 'B'); 
+    const pInvBatt = mkPath(inv.x, inv.bot, batt.x, batt.bot, 'B'); 
     const amInvBatt = this.shadowRoot.getElementById('anim-inv-batt');
     if(amInvBatt) amInvBatt.setAttribute('path', pInvBatt);
     const amInvBattPv = this.shadowRoot.getElementById('anim-inv-batt-pv');
     if(amInvBattPv) amInvBattPv.setAttribute('path', pInvBatt);
 
-    updateLine('line-grid-inv', [], grid.x, grid.y, inv.x, inv.y, 'B'); 
-    const rpGrid = mkPath(grid.x, grid.y, inv.x, inv.y, 'B'); 
+    updateLine('line-grid-inv', [], grid.x, grid.bot, inv.x, inv.bot, 'B'); 
+    const rpGrid = mkPath(grid.x, grid.bot, inv.x, inv.bot, 'B'); 
     const amGridInv = this.shadowRoot.getElementById('anim-grid-inv');
     if(amGridInv) amGridInv.setAttribute('path', rpGrid);
     
-    const pInvGrid = mkPath(inv.x, inv.y, grid.x, grid.y, 'B'); 
+    const pInvGrid = mkPath(inv.x, inv.bot, grid.x, grid.bot, 'B'); 
     const amInvGrid = this.shadowRoot.getElementById('anim-inv-grid');
     if(amInvGrid) amInvGrid.setAttribute('path', pInvGrid);
   }

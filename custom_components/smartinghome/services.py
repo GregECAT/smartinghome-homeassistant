@@ -254,31 +254,30 @@ async def async_setup_services(
             _LOGGER.error("Failed to save image: %s", err)
 
     async def handle_save_settings(call: ServiceCall) -> None:
-        """Update API keys + model settings — store in config_entry AND settings.json."""
+        """Update API keys + model settings — store in settings.json ONLY.
+
+        IMPORTANT: Do NOT call async_update_entry here!
+        It triggers _async_update_listener → async_reload → full integration
+        restart, which destroys the ai_advisor before settings.json is written.
+        """
         gemini_key = call.data.get("gemini_api_key")
         anthropic_key = call.data.get("anthropic_api_key")
         gemini_model = call.data.get("gemini_model")
         anthropic_model = call.data.get("anthropic_model")
         default_provider = call.data.get("default_ai_provider")
 
-        new_data = {**entry.data}
         updates = {}
-        changed = False
 
         if gemini_key is not None and gemini_key:
-            new_data[CONF_GEMINI_API_KEY] = gemini_key
             ai_advisor._gemini_key = gemini_key
             updates["gemini_api_key"] = gemini_key
             updates["gemini_key_status"] = "saved"
             updates["gemini_key_masked"] = gemini_key[:6] + "***" + gemini_key[-4:] if len(gemini_key) > 10 else "***"
-            changed = True
         if anthropic_key is not None and anthropic_key:
-            new_data[CONF_ANTHROPIC_API_KEY] = anthropic_key
             ai_advisor._anthropic_key = anthropic_key
             updates["anthropic_api_key"] = anthropic_key
             updates["anthropic_key_status"] = "saved"
             updates["anthropic_key_masked"] = anthropic_key[:7] + "***" + anthropic_key[-4:] if len(anthropic_key) > 11 else "***"
-            changed = True
 
         # Update model selections on advisor
         if gemini_model:
@@ -296,12 +295,10 @@ async def async_setup_services(
             if val is not None:
                 updates[status_key] = val
 
-        if changed:
-            hass.config_entries.async_update_entry(entry, data=new_data)
         if updates:
             _update_settings_file(hass, updates)
 
-        _LOGGER.info("API keys/models updated via panel (changed=%s, updates=%s)", changed, list(updates.keys()))
+        _LOGGER.info("API keys/models updated via panel (updates=%s)", list(updates.keys()))
 
     async def handle_test_api_key(call: ServiceCall) -> None:
         """Test if an API key is valid by making a minimal request."""
