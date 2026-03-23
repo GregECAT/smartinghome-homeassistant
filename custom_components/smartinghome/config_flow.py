@@ -633,10 +633,12 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
             current = self._config_entry.data
             new_data = {**current}
 
-            # Merge API keys into entry data
+            # Merge API keys into entry data (skip masked values)
             for key in (CONF_GEMINI_API_KEY, CONF_ANTHROPIC_API_KEY):
-                if key in user_input:
-                    new_data[key] = user_input[key]
+                val = user_input.get(key, "")
+                # Skip masked values or empty — don't overwrite real key
+                if val and "***" not in val:
+                    new_data[key] = val
 
             # Mark as soft update — skip integration reload
             new_data["_keys_only_update"] = True
@@ -684,17 +686,26 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
 
         current = self._config_entry.data
 
+        def _mask(key: str) -> str:
+            """Mask API key for safe display: show first 4 + last 4."""
+            if not key or len(key) < 10:
+                return ""
+            return key[:4] + "***" + key[-4:]
+
+        gk_raw = current.get(CONF_GEMINI_API_KEY, "")
+        ak_raw = current.get(CONF_ANTHROPIC_API_KEY, "")
+
         return self.async_show_form(
             step_id="api_keys",
             data_schema=vol.Schema(
                 {
                     vol.Optional(
                         CONF_GEMINI_API_KEY,
-                        default=current.get(CONF_GEMINI_API_KEY, ""),
+                        default=_mask(gk_raw),
                     ): str,
                     vol.Optional(
                         CONF_ANTHROPIC_API_KEY,
-                        default=current.get(CONF_ANTHROPIC_API_KEY, ""),
+                        default=_mask(ak_raw),
                     ): str,
                 }
             ),
