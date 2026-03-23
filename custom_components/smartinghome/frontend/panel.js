@@ -483,37 +483,18 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   _saveApiKeys() {
-    const geminiVal = this.shadowRoot.getElementById("inp-gemini-key")?.value || "";
-    const anthropicVal = this.shadowRoot.getElementById("inp-anthropic-key")?.value || "";
     const geminiModel = this.shadowRoot.getElementById("sel-gemini-model")?.value || "gemini-2.5-flash";
     const anthropicModel = this.shadowRoot.getElementById("sel-anthropic-model")?.value || "claude-sonnet-4.6-20260217";
     const defaultProvider = this.shadowRoot.getElementById("sel-default-provider")?.value || "gemini";
     if (this._hass) {
-      // Build ONE unified payload — keys + models + provider (all in save_settings)
-      const saveData = {
+      // Save models + provider only (keys are managed via HA integration options)
+      this._hass.callService("smartinghome", "save_settings", {
         gemini_model: geminiModel,
         anthropic_model: anthropicModel,
         default_ai_provider: defaultProvider,
-      };
-      const parts = [];
-      if (this._geminiDirty && geminiVal) {
-        saveData.gemini_api_key = geminiVal;
-        saveData.gemini_key_status = "saved";
-        parts.push('Gemini');
-      }
-      if (this._anthropicDirty && anthropicVal) {
-        saveData.anthropic_api_key = anthropicVal;
-        saveData.anthropic_key_status = "saved";
-        parts.push('Anthropic');
-      }
-      // One single call — no race condition
-      this._hass.callService("smartinghome", "save_settings", saveData);
-      this._updateKeyStatus();
-      // Reset dirty flags
-      this._geminiDirty = false;
-      this._anthropicDirty = false;
+      });
       const st = this.shadowRoot.getElementById("v-save-status");
-      if (st) { st.textContent = parts.length > 0 ? '✅ Klucze zapisane: ' + parts.join(', ') + ' + modele!' : '✅ Modele zapisane!'; setTimeout(() => { st.textContent = ''; }, 4000); }
+      if (st) { st.textContent = '✅ Ustawienia AI zapisane!'; setTimeout(() => { st.textContent = ''; }, 4000); }
     }
   }
 
@@ -1348,39 +1329,19 @@ class SmartingHomePanel extends HTMLElement {
   async _testApiKey(provider) {
     const btn = this.shadowRoot.getElementById(`test-btn-${provider}`);
     if (btn) { btn.textContent = "⏳ Testowanie..."; btn.disabled = true; }
-    const keyInput = this.shadowRoot.getElementById(`inp-${provider}-key`);
-    const keyValue = keyInput?.value || "";
-    const setupSub = () => {
-      if (!this._testSub) {
-        this._testSub = this._hass.connection.subscribeEvents((ev) => {
-          const d = ev.data;
-          this._settings[`${d.provider}_key_status`] = d.status;
-          this._updateKeyStatus();
-          const b = this.shadowRoot.getElementById(`test-btn-${d.provider}`);
-          if (b) { b.textContent = "🧪 Testuj"; b.disabled = false; }
-        }, "smartinghome_api_key_test");
-      }
-      setTimeout(() => { if (btn) { btn.textContent = "🧪 Testuj"; btn.disabled = false; } }, 15000);
-    };
-    if (!keyValue) {
-      // Test the key already stored on backend (don't require re-entering)
-      if (this._hass) {
-        this._hass.callService("smartinghome", "test_api_key", { provider, api_key: "" });
-        setupSub();
-      }
-      return;
+    if (!this._testSub) {
+      this._testSub = this._hass.connection.subscribeEvents((ev) => {
+        const d = ev.data;
+        this._settings[`${d.provider}_key_status`] = d.status;
+        this._updateKeyStatus();
+        const b = this.shadowRoot.getElementById(`test-btn-${d.provider}`);
+        if (b) { b.textContent = "🧪 Testuj"; b.disabled = false; }
+      }, "smartinghome_api_key_test");
     }
+    setTimeout(() => { if (btn) { btn.textContent = "🧪 Testuj"; btn.disabled = false; } }, 15000);
+    // Test the key stored on backend (managed via HA integration options)
     if (this._hass) {
-      // Save this provider's key first, then test with the key value directly
-      try {
-        await this._hass.callService("smartinghome", "save_settings", {
-          [`${provider}_api_key`]: keyValue,
-        });
-      } catch(e) { /* ignore save errors, still try to test */ }
-      if (provider === 'gemini') this._geminiDirty = false;
-      else this._anthropicDirty = false;
-      this._hass.callService("smartinghome", "test_api_key", { provider, api_key: keyValue });
-      setupSub();
+      this._hass.callService("smartinghome", "test_api_key", { provider, api_key: "" });
     }
   }
 
@@ -3654,23 +3615,23 @@ class SmartingHomePanel extends HTMLElement {
 
             <!-- 🔑 API Keys -->
             <div class="card" style="grid-column: 1 / -1">
-              <div class="card-title">🔑 Klucze API — AI Advisor</div>
-              <div style="font-size:11px; color:#94a3b8; margin-bottom:10px">Podaj klucze API aby włączyć AI Advisor — inteligentne porady dotyczące zarządzania energią.</div>
-              <div class="settings-field">
-                <label>Google Gemini API Key</label>
-                <div class="key-row">
-                  <input type="password" id="inp-gemini-key" placeholder="AIza..." />
-                  <button class="test-btn" id="test-btn-gemini" onclick="this.getRootNode().host._testApiKey('gemini')">🧪 Testuj</button>
+              <div class="card-title">🤖 Ustawienia AI — AI Advisor</div>
+              <div style="font-size:11px; color:#94a3b8; margin-bottom:10px">Klucze API zarządzaj w: <strong>Ustawienia → Integracje → Smarting HOME → ⚙️ → 🔑 API Keys</strong></div>
+              <div style="display:flex; gap:16px; flex-wrap:wrap; margin-bottom:10px">
+                <div style="flex:1; min-width:200px">
+                  <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">Google Gemini</div>
+                  <div style="display:flex; align-items:center; gap:8px">
+                    <div class="key-status" id="key-status-gemini" style="flex:1">— Brak klucza</div>
+                    <button class="test-btn" id="test-btn-gemini" onclick="this.getRootNode().host._testApiKey('gemini')">🧪 Testuj</button>
+                  </div>
                 </div>
-                <div class="key-status" id="key-status-gemini">— Brak klucza</div>
-              </div>
-              <div class="settings-field">
-                <label>Anthropic Claude API Key</label>
-                <div class="key-row">
-                  <input type="password" id="inp-anthropic-key" placeholder="sk-ant-..." />
-                  <button class="test-btn" id="test-btn-anthropic" onclick="this.getRootNode().host._testApiKey('anthropic')">🧪 Testuj</button>
+                <div style="flex:1; min-width:200px">
+                  <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">Anthropic Claude</div>
+                  <div style="display:flex; align-items:center; gap:8px">
+                    <div class="key-status" id="key-status-anthropic" style="flex:1">— Brak klucza</div>
+                    <button class="test-btn" id="test-btn-anthropic" onclick="this.getRootNode().host._testApiKey('anthropic')">🧪 Testuj</button>
+                  </div>
                 </div>
-                <div class="key-status" id="key-status-anthropic">— Brak klucza</div>
               </div>
               <div style="display:flex; gap:16px; flex-wrap:wrap; margin-top:14px">
                 <div class="settings-field" style="flex:1; min-width:200px">
@@ -3702,7 +3663,7 @@ class SmartingHomePanel extends HTMLElement {
                   Dostawca używany przez AI Cron i zapytania HEMS
                 </div>
               </div>
-              <button class="save-btn" onclick="this.getRootNode().host._saveApiKeys()">💾 Zapisz klucze API i model</button>
+              <button class="save-btn" onclick="this.getRootNode().host._saveApiKeys()">💾 Zapisz ustawienia AI</button>
               <div id="v-save-status" style="font-size:11px; color:#2ecc71; margin-top:8px"></div>
             </div>
 
