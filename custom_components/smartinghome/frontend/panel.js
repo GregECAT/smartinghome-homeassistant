@@ -484,7 +484,7 @@ class SmartingHomePanel extends HTMLElement {
 
   _saveApiKeys() {
     const geminiModel = this.shadowRoot.getElementById("sel-gemini-model")?.value || "gemini-2.5-flash";
-    const anthropicModel = this.shadowRoot.getElementById("sel-anthropic-model")?.value || "claude-sonnet-4-6-20260217";
+    const anthropicModel = this.shadowRoot.getElementById("sel-anthropic-model")?.value || "claude-sonnet-4-6-latest";
     const defaultProvider = this.shadowRoot.getElementById("sel-default-provider")?.value || "gemini";
     if (this._hass) {
       // Save models + provider only (keys are managed via HA integration options)
@@ -3645,9 +3645,9 @@ class SmartingHomePanel extends HTMLElement {
                 <div class="settings-field" style="flex:1; min-width:200px">
                   <label style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">🤖 Model Claude</label>
                   <select id="sel-anthropic-model" style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:12px">
-                    <option value="claude-sonnet-4-6-20260217">Claude Sonnet 4.6 (szybki)</option>
-                    <option value="claude-opus-4-6-20260205">Claude Opus 4.6 (najpotężniejszy)</option>
-                    <option value="claude-haiku-3-5-20241022">Claude Haiku 3.5 (najtańszy)</option>
+                    <option value="claude-sonnet-4-6-latest">Claude Sonnet 4.6 (szybki)</option>
+                    <option value="claude-opus-4-6-latest">Claude Opus 4.6 (najpotężniejszy)</option>
+                    <option value="claude-3-5-haiku-latest">Claude Haiku 3.5 (najtańszy)</option>
                   </select>
                 </div>
               </div>

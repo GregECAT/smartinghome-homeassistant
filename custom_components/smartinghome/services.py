@@ -308,17 +308,21 @@ async def async_setup_services(
         # If no key provided in the call, try reading from stored settings
         if not test_key:
             stored = _read_settings(hass)
+            def _clean(k: str) -> str:
+                """Return empty string for masked or empty keys."""
+                return "" if not k or "***" in k else k
+
             if provider == "gemini":
                 test_key = (
-                    stored.get("gemini_api_key", "")
-                    or entry.data.get(CONF_GEMINI_API_KEY, "")
-                    or ai_advisor._gemini_key
+                    _clean(stored.get("gemini_api_key", ""))
+                    or _clean(entry.data.get(CONF_GEMINI_API_KEY, ""))
+                    or _clean(ai_advisor._gemini_key)
                 )
             else:
                 test_key = (
-                    stored.get("anthropic_api_key", "")
-                    or entry.data.get(CONF_ANTHROPIC_API_KEY, "")
-                    or ai_advisor._anthropic_key
+                    _clean(stored.get("anthropic_api_key", ""))
+                    or _clean(entry.data.get(CONF_ANTHROPIC_API_KEY, ""))
+                    or _clean(ai_advisor._anthropic_key)
                 )
             _LOGGER.info(
                 "Test %s: key from settings (len=%d, prefix=%s)",
@@ -332,10 +336,11 @@ async def async_setup_services(
         if gm:
             ai_advisor._gemini_model = gm
         if am:
-            # Migrate old dot-format model IDs to dash-format
-            am = am.replace("claude-sonnet-4.6", "claude-sonnet-4-6")
-            am = am.replace("claude-opus-4.6", "claude-opus-4-6")
-            am = am.replace("claude-haiku-4.5", "claude-haiku-3-5")
+            # Normalize old model IDs to -latest aliases
+            import re
+            am = re.sub(r"claude-sonnet-4[\.\-]6.*", "claude-sonnet-4-6-latest", am)
+            am = re.sub(r"claude-opus-4[\.\-]6.*", "claude-opus-4-6-latest", am)
+            am = re.sub(r"claude-haiku-[34][\.\-]5.*", "claude-3-5-haiku-latest", am)
             ai_advisor._anthropic_model = am
         _LOGGER.info(
             "Test %s: model=%s",
