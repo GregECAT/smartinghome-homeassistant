@@ -41,6 +41,7 @@ Body (JSON):
   "success": true,
   "license_key": "SH-PRO-A1B2C3D-E4F5-G6H7-I8J9",
   "tier": "pro",
+  "lifetime": false,
   "expires_at": "2027-03-21 20:57:00+00",
   "email": "klient@example.com"
 }
@@ -56,7 +57,7 @@ Body (JSON):
 |----------|-----|----------|------|
 | `p_email` | string | ✅ | Email klienta |
 | `p_tier` | string | ❌ | `pro` (domyślny) lub `enterprise` |
-| `p_months` | int | ❌ | Ile miesięcy (domyślnie: 12) |
+| `p_months` | int | ❌ | Ile miesięcy (domyślnie: 12). **`0` = licencja dożywotnia** |
 | `p_payment_ref` | string | ❌ | ID płatności z systemu |
 | `p_notes` | string | ❌ | Notatki admina |
 
@@ -72,6 +73,29 @@ Body (JSON):
 }
 ```
 
+**PRO dożywotnia (lifetime):**
+```json
+{
+  "p_email": "jan@example.pl",
+  "p_tier": "pro",
+  "p_months": 0,
+  "p_payment_ref": "stripe_pi_xxx456",
+  "p_notes": "Licencja dożywotnia - early adopter"
+}
+```
+
+Odpowiedź dla licencji dożywotniej:
+```json
+{
+  "success": true,
+  "license_key": "SH-PRO-X1Y2Z3W-A4B5-C6D7-E8F9",
+  "tier": "pro",
+  "lifetime": true,
+  "expires_at": "lifetime",
+  "email": "jan@example.pl"
+}
+```
+
 **ENTERPRISE 24 miesiące:**
 ```json
 {
@@ -79,6 +103,16 @@ Body (JSON):
   "p_tier": "enterprise",
   "p_months": 24,
   "p_payment_ref": "woo_order_456"
+}
+```
+
+**ENTERPRISE dożywotnia:**
+```json
+{
+  "p_email": "firma@example.pl",
+  "p_tier": "enterprise",
+  "p_months": 0,
+  "p_payment_ref": "woo_order_789"
 }
 ```
 
@@ -111,6 +145,20 @@ Body:
 }
 ```
 
+Odpowiedź (dla licencji dożywotniej):
+```json
+{
+  "valid": true,
+  "tier": "pro",
+  "lifetime": true,
+  "expires": "lifetime",
+  "email": "jan@example.pl",
+  "max_installations": 1,
+  "features": ["sensors", "binary_sensors", "..."],
+  "message": "Lifetime license active"
+}
+```
+
 ---
 
 ## 5. Supabase Credentials w n8n
@@ -137,3 +185,15 @@ Opcjonalnie:
 ```
 Webhook (Refund) → HTTP Request (sh_revoke_license) → Send Email (powiadomienie o anulowaniu)
 ```
+
+---
+
+## 7. Podsumowanie typów licencji
+
+| Typ | `p_tier` | `p_months` | Opis |
+|-----|----------|------------|------|
+| PRO miesięczna | `pro` | `1` | 1 miesiąc |
+| PRO roczna | `pro` | `12` | 12 miesięcy |
+| PRO dożywotnia | `pro` | `0` | Nigdy nie wygasa |
+| ENTERPRISE roczna | `enterprise` | `12` | 12 miesięcy, do 5 instalacji |
+| ENTERPRISE dożywotnia | `enterprise` | `0` | Nigdy nie wygasa, do 5 instalacji |
