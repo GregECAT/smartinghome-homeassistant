@@ -55,14 +55,70 @@ class AIAdvisor:
         self._gemini_client: Any = None
         self._anthropic_client: Any = None
 
+    def refresh_keys(self) -> None:
+        """Reload API keys from settings.json and config entry data."""
+        import json
+        from pathlib import Path
+        from .const import CONF_GEMINI_API_KEY, CONF_ANTHROPIC_API_KEY
+
+        # Try settings.json first
+        settings_path = Path(self.hass.config.path("custom_components/smartinghome/settings.json"))
+        stored = {}
+        if settings_path.exists():
+            try:
+                stored = json.loads(settings_path.read_text())
+            except Exception:
+                pass
+
+        # Try config entry data
+        entry_data = {}
+        entries = self.hass.config_entries.async_entries("smartinghome")
+        if entries:
+            entry_data = entries[0].data
+
+        gk = (
+            stored.get("gemini_api_key", "")
+            or entry_data.get(CONF_GEMINI_API_KEY, "")
+        )
+        ak = (
+            stored.get("anthropic_api_key", "")
+            or entry_data.get(CONF_ANTHROPIC_API_KEY, "")
+        )
+        if gk:
+            self._gemini_key = gk
+        if ak:
+            self._anthropic_key = ak
+
+        # Also refresh models
+        gm = stored.get("gemini_model", "")
+        am = stored.get("anthropic_model", "")
+        if gm:
+            self._gemini_model = gm
+        if am:
+            import re
+            am = re.sub(r"claude-sonnet-4[\.\-]6.*", "claude-sonnet-4-6", am)
+            am = re.sub(r"claude-opus-4[\.\-]6.*", "claude-opus-4-6", am)
+            am = re.sub(r"claude-haiku-[34][\.\-]5.*", "claude-3-5-haiku", am)
+            self._anthropic_model = am
+
+        _LOGGER.debug(
+            "Keys refreshed: gemini=%s, anthropic=%s",
+            "yes" if self._gemini_key else "no",
+            "yes" if self._anthropic_key else "no",
+        )
+
     @property
     def gemini_available(self) -> bool:
         """Return True if Gemini is configured."""
+        if not self._gemini_key:
+            self.refresh_keys()
         return bool(self._gemini_key)
 
     @property
     def anthropic_available(self) -> bool:
         """Return True if Anthropic is configured."""
+        if not self._anthropic_key:
+            self.refresh_keys()
         return bool(self._anthropic_key)
 
     @property
