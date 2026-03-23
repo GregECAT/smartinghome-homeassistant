@@ -204,6 +204,20 @@ class AIAdvisor:
             grid_for_ai = -float(raw_grid) if raw_grid is not None else 0
         except (ValueError, TypeError):
             grid_for_ai = 0
+        # GoodWe convention: positive=discharge, negative=charge
+        # Negate to match our AI description: positive=charge, negative=discharge
+        raw_battery = data.get('battery_power', 0)
+        try:
+            raw_battery_f = float(raw_battery) if raw_battery is not None else 0
+        except (ValueError, TypeError):
+            raw_battery_f = 0
+        battery_for_ai = -raw_battery_f  # flip sign for AI
+        if raw_battery_f > 50:
+            battery_state = "DISCHARGING (battery powers the home)"
+        elif raw_battery_f < -50:
+            battery_state = "CHARGING (battery absorbs power)"
+        else:
+            battery_state = "IDLE"
         lines = [
             "=== SMARTING HOME — ENERGY SYSTEM STATUS ===",
             "",
@@ -217,7 +231,8 @@ class AIAdvisor:
             f"- PV Power: {data.get('pv_power', 0)} W",
             f"- Grid Power: {grid_for_ai} W (positive=import from grid, negative=export to grid)",
             f"- Battery SOC: {data.get('battery_soc', 0)}%",
-            f"- Battery Power: {data.get('battery_power', 0)} W (+charge, -discharge)",
+            f"- Battery Power: {battery_for_ai} W (positive=charging, negative=discharging)",
+            f"- Battery State: {battery_state}",
             f"- Home Load: {data.get('load', 0)} W",
             f"- PV Surplus: {data.get('pv_surplus', 0)} W",
             "",
