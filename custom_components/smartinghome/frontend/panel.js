@@ -24,6 +24,12 @@ class SmartingHomePanel extends HTMLElement {
   connectedCallback() {
     this._render();
     this._loadSettings();
+    const wrap = this.shadowRoot.querySelector('.flow-wrapper');
+    if (wrap && window.ResizeObserver) {
+      this._ro = new ResizeObserver(() => this._updateSvgPaths());
+      this._ro.observe(wrap);
+      setTimeout(() => this._updateSvgPaths(), 50);
+    }
     ["fullscreenchange","webkitfullscreenchange","mozfullscreenchange","MSFullscreenChange"].forEach(ev => {
       document.addEventListener(ev, () => {
         this._isFullscreen = !!(document.fullscreenElement||document.webkitFullscreenElement||document.mozFullScreenElement||document.msFullscreenElement);
@@ -32,7 +38,10 @@ class SmartingHomePanel extends HTMLElement {
       });
     });
   }
-  disconnectedCallback() { if (this._interval) clearInterval(this._interval); }
+  disconnectedCallback() {
+    if (this._interval) clearInterval(this._interval);
+    if (this._ro) this._ro.disconnect();
+  }
 
   _toggleFullscreen() {
     const c = this.shadowRoot.querySelector(".panel-container");
@@ -1434,9 +1443,7 @@ class SmartingHomePanel extends HTMLElement {
       const statusLabel = this.shadowRoot.getElementById("ov-status-label");
       if (statusLabel) { statusLabel.textContent = "☀️ Dzień"; statusLabel.style.color = "#f7b731"; }
 
-      // Arc animation — bezier M10,98 Q100,-15 190,98
-      const arc = this.shadowRoot.getElementById("ov-sun-arc");
-      if (arc) arc.setAttribute("stroke-dashoffset", String(290 * (1 - t)));
+      // Arc is now handled by clip-path in sync with the dot
 
       const dot = this.shadowRoot.getElementById("ov-sun-dot");
       if (dot) {
@@ -1447,6 +1454,8 @@ class SmartingHomePanel extends HTMLElement {
         dot.setAttribute("cy", String(cy));
         dot.setAttribute("fill", "#f7b731");
         dot.setAttribute("r", "7");
+        const clipRect = this.shadowRoot.getElementById("ov-sun-clip-rect");
+        if (clipRect) clipRect.setAttribute("width", String(cx));
       }
     } else {
       // 🌙 NIGHTTIME
@@ -1462,8 +1471,8 @@ class SmartingHomePanel extends HTMLElement {
       if (statusLabel) { statusLabel.textContent = "🌙 Noc"; statusLabel.style.color = "#64748b"; }
 
       // Arc: empty (no daylight progress)
-      const arc = this.shadowRoot.getElementById("ov-sun-arc");
-      if (arc) arc.setAttribute("stroke-dashoffset", "290");
+      const clipRect = this.shadowRoot.getElementById("ov-sun-clip-rect");
+      if (clipRect) clipRect.setAttribute("width", "0");
 
       // Dot: dim, at right horizon (set position)
       const dot = this.shadowRoot.getElementById("ov-sun-dot");
@@ -1693,16 +1702,20 @@ class SmartingHomePanel extends HTMLElement {
       }
     }
 
-    // Animated flows (GoodWe BT: batt>0=discharge, batt<0=charge)
-    this._flow("fl-pv-inv", pv > 10, pv);
+    // Animated flows
+    const pvSurplus = pv > load && pv > 10;
+    const battCharging = batt < -10;
+
+    this._flow("fl-pv-inv", pv > 10 && !pvSurplus, pv);
+    this._flow("fl-pv-inv-bolt", pv > 10 && pvSurplus, pv);
+    
     this._flow("fl-inv-load", load > 10, load);
     this._flow("fl-grid-inv", grid > 10, grid);
     this._flow("fl-inv-grid", grid < -10, Math.abs(grid));
-    const pvSurplus = pv > load && pv > 10;
-    const battCharging = batt < -10;
-    this._flow("fl-inv-batt", battCharging && !pvSurplus, Math.abs(batt));  // charging: inverter → battery (no PV surplus)
-    this._flow("fl-inv-batt-pv", battCharging && pvSurplus, Math.abs(batt));  // charging from PV surplus: pulsating ⚡
-    this._flow("fl-batt-inv", batt > 10, batt);               // discharging: battery → inverter
+    
+    this._flow("fl-inv-batt", battCharging && !pvSurplus, Math.abs(batt));
+    this._flow("fl-inv-batt-pv", battCharging && pvSurplus, Math.abs(batt));
+    this._flow("fl-batt-inv", batt > 10, batt);
 
     // Dynamic Inverter Image Logic
     let imgName = "goodwe"; // domyślnie GoodWe
@@ -1745,6 +1758,82 @@ class SmartingHomePanel extends HTMLElement {
         if (iconEl) iconEl.style.display = 'none';
       }
     }
+  }
+
+  _updateSvgPaths() {
+    const wrap = this.shadowRoot.querySelector('.flow-wrapper');
+    const svg = this.shadowRoot.querySelector('.flow-svg-bg');
+    if (!wrap || !svg) return;
+    const wr = wrap.getBoundingClientRect();
+    if (wr.width === 0 || wr.height === 0) return;
+    
+    svg.setAttribute('viewBox', `0 0 ${wr.width} ${wr.height}`);
+    svg.removeAttribute('preserveAspectRatio');
+    
+    const getC = (id) => {
+      const el = this.shadowRoot.getElementById(id);
+      if(!el) return null;
+      const r = el.getBoundingClientRect();
+      const hw = (r.width > 440) ? 220 : r.width/2; 
+      return { x: r.left - wr.left + r.width/2, y: r.top - wr.top + r.height/2 };
+    };
+    
+    const pv = getC('pv-node');
+    const load = getC('home-node');
+    const batt = getC('batt-node');
+    const grid = getC('grid-node');
+    
+    const invEl = this.shadowRoot.querySelector('.inv-box');
+    let inv = {x: wr.width/2, y: wr.height/2};
+    if (invEl) {
+      const ir = invEl.getBoundingClientRect();
+      inv = { x: ir.left - wr.left + ir.width/2, y: ir.top - wr.top + ir.height/2 };
+    }
+    
+    if(!pv || !load || !batt || !grid) return;
+
+    const mkPath = (x1, y1, x2, y2, mode) => {
+      if (mode === 'H') return `M ${x1},${y1} H ${x2} V ${y2}`;
+      if (mode === 'V') return `M ${x1},${y1} V ${y2} H ${x2}`;
+      if (mode === 'B') {
+        const busY = wr.height * 0.85;
+        return `M ${x1},${y1} V ${busY} H ${x2} V ${y2}`;
+      }
+      return `M ${x1},${y1} L ${x2},${y2}`;
+    };
+
+    const updateLine = (lineId, anims, x1, y1, x2, y2, mode) => {
+      const p = mkPath(x1, y1, x2, y2, mode);
+      const lp = this.shadowRoot.getElementById(lineId);
+      if(lp) lp.setAttribute('d', p);
+      for(let animId of anims) {
+         const am = this.shadowRoot.getElementById(animId);
+         if(am) am.setAttribute('path', p);
+      }
+    };
+    
+    updateLine('line-pv-inv', ['anim-pv-inv', 'anim-pv-inv-bolt'], pv.x, pv.y, inv.x, inv.y, 'H');
+    updateLine('line-inv-load', ['anim-inv-load'], inv.x, inv.y, load.x, load.y, 'V');
+    updateLine('line-batt-inv', [], batt.x, batt.y, inv.x, inv.y, 'B'); 
+    
+    const rpBatt = mkPath(batt.x, batt.y, inv.x, inv.y, 'B'); 
+    const amBattInv = this.shadowRoot.getElementById('anim-batt-inv');
+    if(amBattInv) amBattInv.setAttribute('path', rpBatt);
+    
+    const pInvBatt = mkPath(inv.x, inv.y, batt.x, batt.y, 'B'); 
+    const amInvBatt = this.shadowRoot.getElementById('anim-inv-batt');
+    if(amInvBatt) amInvBatt.setAttribute('path', pInvBatt);
+    const amInvBattPv = this.shadowRoot.getElementById('anim-inv-batt-pv');
+    if(amInvBattPv) amInvBattPv.setAttribute('path', pInvBatt);
+
+    updateLine('line-grid-inv', [], grid.x, grid.y, inv.x, inv.y, 'B'); 
+    const rpGrid = mkPath(grid.x, grid.y, inv.x, inv.y, 'B'); 
+    const amGridInv = this.shadowRoot.getElementById('anim-grid-inv');
+    if(amGridInv) amGridInv.setAttribute('path', rpGrid);
+    
+    const pInvGrid = mkPath(inv.x, inv.y, grid.x, grid.y, 'B'); 
+    const amInvGrid = this.shadowRoot.getElementById('anim-inv-grid');
+    if(amInvGrid) amInvGrid.setAttribute('path', pInvGrid);
   }
 
   _flow(id, active, power) {
@@ -2548,8 +2637,11 @@ class SmartingHomePanel extends HTMLElement {
             </div>
             <div style="position:relative; width:180px; height:70px; flex-shrink:0">
               <svg viewBox="0 0 200 105" style="width:100%; height:100%">
+                <defs>
+                  <clipPath id="sun-clip"><rect id="ov-sun-clip-rect" x="0" y="-20" width="0" height="150" /></clipPath>
+                </defs>
                 <path d="M 10,98 Q 100,-15 190,98" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="1.5" />
-                <path id="ov-sun-arc" d="M 10,98 Q 100,-15 190,98" fill="none" stroke="#f7b731" stroke-width="2.5" stroke-dasharray="290" stroke-dashoffset="290" />
+                <path id="ov-sun-arc" d="M 10,98 Q 100,-15 190,98" fill="none" stroke="#f7b731" stroke-width="2.5" clip-path="url(#sun-clip)" />
                 <line x1="5" y1="98" x2="195" y2="98" stroke="rgba(255,255,255,0.08)" stroke-width="0.5" />
                 <circle id="ov-sun-dot" cx="100" cy="50" r="7" fill="#f7b731" style="filter:drop-shadow(0 0 8px #f7b731); transition: all 1s ease" />
               </svg>
@@ -2576,43 +2668,50 @@ class SmartingHomePanel extends HTMLElement {
         <div class="tab-content active" data-tab="overview">
           <div class="flow-wrapper">
             <!-- ORTHOGONAL SVG OVERLAY -->
-            <svg class="flow-svg-bg" viewBox="0 0 700 480" preserveAspectRatio="none">
-              <!-- PV (top-left) → Inverter (center): right then down -->
-              <path class="fl-line" d="M 80,90 H 350 V 180" />
+            <svg class="flow-svg-bg" viewBox="0 0 700 480">
+              <!-- PV (top-left) → Inverter (center) -->
+              <path class="fl-line" id="line-pv-inv" d="M 80,90 H 350 V 180" />
               <g id="fl-pv-inv" class="fl-dot solar" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2.5s" repeatCount="indefinite" path="M 80,90 H 350 V 180" />
+                <animateMotion id="anim-pv-inv" dur="2.5s" repeatCount="indefinite" path="M 80,90 H 350 V 180" />
               </g>
-              <!-- Inverter → Home (top-right): up then right -->
-              <path class="fl-line" d="M 350,180 V 90 H 620" />
+              <!-- PV → Inverter (Bolt) -->
+              <g id="fl-pv-inv-bolt" class="fl-dot pv-charge" style="display:none">
+                <circle r="7" style="animation: pvPulse 1.2s ease-in-out infinite" />
+                <text text-anchor="middle" dominant-baseline="central" font-size="10" fill="#fff" style="font-weight:900; filter:drop-shadow(0 0 4px #00aaff)">⚡</text>
+                <animateMotion id="anim-pv-inv-bolt" dur="2.5s" repeatCount="indefinite" path="M 80,90 H 350 V 180" />
+              </g>
+              <!-- Inverter → Home (top-right) -->
+              <path class="fl-line" id="line-inv-load" d="M 350,180 V 90 H 620" />
               <g id="fl-inv-load" class="fl-dot load-flow" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2.5s" repeatCount="indefinite" path="M 350,180 V 90 H 620" />
+                <animateMotion id="anim-inv-load" dur="2.5s" repeatCount="indefinite" path="M 350,180 V 90 H 620" />
               </g>
-              <!-- Battery → Inverter: down from battery, horizontal, then up to inverter -->
-              <path class="fl-line" d="M 80,340 V 410 H 350 V 260" />
+              <!-- Battery → Inverter -->
+              <path class="fl-line" id="line-batt-inv" d="M 80,340 V 410 H 350 V 260" />
+              <g id="fl-batt-inv" class="fl-dot batt-discharge" style="display:none">
+                <circle r="5" />
+                <animateMotion id="anim-batt-inv" dur="2.5s" repeatCount="indefinite" path="M 80,340 V 410 H 350 V 260" />
+              </g>
+              <!-- Inverter -> Battery -->
               <g id="fl-inv-batt" class="fl-dot batt-charge" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2.5s" repeatCount="indefinite" path="M 350,260 V 410 H 80 V 340" />
+                <animateMotion id="anim-inv-batt" dur="2.5s" repeatCount="indefinite" path="M 350,260 V 410 H 80 V 340" />
               </g>
               <g id="fl-inv-batt-pv" class="fl-dot pv-charge" style="display:none">
                 <circle r="7" style="animation: pvPulse 1.2s ease-in-out infinite" />
                 <text text-anchor="middle" dominant-baseline="central" font-size="10" fill="#fff" style="font-weight:900; filter:drop-shadow(0 0 4px #00aaff)">⚡</text>
-                <animateMotion dur="2.5s" repeatCount="indefinite" path="M 350,260 V 410 H 80 V 340" />
+                <animateMotion id="anim-inv-batt-pv" dur="2.5s" repeatCount="indefinite" path="M 350,260 V 410 H 80 V 340" />
               </g>
-              <g id="fl-batt-inv" class="fl-dot batt-discharge" style="display:none">
-                <circle r="5" />
-                <animateMotion dur="2.5s" repeatCount="indefinite" path="M 80,340 V 410 H 350 V 260" />
-              </g>
-              <!-- Grid → Inverter: down from grid, horizontal, then up to inverter -->
-              <path class="fl-line" d="M 620,340 V 410 H 350 V 260" />
+              <!-- Grid → Inverter -->
+              <path class="fl-line" id="line-grid-inv" d="M 620,340 V 410 H 350 V 260" />
               <g id="fl-grid-inv" class="fl-dot grid-in" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2.5s" repeatCount="indefinite" path="M 620,340 V 410 H 350 V 260" />
+                <animateMotion id="anim-grid-inv" dur="2.5s" repeatCount="indefinite" path="M 620,340 V 410 H 350 V 260" />
               </g>
               <g id="fl-inv-grid" class="fl-dot grid-out" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2.5s" repeatCount="indefinite" path="M 350,260 V 410 H 620 V 340" />
+                <animateMotion id="anim-inv-grid" dur="2.5s" repeatCount="indefinite" path="M 350,260 V 410 H 620 V 340" />
               </g>
             </svg>
 
@@ -2718,7 +2817,7 @@ class SmartingHomePanel extends HTMLElement {
               <!-- 🔌 GRID / SIEĆ (right, below Home) -->
               <div class="grid-area">
                 <div class="node" id="grid-node" style="border-color: rgba(231,76,60,0.15); transition: border-color 0.5s, box-shadow 0.5s">
-                  <div style="display:flex; align-items:flex-start; gap:10px">
+                  <div style="display:flex; align-items:flex-end; gap:10px">
                     <div style="flex:1">
                       <div class="node-title">🔌 Sieć</div>
                       <div class="node-big" id="v-grid">— W</div>
@@ -3782,7 +3881,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.13</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.14</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
