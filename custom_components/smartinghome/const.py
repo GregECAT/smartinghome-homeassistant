@@ -30,6 +30,7 @@ CONF_MODBUS_SLAVE: Final = "modbus_slave"
 CONF_UPDATE_INTERVAL: Final = "update_interval"
 CONF_SENSOR_MAP: Final = "sensor_map"
 CONF_INVERTER_BRAND: Final = "inverter_brand"
+CONF_ECOWITT_ENABLED: Final = "ecowitt_enabled"
 
 # License mode values
 LICENSE_MODE_FREE: Final = "free"
@@ -38,6 +39,7 @@ LICENSE_MODE_PRO: Final = "pro"
 # Inverter brands
 INVERTER_BRAND_GOODWE: Final = "goodwe"
 INVERTER_BRAND_DEYE: Final = "deye"
+INVERTER_BRAND_GROWATT: Final = "growatt"
 INVERTER_BRAND_OTHER: Final = "other"
 
 # =============================================================================
@@ -119,6 +121,14 @@ SENSOR_MAP_WEATHER_LOCAL: Final = {
     "local_wind_speed": "Wind speed — local station (km/h)",
     "local_rain_rate": "Rain rate — local station (mm/h)",
     "local_solar_radiation": "Solar radiation — local station (W/m²)",
+    "local_dewpoint": "Dewpoint temperature — local station (°C)",
+    "local_uv_index": "UV index — local station",
+    "local_solar_lux": "Solar illuminance — local station (lx)",
+    "local_pressure": "Atmospheric pressure — local station (hPa)",
+    "local_daily_rain": "Daily rain — local station (mm)",
+    "local_wind_direction": "Wind direction — local station (°)",
+    "local_wind_gust": "Wind gust — local station (km/h)",
+    "local_feels_like": "Feels like temperature — local station (°C)",
 }
 
 # Combined map (all keys)
@@ -188,6 +198,14 @@ DEFAULT_SENSOR_MAP: Final = {
     "local_wind_speed": "",
     "local_rain_rate": "",
     "local_solar_radiation": "",
+    "local_dewpoint": "",
+    "local_uv_index": "",
+    "local_solar_lux": "",
+    "local_pressure": "",
+    "local_daily_rain": "",
+    "local_wind_direction": "",
+    "local_wind_gust": "",
+    "local_feels_like": "",
 }
 
 # ── Deye defaults ──
@@ -245,6 +263,96 @@ DEFAULT_SENSOR_MAP_DEYE: Final = {
     "local_wind_speed": "",
     "local_rain_rate": "",
     "local_solar_radiation": "",
+    "local_dewpoint": "",
+    "local_uv_index": "",
+    "local_solar_lux": "",
+    "local_pressure": "",
+    "local_daily_rain": "",
+    "local_wind_direction": "",
+    "local_wind_gust": "",
+    "local_feels_like": "",
+}
+
+# ── Growatt defaults ──
+DEFAULT_SENSOR_MAP_GROWATT: Final = {
+    # Core
+    "pv_power": "sensor.growatt_pv_power",
+    "load_power": "sensor.growatt_load_power",
+    "grid_power": "sensor.growatt_grid_power",
+    "battery_power": "sensor.growatt_battery_power",
+    "battery_soc": "sensor.growatt_battery_soc",
+    # PV Strings
+    "pv1_power": "sensor.growatt_pv1_power",
+    "pv1_voltage": "sensor.growatt_pv1_voltage",
+    "pv1_current": "sensor.growatt_pv1_current",
+    "pv2_power": "sensor.growatt_pv2_power",
+    "pv2_voltage": "sensor.growatt_pv2_voltage",
+    "pv2_current": "sensor.growatt_pv2_current",
+    "pv3_power": "",
+    "pv4_power": "",
+    # Battery extended
+    "battery_voltage": "sensor.growatt_battery_voltage",
+    "battery_current": "sensor.growatt_battery_current",
+    "battery_temp": "sensor.growatt_battery_temperature",
+    "battery_capacity_kwh": "",
+    # Grid extended
+    "voltage_l1": "sensor.growatt_grid_l1_voltage",
+    "voltage_l2": "sensor.growatt_grid_l2_voltage",
+    "voltage_l3": "sensor.growatt_grid_l3_voltage",
+    "current_l1": "sensor.growatt_grid_l1_current",
+    "current_l2": "sensor.growatt_grid_l2_current",
+    "current_l3": "sensor.growatt_grid_l3_current",
+    "power_l1": "sensor.growatt_grid_l1_power",
+    "power_l2": "sensor.growatt_grid_l2_power",
+    "power_l3": "sensor.growatt_grid_l3_power",
+    "grid_frequency": "sensor.growatt_grid_frequency",
+    # Daily totals
+    "pv_today": "sensor.growatt_day_pv_energy",
+    "grid_import_today": "sensor.growatt_day_grid_import",
+    "grid_export_today": "sensor.growatt_day_grid_export",
+    "battery_charge_today": "sensor.growatt_day_battery_charge",
+    "battery_discharge_today": "sensor.growatt_day_battery_discharge",
+    # Inverter
+    "inverter_power": "sensor.growatt_active_power",
+    "inverter_temp": "sensor.growatt_inverter_temperature",
+    # Weather — cloud (user fills in)
+    "weather_temp": "",
+    "weather_humidity": "",
+    "weather_cloud_cover": "",
+    "weather_wind_speed": "",
+    "weather_pressure": "",
+    "weather_uv_index": "",
+    # Weather — local station (user fills in)
+    "local_temp": "",
+    "local_humidity": "",
+    "local_wind_speed": "",
+    "local_rain_rate": "",
+    "local_solar_radiation": "",
+    "local_dewpoint": "",
+    "local_uv_index": "",
+    "local_solar_lux": "",
+    "local_pressure": "",
+    "local_daily_rain": "",
+    "local_wind_direction": "",
+    "local_wind_gust": "",
+    "local_feels_like": "",
+}
+
+# ── Ecowitt WH90 defaults ──
+DEFAULT_ECOWITT_SENSOR_MAP: Final = {
+    "local_temp": "sensor.ecowitt_outdoor_temp_9747",
+    "local_humidity": "sensor.ecowitt_outdoor_humidity_9747",
+    "local_wind_speed": "sensor.ecowitt_wind_speed_9747",
+    "local_rain_rate": "sensor.ecowitt_rain_rate_9747",
+    "local_solar_radiation": "sensor.ecowitt_solar_radiation_9747",
+    "local_dewpoint": "sensor.ecowitt_dewpoint_9747",
+    "local_uv_index": "sensor.ecowitt_uv_index_9747",
+    "local_solar_lux": "sensor.ecowitt_solar_lux_9747",
+    "local_pressure": "sensor.ecowitt_pressure_relative",
+    "local_daily_rain": "sensor.ecowitt_daily_rain_9747",
+    "local_wind_direction": "sensor.ecowitt_wind_direction_9747",
+    "local_wind_gust": "sensor.ecowitt_wind_gust_9747",
+    "local_feels_like": "sensor.ecowitt_feels_like_temp_ch3",
 }
 
 # =============================================================================

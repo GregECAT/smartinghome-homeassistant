@@ -75,6 +75,8 @@ from .const import (
     RCETrend,
     DEFAULT_BATTERY_CAPACITY,
     DEFAULT_BATTERY_MIN_SOC,
+    CONF_ECOWITT_ENABLED,
+    CONF_SENSOR_MAP,
 )
 from .license import LicenseManager
 
@@ -136,6 +138,8 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.license_manager = license_manager
         self._tariff = entry.data.get(CONF_TARIFF, TariffType.G13)
         self._rce_enabled = entry.data.get(CONF_RCE_ENABLED, True)
+        self._ecowitt_enabled = entry.data.get(CONF_ECOWITT_ENABLED, False)
+        self._sensor_map = entry.data.get(CONF_SENSOR_MAP, {})
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from HA state machine and compute HEMS values."""
@@ -148,6 +152,11 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             # Compute derived values
             computed = self._compute_derived(raw)
+
+            # Read Ecowitt sensors if enabled
+            if self._ecowitt_enabled:
+                ecowitt = self._read_ecowitt_sensors()
+                computed.update(ecowitt)
 
             return {**raw, **computed}
 
@@ -163,6 +172,40 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 data[entity_id] = state.state
             else:
                 data[entity_id] = None
+        return data
+
+    def _read_ecowitt_sensors(self) -> dict[str, Any]:
+        """Read Ecowitt local weather sensors via sensor_map."""
+        data: dict[str, Any] = {"ecowitt_enabled": True}
+
+        # Map of local_* sensor_map keys → ecowitt_* output keys
+        ecowitt_keys = {
+            "local_temp": "ecowitt_temp",
+            "local_humidity": "ecowitt_humidity",
+            "local_dewpoint": "ecowitt_dewpoint",
+            "local_wind_speed": "ecowitt_wind_speed",
+            "local_wind_gust": "ecowitt_wind_gust",
+            "local_wind_direction": "ecowitt_wind_direction",
+            "local_rain_rate": "ecowitt_rain_rate",
+            "local_daily_rain": "ecowitt_daily_rain",
+            "local_solar_radiation": "ecowitt_solar_radiation",
+            "local_solar_lux": "ecowitt_solar_lux",
+            "local_uv_index": "ecowitt_uv_index",
+            "local_pressure": "ecowitt_pressure",
+            "local_feels_like": "ecowitt_feels_like",
+        }
+
+        for map_key, out_key in ecowitt_keys.items():
+            entity_id = self._sensor_map.get(map_key, "")
+            if entity_id:
+                state = self.hass.states.get(entity_id)
+                if state and state.state not in ("unknown", "unavailable"):
+                    data[out_key] = _safe_float(state.state)
+                else:
+                    data[out_key] = None
+            else:
+                data[out_key] = None
+
         return data
 
     def _compute_derived(self, raw: dict[str, Any]) -> dict[str, Any]:

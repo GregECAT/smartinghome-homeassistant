@@ -30,15 +30,20 @@ from .const import (
     CONF_UPDATE_INTERVAL,
     CONF_SENSOR_MAP,
     CONF_INVERTER_BRAND,
+    CONF_ECOWITT_ENABLED,
     DEFAULT_GOODWE_DEVICE_ID,
     DEFAULT_MODBUS_PORT,
     DEFAULT_MODBUS_SLAVE,
     DEFAULT_UPDATE_INTERVAL,
     DEFAULT_SENSOR_MAP,
     DEFAULT_SENSOR_MAP_DEYE,
+    DEFAULT_SENSOR_MAP_GROWATT,
     SENSOR_MAP_KEYS,
     INVERTER_BRAND_GOODWE,
     INVERTER_BRAND_DEYE,
+    INVERTER_BRAND_GROWATT,
+    INVERTER_BRAND_OTHER,
+    DEFAULT_ECOWITT_SENSOR_MAP,
     LICENSE_MODE_FREE,
     LICENSE_MODE_PRO,
     TariffType,
@@ -53,6 +58,8 @@ def _get_defaults_for_brand(brand: str) -> dict:
     """Return sensor map defaults based on inverter brand."""
     if brand == INVERTER_BRAND_DEYE:
         return DEFAULT_SENSOR_MAP_DEYE
+    if brand == INVERTER_BRAND_GROWATT:
+        return DEFAULT_SENSOR_MAP_GROWATT
     return DEFAULT_SENSOR_MAP
 
 
@@ -84,9 +91,9 @@ class SmartingHomeConfigFlow(
             if self._license_mode == LICENSE_MODE_PRO:
                 return await self.async_step_license()
 
-            # FREE mode — skip license, go to inverter
+            # FREE mode — skip license, go to brand selection
             self._data[CONF_LICENSE_KEY] = ""
-            return await self.async_step_inverter()
+            return await self.async_step_brand()
 
         return self.async_show_form(
             step_id="user",
@@ -125,7 +132,7 @@ class SmartingHomeConfigFlow(
                 if info.valid:
                     self._license_tier = info.tier
                     self._data[CONF_LICENSE_KEY] = self._license_key
-                    return await self.async_step_inverter()
+                    return await self.async_step_brand()
                 errors["base"] = "invalid_license"
             except AuthenticationError:
                 errors["base"] = "invalid_license"
@@ -148,10 +155,38 @@ class SmartingHomeConfigFlow(
             },
         )
 
+    async def async_step_brand(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Step 2: Choose inverter brand."""
+        if user_input is not None:
+            self._data[CONF_INVERTER_BRAND] = user_input.get(
+                CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE
+            )
+            return await self.async_step_inverter()
+
+        return self.async_show_form(
+            step_id="brand",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_INVERTER_BRAND, default=INVERTER_BRAND_GOODWE
+                    ): vol.In(
+                        {
+                            INVERTER_BRAND_GOODWE: "GoodWe",
+                            INVERTER_BRAND_DEYE: "Deye",
+                            INVERTER_BRAND_GROWATT: "Growatt",
+                            INVERTER_BRAND_OTHER: "Inny / Other",
+                        }
+                    ),
+                }
+            ),
+        )
+
     async def async_step_inverter(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Step 2: Inverter configuration."""
+        """Step 3: Inverter configuration."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -361,7 +396,8 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
         current = self._config_entry.data
         is_free = current.get(CONF_LICENSE_MODE, LICENSE_MODE_FREE) == LICENSE_MODE_FREE
 
-        menu_options = ["sensors"]
+        menu_options = ["inverter_brand", "sensors"]
+        menu_options.append("ecowitt")
         if is_free:
             menu_options.insert(0, "upgrade")
         else:
@@ -495,11 +531,91 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
             },
         )
 
+    async def async_step_ecowitt(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Ecowitt integration toggle — applies default sensor map."""
+        current = self._config_entry.data
+
+        if user_input is not None:
+            ecowitt_enabled = user_input.get(CONF_ECOWITT_ENABLED, False)
+            new_data = {**current, CONF_ECOWITT_ENABLED: ecowitt_enabled}
+
+            if ecowitt_enabled:
+                # Auto-merge Ecowitt sensor defaults into sensor_map
+                sensor_map = dict(new_data.get(CONF_SENSOR_MAP, {}))
+                for key, entity in DEFAULT_ECOWITT_SENSOR_MAP.items():
+                    if not sensor_map.get(key):
+                        sensor_map[key] = entity
+                new_data[CONF_SENSOR_MAP] = sensor_map
+
+            self.hass.config_entries.async_update_entry(
+                self._config_entry, data=new_data
+            )
+            return self.async_create_entry(title="", data={})
+
+        return self.async_show_form(
+            step_id="ecowitt",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_ECOWITT_ENABLED,
+                        default=current.get(CONF_ECOWITT_ENABLED, False),
+                    ): bool,
+                }
+            ),
+        )
+
     async def async_step_sensor_mapping(
         self, _user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Redirect to sensors step from menu."""
         return await self.async_step_sensors()
+
+    async def async_step_inverter_brand(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Change inverter brand in options flow."""
+        current = self._config_entry.data
+
+        if user_input is not None:
+            new_brand = user_input.get(
+                CONF_INVERTER_BRAND,
+                current.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE),
+            )
+            new_data = {**current, CONF_INVERTER_BRAND: new_brand}
+            # Update sensor map defaults for the new brand
+            brand_defaults = _get_defaults_for_brand(new_brand)
+            current_map = dict(new_data.get(CONF_SENSOR_MAP, {}))
+            for key in SENSOR_MAP_KEYS:
+                if not current_map.get(key):
+                    current_map[key] = brand_defaults.get(key, "")
+            new_data[CONF_SENSOR_MAP] = current_map
+            self.hass.config_entries.async_update_entry(
+                self._config_entry, data=new_data
+            )
+            return self.async_create_entry(title="", data={})
+
+        return self.async_show_form(
+            step_id="inverter_brand",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_INVERTER_BRAND,
+                        default=current.get(
+                            CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE
+                        ),
+                    ): vol.In(
+                        {
+                            INVERTER_BRAND_GOODWE: "GoodWe",
+                            INVERTER_BRAND_DEYE: "Deye",
+                            INVERTER_BRAND_GROWATT: "Growatt",
+                            INVERTER_BRAND_OTHER: "Inny / Other",
+                        }
+                    ),
+                }
+            ),
+        )
 
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None

@@ -70,8 +70,8 @@ UPLOAD_IMAGE_SCHEMA = vol.Schema(
 
 SAVE_SETTINGS_SCHEMA = vol.Schema(
     {
-        vol.Optional("gemini_api_key", default=""): cv.string,
-        vol.Optional("anthropic_api_key", default=""): cv.string,
+        vol.Optional("gemini_api_key"): cv.string,
+        vol.Optional("anthropic_api_key"): cv.string,
     }
 )
 
@@ -250,30 +250,34 @@ async def async_setup_services(
 
     async def handle_save_settings(call: ServiceCall) -> None:
         """Update API keys — store in config_entry AND settings.json."""
-        gemini_key = call.data.get("gemini_api_key", "")
-        anthropic_key = call.data.get("anthropic_api_key", "")
+        gemini_key = call.data.get("gemini_api_key")
+        anthropic_key = call.data.get("anthropic_api_key")
 
         new_data = {**entry.data}
         updates = {}
+        changed = False
 
-        if gemini_key:
+        if gemini_key is not None and gemini_key:
             new_data[CONF_GEMINI_API_KEY] = gemini_key
             ai_advisor._gemini_key = gemini_key
             updates["gemini_api_key"] = gemini_key
             updates["gemini_key_status"] = "saved"
             updates["gemini_key_masked"] = gemini_key[:6] + "***" + gemini_key[-4:] if len(gemini_key) > 10 else "***"
-        if anthropic_key:
+            changed = True
+        if anthropic_key is not None and anthropic_key:
             new_data[CONF_ANTHROPIC_API_KEY] = anthropic_key
             ai_advisor._anthropic_key = anthropic_key
             updates["anthropic_api_key"] = anthropic_key
             updates["anthropic_key_status"] = "saved"
             updates["anthropic_key_masked"] = anthropic_key[:7] + "***" + anthropic_key[-4:] if len(anthropic_key) > 11 else "***"
+            changed = True
 
-        hass.config_entries.async_update_entry(entry, data=new_data)
+        if changed:
+            hass.config_entries.async_update_entry(entry, data=new_data)
         if updates:
             _update_settings_file(hass, updates)
 
-        _LOGGER.info("API keys updated via panel settings")
+        _LOGGER.info("API keys updated via panel settings (changed=%s)", changed)
 
     async def handle_test_api_key(call: ServiceCall) -> None:
         """Test if an API key is valid by making a minimal request."""
@@ -296,12 +300,18 @@ async def async_setup_services(
             return
 
         try:
+            # Save old key to restore on failure
+            old_key = ai_advisor._gemini_key if provider == "gemini" else ai_advisor._anthropic_key
             if provider == "gemini":
                 ai_advisor._gemini_key = test_key
                 valid = await ai_advisor.test_gemini_key()
+                if not valid:
+                    ai_advisor._gemini_key = old_key  # restore working key
             else:
                 ai_advisor._anthropic_key = test_key
                 valid = await ai_advisor.test_anthropic_key()
+                if not valid:
+                    ai_advisor._anthropic_key = old_key  # restore working key
             status = "valid" if valid else "invalid"
         except Exception:
             status = "invalid"

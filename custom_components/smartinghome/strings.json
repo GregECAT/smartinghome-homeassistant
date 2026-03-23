@@ -15,11 +15,18 @@
           "license_key": "License Key"
         }
       },
+      "brand": {
+        "title": "Inverter Brand",
+        "description": "Choose your solar inverter brand. This will set default sensor mappings.\nYou can always adjust sensors manually in the next step.",
+        "data": {
+          "inverter_brand": "Inverter Brand"
+        }
+      },
       "inverter": {
         "title": "Inverter Configuration",
-        "description": "Configure your GoodWe inverter connection.",
+        "description": "Configure your inverter connection.",
         "data": {
-          "device_id": "GoodWe Device ID",
+          "device_id": "Device ID",
           "modbus_enabled": "Enable Modbus RS485",
           "modbus_port": "Modbus Serial Port",
           "modbus_slave": "Modbus Slave Address"
@@ -90,7 +97,15 @@
           "local_humidity": "🏠💧 Humidity — Local Station (%)",
           "local_wind_speed": "🏠💨 Wind Speed — Local Station (km/h)",
           "local_rain_rate": "🏠🌧️ Rain Rate — Local Station (mm/h)",
-          "local_solar_radiation": "🏠☀️ Solar Radiation — Local Station (W/m²)"
+          "local_solar_radiation": "🏠☀️ Solar Radiation — Local Station (W/m²)",
+          "local_dewpoint": "🏠🌡️ Dewpoint — Local Station (°C)",
+          "local_uv_index": "🏠🔆 UV Index — Local Station",
+          "local_solar_lux": "🏠💡 Solar Illuminance — Local Station (lx)",
+          "local_pressure": "🏠🌡️ Pressure — Local Station (hPa)",
+          "local_daily_rain": "🏠🌧️ Daily Rain — Local Station (mm)",
+          "local_wind_direction": "🏠🧭 Wind Direction — Local Station (°)",
+          "local_wind_gust": "🏠💨 Wind Gust — Local Station (km/h)",
+          "local_feels_like": "🏠🌡️ Feels Like — Local Station (°C)"
         }
       }
     },
@@ -111,7 +126,9 @@
         "menu_options": {
           "upgrade": "⚙️ Settings & Upgrade",
           "settings": "⚙️ PRO Settings",
-          "sensors": "🔌 Sensor Mapping"
+          "inverter_brand": "🔌 Inverter Brand",
+          "sensors": "🔌 Sensor Mapping",
+          "ecowitt": "🌦️ Ecowitt Weather Station"
         }
       },
       "upgrade": {
@@ -182,7 +199,29 @@
           "local_humidity": "🏠💧 Humidity — Local Station (%)",
           "local_wind_speed": "🏠💨 Wind Speed — Local Station (km/h)",
           "local_rain_rate": "🏠🌧️ Rain Rate — Local Station (mm/h)",
-          "local_solar_radiation": "🏠☀️ Solar Radiation — Local Station (W/m²)"
+          "local_solar_radiation": "🏠☀️ Solar Radiation — Local Station (W/m²)",
+          "local_dewpoint": "🏠🌡️ Dewpoint — Local Station (°C)",
+          "local_uv_index": "🏠🔆 UV Index — Local Station",
+          "local_solar_lux": "🏠💡 Solar Illuminance — Local Station (lx)",
+          "local_pressure": "🏠🌡️ Pressure — Local Station (hPa)",
+          "local_daily_rain": "🏠🌧️ Daily Rain — Local Station (mm)",
+          "local_wind_direction": "🏠🧭 Wind Direction — Local Station (°)",
+          "local_wind_gust": "🏠💨 Wind Gust — Local Station (km/h)",
+          "local_feels_like": "🏠🌡️ Feels Like — Local Station (°C)"
+        }
+      },
+      "ecowitt": {
+        "title": "🌦️ Ecowitt — Local Weather Station",
+        "description": "Enable Ecowitt integration to use local weather sensors for instant weather data. When enabled, Ecowitt sensors will be auto-mapped to the local weather sensor slots.",
+        "data": {
+          "ecowitt_enabled": "🌦️ Enable Ecowitt Integration (local weather station)"
+        }
+      },
+      "inverter_brand": {
+        "title": "🔌 Inverter Brand",
+        "description": "Change your inverter brand. Empty sensor mappings will be updated with new defaults.",
+        "data": {
+          "inverter_brand": "Inverter Brand"
         }
       }
     }

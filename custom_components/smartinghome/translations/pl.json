@@ -15,11 +15,18 @@
           "license_key": "Klucz licencyjny"
         }
       },
+      "brand": {
+        "title": "Marka falownika",
+        "description": "Wybierz markę falownika. Na tej podstawie zostaną ustawione domyślne sensory.\nZawsze możesz je ręcznie zmienić w następnym kroku.",
+        "data": {
+          "inverter_brand": "Marka falownika"
+        }
+      },
       "inverter": {
         "title": "Konfiguracja falownika",
-        "description": "Skonfiguruj połączenie z falownikiem GoodWe.",
+        "description": "Skonfiguruj połączenie z falownikiem.",
         "data": {
-          "device_id": "ID urządzenia GoodWe",
+          "device_id": "ID urządzenia",
           "modbus_enabled": "Włącz Modbus RS485",
           "modbus_port": "Port szeregowy Modbus",
           "modbus_slave": "Adres slave Modbus"
@@ -103,7 +110,9 @@
         "menu_options": {
           "upgrade": "⚙️ Ustawienia & Upgrade",
           "settings": "⚙️ Ustawienia PRO",
-          "sensors": "🔌 Mapowanie sensorów"
+          "inverter_brand": "🔌 Marka falownika",
+          "sensors": "🔌 Mapowanie sensorów",
+          "ecowitt": "🌦️ Stacja pogodowa Ecowitt"
         }
       },
       "upgrade": {
