@@ -336,11 +336,11 @@ async def async_setup_services(
         if gm:
             ai_advisor._gemini_model = gm
         if am:
-            # Normalize old model IDs to -latest aliases
+            # Normalize old model IDs to clean format
             import re
-            am = re.sub(r"claude-sonnet-4[\.\-]6.*", "claude-sonnet-4-6-latest", am)
-            am = re.sub(r"claude-opus-4[\.\-]6.*", "claude-opus-4-6-latest", am)
-            am = re.sub(r"claude-haiku-[34][\.\-]5.*", "claude-3-5-haiku-latest", am)
+            am = re.sub(r"claude-sonnet-4[\.\-]6.*", "claude-sonnet-4-6", am)
+            am = re.sub(r"claude-opus-4[\.\-]6.*", "claude-opus-4-6", am)
+            am = re.sub(r"claude-haiku-[34][\.\-]5.*", "claude-3-5-haiku", am)
             ai_advisor._anthropic_model = am
         _LOGGER.info(
             "Test %s: model=%s",
