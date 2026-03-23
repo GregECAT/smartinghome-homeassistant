@@ -213,8 +213,12 @@ class SmartingHomePanel extends HTMLElement {
       const labels = this._settings.pv_labels || {};
       labels[`pv${idx}`] = newLabel;
       this._savePanelSettings({ pv_labels: labels });
-      const el = this.shadowRoot.getElementById(`pv${idx}-label`);
+      // Update Overview tab label text span (preserves ⚙️ button)
+      const el = this.shadowRoot.getElementById(`pv${idx}-label-text`);
       if (el) el.textContent = newLabel;
+      // Update Energy tab label
+      const enEl = this.shadowRoot.getElementById(`v-en-pv${idx}-label`);
+      if (enEl) enEl.textContent = newLabel;
       // Also update sub-string displays if present
       this._renderSubstringBoxes();
     }
@@ -2264,9 +2268,9 @@ class SmartingHomePanel extends HTMLElement {
         const ratio = p / (pv || 1);
         kwhEl.textContent = `↑ ${(pvTodayVal * ratio).toFixed(1)} kWh`;
       }
-      // Custom label
-      const labelEl = this.shadowRoot.getElementById(`pv${i}-label`);
-      if (labelEl && pvLabels[`pv${i}`]) labelEl.textContent = pvLabels[`pv${i}`];
+      // Custom label — update only the text span, preserve ⚙️ button
+      const labelTextEl = this.shadowRoot.getElementById(`pv${i}-label-text`);
+      if (labelTextEl && pvLabels[`pv${i}`]) labelTextEl.textContent = pvLabels[`pv${i}`];
     }
     // Render sub-string boxes (proportional split)
     this._renderSubstringBoxes();
@@ -3001,11 +3005,10 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-en-pv-today2", pvToday !== null ? `${pvToday.toFixed(1)} kWh` : "— kWh");
 
     // Restore custom PV labels from settings
-    if (this._settings) {
-      for (let i = 1; i <= 2; i++) {
-        const lbl = this._settings[`pv${i}_label`];
-        if (lbl) this._setText(`v-en-pv${i}-label`, lbl);
-      }
+    const enPvLabels = (this._settings.pv_labels) || {};
+    for (let i = 1; i <= 2; i++) {
+      const lbl = enPvLabels[`pv${i}`];
+      if (lbl) this._setText(`v-en-pv${i}-label`, lbl);
     }
 
     // ROW 4: Autarky & Self-consumption
@@ -3702,10 +3705,10 @@ class SmartingHomePanel extends HTMLElement {
                       <div class="node-sub" id="v-pv-today">— kWh dziś</div>
                       <div style="font-size:10px; color:#f7b731; margin-top:2px; font-weight:600" id="v-pv-total-kwh"></div>
                       <div class="pv-strings" style="display:flex; gap:6px; flex-wrap:wrap; margin-top:10px">
-                        <div class="pv-string" id="pv1-box"><div class="pv-name" id="pv1-label" onclick="this.getRootNode().host._editPvLabel(1)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV1<span class="pv-config-btn" onclick="event.stopPropagation(); this.getRootNode().host._openPvStringConfig(1)" title="Konfiguracja stringa">⚙️</span></div><div class="pv-val" id="v-pv1-p">—</div><div class="pv-detail"><span id="v-pv1-v">— V</span> · <span id="v-pv1-a">— A</span></div><div style="font-size:9px; color:#94a3b8; margin-top:2px" id="v-pv1-kwh"></div></div>
-                        <div class="pv-string" id="pv2-box"><div class="pv-name" id="pv2-label" onclick="this.getRootNode().host._editPvLabel(2)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV2<span class="pv-config-btn" onclick="event.stopPropagation(); this.getRootNode().host._openPvStringConfig(2)" title="Konfiguracja stringa">⚙️</span></div><div class="pv-val" id="v-pv2-p">—</div><div class="pv-detail"><span id="v-pv2-v">— V</span> · <span id="v-pv2-a">— A</span></div><div style="font-size:9px; color:#94a3b8; margin-top:2px" id="v-pv2-kwh"></div></div>
-                        <div class="pv-string" id="pv3-box" style="display:none"><div class="pv-name" id="pv3-label" onclick="this.getRootNode().host._editPvLabel(3)" style="cursor:pointer">PV3<span class="pv-config-btn" onclick="event.stopPropagation(); this.getRootNode().host._openPvStringConfig(3)" title="Konfiguracja stringa">⚙️</span></div><div class="pv-val" id="v-pv3-p">—</div><div class="pv-detail"><span id="v-pv3-v">—</span></div></div>
-                        <div class="pv-string" id="pv4-box" style="display:none"><div class="pv-name" id="pv4-label" onclick="this.getRootNode().host._editPvLabel(4)" style="cursor:pointer">PV4<span class="pv-config-btn" onclick="event.stopPropagation(); this.getRootNode().host._openPvStringConfig(4)" title="Konfiguracja stringa">⚙️</span></div><div class="pv-val" id="v-pv4-p">—</div><div class="pv-detail"><span id="v-pv4-v">—</span></div></div>
+                        <div class="pv-string" id="pv1-box"><div class="pv-name" id="pv1-label" onclick="this.getRootNode().host._editPvLabel(1)" style="cursor:pointer" title="Kliknij aby zmienić nazwę"><span id="pv1-label-text">PV1</span><span class="pv-config-btn" onclick="event.stopPropagation(); this.getRootNode().host._openPvStringConfig(1)" title="Konfiguracja stringa">⚙️</span></div><div class="pv-val" id="v-pv1-p">—</div><div class="pv-detail"><span id="v-pv1-v">— V</span> · <span id="v-pv1-a">— A</span></div><div style="font-size:9px; color:#94a3b8; margin-top:2px" id="v-pv1-kwh"></div></div>
+                        <div class="pv-string" id="pv2-box"><div class="pv-name" id="pv2-label" onclick="this.getRootNode().host._editPvLabel(2)" style="cursor:pointer" title="Kliknij aby zmienić nazwę"><span id="pv2-label-text">PV2</span><span class="pv-config-btn" onclick="event.stopPropagation(); this.getRootNode().host._openPvStringConfig(2)" title="Konfiguracja stringa">⚙️</span></div><div class="pv-val" id="v-pv2-p">—</div><div class="pv-detail"><span id="v-pv2-v">— V</span> · <span id="v-pv2-a">— A</span></div><div style="font-size:9px; color:#94a3b8; margin-top:2px" id="v-pv2-kwh"></div></div>
+                        <div class="pv-string" id="pv3-box" style="display:none"><div class="pv-name" id="pv3-label" onclick="this.getRootNode().host._editPvLabel(3)" style="cursor:pointer"><span id="pv3-label-text">PV3</span><span class="pv-config-btn" onclick="event.stopPropagation(); this.getRootNode().host._openPvStringConfig(3)" title="Konfiguracja stringa">⚙️</span></div><div class="pv-val" id="v-pv3-p">—</div><div class="pv-detail"><span id="v-pv3-v">—</span></div></div>
+                        <div class="pv-string" id="pv4-box" style="display:none"><div class="pv-name" id="pv4-label" onclick="this.getRootNode().host._editPvLabel(4)" style="cursor:pointer"><span id="pv4-label-text">PV4</span><span class="pv-config-btn" onclick="event.stopPropagation(); this.getRootNode().host._openPvStringConfig(4)" title="Konfiguracja stringa">⚙️</span></div><div class="pv-val" id="v-pv4-p">—</div><div class="pv-detail"><span id="v-pv4-v">—</span></div></div>
                       </div>
                     </div>
                     <div id="pv-eco-sidebar" style="display:none; flex-shrink:0; width:110px; border-left:1px solid rgba(255,255,255,0.06); padding-left:10px">
@@ -3972,13 +3975,13 @@ class SmartingHomePanel extends HTMLElement {
             <div class="card">
               <div class="card-title">☀️ Stringi PV — szczegóły</div>
               <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px">
-                <div style="background:rgba(247,183,49,0.06); border-radius:10px; padding:12px">
-                  <div style="font-size:11px; font-weight:700; color:#f7b731; margin-bottom:6px" id="v-en-pv1-label">PV1</div>
+                <div style="background:rgba(247,183,49,0.06); border-radius:10px; padding:12px; cursor:pointer" onclick="this.getRootNode().host._editPvLabel(1)" title="Kliknij aby zmienić nazwę">
+                  <div style="font-size:11px; font-weight:700; color:#f7b731; margin-bottom:6px; display:flex; align-items:center; gap:4px"><span id="v-en-pv1-label">PV1</span><span class="pv-config-btn" onclick="event.stopPropagation(); this.getRootNode().host._openPvStringConfig(1)" title="Konfiguracja stringa">⚙️</span></div>
                   <div style="font-size:22px; font-weight:800; color:#fff" id="v-en-pv1-p">— W</div>
                   <div style="font-size:11px; color:#94a3b8; margin-top:4px"><span id="v-en-pv1-v">— V</span> · <span id="v-en-pv1-a">— A</span></div>
                 </div>
-                <div style="background:rgba(247,183,49,0.06); border-radius:10px; padding:12px">
-                  <div style="font-size:11px; font-weight:700; color:#f7b731; margin-bottom:6px" id="v-en-pv2-label">PV2</div>
+                <div style="background:rgba(247,183,49,0.06); border-radius:10px; padding:12px; cursor:pointer" onclick="this.getRootNode().host._editPvLabel(2)" title="Kliknij aby zmienić nazwę">
+                  <div style="font-size:11px; font-weight:700; color:#f7b731; margin-bottom:6px; display:flex; align-items:center; gap:4px"><span id="v-en-pv2-label">PV2</span><span class="pv-config-btn" onclick="event.stopPropagation(); this.getRootNode().host._openPvStringConfig(2)" title="Konfiguracja stringa">⚙️</span></div>
                   <div style="font-size:22px; font-weight:800; color:#fff" id="v-en-pv2-p">— W</div>
                   <div style="font-size:11px; color:#94a3b8; margin-top:4px"><span id="v-en-pv2-v">— V</span> · <span id="v-en-pv2-a">— A</span></div>
                 </div>
@@ -5214,7 +5217,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.13.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.13.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
