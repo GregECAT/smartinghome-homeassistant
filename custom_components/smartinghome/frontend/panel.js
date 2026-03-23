@@ -61,6 +61,10 @@ class SmartingHomePanel extends HTMLElement {
       const btn = this.shadowRoot.querySelector(".fullscreen-btn"); if(btn) btn.textContent="⊞ Pełny ekran";
     }
   }
+  _toggleHaSidebar() {
+    const ev = new Event("hass-toggle-menu", { bubbles: true, composed: true });
+    this.dispatchEvent(ev);
+  }
   _switchTab(tab) {
     this._activeTab = tab;
     this.shadowRoot.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
@@ -1354,6 +1358,40 @@ class SmartingHomePanel extends HTMLElement {
   /* ── Update all ─────────────────────────── */
   _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); }
 
+  /* ── Moon phase calculation ─────────────────── */
+  _getMoonPhase(date) {
+    // Algorithm based on synodic month (29.53058770576 days)
+    // Reference new moon: January 6, 2000 18:14 UTC
+    const refNewMoon = new Date(Date.UTC(2000, 0, 6, 18, 14, 0));
+    const synodicMonth = 29.53058770576;
+    const daysSinceRef = (date.getTime() - refNewMoon.getTime()) / 86400000;
+    const moonAge = ((daysSinceRef % synodicMonth) + synodicMonth) % synodicMonth;
+    const phase = moonAge / synodicMonth; // 0..1
+
+    // Moon phase names and emojis
+    // Phase ranges (approximate):
+    // 0.000 - 0.025: New Moon 🌑
+    // 0.025 - 0.225: Waxing Crescent 🌒
+    // 0.225 - 0.275: First Quarter 🌓
+    // 0.275 - 0.475: Waxing Gibbous 🌔
+    // 0.475 - 0.525: Full Moon 🌕
+    // 0.525 - 0.725: Waning Gibbous 🌖
+    // 0.725 - 0.775: Last Quarter 🌗
+    // 0.775 - 0.975: Waning Crescent 🌘
+    // 0.975 - 1.000: New Moon 🌑
+    let emoji, name;
+    if (phase < 0.025 || phase >= 0.975) { emoji = '🌑'; name = 'Nów'; }
+    else if (phase < 0.225) { emoji = '🌒'; name = 'Przybywający sierp'; }
+    else if (phase < 0.275) { emoji = '🌓'; name = 'Pierwsza kwadra'; }
+    else if (phase < 0.475) { emoji = '🌔'; name = 'Przybywający garb'; }
+    else if (phase < 0.525) { emoji = '🌕'; name = 'Pełnia'; }
+    else if (phase < 0.725) { emoji = '🌖'; name = 'Ubywający garb'; }
+    else if (phase < 0.775) { emoji = '🌗'; name = 'Ostatnia kwadra'; }
+    else { emoji = '🌘'; name = 'Ubywający sierp'; }
+
+    return { phase, moonAge: moonAge.toFixed(1), emoji, name };
+  }
+
   _updateSunWidget() {
     const now = new Date();
     const dayNames = ['Niedziela','Poniedziałek','Wtorek','Środa','Czwartek','Piątek','Sobota'];
@@ -1405,6 +1443,15 @@ class SmartingHomePanel extends HTMLElement {
       if (statusLabel) { statusLabel.textContent = "☀️ Dzień"; statusLabel.style.color = "#f7b731"; }
 
       // Arc is now handled by clip-path in sync with the dot
+      const arcPath = this.shadowRoot.getElementById("ov-sun-arc");
+      if (arcPath) {
+        arcPath.setAttribute("stroke", "#f7b731");
+        arcPath.setAttribute("stroke-width", "2.5");
+        arcPath.removeAttribute("stroke-dasharray");
+      }
+      // Hide moon phase name during day
+      const moonPhaseEl = this.shadowRoot.getElementById("ov-moon-phase-name");
+      if (moonPhaseEl) moonPhaseEl.style.display = 'none';
 
       const dot = this.shadowRoot.getElementById("ov-sun-dot");
       if (dot) {
@@ -1415,6 +1462,7 @@ class SmartingHomePanel extends HTMLElement {
         dot.setAttribute("cy", String(cy));
         dot.setAttribute("fill", "#f7b731");
         dot.setAttribute("r", "7");
+        dot.style.filter = "drop-shadow(0 0 8px #f7b731)";
         const clipRect = this.shadowRoot.getElementById("ov-sun-clip-rect");
         if (clipRect) clipRect.setAttribute("width", String(cx));
       }
@@ -1426,22 +1474,53 @@ class SmartingHomePanel extends HTMLElement {
       const msToRise = todaySunrise.getTime() - now.getTime();
       const hToRise = Math.floor(msToRise / 3600000);
       const mToRise = Math.floor((msToRise % 3600000) / 60000);
-      this._setText("ov-daylight-pct", "☾");
+
+      // Moon phase
+      const moon = this._getMoonPhase(now);
+      this._setText("ov-daylight-pct", moon.emoji);
       this._setText("ov-daylight-left", `${hToRise}h ${mToRise}m do wschodu`);
       const statusLabel = this.shadowRoot.getElementById("ov-status-label");
-      if (statusLabel) { statusLabel.textContent = "🌙 Noc"; statusLabel.style.color = "#64748b"; }
+      if (statusLabel) { statusLabel.textContent = "🌙 Noc"; statusLabel.style.color = "#8b9dc3"; }
 
-      // Arc: empty (no daylight progress)
+      // Moon phase name
+      const moonPhaseEl = this.shadowRoot.getElementById("ov-moon-phase-name");
+      if (moonPhaseEl) { moonPhaseEl.textContent = moon.name; moonPhaseEl.style.display = ''; }
+
+      // Night arc progress: compute how far through the night we are
+      // Night started at todaySunset of previous day, ends at todaySunrise
+      // For simplicity: total night = 24h - dayLength, elapsed = time since sunset
+      let nightStart;
+      if (nextSetting && nextSetting > nextRising) {
+        // next_setting is tomorrow's sunset → yesterday's sunset was ~24h ago
+        nightStart = new Date(nextSetting.getTime() - 86400000);
+      } else {
+        nightStart = todaySunset;
+      }
+      const nightLen = todaySunrise.getTime() - nightStart.getTime();
+      const nightElapsed = now.getTime() - nightStart.getTime();
+      const tNight = Math.max(0, Math.min(1, nightElapsed / nightLen));
+
+      // Moon arc: show progress with inverted arc (moon travels across sky)
+      const arcPath = this.shadowRoot.getElementById("ov-sun-arc");
+      if (arcPath) {
+        arcPath.setAttribute("stroke", "#8b9dc3");
+        arcPath.setAttribute("stroke-width", "1.5");
+        arcPath.setAttribute("stroke-dasharray", "4,4");
+      }
       const clipRect = this.shadowRoot.getElementById("ov-sun-clip-rect");
-      if (clipRect) clipRect.setAttribute("width", "0");
 
-      // Dot: dim, at right horizon (set position)
+      // Move moon dot along the arc
       const dot = this.shadowRoot.getElementById("ov-sun-dot");
       if (dot) {
-        dot.setAttribute("cx", "190");
-        dot.setAttribute("cy", "98");
-        dot.setAttribute("fill", "#475569");
-        dot.setAttribute("r", "5");
+        const p0 = {x:10, y:98}, p1 = {x:100, y:-15}, p2 = {x:190, y:98};
+        const cx = (1-tNight)*(1-tNight)*p0.x + 2*(1-tNight)*tNight*p1.x + tNight*tNight*p2.x;
+        const cy = (1-tNight)*(1-tNight)*p0.y + 2*(1-tNight)*tNight*p1.y + tNight*tNight*p2.y;
+        dot.setAttribute("cx", String(cx));
+        dot.setAttribute("cy", String(cy));
+        dot.setAttribute("fill", "#c4d4e8");
+        dot.setAttribute("r", "6");
+        dot.style.filter = "drop-shadow(0 0 6px rgba(139,157,195,0.6))";
+        if (clipRect) clipRect.setAttribute("width", String(cx));
       }
     }
   }
@@ -2461,6 +2540,12 @@ class SmartingHomePanel extends HTMLElement {
         .key-row { display: flex; gap: 8px; align-items: center; }
         .key-row input { flex: 1; }
         .key-status { font-size: 11px; margin-top: 3px; margin-bottom: 8px; }
+        .sidebar-toggle {
+          background: none; border: none; color: #a0aec0; cursor: pointer;
+          padding: 6px; border-radius: 8px; transition: all 0.2s;
+          display: flex; align-items: center; justify-content: center;
+        }
+        .sidebar-toggle:hover { background: rgba(255,255,255,0.08); color: #fff; }
         .gear-btn {
           background: none; border: none; font-size: 20px; cursor: pointer;
           padding: 4px 8px; border-radius: 6px; transition: all 0.2s;
@@ -2541,10 +2626,14 @@ class SmartingHomePanel extends HTMLElement {
           .header h1 { font-size: 14px; }
           .tab-btn { padding: 5px 8px; font-size: 10px; }
           .tab-content { padding: 8px 6px; }
-          .flow-wrapper { min-height: auto; overflow: hidden; }
-          .flow-nodes { grid-template-columns: 1fr; min-height: auto; gap: 8px; }
-          .pv-area, .home-area, .inv-area, .batt-area, .grid-area, .summary-area { grid-column: 1; }
-          .inv-area { flex-direction: column; align-items: center; }
+          .flow-wrapper { min-height: auto; overflow: visible; }
+          .flow-nodes { grid-template-columns: 1fr; min-height: auto; gap: 14px; }
+          .pv-area    { grid-column: 1; grid-row: 1; }
+          .home-area  { grid-column: 1; grid-row: 2; }
+          .inv-area   { grid-column: 1; grid-row: 3; flex-direction: column; align-items: center; }
+          .batt-area  { grid-column: 1; grid-row: 4; }
+          .grid-area  { grid-column: 1; grid-row: 5; }
+          .summary-area { grid-column: 1; grid-row: 6; }
           .inv-box { width: 110px !important; height: 100px !important; }
           .inv-box img { max-width: 80px !important; }
           .node { padding: 10px; border-radius: 12px; }
@@ -2580,6 +2669,9 @@ class SmartingHomePanel extends HTMLElement {
           <div class="top-left">
             <div class="header" style="position:relative; border-bottom:none">
               <div class="header-left">
+                <button class="sidebar-toggle" onclick="this.getRootNode().host._toggleHaSidebar()" title="Menu">
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
+                </button>
                 <span style="font-size:22px">⚡</span>
                 <h1>Smarting HOME</h1>
               </div>
@@ -2596,7 +2688,7 @@ class SmartingHomePanel extends HTMLElement {
           </div>
           <!-- Center: Sun Widget (compact) -->
           <div class="top-center">
-            <div style="text-align:center">
+            <div style="text-align:left; min-width:70px">
               <div style="font-size:8px; color:#64748b; text-transform:uppercase; letter-spacing:0.8px" id="ov-date">—</div>
               <div style="font-size:24px; font-weight:900; color:#fff; letter-spacing:-1px; line-height:1" id="ov-clock">--:--</div>
               <div style="font-size:9px; color:#94a3b8; margin-top:1px" id="ov-day-name">—</div>
@@ -2614,10 +2706,11 @@ class SmartingHomePanel extends HTMLElement {
               <div style="position:absolute; bottom:0; left:2px; font-size:8px; color:#f7b731">🌅 <span id="ov-sunrise">—</span></div>
               <div style="position:absolute; bottom:0; right:2px; font-size:8px; color:#e67e22; text-align:right">🌇 <span id="ov-sunset">—</span></div>
             </div>
-            <div style="text-align:right; min-width:60px">
+            <div style="text-align:right; min-width:70px">
               <div style="font-size:8px; color:#64748b; text-transform:uppercase" id="ov-status-label">Dzień</div>
               <div style="font-size:18px; font-weight:800; color:#f7b731" id="ov-daylight-pct">—%</div>
               <div style="font-size:8px; color:#94a3b8" id="ov-daylight-left">—</div>
+              <div style="font-size:7px; color:#8b9dc3; margin-top:1px; display:none" id="ov-moon-phase-name"></div>
             </div>
           </div>
           <!-- Right: Actions -->
@@ -2762,21 +2855,23 @@ class SmartingHomePanel extends HTMLElement {
 
               <!-- ⚡ INVERTER (center) -->
               <div class="inv-area">
-                <div class="inv-box">
-                  <img id="v-inv-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/GoodWe-1.png" alt="Inverter" style="max-width:120px; max-height:90px; object-fit:contain" />
-                  <div id="v-inv-icon" style="display:none; text-align:center">
-                    <div class="inv-icon">⚡</div>
-                    <div style="font-size:8px; color:#f39c12; line-height:1.2; margin-top:2px">Wgraj zdjęcie<br>w ⚙️ Ustawieniach</div>
+                <div class="node inv-node" style="border-color: rgba(0,212,255,0.15); display:flex; flex-direction:column; align-items:center; padding:16px">
+                  <div class="inv-box">
+                    <img id="v-inv-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/GoodWe-1.png" alt="Inverter" style="max-width:120px; max-height:90px; object-fit:contain" />
+                    <div id="v-inv-icon" style="display:none; text-align:center">
+                      <div class="inv-icon">⚡</div>
+                      <div style="font-size:8px; color:#f39c12; line-height:1.2; margin-top:2px">Wgraj zdjęcie<br>w ⚙️ Ustawieniach</div>
+                    </div>
+                    <div class="inv-label">Falownik</div>
                   </div>
-                  <div class="inv-label">Falownik</div>
-                </div>
-                <div style="text-align:center; margin-top:6px">
-                  <div style="font-size:14px; font-weight:700; color:#fff" id="v-inv-p">— W</div>
-                  <div style="font-size:10px; color:#94a3b8" id="v-inv-t">—°C</div>
-                </div>
-                <div style="display:flex; gap:14px; margin-top:12px">
-                  <div class="summary-item"><div class="si-label">Autarkia</div><div class="si-val" id="v-autarky">—%</div></div>
-                  <div class="summary-item"><div class="si-label">Autokonsumpcja</div><div class="si-val" id="v-selfcons">—%</div></div>
+                  <div style="text-align:center; margin-top:6px">
+                    <div style="font-size:14px; font-weight:700; color:#fff" id="v-inv-p">— W</div>
+                    <div style="font-size:10px; color:#94a3b8" id="v-inv-t">—°C</div>
+                  </div>
+                  <div style="display:flex; gap:14px; margin-top:12px">
+                    <div class="summary-item"><div class="si-label">Autarkia</div><div class="si-val" id="v-autarky">—%</div></div>
+                    <div class="summary-item"><div class="si-label">Autokonsumpcja</div><div class="si-val" id="v-selfcons">—%</div></div>
+                  </div>
                 </div>
               </div>
 
