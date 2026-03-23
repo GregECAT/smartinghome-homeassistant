@@ -2246,6 +2246,118 @@ class SmartingHomePanel extends HTMLElement {
         bar.style.background = v > 253 ? "#e74c3c" : v < 207 ? "#f39c12" : "#2ecc71";
       }
     });
+
+    // ══════ ENERGY TAB — Extended Data ══════
+
+    // ROW 1: Daily Energy Balance KPIs
+    const pvToday = this._nm("pv_today");
+    const gridImpToday = this._nm("grid_import_today") || 0;
+    const gridExpToday = this._nm("grid_export_today") || 0;
+    const netToday = gridExpToday - gridImpToday;
+    this._setText("v-en-pv-today", pvToday !== null ? pvToday.toFixed(1) : "—");
+    this._setText("v-en-import-today", gridImpToday.toFixed(1));
+    this._setText("v-en-export-today", gridExpToday.toFixed(1));
+    const netTodayEl = this.shadowRoot.getElementById("v-en-net-today");
+    if (netTodayEl) {
+      netTodayEl.textContent = netToday.toFixed(1);
+      netTodayEl.style.color = netToday >= 0 ? "#2ecc71" : "#e74c3c";
+    }
+
+    // ROW 2: Real-time Power KPIs
+    const enPv = this._nm("pv_power") || 0;
+    const enLoad = this._nm("load_power") || 0;
+    const enSurplus = this._n("sensor.smartinghome_pv_surplus_power") || 0;
+    const enBatt = this._nm("battery_power") || 0;
+    const enSoc = this._nm("battery_soc") || 0;
+    this._setText("v-en-pv-power", this._pw(enPv));
+    this._setText("v-en-load-power", this._pw(enLoad));
+    this._setText("v-en-surplus", this._pw(Math.max(0, enSurplus)));
+    this._setText("v-en-batt-power", this._pw(Math.abs(enBatt)));
+    const battDir = enBatt > 50 ? "ŁAD." : enBatt < -50 ? "ROZŁAD." : "STANDBY";
+    this._setText("v-en-batt-info", `${Math.round(enSoc)}% · ${battDir}`);
+
+    // ROW 3: Grid Extended — currents & powers per phase
+    [1, 2, 3].forEach(i => {
+      this._setText(`v-en-a${i}`, `${this._fm(`current_l${i}`, 1)} A`);
+      this._setText(`v-en-p${i}`, `${this._fm(`power_l${i}`, 0)} W`);
+    });
+
+    // ROW 3: PV Strings
+    for (let i = 1; i <= 4; i++) {
+      const p = this._nm(`pv${i}_power`);
+      if (i <= 2) {
+        this._setText(`v-en-pv${i}-p`, p !== null ? this._pw(p) : "— W");
+        this._setText(`v-en-pv${i}-v`, `${this._fm(`pv${i}_voltage`, 1)} V`);
+        this._setText(`v-en-pv${i}-a`, `${this._fm(`pv${i}_current`, 1)} A`);
+      } else {
+        const box = this.shadowRoot.getElementById(`v-en-pv${i}-box`);
+        if (box && p !== null && p > 0) {
+          box.style.display = "";
+          this._setText(`v-en-pv${i}-p`, this._pw(p));
+        }
+      }
+    }
+    this._setText("v-en-pv-total", this._pw(enPv));
+    this._setText("v-en-pv-today2", pvToday !== null ? `${pvToday.toFixed(1)} kWh` : "— kWh");
+
+    // Restore custom PV labels from settings
+    if (this._settings) {
+      for (let i = 1; i <= 2; i++) {
+        const lbl = this._settings[`pv${i}_label`];
+        if (lbl) this._setText(`v-en-pv${i}-label`, lbl);
+      }
+    }
+
+    // ROW 4: Autarky & Self-consumption
+    const autarky = this._n("sensor.smartinghome_autarky_today");
+    const selfCons = this._n("sensor.smartinghome_self_consumption_today");
+    const homeFromPv = this._n("sensor.smartinghome_home_consumption_from_pv_today");
+    const netGrid = this._n("sensor.smartinghome_net_grid_today");
+    const fAccuracy = this._n("sensor.smartinghome_pv_forecast_accuracy_today");
+    this._setText("v-en-autarky", autarky !== null ? `${Math.round(autarky)}%` : "—%");
+    this._setText("v-en-selfcons", selfCons !== null ? `${Math.round(selfCons)}%` : "—%");
+    const autarkyBar = this.shadowRoot.getElementById("v-en-autarky-bar");
+    if (autarkyBar && autarky !== null) autarkyBar.style.width = `${Math.min(100, Math.max(0, autarky))}%`;
+    const selfConsBar = this.shadowRoot.getElementById("v-en-selfcons-bar");
+    if (selfConsBar && selfCons !== null) selfConsBar.style.width = `${Math.min(100, Math.max(0, selfCons))}%`;
+    this._setText("v-en-home-from-pv", homeFromPv !== null ? `${homeFromPv.toFixed(1)} kWh` : "— kWh");
+    this._setText("v-en-net-grid", netGrid !== null ? `${netGrid.toFixed(1)} kWh` : "— kWh");
+    this._setText("v-en-forecast-accuracy", fAccuracy !== null ? `${Math.round(fAccuracy)}%` : "—%");
+
+    // ROW 4: Inverter & Battery details
+    this._setText("v-en-inv-p", this._pw(Math.abs(this._nm("inverter_power") || 0)));
+    this._setText("v-en-inv-t", `${this._fm("inverter_temp", 1)} °C`);
+    this._setText("v-en-batt-v", `${this._fm("battery_voltage", 1)} V`);
+    this._setText("v-en-batt-a", `${this._fm("battery_current", 1)} A`);
+    this._setText("v-en-batt-temp", `${this._fm("battery_temp", 1)} °C`);
+    this._setText("v-en-batt-energy", `${this._f("sensor.smartinghome_battery_energy_available")} kWh`);
+    this._setText("v-en-batt-runtime", this._s("sensor.smartinghome_battery_runtime") || "—");
+    const enChargeToday = this._nm("battery_charge_today") || 0;
+    const enDischargeToday = this._nm("battery_discharge_today") || 0;
+    this._setText("v-en-batt-charge", `${enChargeToday.toFixed(1)} kWh`);
+    this._setText("v-en-batt-discharge", `${enDischargeToday.toFixed(1)} kWh`);
+
+    // ROW 5: PV Forecast extended
+    this._setText("v-en-forecast-now", `${this._f("sensor.smartinghome_pv_forecast_power_now_total")} W`);
+    this._setText("v-en-forecast-remaining", `${this._f("sensor.smartinghome_pv_forecast_remaining_today_total")} kWh`);
+
+    // ROW 6: Ecowitt local weather
+    const ecoCard = this.shadowRoot.getElementById("en-ecowitt-card");
+    const ecoTemp = this._n(this._m("local_temp"));
+    if (ecoCard && ecoTemp !== null) {
+      ecoCard.style.display = "";
+      this._setText("v-en-eco-temp", `${ecoTemp.toFixed(1)}°C`);
+      const ecoHum = this._n(this._m("local_humidity"));
+      this._setText("v-en-eco-hum", ecoHum !== null ? `${Math.round(ecoHum)}%` : "—%");
+      const ecoSolar = this._n(this._m("local_solar_radiation"));
+      this._setText("v-en-eco-solar", ecoSolar !== null ? `${Math.round(ecoSolar)} W/m²` : "— W/m²");
+      const ecoWind = this._n(this._m("local_wind_speed"));
+      this._setText("v-en-eco-wind", ecoWind !== null ? `${ecoWind.toFixed(1)} km/h` : "— km/h");
+      const ecoRain = this._n(this._m("local_rain_rate"));
+      this._setText("v-en-eco-rain", ecoRain !== null ? `${ecoRain.toFixed(1)} mm/h` : "— mm/h");
+      const ecoPressure = this._n(this._m("local_pressure"));
+      this._setText("v-en-eco-pressure", ecoPressure !== null ? `${Math.round(ecoPressure)} hPa` : "— hPa");
+    }
   }
 
   /* ── Render ─────────────────────────────── */
@@ -2969,48 +3081,254 @@ class SmartingHomePanel extends HTMLElement {
 
         <!-- ═══════ TAB: ENERGY ═══════ -->
         <div class="tab-content" data-tab="energy">
-          <div class="grid-cards gc-3">
+
+          <!-- ROW 1: Daily Energy Balance KPIs -->
+          <div class="g4" style="margin-bottom:14px">
+            <div class="card" style="text-align:center; padding:14px 8px">
+              <div style="font-size:9px; color:#f7b731; text-transform:uppercase; letter-spacing:1px">☀️ Produkcja PV dziś</div>
+              <div style="font-size:28px; font-weight:800; color:#f7b731; margin:4px 0" id="v-en-pv-today">—</div>
+              <div style="font-size:10px; color:#94a3b8">kWh</div>
+            </div>
+            <div class="card" style="text-align:center; padding:14px 8px">
+              <div style="font-size:9px; color:#e74c3c; text-transform:uppercase; letter-spacing:1px">↓ Import z sieci</div>
+              <div style="font-size:28px; font-weight:800; color:#e74c3c; margin:4px 0" id="v-en-import-today">—</div>
+              <div style="font-size:10px; color:#94a3b8">kWh</div>
+            </div>
+            <div class="card" style="text-align:center; padding:14px 8px">
+              <div style="font-size:9px; color:#2ecc71; text-transform:uppercase; letter-spacing:1px">↑ Eksport do sieci</div>
+              <div style="font-size:28px; font-weight:800; color:#2ecc71; margin:4px 0" id="v-en-export-today">—</div>
+              <div style="font-size:10px; color:#94a3b8">kWh</div>
+            </div>
+            <div class="card" style="text-align:center; padding:14px 8px">
+              <div style="font-size:9px; color:#00d4ff; text-transform:uppercase; letter-spacing:1px">📊 Saldo netto</div>
+              <div style="font-size:28px; font-weight:800; margin:4px 0" id="v-en-net-today">—</div>
+              <div style="font-size:10px; color:#94a3b8">kWh</div>
+            </div>
+          </div>
+
+          <!-- ROW 2: Real-time Power KPIs -->
+          <div class="g4" style="margin-bottom:14px">
+            <div class="card" style="text-align:center; padding:12px 8px; border-left:3px solid #f7b731">
+              <div style="font-size:9px; color:#f7b731; text-transform:uppercase">☀️ Produkcja PV</div>
+              <div style="font-size:22px; font-weight:800; color:#f7b731; margin-top:4px" id="v-en-pv-power">— W</div>
+            </div>
+            <div class="card" style="text-align:center; padding:12px 8px; border-left:3px solid #2ecc71">
+              <div style="font-size:9px; color:#2ecc71; text-transform:uppercase">🏠 Zużycie</div>
+              <div style="font-size:22px; font-weight:800; color:#2ecc71; margin-top:4px" id="v-en-load-power">— W</div>
+            </div>
+            <div class="card" style="text-align:center; padding:12px 8px; border-left:3px solid #a855f7">
+              <div style="font-size:9px; color:#a855f7; text-transform:uppercase">⚡ Nadwyżka PV</div>
+              <div style="font-size:22px; font-weight:800; color:#a855f7; margin-top:4px" id="v-en-surplus">— W</div>
+            </div>
+            <div class="card" style="text-align:center; padding:12px 8px; border-left:3px solid #00d4ff">
+              <div style="font-size:9px; color:#00d4ff; text-transform:uppercase">🔋 Bateria</div>
+              <div style="font-size:22px; font-weight:800; color:#00d4ff; margin-top:4px" id="v-en-batt-power">— W</div>
+              <div style="font-size:11px; color:#94a3b8; margin-top:2px" id="v-en-batt-info">—% · STANDBY</div>
+            </div>
+          </div>
+
+          <!-- ROW 3: Grid 3F Extended + PV Strings -->
+          <div class="grid-cards gc-2" style="margin-bottom:14px">
             <div class="card">
-              <div class="card-title">⚡ Napięcie sieci 3F</div>
-              <div class="dr">
-                <span class="lb">L1</span>
-                <div class="v-bar-container"><div class="v-bar-fill" id="vb-l1"></div></div>
-                <span class="vl" id="v-e-v1">— V</span>
+              <div class="card-title">⚡ Sieć 3F — parametry</div>
+              <div style="margin-bottom:8px">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:6px">Napięcie</div>
+                <div class="dr">
+                  <span class="lb">L1</span>
+                  <div class="v-bar-container"><div class="v-bar-fill" id="vb-l1"></div></div>
+                  <span class="vl" id="v-e-v1">— V</span>
+                </div>
+                <div class="dr">
+                  <span class="lb">L2</span>
+                  <div class="v-bar-container"><div class="v-bar-fill" id="vb-l2"></div></div>
+                  <span class="vl" id="v-e-v2">— V</span>
+                </div>
+                <div class="dr">
+                  <span class="lb">L3</span>
+                  <div class="v-bar-container"><div class="v-bar-fill" id="vb-l3"></div></div>
+                  <span class="vl" id="v-e-v3">— V</span>
+                </div>
               </div>
-              <div class="dr">
-                <span class="lb">L2</span>
-                <div class="v-bar-container"><div class="v-bar-fill" id="vb-l2"></div></div>
-                <span class="vl" id="v-e-v2">— V</span>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:0 16px; margin-top:6px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.06)">
+                <div>
+                  <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:4px">Prąd (A)</div>
+                  <div class="dr"><span class="lb">L1</span><span class="vl" id="v-en-a1">— A</span></div>
+                  <div class="dr"><span class="lb">L2</span><span class="vl" id="v-en-a2">— A</span></div>
+                  <div class="dr"><span class="lb">L3</span><span class="vl" id="v-en-a3">— A</span></div>
+                </div>
+                <div>
+                  <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:4px">Moc (W)</div>
+                  <div class="dr"><span class="lb">L1</span><span class="vl" id="v-en-p1">— W</span></div>
+                  <div class="dr"><span class="lb">L2</span><span class="vl" id="v-en-p2">— W</span></div>
+                  <div class="dr"><span class="lb">L3</span><span class="vl" id="v-en-p3">— W</span></div>
+                </div>
               </div>
-              <div class="dr">
-                <span class="lb">L3</span>
-                <div class="v-bar-container"><div class="v-bar-fill" id="vb-l3"></div></div>
-                <span class="vl" id="v-e-v3">— V</span>
-              </div>
-              <div class="dr" style="margin-top:4px"><span class="lb">Częstotliwość</span><span class="vl" id="v-e-freq">— Hz</span></div>
+              <div class="dr" style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.06)"><span class="lb">Częstotliwość</span><span class="vl" id="v-e-freq">— Hz</span></div>
             </div>
             <div class="card">
-              <div class="card-title">☀️ Prognoza PV & Pogoda</div>
-              <div class="dr"><span class="lb">PV Dzisiaj</span><span class="vl" id="v-forecast-today-tab">— kWh</span></div>
-              <div class="dr"><span class="lb">PV Jutro</span><span class="vl" id="v-forecast-tomorrow-tab">— kWh</span></div>
-              <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.06)">
-                <div class="dr"><span class="lb">🌡️ Temperatura</span><span class="vl" id="v-energy-temp">—</span></div>
-                <div class="dr"><span class="lb">🌡️ RealFeel</span><span class="vl" id="v-energy-realfeel">—</span></div>
-                <div class="dr"><span class="lb">☁️ Zachmurzenie</span><span class="vl" id="v-energy-clouds">—</span></div>
-                <div class="dr"><span class="lb">🌤️ Warunki</span><span class="vl" id="v-energy-condition">—</span></div>
-                <div class="dr"><span class="lb">☀️ Godziny słon. dziś</span><span class="vl" id="v-energy-sunhours">—</span></div>
-                <div class="dr"><span class="lb">🔆 UV Index</span><span class="vl" id="v-energy-uv">—</span></div>
-                <div class="dr"><span class="lb">💨 Wiatr</span><span class="vl" id="v-energy-wind">—</span></div>
+              <div class="card-title">☀️ Stringi PV — szczegóły</div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px">
+                <div style="background:rgba(247,183,49,0.06); border-radius:10px; padding:12px">
+                  <div style="font-size:11px; font-weight:700; color:#f7b731; margin-bottom:6px" id="v-en-pv1-label">PV1</div>
+                  <div style="font-size:22px; font-weight:800; color:#fff" id="v-en-pv1-p">— W</div>
+                  <div style="font-size:11px; color:#94a3b8; margin-top:4px"><span id="v-en-pv1-v">— V</span> · <span id="v-en-pv1-a">— A</span></div>
+                </div>
+                <div style="background:rgba(247,183,49,0.06); border-radius:10px; padding:12px">
+                  <div style="font-size:11px; font-weight:700; color:#f7b731; margin-bottom:6px" id="v-en-pv2-label">PV2</div>
+                  <div style="font-size:22px; font-weight:800; color:#fff" id="v-en-pv2-p">— W</div>
+                  <div style="font-size:11px; color:#94a3b8; margin-top:4px"><span id="v-en-pv2-v">— V</span> · <span id="v-en-pv2-a">— A</span></div>
+                </div>
+                <div style="background:rgba(247,183,49,0.06); border-radius:10px; padding:12px; display:none" id="v-en-pv3-box">
+                  <div style="font-size:11px; font-weight:700; color:#f7b731; margin-bottom:6px">PV3</div>
+                  <div style="font-size:22px; font-weight:800; color:#fff" id="v-en-pv3-p">— W</div>
+                </div>
+                <div style="background:rgba(247,183,49,0.06); border-radius:10px; padding:12px; display:none" id="v-en-pv4-box">
+                  <div style="font-size:11px; font-weight:700; color:#f7b731; margin-bottom:6px">PV4</div>
+                  <div style="font-size:22px; font-weight:800; color:#fff" id="v-en-pv4-p">— W</div>
+                </div>
               </div>
-            </div>
-            <div class="card">
-              <div class="card-title">🔧 Szybkie akcje</div>
-              <div class="actions">
-                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','force_charge')">🔋 Wymuś Ład.</button>
-                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','force_discharge')">⚡ Wymuś Rozład.</button>
+              <div style="margin-top:10px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.06)">
+                <div class="dr"><span class="lb">☀️ Łączna moc PV</span><span class="vl" style="color:#f7b731; font-weight:800" id="v-en-pv-total">— W</span></div>
+                <div class="dr"><span class="lb">📊 Produkcja dziś</span><span class="vl" id="v-en-pv-today2">— kWh</span></div>
               </div>
             </div>
           </div>
+
+          <!-- ROW 4: Autarky & Self-consumption + Inverter -->
+          <div class="grid-cards gc-2" style="margin-bottom:14px">
+            <div class="card">
+              <div class="card-title">🛡️ Autarkia & Autokonsumpcja</div>
+              <div style="margin-bottom:12px">
+                <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:4px">
+                  <span style="color:#94a3b8">Autarkia dziś</span>
+                  <span style="color:#2ecc71; font-weight:800" id="v-en-autarky">—%</span>
+                </div>
+                <div style="background:rgba(255,255,255,0.06); border-radius:6px; height:10px; overflow:hidden">
+                  <div style="height:100%; border-radius:6px; background:linear-gradient(90deg,#2ecc71,#27ae60); transition:width 0.5s; width:0%" id="v-en-autarky-bar"></div>
+                </div>
+                <div style="font-size:9px; color:#64748b; margin-top:2px">ile energii pochodzi z własnej instalacji PV</div>
+              </div>
+              <div style="margin-bottom:12px">
+                <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:4px">
+                  <span style="color:#94a3b8">Autokonsumpcja dziś</span>
+                  <span style="color:#00d4ff; font-weight:800" id="v-en-selfcons">—%</span>
+                </div>
+                <div style="background:rgba(255,255,255,0.06); border-radius:6px; height:10px; overflow:hidden">
+                  <div style="height:100%; border-radius:6px; background:linear-gradient(90deg,#00d4ff,#0891b2); transition:width 0.5s; width:0%" id="v-en-selfcons-bar"></div>
+                </div>
+                <div style="font-size:9px; color:#64748b; margin-top:2px">ile wyprodukowanej energii zużywamy na miejscu</div>
+              </div>
+              <div style="padding-top:8px; border-top:1px solid rgba(255,255,255,0.06)">
+                <div class="dr"><span class="lb">🏠 Z PV na dom dziś</span><span class="vl" style="color:#f7b731" id="v-en-home-from-pv">— kWh</span></div>
+                <div class="dr"><span class="lb">📊 Saldo sieci dziś</span><span class="vl" id="v-en-net-grid">— kWh</span></div>
+                <div class="dr"><span class="lb">🎯 Celność prognoz PV</span><span class="vl" id="v-en-forecast-accuracy">—%</span></div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-title">⚙️ Falownik & Bateria</div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:10px">
+                <div style="background:rgba(247,183,49,0.08); border-radius:10px; padding:10px; text-align:center">
+                  <div style="font-size:9px; color:#f7b731; text-transform:uppercase">Moc falownika</div>
+                  <div style="font-size:22px; font-weight:800; color:#fff; margin-top:2px" id="v-en-inv-p">— W</div>
+                </div>
+                <div style="background:rgba(231,76,60,0.08); border-radius:10px; padding:10px; text-align:center">
+                  <div style="font-size:9px; color:#e74c3c; text-transform:uppercase">Temp. falownika</div>
+                  <div style="font-size:22px; font-weight:800; color:#fff; margin-top:2px" id="v-en-inv-t">— °C</div>
+                </div>
+              </div>
+              <div style="padding-top:8px; border-top:1px solid rgba(255,255,255,0.06)">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:6px">🔋 Bateria</div>
+                <div class="dr"><span class="lb">Napięcie</span><span class="vl" id="v-en-batt-v">— V</span></div>
+                <div class="dr"><span class="lb">Prąd</span><span class="vl" id="v-en-batt-a">— A</span></div>
+                <div class="dr"><span class="lb">Temperatura</span><span class="vl" id="v-en-batt-temp">— °C</span></div>
+                <div class="dr"><span class="lb">Energia dostępna</span><span class="vl" style="color:#00d4ff" id="v-en-batt-energy">— kWh</span></div>
+                <div class="dr"><span class="lb">Czas pracy (est.)</span><span class="vl" id="v-en-batt-runtime">—</span></div>
+              </div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.06)">
+                <div style="background:rgba(46,204,113,0.08); border-radius:8px; padding:8px; text-align:center">
+                  <div style="font-size:9px; color:#2ecc71; text-transform:uppercase">↑ Ładowanie dziś</div>
+                  <div style="font-size:16px; font-weight:800; color:#2ecc71; margin-top:2px" id="v-en-batt-charge">— kWh</div>
+                </div>
+                <div style="background:rgba(243,156,18,0.08); border-radius:8px; padding:8px; text-align:center">
+                  <div style="font-size:9px; color:#f39c12; text-transform:uppercase">↓ Rozładowanie dziś</div>
+                  <div style="font-size:16px; font-weight:800; color:#f39c12; margin-top:2px" id="v-en-batt-discharge">— kWh</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ROW 5: PV Forecast Extended -->
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-title">☀️ Prognoza PV & Pogoda</div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:8px; margin-bottom:10px">
+              <div style="background:rgba(247,183,49,0.08); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#f7b731; text-transform:uppercase">PV teraz</div>
+                <div style="font-size:20px; font-weight:800; color:#f7b731; margin-top:2px" id="v-en-forecast-now">— W</div>
+              </div>
+              <div style="background:rgba(247,183,49,0.08); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#f7b731; text-transform:uppercase">Prognoza dziś</div>
+                <div style="font-size:20px; font-weight:800; color:#fff; margin-top:2px" id="v-forecast-today-tab">— kWh</div>
+              </div>
+              <div style="background:rgba(0,212,255,0.08); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#00d4ff; text-transform:uppercase">Pozostało dziś</div>
+                <div style="font-size:20px; font-weight:800; color:#00d4ff; margin-top:2px" id="v-en-forecast-remaining">— kWh</div>
+              </div>
+              <div style="background:rgba(168,85,247,0.08); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#a855f7; text-transform:uppercase">Prognoza jutro</div>
+                <div style="font-size:20px; font-weight:800; color:#a855f7; margin-top:2px" id="v-forecast-tomorrow-tab">— kWh</div>
+              </div>
+            </div>
+            <div style="padding-top:8px; border-top:1px solid rgba(255,255,255,0.06)">
+              <div class="dr"><span class="lb">🌡️ Temperatura</span><span class="vl" id="v-energy-temp">—</span></div>
+              <div class="dr"><span class="lb">🌡️ RealFeel</span><span class="vl" id="v-energy-realfeel">—</span></div>
+              <div class="dr"><span class="lb">☁️ Zachmurzenie</span><span class="vl" id="v-energy-clouds">—</span></div>
+              <div class="dr"><span class="lb">🌤️ Warunki</span><span class="vl" id="v-energy-condition">—</span></div>
+              <div class="dr"><span class="lb">☀️ Godziny słon. dziś</span><span class="vl" id="v-energy-sunhours">—</span></div>
+              <div class="dr"><span class="lb">🔆 UV Index</span><span class="vl" id="v-energy-uv">—</span></div>
+              <div class="dr"><span class="lb">💨 Wiatr</span><span class="vl" id="v-energy-wind">—</span></div>
+            </div>
+          </div>
+
+          <!-- ROW 6: Ecowitt Local Weather -->
+          <div class="card" style="margin-bottom:14px; display:none" id="en-ecowitt-card">
+            <div class="card-title">🌦️ Stacja lokalna — Ecowitt</div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:8px">
+              <div style="background:rgba(231,76,60,0.06); border-radius:8px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#e74c3c; text-transform:uppercase">🌡️ Temperatura</div>
+                <div style="font-size:18px; font-weight:800; color:#fff; margin-top:2px" id="v-en-eco-temp">—°C</div>
+              </div>
+              <div style="background:rgba(0,212,255,0.06); border-radius:8px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#00d4ff; text-transform:uppercase">💧 Wilgotność</div>
+                <div style="font-size:18px; font-weight:800; color:#fff; margin-top:2px" id="v-en-eco-hum">—%</div>
+              </div>
+              <div style="background:rgba(247,183,49,0.06); border-radius:8px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#f7b731; text-transform:uppercase">☀️ Nasłoneczn.</div>
+                <div style="font-size:18px; font-weight:800; color:#fff; margin-top:2px" id="v-en-eco-solar">— W/m²</div>
+              </div>
+              <div style="background:rgba(46,204,113,0.06); border-radius:8px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#2ecc71; text-transform:uppercase">💨 Wiatr</div>
+                <div style="font-size:18px; font-weight:800; color:#fff; margin-top:2px" id="v-en-eco-wind">— km/h</div>
+              </div>
+              <div style="background:rgba(0,150,255,0.06); border-radius:8px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#0096ff; text-transform:uppercase">🌧️ Deszcz</div>
+                <div style="font-size:18px; font-weight:800; color:#fff; margin-top:2px" id="v-en-eco-rain">— mm/h</div>
+              </div>
+              <div style="background:rgba(168,85,247,0.06); border-radius:8px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#a855f7; text-transform:uppercase">📊 Ciśnienie</div>
+                <div style="font-size:18px; font-weight:800; color:#fff; margin-top:2px" id="v-en-eco-pressure">— hPa</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ROW 7: Quick Actions -->
+          <div class="card">
+            <div class="card-title">🔧 Szybkie akcje</div>
+            <div class="actions">
+              <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','force_charge')">🔋 Wymuś Ład.</button>
+              <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','force_discharge')">⚡ Wymuś Rozład.</button>
+            </div>
+          </div>
+
         </div>
 
         <!-- ═══════ TAB: TARIFF & RCE ═══════ -->
@@ -3942,7 +4260,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.15</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.11.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
