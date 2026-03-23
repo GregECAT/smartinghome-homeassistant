@@ -350,8 +350,13 @@ User question: {question}"""
                     return f"Gemini error (HTTP {resp.status})"
 
         except Exception as err:
-            _LOGGER.error("Gemini API error: %s", err)
-            return f"Gemini error: {err}"
+            _LOGGER.error(
+                "Gemini API error [%s]: %s (key_len=%d, model=%s)",
+                type(err).__name__, err,
+                len(self._gemini_key), self._gemini_model,
+                exc_info=True,
+            )
+            return f"Gemini error: {type(err).__name__}: {err}"
 
     async def ask_anthropic(
         self,
