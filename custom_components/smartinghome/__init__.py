@@ -202,6 +202,18 @@ async def async_unload_entry(
 async def _async_update_listener(
     hass: HomeAssistant, entry: SmartingHomeConfigEntry
 ) -> None:
-    """Handle options update."""
+    """Handle options update.
+
+    Skip full reload if only API keys were updated (_keys_only_update flag).
+    This prevents destroying the ai_advisor when keys change.
+    """
+    if entry.data.get("_keys_only_update"):
+        # Clear the flag and DON'T reload
+        new_data = {**entry.data}
+        new_data.pop("_keys_only_update", None)
+        hass.config_entries.async_update_entry(entry, data=new_data)
+        _LOGGER.info("API keys updated (no reload needed)")
+        return
+
     _LOGGER.info("Options updated, reloading Smarting HOME")
     await hass.config_entries.async_reload(entry.entry_id)

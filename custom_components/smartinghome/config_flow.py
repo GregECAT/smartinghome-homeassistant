@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
@@ -620,9 +621,72 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """PRO settings — tariff, RCE, AI, update interval."""
+        """PRO settings — tariff, RCE, AI keys, update interval.
+
+        Saves API keys to entry.data AND hot-updates the running ai_advisor
+        without triggering a full integration reload.
+        """
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            import json
+
+            current = self._config_entry.data
+            new_data = {**current}
+
+            # Merge user input into entry data
+            for key in (CONF_TARIFF, CONF_RCE_ENABLED, CONF_UPDATE_INTERVAL,
+                        CONF_GEMINI_API_KEY, CONF_ANTHROPIC_API_KEY):
+                if key in user_input:
+                    new_data[key] = user_input[key]
+
+            # Mark that this is a "soft" update (no reload needed for key changes)
+            new_data["_keys_only_update"] = True
+
+            # Persist to entry.data (triggers _async_update_listener)
+            self.hass.config_entries.async_update_entry(
+                self._config_entry, data=new_data
+            )
+
+            # Hot-update running ai_advisor in memory (no reload needed)
+            domain_data = self.hass.data.get(DOMAIN, {})
+            entry_data = domain_data.get(self._config_entry.entry_id, {})
+            coordinator = entry_data.get("coordinator")
+            if coordinator:
+                # The ai_advisor is accessible via services closure,
+                # but we can also write to settings.json for the panel to pick up
+                settings_path = (
+                    Path(self.hass.config.path("www"))
+                    / "smartinghome"
+                    / "settings.json"
+                )
+                settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+                # Read existing settings
+                try:
+                    existing = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+                except Exception:
+                    existing = {}
+
+                gk = user_input.get(CONF_GEMINI_API_KEY, "")
+                ak = user_input.get(CONF_ANTHROPIC_API_KEY, "")
+
+                if gk:
+                    existing["gemini_api_key"] = gk
+                    existing["gemini_key_status"] = "saved"
+                    existing["gemini_key_masked"] = (
+                        gk[:6] + "***" + gk[-4:] if len(gk) > 10 else "***"
+                    )
+                if ak:
+                    existing["anthropic_api_key"] = ak
+                    existing["anthropic_key_status"] = "saved"
+                    existing["anthropic_key_masked"] = (
+                        ak[:7] + "***" + ak[-4:] if len(ak) > 11 else "***"
+                    )
+
+                settings_path.write_text(
+                    json.dumps(existing, indent=2, ensure_ascii=False)
+                )
+
+            return self.async_create_entry(title="", data={})
 
         current = self._config_entry.data
 
