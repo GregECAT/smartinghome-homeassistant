@@ -315,6 +315,10 @@ async def async_setup_services(
                 test_key = stored.get("gemini_api_key", "") or ai_advisor._gemini_key
             else:
                 test_key = stored.get("anthropic_api_key", "") or ai_advisor._anthropic_key
+            _LOGGER.info(
+                "Test %s: key from settings (len=%d, prefix=%s)",
+                provider, len(test_key), test_key[:8] + "..." if len(test_key) > 8 else test_key
+            )
 
         # Also refresh model from settings (user may have changed it in panel)
         stored_for_model = _read_settings(hass)
@@ -324,12 +328,17 @@ async def async_setup_services(
             ai_advisor._gemini_model = gm
         if am:
             ai_advisor._anthropic_model = am
+        _LOGGER.info(
+            "Test %s: model=%s",
+            provider, ai_advisor._gemini_model if provider == "gemini" else ai_advisor._anthropic_model
+        )
 
         if not test_key:
             hass.bus.async_fire(
                 f"{DOMAIN}_api_key_test",
                 {"provider": provider, "status": "invalid"},
             )
+            _LOGGER.warning("Test %s: no key found anywhere!", provider)
             return
 
         try:
@@ -365,6 +374,9 @@ async def async_setup_services(
         except Exception as err:
             _LOGGER.error("Invalid JSON in save_panel_settings: %s", err)
             return
+        # SAFETY: never let panel settings overwrite API keys
+        for danger_key in ("gemini_api_key", "anthropic_api_key"):
+            incoming.pop(danger_key, None)
         _update_settings_file(hass, incoming)
         _LOGGER.info("Panel settings saved: %s", list(incoming.keys()))
 

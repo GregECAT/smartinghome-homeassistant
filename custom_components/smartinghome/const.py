@@ -662,17 +662,17 @@ SERVICE_GENERATE_REPORT: Final = "generate_report"
 # =============================================================================
 # AI Advisor
 # =============================================================================
-AI_GEMINI_MODEL: Final = "gemini-2.5-flash"  # default
+AI_GEMINI_MODEL: Final = "gemini-2.5-flash"  # default — GA since June 2025
 AI_GEMINI_MODELS: Final = {
-    "gemini-2.5-flash": "Gemini 2.5 Flash (bardzo szybki)",
-    "gemini-2.0-flash": "Gemini 2.0 Flash (szybki)",
-    "gemini-1.5-pro": "Gemini 1.5 Pro (zaawansowany)",
+    "gemini-2.5-flash": "Gemini 2.5 Flash (szybki, domyślny)",
+    "gemini-2.5-pro": "Gemini 2.5 Pro (zaawansowany)",
+    "gemini-3-flash-preview": "Gemini 3 Flash (Preview)",
 }
-AI_CLAUDE_MODEL: Final = "claude-3-7-sonnet-20250219"  # default
+AI_CLAUDE_MODEL: Final = "claude-sonnet-4.6-20260217"  # default — released Feb 17 2026
 AI_CLAUDE_MODELS: Final = {
-    "claude-3-7-sonnet-20250219": "Claude 3.7 Sonnet (najnowszy)",
-    "claude-3-5-sonnet-20241022": "Claude 3.5 Sonnet (zaawansowany)",
-    "claude-3-5-haiku-20241022": "Claude 3.5 Haiku (szybki)",
+    "claude-sonnet-4.6-20260217": "Claude Sonnet 4.6 (szybki)",
+    "claude-opus-4.6-20260205": "Claude Opus 4.6 (najpotężniejszy)",
+    "claude-haiku-4.5-20251015": "Claude Haiku 4.5 (najtańszy)",
 }
 AI_MAX_TOKENS: Final = 8192
 AI_TEMPERATURE: Final = 0.3
