@@ -2196,6 +2196,7 @@ class SmartingHomePanel extends HTMLElement {
 
         /* Node boxes */
         .node {
+          width: 100%; max-width: 440px; box-sizing: border-box;
           background: rgba(20, 30, 48, 0.4);
           backdrop-filter: blur(12px);
           -webkit-backdrop-filter: blur(12px);
@@ -2225,11 +2226,11 @@ class SmartingHomePanel extends HTMLElement {
         }
 
         /* Corner layout: PV top-left, Home top-right, Inv center-up, Batt bottom-left, Grid bottom-right */
-        .pv-area { grid-column: 1; grid-row: 1; }
-        .home-area { grid-column: 3; grid-row: 1; }
+        .pv-area { grid-column: 1; grid-row: 1; display: flex; justify-content: flex-start; }
+        .home-area { grid-column: 3; grid-row: 1; display: flex; justify-content: flex-end; }
         .inv-area { grid-column: 2; grid-row: 1 / 4; display: flex; flex-direction: column; align-items: center; justify-content: center; align-self: center; }
-        .batt-area { grid-column: 1; grid-row: 2 / 4; align-self: center; }
-        .grid-area { grid-column: 3; grid-row: 2 / 4; align-self: center; }
+        .batt-area { grid-column: 1; grid-row: 2 / 4; align-self: center; display: flex; justify-content: flex-start; }
+        .grid-area { grid-column: 3; grid-row: 2 / 4; align-self: center; display: flex; justify-content: flex-end; }
         .summary-area { grid-column: 1 / 4; grid-row: 4; }
 
         /* PV string boxes */
@@ -2575,7 +2576,7 @@ class SmartingHomePanel extends HTMLElement {
         <div class="tab-content active" data-tab="overview">
           <div class="flow-wrapper">
             <!-- ORTHOGONAL SVG OVERLAY -->
-            <svg class="flow-svg-bg" viewBox="0 0 700 480" preserveAspectRatio="xMidYMid meet">
+            <svg class="flow-svg-bg" viewBox="0 0 700 480" preserveAspectRatio="none">
               <!-- PV (top-left) → Inverter (center): right then down -->
               <path class="fl-line" d="M 80,90 H 350 V 180" />
               <g id="fl-pv-inv" class="fl-dot solar" style="display:none">
@@ -3781,7 +3782,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.12</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.13</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
