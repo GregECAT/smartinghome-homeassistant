@@ -218,7 +218,8 @@ class SmartingHomePanel extends HTMLElement {
     const costVal = p === "day" ? (this._n("sensor.g13_export_revenue_today") ?? 0) : (this._n(`sensor.g13_export_revenue_${s}`) ?? 0);
     const revVal = p === "day" ? (this._n("sensor.g13_import_cost_today") ?? 0) : (this._n(`sensor.g13_import_cost_${s}`) ?? 0);
     const savVal = p === "day" ? (this._n("sensor.g13_self_consumption_savings_today") ?? 0) : (this._n(`sensor.g13_self_consumption_savings_${s}`) ?? 0);
-    const balVal = p === "day" ? (this._n("sensor.g13_net_balance_today") ?? 0) : (this._n(`sensor.g13_net_balance_${s}`) ?? 0);
+    // Compute balance from corrected components (backend sensor has swapped sign)
+    const balVal = revVal + savVal - costVal;
 
     this._setText("roi-cost", `${costVal.toFixed(2)} zł`);
     this._setText("roi-revenue", `${revVal.toFixed(2)} zł`);
@@ -273,7 +274,11 @@ class SmartingHomePanel extends HTMLElement {
       const pv = this._n(pvSensor) ?? 0;
       const imp = this._n(`sensor.grid_import_${suffix}`) ?? 0;
       const exp = this._n(`sensor.grid_export_${suffix}`) ?? 0;
-      const bal = key === "d" ? (this._n("sensor.g13_net_balance_today") ?? 0) : (this._n(`sensor.g13_net_balance_${suffix}`) ?? 0);
+      // Compute balance from corrected components (backend sensor has swapped sign)
+      const cost_p = key === "d" ? (this._n("sensor.g13_export_revenue_today") ?? 0) : (this._n(`sensor.g13_export_revenue_${suffix}`) ?? 0);
+      const rev_p = key === "d" ? (this._n("sensor.g13_import_cost_today") ?? 0) : (this._n(`sensor.g13_import_cost_${suffix}`) ?? 0);
+      const sav_p = key === "d" ? (this._n("sensor.g13_self_consumption_savings_today") ?? 0) : (this._n(`sensor.g13_self_consumption_savings_${suffix}`) ?? 0);
+      const bal = rev_p + sav_p - cost_p;
       this._setText(`roi-tbl-pv-${key}`, pv.toFixed(1));
       this._setText(`roi-tbl-imp-${key}`, imp.toFixed(1));
       this._setText(`roi-tbl-exp-${key}`, exp.toFixed(1));
@@ -1400,7 +1405,7 @@ class SmartingHomePanel extends HTMLElement {
     if (socEl) socEl.style.color = soc > 50 ? "#2ecc71" : soc > 20 ? "#f39c12" : "#e74c3c";
 
     // Inverter
-    this._setText("v-inv-p", this._pw(this._nm("inverter_power")));
+    this._setText("v-inv-p", this._pw(Math.abs(this._nm("inverter_power") || 0)));
     this._setText("v-inv-t", `${this._fm("inverter_temp")}°C`);
 
     // Autarky / Self-consumption — calculate from existing data or use smartinghome sensors
@@ -1571,7 +1576,8 @@ class SmartingHomePanel extends HTMLElement {
     const ovCost = this._n("sensor.g13_export_revenue_today") ?? this._n("sensor.g13_export_revenue_daily") ?? 0;
     const ovRev = this._n("sensor.g13_import_cost_today") ?? this._n("sensor.g13_import_cost_daily") ?? 0;
     const ovSav = this._n("sensor.g13_self_consumption_savings_today") ?? this._n("sensor.g13_self_consumption_savings_daily") ?? 0;
-    const ovBal = this._n("sensor.g13_net_balance_today") ?? this._n("sensor.g13_net_balance_daily") ?? (ovRev + ovSav - ovCost);
+    // Always compute balance from corrected components (backend sensor has swapped sign)
+    const ovBal = ovRev + ovSav - ovCost;
     this._setText("ov-cost", `${ovCost.toFixed(2)} zł`);
     this._setText("ov-revenue", `${ovRev.toFixed(2)} zł`);
     this._setText("ov-savings", `${ovSav.toFixed(2)} zł`);
@@ -1685,12 +1691,13 @@ class SmartingHomePanel extends HTMLElement {
     const savings = this._n("sensor.g13_self_consumption_savings_today") ?? this._n("sensor.smartinghome_self_consumption_savings_today");
     const expRev = this._n("sensor.g13_import_cost_today") ?? this._n("sensor.smartinghome_export_revenue_today");
     const impCost = this._n("sensor.g13_export_revenue_today") ?? this._n("sensor.smartinghome_import_cost_today");
-    const netBal = this._n("sensor.g13_net_balance_today") ?? this._n("sensor.smartinghome_net_balance_today");
+    // Compute balance from corrected components (backend sensor has swapped sign)
+    const netBal = (expRev ?? 0) + (savings ?? 0) - (impCost ?? 0);
     this._setText("v-savings", savings !== null ? savings.toFixed(2) : "—");
     this._setText("v-export-rev", expRev !== null ? expRev.toFixed(2) : "—");
     this._setText("v-import-cost", impCost !== null ? impCost.toFixed(2) : "—");
     const netEl = this.shadowRoot.getElementById("v-net-balance");
-    if (netEl && netBal !== null) { netEl.textContent = netBal.toFixed(2); netEl.style.color = netBal >= 0 ? "#2ecc71" : "#e74c3c"; }
+    if (netEl) { netEl.textContent = netBal.toFixed(2); netEl.style.color = netBal >= 0 ? "#2ecc71" : "#e74c3c"; }
     
     const ftoday = this._f("sensor.smartinghome_pv_forecast_today_total");
     const ftomor = this._f("sensor.smartinghome_pv_forecast_tomorrow_total");
@@ -2234,11 +2241,18 @@ class SmartingHomePanel extends HTMLElement {
           .header h1 { font-size: 14px; }
           .tab-btn { padding: 5px 8px; font-size: 10px; }
           .tab-content { padding: 8px 6px; }
-          .flow-wrapper { min-height: auto; }
-          .flow-nodes { grid-template-columns: 1fr; min-height: auto; }
+          .flow-wrapper { min-height: auto; overflow: hidden; }
+          .flow-nodes { grid-template-columns: 1fr; min-height: auto; gap: 8px; }
           .pv-area, .home-area, .inv-area, .batt-area, .grid-area, .summary-area { grid-column: 1; }
-          .inv-area { flex-direction: column; }
+          .inv-area { flex-direction: column; align-items: center; }
+          .inv-box { width: 110px !important; height: 100px !important; }
+          .inv-box img { max-width: 80px !important; }
           .node { padding: 10px; border-radius: 12px; }
+          .node-title { font-size: 9px; letter-spacing: 0.5px; }
+          .node-value { font-size: 22px; }
+          .node img { max-width: 70px; max-height: 60px; }
+          .pv-string { padding: 6px 8px; }
+          .pv-string .pv-val { font-size: 13px; }
           .card { padding: 10px; border-radius: 10px; }
           .card-title { font-size: 9px; }
           .g4 { grid-template-columns: 1fr 1fr; gap: 6px; }
@@ -3465,7 +3479,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.6</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.7</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
