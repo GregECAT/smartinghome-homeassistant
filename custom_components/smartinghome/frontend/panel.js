@@ -480,24 +480,29 @@ class SmartingHomePanel extends HTMLElement {
     const anthropicModel = this.shadowRoot.getElementById("sel-anthropic-model")?.value || "claude-sonnet-4.6-20260301";
     const defaultProvider = this.shadowRoot.getElementById("sel-default-provider")?.value || "gemini";
     if (this._hass) {
-      // ONLY send keys that user actually typed (dirty flag set by input event)
-      const saveData = {};
-      if (this._geminiDirty && geminiVal) saveData.gemini_api_key = geminiVal;
-      if (this._anthropicDirty && anthropicVal) saveData.anthropic_api_key = anthropicVal;
-      if (Object.keys(saveData).length > 0) {
-        this._hass.callService("smartinghome", "save_settings", saveData);
+      // Build ONE unified payload — keys + models + provider (all in save_settings)
+      const saveData = {
+        gemini_model: geminiModel,
+        anthropic_model: anthropicModel,
+        default_ai_provider: defaultProvider,
+      };
+      const parts = [];
+      if (this._geminiDirty && geminiVal) {
+        saveData.gemini_api_key = geminiVal;
+        saveData.gemini_key_status = "saved";
+        parts.push('Gemini');
       }
-      const updates = { gemini_model: geminiModel, anthropic_model: anthropicModel, default_ai_provider: defaultProvider };
-      if (this._geminiDirty && geminiVal) updates.gemini_key_status = "saved";
-      if (this._anthropicDirty && anthropicVal) updates.anthropic_key_status = "saved";
-      this._savePanelSettings(updates);
+      if (this._anthropicDirty && anthropicVal) {
+        saveData.anthropic_api_key = anthropicVal;
+        saveData.anthropic_key_status = "saved";
+        parts.push('Anthropic');
+      }
+      // One single call — no race condition
+      this._hass.callService("smartinghome", "save_settings", saveData);
       this._updateKeyStatus();
       // Reset dirty flags
       this._geminiDirty = false;
       this._anthropicDirty = false;
-      const parts = [];
-      if (saveData.gemini_api_key) parts.push('Gemini');
-      if (saveData.anthropic_api_key) parts.push('Anthropic');
       const st = this.shadowRoot.getElementById("v-save-status");
       if (st) { st.textContent = parts.length > 0 ? '✅ Klucze zapisane: ' + parts.join(', ') + ' + modele!' : '✅ Modele zapisane!'; setTimeout(() => { st.textContent = ''; }, 4000); }
     }
@@ -620,7 +625,11 @@ class SmartingHomePanel extends HTMLElement {
     if (!el) return;
     const enabled = this._settings.ecowitt_enabled;
     el.style.display = enabled ? '' : 'none';
-    if (!enabled || !this._hass?.states) return;
+    if (!enabled || !this._hass?.states) {
+      const pvSidebar = this.shadowRoot.getElementById('pv-eco-sidebar');
+      if (pvSidebar) pvSidebar.style.display = 'none';
+      return;
+    }
 
     const s = (id) => {
       const st = this._hass.states[id];
@@ -701,6 +710,20 @@ class SmartingHomePanel extends HTMLElement {
         </div>
       </div>
     `;
+
+    // Update PV sidebar with weather data affecting production
+    const pvSidebar = this.shadowRoot.getElementById('pv-eco-sidebar');
+    if (pvSidebar) {
+      pvSidebar.style.display = '';
+      this._setText('pv-eco-solar', solar !== null ? `${solar.toFixed(0)} W/m²` : '—');
+      const uvEl = this.shadowRoot.getElementById('pv-eco-uv');
+      if (uvEl) {
+        uvEl.textContent = uv !== null ? `${uv}` : '—';
+        uvEl.style.color = uv === null ? '#64748b' : uv <= 2 ? '#2ecc71' : uv <= 5 ? '#f7b731' : '#e74c3c';
+      }
+      this._setText('pv-eco-temp', temp !== null ? `${temp.toFixed(1)}°C` : '—');
+      this._setText('pv-eco-wind', wind !== null ? `${wind.toFixed(1)} km/h` : '—');
+    }
   }
 
   _saveEcowittSettings() {
@@ -2147,7 +2170,7 @@ class SmartingHomePanel extends HTMLElement {
         .tab-btn.active { background: rgba(0,212,255,0.1); color: #00d4ff; }
 
         /* ── Content ── */
-        .tab-content { display: none; padding: 12px 16px; }
+        .tab-content { display: none; padding: 12px 6px; }
         .tab-content.active { display: block; }
 
         /* ═══════════════════════════════════════ */
@@ -2155,8 +2178,9 @@ class SmartingHomePanel extends HTMLElement {
         /* ═══════════════════════════════════════ */
         .flow-wrapper {
           position: relative;
-          width: 100%; max-width: 1100px; margin: 0 auto;
+          width: 100%; max-width: 100%; margin: 0 auto; padding: 0 12px;
           min-height: 520px;
+          box-sizing: border-box;
         }
         .flow-svg-bg {
           position: absolute; top: 0; left: 0; width: 100%; height: 100%;
@@ -2165,7 +2189,7 @@ class SmartingHomePanel extends HTMLElement {
         .flow-nodes {
           position: relative; z-index: 1;
           display: grid;
-          grid-template-columns: 1.3fr 0.4fr 1.3fr;
+          grid-template-columns: 1.5fr 0.3fr 1.5fr;
           grid-template-rows: auto auto auto;
           gap: 12px; min-height: 540px;
         }
@@ -2553,41 +2577,41 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ORTHOGONAL SVG OVERLAY -->
             <svg class="flow-svg-bg" viewBox="0 0 700 480" preserveAspectRatio="xMidYMid meet">
               <!-- PV (top-left) → Inverter (center): right then down -->
-              <path class="fl-line" d="M 150,90 H 350 V 180" />
+              <path class="fl-line" d="M 80,90 H 350 V 180" />
               <g id="fl-pv-inv" class="fl-dot solar" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 150,90 H 350 V 180" />
+                <animateMotion dur="2.5s" repeatCount="indefinite" path="M 80,90 H 350 V 180" />
               </g>
               <!-- Inverter → Home (top-right): up then right -->
-              <path class="fl-line" d="M 350,180 V 90 H 550" />
+              <path class="fl-line" d="M 350,180 V 90 H 620" />
               <g id="fl-inv-load" class="fl-dot load-flow" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 350,180 V 90 H 550" />
+                <animateMotion dur="2.5s" repeatCount="indefinite" path="M 350,180 V 90 H 620" />
               </g>
               <!-- Battery → Inverter: down from battery, horizontal, then up to inverter -->
-              <path class="fl-line" d="M 150,340 V 410 H 350 V 260" />
+              <path class="fl-line" d="M 80,340 V 410 H 350 V 260" />
               <g id="fl-inv-batt" class="fl-dot batt-charge" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 350,260 V 410 H 150 V 340" />
+                <animateMotion dur="2.5s" repeatCount="indefinite" path="M 350,260 V 410 H 80 V 340" />
               </g>
               <g id="fl-inv-batt-pv" class="fl-dot pv-charge" style="display:none">
                 <circle r="7" style="animation: pvPulse 1.2s ease-in-out infinite" />
                 <text text-anchor="middle" dominant-baseline="central" font-size="10" fill="#fff" style="font-weight:900; filter:drop-shadow(0 0 4px #00aaff)">⚡</text>
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 350,260 V 410 H 150 V 340" />
+                <animateMotion dur="2.5s" repeatCount="indefinite" path="M 350,260 V 410 H 80 V 340" />
               </g>
               <g id="fl-batt-inv" class="fl-dot batt-discharge" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 150,340 V 410 H 350 V 260" />
+                <animateMotion dur="2.5s" repeatCount="indefinite" path="M 80,340 V 410 H 350 V 260" />
               </g>
               <!-- Grid → Inverter: down from grid, horizontal, then up to inverter -->
-              <path class="fl-line" d="M 550,340 V 410 H 350 V 260" />
+              <path class="fl-line" d="M 620,340 V 410 H 350 V 260" />
               <g id="fl-grid-inv" class="fl-dot grid-in" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 550,340 V 410 H 350 V 260" />
+                <animateMotion dur="2.5s" repeatCount="indefinite" path="M 620,340 V 410 H 350 V 260" />
               </g>
               <g id="fl-inv-grid" class="fl-dot grid-out" style="display:none">
                 <circle r="5" />
-                <animateMotion dur="2s" repeatCount="indefinite" path="M 350,260 V 410 H 550 V 340" />
+                <animateMotion dur="2.5s" repeatCount="indefinite" path="M 350,260 V 410 H 620 V 340" />
               </g>
             </svg>
 
@@ -2596,15 +2620,40 @@ class SmartingHomePanel extends HTMLElement {
               <!-- ☀️ PV AREA (top left) -->
               <div class="pv-area">
                 <div class="node" id="pv-node" style="border-color: rgba(247,183,49,0.2); transition: border-color 0.5s, box-shadow 0.5s">
-                  <div class="node-title">☀️ Produkcja PV</div>
-                  <div class="node-big" style="color:#f7b731" id="v-pv">— W</div>
-                  <div class="node-sub" id="v-pv-today">— kWh dziś</div>
-                  <div style="font-size:10px; color:#f7b731; margin-top:2px; font-weight:600" id="v-pv-total-kwh"></div>
-                  <div class="pv-strings" style="display:flex; gap:6px; flex-wrap:wrap; margin-top:10px">
-                    <div class="pv-string" id="pv1-box"><div class="pv-name" id="pv1-label" onclick="this.getRootNode().host._editPvLabel(1)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV1</div><div class="pv-val" id="v-pv1-p">—</div><div class="pv-detail"><span id="v-pv1-v">— V</span> · <span id="v-pv1-a">— A</span></div><div style="font-size:9px; color:#94a3b8; margin-top:2px" id="v-pv1-kwh"></div></div>
-                    <div class="pv-string" id="pv2-box"><div class="pv-name" id="pv2-label" onclick="this.getRootNode().host._editPvLabel(2)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV2</div><div class="pv-val" id="v-pv2-p">—</div><div class="pv-detail"><span id="v-pv2-v">— V</span> · <span id="v-pv2-a">— A</span></div><div style="font-size:9px; color:#94a3b8; margin-top:2px" id="v-pv2-kwh"></div></div>
-                    <div class="pv-string" id="pv3-box" style="display:none"><div class="pv-name" id="pv3-label" onclick="this.getRootNode().host._editPvLabel(3)" style="cursor:pointer">PV3</div><div class="pv-val" id="v-pv3-p">—</div><div class="pv-detail"><span id="v-pv3-v">—</span></div></div>
-                    <div class="pv-string" id="pv4-box" style="display:none"><div class="pv-name" id="pv4-label" onclick="this.getRootNode().host._editPvLabel(4)" style="cursor:pointer">PV4</div><div class="pv-val" id="v-pv4-p">—</div><div class="pv-detail"><span id="v-pv4-v">—</span></div></div>
+                  <div style="display:flex; gap:10px">
+                    <div style="flex:1; min-width:0">
+                      <div class="node-title">☀️ Produkcja PV</div>
+                      <div class="node-big" style="color:#f7b731" id="v-pv">— W</div>
+                      <div class="node-sub" id="v-pv-today">— kWh dziś</div>
+                      <div style="font-size:10px; color:#f7b731; margin-top:2px; font-weight:600" id="v-pv-total-kwh"></div>
+                      <div class="pv-strings" style="display:flex; gap:6px; flex-wrap:wrap; margin-top:10px">
+                        <div class="pv-string" id="pv1-box"><div class="pv-name" id="pv1-label" onclick="this.getRootNode().host._editPvLabel(1)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV1</div><div class="pv-val" id="v-pv1-p">—</div><div class="pv-detail"><span id="v-pv1-v">— V</span> · <span id="v-pv1-a">— A</span></div><div style="font-size:9px; color:#94a3b8; margin-top:2px" id="v-pv1-kwh"></div></div>
+                        <div class="pv-string" id="pv2-box"><div class="pv-name" id="pv2-label" onclick="this.getRootNode().host._editPvLabel(2)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV2</div><div class="pv-val" id="v-pv2-p">—</div><div class="pv-detail"><span id="v-pv2-v">— V</span> · <span id="v-pv2-a">— A</span></div><div style="font-size:9px; color:#94a3b8; margin-top:2px" id="v-pv2-kwh"></div></div>
+                        <div class="pv-string" id="pv3-box" style="display:none"><div class="pv-name" id="pv3-label" onclick="this.getRootNode().host._editPvLabel(3)" style="cursor:pointer">PV3</div><div class="pv-val" id="v-pv3-p">—</div><div class="pv-detail"><span id="v-pv3-v">—</span></div></div>
+                        <div class="pv-string" id="pv4-box" style="display:none"><div class="pv-name" id="pv4-label" onclick="this.getRootNode().host._editPvLabel(4)" style="cursor:pointer">PV4</div><div class="pv-val" id="v-pv4-p">—</div><div class="pv-detail"><span id="v-pv4-v">—</span></div></div>
+                      </div>
+                    </div>
+                    <div id="pv-eco-sidebar" style="display:none; flex-shrink:0; width:110px; border-left:1px solid rgba(255,255,255,0.06); padding-left:10px">
+                      <div style="font-size:8px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px">🌦️ Stacja</div>
+                      <div style="display:flex; flex-direction:column; gap:5px">
+                        <div>
+                          <div style="font-size:8px; color:#64748b">☀️ Nasłoneczn.</div>
+                          <div style="font-size:13px; font-weight:800; color:#f7b731" id="pv-eco-solar">—</div>
+                        </div>
+                        <div>
+                          <div style="font-size:8px; color:#64748b">🔆 UV</div>
+                          <div style="font-size:11px; font-weight:700" id="pv-eco-uv" style="color:#2ecc71">—</div>
+                        </div>
+                        <div>
+                          <div style="font-size:8px; color:#64748b">🌡️ Temp.</div>
+                          <div style="font-size:11px; font-weight:700; color:#fff" id="pv-eco-temp">—</div>
+                        </div>
+                        <div>
+                          <div style="font-size:8px; color:#64748b">💨 Wiatr</div>
+                          <div style="font-size:11px; font-weight:700; color:#00d4ff" id="pv-eco-wind">—</div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -3731,7 +3780,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.10</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.11</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
