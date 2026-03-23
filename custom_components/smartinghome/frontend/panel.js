@@ -1538,7 +1538,10 @@ class SmartingHomePanel extends HTMLElement {
     this._flow("fl-inv-load", load > 10, load);
     this._flow("fl-grid-inv", grid > 10, grid);
     this._flow("fl-inv-grid", grid < -10, Math.abs(grid));
-    this._flow("fl-inv-batt", batt < -10, Math.abs(batt));  // charging: inverter → battery
+    const pvSurplus = pv > load && pv > 10;
+    const battCharging = batt < -10;
+    this._flow("fl-inv-batt", battCharging && !pvSurplus, Math.abs(batt));  // charging: inverter → battery (no PV surplus)
+    this._flow("fl-inv-batt-pv", battCharging && pvSurplus, Math.abs(batt));  // charging from PV surplus: pulsating ⚡
     this._flow("fl-batt-inv", batt > 10, batt);               // discharging: battery → inverter
 
     // Dynamic Inverter Image Logic
@@ -2018,7 +2021,7 @@ class SmartingHomePanel extends HTMLElement {
         .flow-nodes {
           position: relative; z-index: 1;
           display: grid;
-          grid-template-columns: 1fr 1fr 1fr;
+          grid-template-columns: 1.3fr 0.4fr 1.3fr;
           grid-template-rows: auto auto auto;
           gap: 12px; min-height: 540px;
         }
@@ -2135,6 +2138,11 @@ class SmartingHomePanel extends HTMLElement {
         .fl-dot.batt-charge { fill: #00d4ff; color: #00d4ff; }
         .fl-dot.batt-discharge { fill: #3498db; color: #3498db; }
         .fl-dot.load-flow { fill: #2ecc71; color: #2ecc71; }
+        .fl-dot.pv-charge { fill: #00aaff; color: #00aaff; }
+        @keyframes pvPulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.4; }
+        }
 
         /* SOC bar */
         .soc-bar { width: 100%; height: 8px; background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; margin: 6px 0; }
@@ -2416,6 +2424,11 @@ class SmartingHomePanel extends HTMLElement {
               <path class="fl-line" d="M 150,340 V 410 H 350 V 260" />
               <g id="fl-inv-batt" class="fl-dot batt-charge" style="display:none">
                 <circle r="5" />
+                <animateMotion dur="2s" repeatCount="indefinite" path="M 350,260 V 410 H 150 V 340" />
+              </g>
+              <g id="fl-inv-batt-pv" class="fl-dot pv-charge" style="display:none">
+                <circle r="7" style="animation: pvPulse 1.2s ease-in-out infinite" />
+                <text text-anchor="middle" dominant-baseline="central" font-size="10" fill="#fff" style="font-weight:900; filter:drop-shadow(0 0 4px #00aaff)">⚡</text>
                 <animateMotion dur="2s" repeatCount="indefinite" path="M 350,260 V 410 H 150 V 340" />
               </g>
               <g id="fl-batt-inv" class="fl-dot batt-discharge" style="display:none">
