@@ -112,7 +112,8 @@
           "settings": "⚙️ Ustawienia PRO",
           "inverter_brand": "🔌 Marka falownika",
           "sensors": "🔌 Mapowanie sensorów",
-          "ecowitt": "🌦️ Stacja pogodowa Ecowitt"
+          "ecowitt": "🌦️ Stacja pogodowa Ecowitt",
+          "api_keys": "🔑 Klucze API (AI Advisor)"
         }
       },
       "upgrade": {
@@ -130,9 +131,15 @@
         "data": {
           "tariff": "Typ taryfy",
           "rce_enabled": "Włącz RCE PSE",
-          "gemini_api_key": "Klucz API Google Gemini",
-          "anthropic_api_key": "Klucz API Anthropic Claude",
           "update_interval": "Interwał aktualizacji (sekundy)"
+        }
+      },
+      "api_keys": {
+        "title": "🔑 Klucze API — AI Advisor",
+        "description": "Podaj klucze API do doradcy AI.\nKlucz Gemini: https://aistudio.google.com/apikey\nKlucz Claude: https://console.anthropic.com/settings/keys",
+        "data": {
+          "gemini_api_key": "🤖 Klucz API Google Gemini",
+          "anthropic_api_key": "🤖 Klucz API Anthropic Claude"
         }
       },
       "sensors": {

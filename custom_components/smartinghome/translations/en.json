@@ -80,24 +80,42 @@
   },
   "options": {
     "step": {
+      "init": {
+        "title": "Smarting HOME — Options",
+        "description": "Choose what to configure:",
+        "menu_options": {
+          "upgrade": "⚙️ Settings & Upgrade",
+          "settings": "⚙️ PRO Settings",
+          "inverter_brand": "🔌 Inverter Brand",
+          "sensors": "🔌 Sensor Mapping",
+          "ecowitt": "🌦️ Ecowitt Weather Station",
+          "api_keys": "🔑 API Keys (AI Advisor)"
+        }
+      },
       "upgrade": {
-        "title": "Smarting HOME — Ustawienia & Upgrade",
-        "description": "Masz plan FREE. Wpisz klucz PRO, aby odblokować wszystkie funkcje.\nKup na: {website}",
+        "title": "Smarting HOME — Settings & Upgrade",
+        "description": "You are on the FREE plan. Enter a PRO license key to unlock all features.\nBuy at: {website}",
         "data": {
-          "license_key": "🔑 Klucz licencji PRO (zostaw puste = FREE)",
-          "tariff": "Typ taryfy",
-          "rce_enabled": "Włącz RCE PSE",
-          "update_interval": "Interwał aktualizacji (sekundy)"
+          "license_key": "🔑 PRO License Key (leave empty = FREE)",
+          "tariff": "Tariff Type",
+          "rce_enabled": "Enable RCE PSE",
+          "update_interval": "Update Interval (seconds)"
         }
       },
       "settings": {
-        "title": "Smarting HOME — Ustawienia PRO",
+        "title": "Smarting HOME — PRO Settings",
         "data": {
-          "tariff": "Typ taryfy",
-          "rce_enabled": "Włącz RCE PSE",
-          "gemini_api_key": "Klucz API Google Gemini",
-          "anthropic_api_key": "Klucz API Anthropic Claude",
-          "update_interval": "Interwał aktualizacji (sekundy)"
+          "tariff": "Tariff Type",
+          "rce_enabled": "Enable RCE PSE",
+          "update_interval": "Update Interval (seconds)"
+        }
+      },
+      "api_keys": {
+        "title": "🔑 API Keys — AI Advisor",
+        "description": "Enter your API keys for the AI energy advisor.\nGet Gemini key at: https://aistudio.google.com/apikey\nGet Claude key at: https://console.anthropic.com/settings/keys",
+        "data": {
+          "gemini_api_key": "🤖 Google Gemini API Key",
+          "anthropic_api_key": "🤖 Anthropic Claude API Key"
         }
       },
       "sensors": {
