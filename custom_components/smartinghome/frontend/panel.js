@@ -70,6 +70,7 @@ class SmartingHomePanel extends HTMLElement {
     this.shadowRoot.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
     this.shadowRoot.querySelectorAll(".tab-content").forEach(c => c.classList.toggle("active", c.dataset.tab === tab));
     if (tab === 'winter') { this._initWinterTab(); this._loadWinterData(); }
+    if (tab === 'wind') { this._initWindTab(); this._loadWindData(); }
   }
 
   /* ── Sensor mapping ─────────────────────── */
@@ -756,6 +757,280 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
 
+  /* ── Wind Power Tab ─────────────────────── */
+  _windTurbineDefaults = { power_kw: 3, rotor_diameter: 3.2, cut_in: 3, rated_speed: 12, investment: 25000, price_kwh: 0.87 };
+
+  _initWindTab() {
+    if (this._windInitialized) return;
+    this._windInitialized = true;
+    const t = this._windTurbineDefaults;
+    const fields = [
+      ['wind-turbine-power', t.power_kw],
+      ['wind-turbine-diameter', t.rotor_diameter],
+      ['wind-turbine-cutin', t.cut_in],
+      ['wind-turbine-rated', t.rated_speed],
+      ['wind-turbine-investment', t.investment],
+      ['wind-turbine-price', t.price_kwh],
+    ];
+    fields.forEach(([id, val]) => {
+      const el = this.shadowRoot.getElementById(id);
+      if (el && !el.value) el.value = val;
+    });
+  }
+
+  _loadWindData() {
+    if (!this._settings.wind_turbine) return;
+    const wt = this._settings.wind_turbine;
+    const fields = [
+      ['wind-turbine-power', wt.power_kw],
+      ['wind-turbine-diameter', wt.rotor_diameter],
+      ['wind-turbine-cutin', wt.cut_in],
+      ['wind-turbine-rated', wt.rated_speed],
+      ['wind-turbine-investment', wt.investment],
+      ['wind-turbine-price', wt.price_kwh],
+    ];
+    fields.forEach(([id, val]) => {
+      const el = this.shadowRoot.getElementById(id);
+      if (el && val !== undefined) el.value = val;
+    });
+    this._recalcWindProfitability();
+  }
+
+  _saveWindData() {
+    const g = (id) => parseFloat(this.shadowRoot.getElementById(id)?.value) || 0;
+    const wt = {
+      power_kw: g('wind-turbine-power'),
+      rotor_diameter: g('wind-turbine-diameter'),
+      cut_in: g('wind-turbine-cutin'),
+      rated_speed: g('wind-turbine-rated'),
+      investment: g('wind-turbine-investment'),
+      price_kwh: g('wind-turbine-price'),
+    };
+    this._savePanelSettings({ wind_turbine: wt });
+    const st = this.shadowRoot.getElementById('wind-save-status');
+    if (st) { st.textContent = '✅ Zapisano konfigurację turbiny!'; setTimeout(() => { st.textContent = ''; }, 4000); }
+  }
+
+  _getBeaufort(speed) {
+    // speed in km/h
+    if (speed < 1) return { scale: 0, name: 'Cisza', color: '#64748b', icon: '🍃' };
+    if (speed < 6) return { scale: 1, name: 'Powiew', color: '#94a3b8', icon: '🍃' };
+    if (speed < 12) return { scale: 2, name: 'Słaby wiatr', color: '#2ecc71', icon: '🌿' };
+    if (speed < 20) return { scale: 3, name: 'Łagodny', color: '#27ae60', icon: '🌿' };
+    if (speed < 29) return { scale: 4, name: 'Umiarkowany', color: '#f7b731', icon: '🌬️' };
+    if (speed < 39) return { scale: 5, name: 'Dość silny', color: '#f39c12', icon: '🌬️' };
+    if (speed < 50) return { scale: 6, name: 'Silny', color: '#e67e22', icon: '💨' };
+    if (speed < 62) return { scale: 7, name: 'Bardzo silny', color: '#e74c3c', icon: '💨' };
+    if (speed < 75) return { scale: 8, name: 'Sztormowy', color: '#c0392b', icon: '🌪️' };
+    return { scale: 9, name: 'Huragan', color: '#8e44ad', icon: '🌪️' };
+  }
+
+  _calcWindPower(speedKmh, diameterM) {
+    // P = 0.5 × ρ × A × v³ × Cp
+    const rho = 1.225; // air density kg/m³
+    const v = speedKmh / 3.6; // m/s
+    const A = Math.PI * Math.pow(diameterM / 2, 2); // swept area m²
+    const Cp = 0.35; // efficiency for small turbines
+    return 0.5 * rho * A * Math.pow(v, 3) * Cp; // watts
+  }
+
+  _updateWindTab() {
+    if (!this._hass?.states) return;
+    const container = this.shadowRoot.getElementById('wind-live-data');
+    if (!container) return;
+
+    const n = (id) => { const st = this._hass.states[id]; return (st && st.state !== 'unknown' && st.state !== 'unavailable') ? parseFloat(st.state) : null; };
+
+    const wind = n('sensor.ecowitt_wind_speed_9747');
+    const gust = n('sensor.ecowitt_wind_gust_9747');
+    const windDir = n('sensor.ecowitt_wind_direction_9747');
+    const temp = n('sensor.ecowitt_outdoor_temp_9747');
+    const pressure = n('sensor.ecowitt_pressure_relative');
+
+    const windDirLabel = (deg) => {
+      if (deg === null) return '—';
+      const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+      return dirs[Math.round(deg / 22.5) % 16];
+    };
+
+    const beaufort = this._getBeaufort(wind || 0);
+
+    // Wind speed card
+    this._setText('wind-speed-val', wind !== null ? wind.toFixed(1) : '—');
+    this._setText('wind-gust-val', gust !== null ? gust.toFixed(1) : '—');
+    this._setText('wind-beaufort-name', `${beaufort.icon} ${beaufort.name}`);
+    const bfEl = this.shadowRoot.getElementById('wind-beaufort-name');
+    if (bfEl) bfEl.style.color = beaufort.color;
+    this._setText('wind-beaufort-scale', `${beaufort.scale} Bft`);
+
+    // Direction + compass
+    this._setText('wind-dir-val', windDir !== null ? `${windDir}° ${windDirLabel(windDir)}` : '—');
+    const needle = this.shadowRoot.getElementById('wind-compass-needle');
+    if (needle && windDir !== null) needle.setAttribute('transform', `rotate(${windDir}, 60, 60)`);
+
+    // Instantaneous power potential
+    const g = (id) => parseFloat(this.shadowRoot.getElementById(id)?.value) || 0;
+    const diameter = g('wind-turbine-diameter') || 3.2;
+    const cutIn = g('wind-turbine-cutin') || 3;
+    const ratedSpeed = g('wind-turbine-rated') || 12;
+    const nominalPower = (g('wind-turbine-power') || 3) * 1000; // W
+    const windMs = (wind || 0) / 3.6;
+
+    let instantPower = 0;
+    if (windMs >= cutIn) {
+      instantPower = this._calcWindPower(wind || 0, diameter);
+      if (instantPower > nominalPower) instantPower = nominalPower;
+    }
+
+    this._setText('wind-instant-power', instantPower >= 1000 ? `${(instantPower / 1000).toFixed(2)} kW` : `${Math.round(instantPower)} W`);
+    const powerBar = this.shadowRoot.getElementById('wind-power-bar-fill');
+    if (powerBar) {
+      const pct = Math.min(100, (instantPower / nominalPower) * 100);
+      powerBar.style.width = `${pct}%`;
+      powerBar.style.background = pct > 80 ? 'linear-gradient(90deg, #2ecc71, #27ae60)' : pct > 40 ? 'linear-gradient(90deg, #f7b731, #f39c12)' : 'linear-gradient(90deg, #e74c3c, #c0392b)';
+    }
+    this._setText('wind-power-pct', `${Math.min(100, (instantPower / nominalPower * 100)).toFixed(0)}%`);
+
+    // Operating status
+    const statusEl = this.shadowRoot.getElementById('wind-turbine-status');
+    if (statusEl) {
+      if (windMs < cutIn) {
+        statusEl.textContent = '⏸️ Poniżej progu startu';
+        statusEl.style.color = '#e74c3c';
+      } else if (windMs >= cutIn && instantPower < nominalPower) {
+        statusEl.textContent = '🔄 Produkcja częściowa';
+        statusEl.style.color = '#f7b731';
+      } else {
+        statusEl.textContent = '⚡ Pełna moc!';
+        statusEl.style.color = '#2ecc71';
+      }
+    }
+
+    // Daily estimation
+    const avgWindToday = wind || 0;
+    const dailyHours = 24;
+    let avgPower = 0;
+    if ((avgWindToday / 3.6) >= cutIn) {
+      avgPower = this._calcWindPower(avgWindToday, diameter);
+      if (avgPower > nominalPower) avgPower = nominalPower;
+    }
+    const dailyKwh = (avgPower * dailyHours) / 1000;
+    const priceKwh = g('wind-turbine-price') || 0.87;
+    this._setText('wind-daily-est', `${dailyKwh.toFixed(2)} kWh`);
+    this._setText('wind-daily-revenue', `${(dailyKwh * priceKwh).toFixed(2)} zł`);
+
+    // Recalc profitability
+    this._recalcWindProfitability();
+  }
+
+  _recalcWindProfitability() {
+    const g = (id) => parseFloat(this.shadowRoot.getElementById(id)?.value) || 0;
+    const nominalKw = g('wind-turbine-power') || 3;
+    const diameter = g('wind-turbine-diameter') || 3.2;
+    const investment = g('wind-turbine-investment') || 25000;
+    const priceKwh = g('wind-turbine-price') || 0.87;
+    const cutIn = g('wind-turbine-cutin') || 3;
+
+    const n = (id) => { const st = this._hass?.states?.[id]; return (st && st.state !== 'unknown' && st.state !== 'unavailable') ? parseFloat(st.state) : null; };
+    const wind = n('sensor.ecowitt_wind_speed_9747') || 0;
+
+    // Average wind classes for Poland (m/s)
+    const windClasses = [
+      { name: 'Słaby (3 m/s)', speed: 10.8 },
+      { name: 'Umiarkowany (4 m/s)', speed: 14.4 },
+      { name: 'Dobry (5 m/s)', speed: 18 },
+      { name: 'Bardzo dobry (6 m/s)', speed: 21.6 },
+      { name: 'Twoja lokalizacja', speed: wind },
+    ];
+
+    const profitEl = this.shadowRoot.getElementById('wind-profit-cards');
+    if (!profitEl) return;
+
+    const cards = windClasses.map((wc, i) => {
+      const isUser = i === windClasses.length - 1;
+      let avgPower = 0;
+      if ((wc.speed / 3.6) >= cutIn) {
+        avgPower = this._calcWindPower(wc.speed, diameter);
+        if (avgPower > nominalKw * 1000) avgPower = nominalKw * 1000;
+      }
+      // Capacity factor for small turbines: ~15-25%
+      const capacityFactor = isUser ? 0.20 : (i === 0 ? 0.12 : i === 1 ? 0.18 : i === 2 ? 0.22 : 0.28);
+      const yearlyKwh = nominalKw * 8760 * capacityFactor;
+      const yearlySavings = yearlyKwh * priceKwh;
+      const payback = investment > 0 && yearlySavings > 0 ? investment / yearlySavings : null;
+      const profit20 = yearlySavings * 20 - investment;
+
+      const color = isUser ? '#00d4ff' : (payback && payback <= 10 ? '#2ecc71' : payback && payback <= 15 ? '#f7b731' : '#e74c3c');
+      const bg = isUser ? 'rgba(0,212,255,0.08)' : 'rgba(255,255,255,0.03)';
+      const border = isUser ? 'rgba(0,212,255,0.25)' : 'rgba(255,255,255,0.06)';
+
+      return `<div style="background:${bg}; border:1px solid ${border}; border-radius:14px; padding:16px; position:relative">
+        ${isUser ? '<div style="position:absolute; top:8px; right:8px; font-size:8px; color:#00d4ff; font-weight:700">📍 TWOJA LOKALIZACJA</div>' : ''}
+        <div style="font-size:12px; font-weight:700; color:${color}; margin-bottom:8px">${wc.name}</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:10px">
+          <div style="color:#64748b">Roczna produkcja:</div><div style="color:#f7b731; font-weight:600">${yearlyKwh.toFixed(0)} kWh</div>
+          <div style="color:#64748b">Roczne oszczędności:</div><div style="color:#2ecc71; font-weight:600">${yearlySavings.toFixed(0)} zł</div>
+          <div style="color:#64748b">Zwrot inwestycji:</div><div style="color:${payback && payback <= 10 ? '#2ecc71' : payback && payback <= 15 ? '#f7b731' : '#e74c3c'}; font-weight:700">${payback ? `~${payback.toFixed(1)} lat` : '—'}</div>
+          <div style="color:#64748b">Zysk w 20 lat:</div><div style="color:${profit20 >= 0 ? '#2ecc71' : '#e74c3c'}; font-weight:700">${profit20 >= 0 ? '+' : ''}${Math.round(profit20).toLocaleString('pl-PL')} zł</div>
+        </div>
+        ${investment > 0 ? `<div style="margin-top:8px"><div style="background:rgba(255,255,255,0.08); border-radius:6px; height:6px; overflow:hidden"><div style="height:100%; width:${payback ? Math.min(100, (20 / payback) * 5) : 0}%; background:linear-gradient(90deg, ${color}, #00d4ff); border-radius:6px"></div></div></div>` : ''}
+      </div>`;
+    });
+
+    profitEl.innerHTML = cards.join('');
+
+    // Recommendation
+    const recEl = this.shadowRoot.getElementById('wind-recommendation');
+    if (recEl && wind > 0) {
+      const avgMs = wind / 3.6;
+      if (avgMs >= 5) {
+        recEl.innerHTML = `<div style="font-size:48px; text-align:center; margin-bottom:8px">✅</div>
+          <div style="font-size:16px; font-weight:800; color:#2ecc71; text-align:center">Lokalizacja KORZYSTNA</div>
+          <div style="font-size:11px; color:#94a3b8; text-align:center; margin-top:4px; line-height:1.6">Średnia prędkość wiatru ${avgMs.toFixed(1)} m/s jest wystarczająca do opłacalnej eksploatacji przydomowej turbiny wiatrowej. Czas zwrotu inwestycji może wynosić poniżej 10 lat.</div>`;
+      } else if (avgMs >= 3.5) {
+        recEl.innerHTML = `<div style="font-size:48px; text-align:center; margin-bottom:8px">⚠️</div>
+          <div style="font-size:16px; font-weight:800; color:#f7b731; text-align:center">Lokalizacja UMIARKOWANA</div>
+          <div style="font-size:11px; color:#94a3b8; text-align:center; margin-top:4px; line-height:1.6">Średnia prędkość wiatru ${avgMs.toFixed(1)} m/s jest na granicy opłacalności. Rozważ turbinę o niskim progu startu (cut-in < 2.5 m/s) lub hybrydę PV + wiatr.</div>`;
+      } else {
+        recEl.innerHTML = `<div style="font-size:48px; text-align:center; margin-bottom:8px">❌</div>
+          <div style="font-size:16px; font-weight:800; color:#e74c3c; text-align:center">Lokalizacja NIEKORZYSTNA</div>
+          <div style="font-size:11px; color:#94a3b8; text-align:center; margin-top:4px; line-height:1.6">Średnia prędkość wiatru ${avgMs.toFixed(1)} m/s jest zbyt niska dla opłacalnej turbiny wiatrowej. Zalecamy inwestycję w fotowoltaikę lub system hybrydowy z magazynem energii.</div>`;
+      }
+    }
+
+    // Monthly bar chart
+    this._renderWindMonthlyChart();
+  }
+
+  _renderWindMonthlyChart() {
+    const chartEl = this.shadowRoot.getElementById('wind-monthly-chart');
+    if (!chartEl) return;
+
+    // Monthly wind capacity factors for Poland (approximate)
+    const monthlyFactors = [0.28, 0.26, 0.24, 0.20, 0.16, 0.14, 0.12, 0.13, 0.16, 0.22, 0.26, 0.28];
+    const monthNames = ['Sty','Lut','Mar','Kwi','Maj','Cze','Lip','Sie','Wrz','Paź','Lis','Gru'];
+    const g = (id) => parseFloat(this.shadowRoot.getElementById(id)?.value) || 0;
+    const nominalKw = g('wind-turbine-power') || 3;
+
+    const monthlyData = monthlyFactors.map((cf, i) => {
+      const kwh = nominalKw * 730 * cf; // hours per month ~730
+      return { month: monthNames[i], kwh, cf };
+    });
+
+    const maxKwh = Math.max(...monthlyData.map(d => d.kwh), 1);
+    const currentMonth = new Date().getMonth();
+
+    chartEl.innerHTML = monthlyData.map((d, i) => {
+      const h = Math.max(4, (d.kwh / maxKwh) * 140);
+      const isCurrent = i === currentMonth;
+      return `<div style="flex:1; display:flex; flex-direction:column; align-items:center; gap:2px">
+        <div style="font-size:9px; font-weight:700; color:#00d4ff">${d.kwh.toFixed(0)}</div>
+        <div style="width:100%; max-width:28px; height:${h}px; background:${isCurrent ? 'linear-gradient(180deg, #00d4ff, #0099cc)' : 'linear-gradient(180deg, rgba(0,212,255,0.4), rgba(0,212,255,0.15))'};border-radius:4px 4px 0 0; ${isCurrent ? 'box-shadow: 0 0 8px rgba(0,212,255,0.4)' : ''}"></div>
+        <div style="font-size:8px; color:${isCurrent ? '#00d4ff' : '#64748b'}; font-weight:${isCurrent ? '700' : '400'}">${d.month}</div>
+      </div>`;
+    }).join('');
+  }
+
   _calcHEMSScore() {
     const el = this.shadowRoot.getElementById("hems-score-display");
     if (!el) return;
@@ -1356,7 +1631,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); }
 
   /* ── Moon phase calculation ─────────────────── */
   _getMoonPhase(date) {
@@ -2796,6 +3071,7 @@ class SmartingHomePanel extends HTMLElement {
               <button class="tab-btn" data-tab="hems" onclick="this.getRootNode().host._switchTab('hems')">🤖 HEMS</button>
               <button class="tab-btn" data-tab="roi" onclick="this.getRootNode().host._switchTab('roi')">📈 Opłacalność</button>
               <button class="tab-btn" data-tab="winter" onclick="this.getRootNode().host._switchTab('winter')">❄️ Zima na plusie</button>
+              <button class="tab-btn" data-tab="wind" onclick="this.getRootNode().host._switchTab('wind')">🌬️ Wiatr</button>
             </div>
           </div>
           <!-- Center: Sun Widget (compact) -->
@@ -4022,6 +4298,156 @@ class SmartingHomePanel extends HTMLElement {
 
         </div>
 
+        <!-- ═══════ TAB: WIND POWER ═══════ -->
+        <div class="tab-content" data-tab="wind">
+
+          <!-- Hero: Live Wind Data -->
+          <div class="card" style="margin-bottom:12px; position:relative; overflow:hidden">
+            <div style="position:absolute; top:0; left:0; right:0; bottom:0; opacity:0.03; font-size:120px; display:flex; align-items:center; justify-content:center">🌬️</div>
+            <div class="card-title" style="position:relative">🌬️ Elektrownia Wiatrowa — Dane na żywo</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:12px; position:relative">Dane z Ecowitt WH90 • Analiza potencjału wiatrowego Twojej lokalizacji</div>
+            <div id="wind-live-data">
+              <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px">
+                <!-- Wind speed -->
+                <div style="background:rgba(0,212,255,0.06); border:1px solid rgba(0,212,255,0.15); border-radius:14px; padding:16px; text-align:center">
+                  <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">💨 Prędkość wiatru</div>
+                  <div style="font-size:32px; font-weight:900; color:#00d4ff; margin-top:6px"><span id="wind-speed-val">—</span> <span style="font-size:14px; font-weight:400; color:#94a3b8">km/h</span></div>
+                  <div style="font-size:11px; color:#94a3b8; margin-top:4px">Porywy: <span id="wind-gust-val" style="color:#f39c12; font-weight:600">—</span> km/h</div>
+                  <div style="margin-top:8px; padding:6px 12px; border-radius:20px; background:rgba(255,255,255,0.05); display:inline-block">
+                    <span id="wind-beaufort-name" style="font-size:12px; font-weight:700">—</span>
+                    <span id="wind-beaufort-scale" style="font-size:10px; color:#64748b; margin-left:4px">—</span>
+                  </div>
+                </div>
+                <!-- Wind direction + compass -->
+                <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:14px; padding:16px; text-align:center">
+                  <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">🧭 Kierunek wiatru</div>
+                  <div style="font-size:18px; font-weight:800; color:#fff; margin-top:6px" id="wind-dir-val">—</div>
+                  <div style="margin-top:8px; display:flex; justify-content:center">
+                    <svg viewBox="0 0 120 120" width="90" height="90">
+                      <circle cx="60" cy="60" r="55" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+                      <circle cx="60" cy="60" r="40" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="0.5"/>
+                      <text x="60" y="12" text-anchor="middle" fill="#94a3b8" font-size="9" font-weight="700">N</text>
+                      <text x="110" y="63" text-anchor="middle" fill="#64748b" font-size="8">E</text>
+                      <text x="60" y="115" text-anchor="middle" fill="#64748b" font-size="8">S</text>
+                      <text x="10" y="63" text-anchor="middle" fill="#64748b" font-size="8">W</text>
+                      <g id="wind-compass-needle" transform="rotate(0, 60, 60)">
+                        <polygon points="60,18 55,60 65,60" fill="#00d4ff" opacity="0.9"/>
+                        <polygon points="60,102 55,60 65,60" fill="rgba(255,255,255,0.15)"/>
+                      </g>
+                      <circle cx="60" cy="60" r="4" fill="#fff"/>
+                    </svg>
+                  </div>
+                </div>
+                <!-- Instant power -->
+                <div style="background:rgba(46,204,113,0.06); border:1px solid rgba(46,204,113,0.15); border-radius:14px; padding:16px; text-align:center">
+                  <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">⚡ Moc chwilowa</div>
+                  <div style="font-size:28px; font-weight:900; color:#2ecc71; margin-top:6px" id="wind-instant-power">— W</div>
+                  <div style="font-size:11px; margin-top:4px" id="wind-turbine-status" style="color:#64748b">—</div>
+                  <div style="margin-top:10px; background:rgba(255,255,255,0.08); border-radius:6px; height:10px; overflow:hidden">
+                    <div id="wind-power-bar-fill" style="height:100%; width:0%; border-radius:6px; transition:width 0.5s"></div>
+                  </div>
+                  <div style="font-size:10px; color:#94a3b8; margin-top:4px">Obciążenie: <span id="wind-power-pct" style="font-weight:600">0%</span></div>
+                </div>
+              </div>
+
+              <!-- Daily estimation strip -->
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px">
+                <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:10px; padding:12px; text-align:center">
+                  <div style="font-size:9px; color:#64748b; text-transform:uppercase">📊 Estymacja dzienna</div>
+                  <div style="font-size:22px; font-weight:800; color:#f7b731; margin-top:4px" id="wind-daily-est">— kWh</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:10px; padding:12px; text-align:center">
+                  <div style="font-size:9px; color:#64748b; text-transform:uppercase">💰 Przychód dzienny</div>
+                  <div style="font-size:22px; font-weight:800; color:#2ecc71; margin-top:4px" id="wind-daily-revenue">— zł</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Turbine configuration -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">⚙️ Konfiguracja turbiny wiatrowej</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:12px">Wprowadź parametry planowanej lub istniejącej turbiny przydomowej.</div>
+            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px">
+              <div class="settings-field">
+                <label style="font-size:10px; color:#64748b; text-transform:uppercase">Moc nominalna (kW)</label>
+                <input type="number" id="wind-turbine-power" step="0.1" min="0.1" max="50" placeholder="3"
+                  style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
+                  onchange="this.getRootNode().host._recalcWindProfitability()" />
+              </div>
+              <div class="settings-field">
+                <label style="font-size:10px; color:#64748b; text-transform:uppercase">Średnica rotora (m)</label>
+                <input type="number" id="wind-turbine-diameter" step="0.1" min="0.5" max="20" placeholder="3.2"
+                  style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
+                  onchange="this.getRootNode().host._recalcWindProfitability()" />
+              </div>
+              <div class="settings-field">
+                <label style="font-size:10px; color:#64748b; text-transform:uppercase">Prędkość startu (m/s)</label>
+                <input type="number" id="wind-turbine-cutin" step="0.1" min="0.5" max="10" placeholder="3"
+                  style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
+                  onchange="this.getRootNode().host._recalcWindProfitability()" />
+              </div>
+              <div class="settings-field">
+                <label style="font-size:10px; color:#64748b; text-transform:uppercase">Prędkość nominalna (m/s)</label>
+                <input type="number" id="wind-turbine-rated" step="0.1" min="3" max="25" placeholder="12"
+                  style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
+                  onchange="this.getRootNode().host._recalcWindProfitability()" />
+              </div>
+              <div class="settings-field">
+                <label style="font-size:10px; color:#64748b; text-transform:uppercase">Koszt inwestycji (zł)</label>
+                <input type="number" id="wind-turbine-investment" step="100" min="0" placeholder="25000"
+                  style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
+                  onchange="this.getRootNode().host._recalcWindProfitability()" />
+              </div>
+              <div class="settings-field">
+                <label style="font-size:10px; color:#64748b; text-transform:uppercase">Cena prądu (zł/kWh)</label>
+                <input type="number" id="wind-turbine-price" step="0.01" min="0" placeholder="0.87"
+                  style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
+                  onchange="this.getRootNode().host._recalcWindProfitability()" />
+              </div>
+            </div>
+            <div style="margin-top:10px; display:flex; gap:8px; align-items:center">
+              <button class="save-btn" onclick="this.getRootNode().host._saveWindData()" style="flex-shrink:0">💾 Zapisz konfigurację</button>
+              <span id="wind-save-status" style="font-size:11px; color:#2ecc71"></span>
+            </div>
+          </div>
+
+          <!-- Profitability analysis -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">💰 Analiza opłacalności — Porównanie scenariuszy wiatru</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:12px">Porównanie 4 klas wiatrowości + Twoja rzeczywista lokalizacja na podstawie Ecowitt WH90.</div>
+            <div id="wind-profit-cards" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:10px"></div>
+          </div>
+
+          <!-- Monthly chart -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">📉 Szacunkowa produkcja miesięczna (kWh)</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:8px">Na podstawie typowego profilu wiatru w Polsce i parametrów Twojej turbiny.</div>
+            <div id="wind-monthly-chart" style="display:flex; align-items:flex-end; gap:4px; height:180px; padding:10px 0"></div>
+          </div>
+
+          <!-- Recommendation -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">💡 Rekomendacja — czy warto stawiać turbinę?</div>
+            <div id="wind-recommendation" style="padding:16px">
+              <div style="text-align:center; color:#64748b; font-size:12px">Oczekiwanie na dane wiatru z Ecowitt WH90...</div>
+            </div>
+          </div>
+
+          <!-- Beaufort scale reference -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">📖 Skala Beauforta — Referencja</div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:6px; margin-top:8px">
+              <div style="background:rgba(100,116,139,0.1); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🍃</div><div style="font-size:10px; font-weight:700; color:#64748b">0 — Cisza</div><div style="font-size:9px; color:#94a3b8">&lt; 1 km/h</div></div>
+              <div style="background:rgba(46,204,113,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🌿</div><div style="font-size:10px; font-weight:700; color:#2ecc71">2-3 — Słaby/Łagodny</div><div style="font-size:9px; color:#94a3b8">6–19 km/h</div></div>
+              <div style="background:rgba(247,183,49,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🌬️</div><div style="font-size:10px; font-weight:700; color:#f7b731">4-5 — Umiarkowany</div><div style="font-size:9px; color:#94a3b8">20–38 km/h</div><div style="font-size:8px; color:#00d4ff; margin-top:2px">⚡ START turbiny</div></div>
+              <div style="background:rgba(231,76,60,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">💨</div><div style="font-size:10px; font-weight:700; color:#e67e22">6-7 — Silny</div><div style="font-size:9px; color:#94a3b8">39–61 km/h</div><div style="font-size:8px; color:#2ecc71; margin-top:2px">⚡ Optymalna moc</div></div>
+              <div style="background:rgba(192,57,43,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🌪️</div><div style="font-size:10px; font-weight:700; color:#c0392b">8+ — Sztorm</div><div style="font-size:9px; color:#94a3b8">&gt; 62 km/h</div><div style="font-size:8px; color:#e74c3c; margin-top:2px">⛔ STOP bezpieczeństwa</div></div>
+            </div>
+          </div>
+
+        </div>
+
         <!-- ═══════ TAB: SETTINGS ═══════ -->
         <div class="tab-content" data-tab="settings">
           <div class="grid-cards gc-2">
@@ -4260,7 +4686,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.11.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.12.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
