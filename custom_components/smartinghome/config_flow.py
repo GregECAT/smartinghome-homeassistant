@@ -404,6 +404,7 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
             menu_options.insert(0, "upgrade")
         else:
             menu_options.insert(0, "settings")
+            menu_options.append("downgrade")
 
         return self.async_show_menu(
             step_id="init",
@@ -454,6 +455,19 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             license_key = user_input.get(CONF_LICENSE_KEY, "").strip()
 
+            # Always persist tariff/RCE/interval to entry.data
+            new_data = {**current}
+            new_data[CONF_TARIFF] = user_input.get(
+                CONF_TARIFF, current.get(CONF_TARIFF, TariffType.G13)
+            )
+            new_data[CONF_RCE_ENABLED] = user_input.get(
+                CONF_RCE_ENABLED, current.get(CONF_RCE_ENABLED, True)
+            )
+            new_data[CONF_UPDATE_INTERVAL] = user_input.get(
+                CONF_UPDATE_INTERVAL,
+                current.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL),
+            )
+
             if license_key:
                 # Validate the license key
                 session = async_get_clientsession(self.hass)
@@ -463,7 +477,6 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
                     info = await api.validate_license()
                     if info.valid:
                         # Upgrade: update entry data to PRO
-                        new_data = {**current}
                         new_data[CONF_LICENSE_MODE] = LICENSE_MODE_PRO
                         new_data[CONF_LICENSE_KEY] = license_key
                         self.hass.config_entries.async_update_entry(
@@ -474,13 +487,7 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
                             info.tier.value,
                             license_key[:12],
                         )
-                        return self.async_create_entry(
-                            title="",
-                            data={
-                                **user_input,
-                                "_upgraded": True,
-                            },
-                        )
+                        return self.async_create_entry(title="", data={})
                     errors["base"] = "invalid_license"
                 except AuthenticationError:
                     errors["base"] = "invalid_license"
@@ -490,8 +497,11 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
                     _LOGGER.exception("Error during license upgrade")
                     errors["base"] = "unknown"
             else:
-                # No key entered — just save other settings
-                return self.async_create_entry(title="", data=user_input)
+                # No key entered — just save settings
+                self.hass.config_entries.async_update_entry(
+                    self._config_entry, data=new_data
+                )
+                return self.async_create_entry(title="", data={})
 
         return self.async_show_form(
             step_id="upgrade",
@@ -706,7 +716,22 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
     ) -> FlowResult:
         """PRO settings — tariff, RCE, update interval (no API keys here)."""
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            current = self._config_entry.data
+            new_data = {**current}
+            new_data[CONF_TARIFF] = user_input.get(
+                CONF_TARIFF, current.get(CONF_TARIFF, TariffType.G13)
+            )
+            new_data[CONF_RCE_ENABLED] = user_input.get(
+                CONF_RCE_ENABLED, current.get(CONF_RCE_ENABLED, True)
+            )
+            new_data[CONF_UPDATE_INTERVAL] = user_input.get(
+                CONF_UPDATE_INTERVAL,
+                current.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL),
+            )
+            self.hass.config_entries.async_update_entry(
+                self._config_entry, data=new_data
+            )
+            return self.async_create_entry(title="", data={})
 
         current = self._config_entry.data
 
@@ -739,5 +764,35 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="settings",
             data_schema=vol.Schema(schema_dict),
+        )
+
+    async def async_step_downgrade(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """PRO → FREE downgrade: remove license key and revert to FREE mode."""
+        if user_input is not None:
+            confirm = user_input.get("confirm_downgrade", False)
+            if confirm:
+                current = self._config_entry.data
+                new_data = {**current}
+                new_data[CONF_LICENSE_MODE] = LICENSE_MODE_FREE
+                new_data[CONF_LICENSE_KEY] = ""
+                self.hass.config_entries.async_update_entry(
+                    self._config_entry, data=new_data
+                )
+                _LOGGER.info("License downgraded to FREE mode")
+                return self.async_create_entry(title="", data={})
+            # User unchecked confirm — go back to menu
+            return self.async_create_entry(title="", data={})
+
+        return self.async_show_form(
+            step_id="downgrade",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        "confirm_downgrade", default=False
+                    ): bool,
+                }
+            ),
         )
 

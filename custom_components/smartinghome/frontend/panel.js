@@ -71,6 +71,7 @@ class SmartingHomePanel extends HTMLElement {
     this.shadowRoot.querySelectorAll(".tab-content").forEach(c => c.classList.toggle("active", c.dataset.tab === tab));
     if (tab === 'winter') { this._initWinterTab(); this._loadWinterData(); }
     if (tab === 'wind') { this._initWindTab(); this._loadWindData(); }
+    if (tab === 'hems') { this._updateHEMSArbitrage(); }
   }
 
   /* ── Sensor mapping ─────────────────────── */
@@ -1561,6 +1562,302 @@ class SmartingHomePanel extends HTMLElement {
       </div>`;
   }
 
+  /* ── HEMS Arbitrage: toggle collapsible sections ─── */
+  _toggleHEMSSection(layer) {
+    const el = this.shadowRoot.getElementById(`hems-layer-${layer}`);
+    if (el) el.classList.toggle('collapsed');
+  }
+
+  /* ── HEMS Arbitrage: update all automation card statuses ─── */
+  _updateHEMSArbitrage() {
+    if (this._activeTab !== 'hems') return;
+    const now = new Date();
+    const hour = now.getHours();
+    const min = now.getMinutes();
+    const dow = now.getDay();
+    const month = now.getMonth();
+    const isWeekend = (dow === 0 || dow === 6);
+    const isSummer = (month >= 3 && month <= 8);
+    const tariff = this._settings.tariff_plan || "G13";
+
+    // Helper: get sensor values
+    const soc = this._nm("battery_soc") || 0;
+    const pvPower = this._nm("pv_power") || 0;
+    const gridPower = this._nm("grid_power") || 0;
+    const surplus = pvPower - (this._nm("load_power") || 0);
+    const v1 = this._nm("voltage_l1") || 0;
+    const v2 = this._nm("voltage_l2") || 0;
+    const v3 = this._nm("voltage_l3") || 0;
+    const vMax = Math.max(v1, v2, v3);
+
+    // RCE data
+    const rceMwh = parseFloat(this._s("sensor.rce_pse_cena") || "0");
+    const rceKwh = parseFloat(this._s("sensor.rce_pse_cena_za_kwh") || "0");
+    const rceNext = parseFloat(this._s("sensor.rce_pse_cena_nastepnej_godziny") || "0");
+    const rceCheapWin = this._s("binary_sensor.rce_pse_aktywne_najtansze_okno_dzisiaj");
+    const rceExpWin = this._s("binary_sensor.rce_pse_aktywne_najdrozsze_okno_dzisiaj");
+
+    // Forecast & Weather
+    const fcstTmrw1 = parseFloat(this._s("sensor.energy_production_tomorrow") || "0");
+    const fcstTmrw2 = parseFloat(this._s("sensor.energy_production_tomorrow_2") || "0");
+    const fcstTmrw = fcstTmrw1 + fcstTmrw2;
+    const fcstRem1 = parseFloat(this._s("sensor.energy_production_today_remaining") || "0");
+    const fcstRem2 = parseFloat(this._s("sensor.energy_production_today_remaining_2") || "0");
+    const fcstRem = fcstRem1 + fcstRem2;
+    const fcstToday1 = parseFloat(this._s("sensor.energy_production_today") || "0");
+    const fcstToday2 = parseFloat(this._s("sensor.energy_production_today_2") || "0");
+    const fcstToday = fcstToday1 + fcstToday2;
+    const radiation = parseFloat(this._s("sensor.ecowitt_solar_radiation_9747") || "0");
+    const rainRate = parseFloat(this._s("sensor.ecowitt_rain_rate_9747") || "0");
+    const uvIndex = parseFloat(this._s("sensor.ecowitt_uv_index_9747") || "0");
+
+    // Device states
+    const boilerState = this._s("switch.bojler_3800") || "unknown";
+    const acState = this._s("switch.klimatyzacja_socket_1") || "unknown";
+    const pumpState = this._s("switch.pompa_zalania_socket_1") || "unknown";
+    const invMode = this._s("select.goodwe_tryb_pracy_falownika") || "—";
+    const hemsMode = this._s("sensor.smartinghome_hems_mode") || "auto";
+
+    // ── G13 zone calculation ──
+    let g13Zone = "off-peak", g13Price = "0.63";
+    if (tariff === "G13" && !isWeekend) {
+      if (hour >= 7 && hour < 13) { g13Zone = "poranný"; g13Price = "0.91"; }
+      else if (isSummer) {
+        if (hour >= 19 && hour < 22) { g13Zone = "SZCZYT"; g13Price = "1.50"; }
+      } else {
+        if (hour >= 16 && hour < 21) { g13Zone = "SZCZYT"; g13Price = "1.50"; }
+      }
+    }
+
+    // ── HEADER & KPIs ──
+    const modeMap = { auto: "AUTO", sell: "MAX SELL", charge: "CHARGE", peak_save: "PEAK SAVE", night_arbitrage: "NOC ARB", emergency: "EMERGENCY", manual: "MANUAL" };
+    this._setText("hems-arb-mode", modeMap[hemsMode] || hemsMode.toUpperCase());
+    this._setText("hems-kpi-soc", `${soc}%`);
+    const socEl = this.shadowRoot.getElementById("hems-kpi-soc");
+    if (socEl) socEl.style.color = soc > 50 ? "#2ecc71" : soc > 20 ? "#f7b731" : "#e74c3c";
+    this._setText("hems-kpi-rce", `${rceKwh.toFixed(2)} zł`);
+    this._setText("hems-kpi-g13", g13Zone);
+    const g13El = this.shadowRoot.getElementById("hems-kpi-g13");
+    if (g13El) g13El.style.color = g13Zone === "SZCZYT" ? "#e74c3c" : g13Zone === "poranný" ? "#e67e22" : "#2ecc71";
+    this._setText("hems-kpi-inv", invMode.replace(/_/g, " ").toUpperCase());
+
+    // License tier badge
+    const tierEl = this.shadowRoot.getElementById("hems-arb-tier");
+    const licTier = this._s("sensor.smartinghome_license") || "free";
+    const attrTier = this.hass?.states?.["sensor.smartinghome_license"]?.attributes?.license_tier || licTier;
+    if (tierEl) tierEl.textContent = attrTier.toUpperCase();
+
+    // ── Helper: set card status ──
+    const setStatus = (id, status) => {
+      const el = this.shadowRoot.getElementById(id);
+      const card = this.shadowRoot.getElementById(id.replace('-st', ''));
+      if (!el) return;
+      if (status === 'on') {
+        el.textContent = "● AKTYWNE";
+        el.className = "hac-status on";
+        if (card) card.classList.add("is-active");
+      } else if (status === 'wait') {
+        el.textContent = "◐ CZEKA";
+        el.className = "hac-status wait";
+        if (card) card.classList.remove("is-active");
+      } else {
+        el.textContent = "○ IDLE";
+        el.className = "hac-status off";
+        if (card) card.classList.remove("is-active");
+      }
+    };
+
+    // ═══ W1: G13 SCHEDULE ═══
+    const isWorkday = !isWeekend;
+    const peakStart = isSummer ? 19 : 16;
+    const peakEnd = isSummer ? 22 : 21;
+
+    // Morning sell (7-13 Pn-Pt)
+    setStatus("hac-morning-sell-st", isWorkday && hour >= 7 && hour < 13 ? "on" : isWorkday ? "wait" : "off");
+    this._setText("hac-ms-rce", `${rceKwh.toFixed(2)} zł`);
+    this._setText("hac-ms-soc", `${soc}%`);
+
+    // Midday charge (13-peakStart Pn-Pt)
+    setStatus("hac-midday-charge-st", isWorkday && hour >= 13 && hour < peakStart ? "on" : isWorkday ? "wait" : "off");
+    this._setText("hac-mc-rce", `${rceKwh.toFixed(2)} zł`);
+    this._setText("hac-mc-soc", `${soc}%`);
+
+    // Evening peak
+    setStatus("hac-evening-peak-st", isWorkday && hour >= peakStart && hour < peakEnd ? "on" : isWorkday ? "wait" : "off");
+    this._setText("hac-ep-g13", `${g13Zone} (${g13Price} zł)`);
+    this._setText("hac-ep-soc", `${soc}%`);
+
+    // Weekend
+    setStatus("hac-weekend-st", isWeekend ? "on" : "off");
+    this._setText("hac-wk-rce", `${rceKwh.toFixed(2)} zł`);
+    this._setText("hac-wk-cheap", rceCheapWin === "on" ? "✅ TAK" : "—");
+
+    // Night arbitrage
+    const nightActive = (hour >= 23 || hour < 6) && soc < 90 && fcstToday < 8;
+    setStatus("hac-night-arb-st", nightActive ? "on" : (hour >= 20 ? "wait" : "off"));
+    this._setText("hac-na-fcst", `${fcstTmrw.toFixed(1)} kWh`);
+    this._setText("hac-na-soc", `${soc}%`);
+
+    // ═══ W2: RCE DYNAMIC ═══
+    setStatus("hac-rce-cheap-st", rceCheapWin === "on" ? "on" : "off");
+    this._setText("hac-rc-win", rceCheapWin === "on" ? "✅ AKTYWNE" : "—");
+    this._setText("hac-rc-soc", `${soc}%`);
+
+    setStatus("hac-rce-exp-st", rceExpWin === "on" ? "on" : "off");
+    this._setText("hac-re-rce", `${rceMwh.toFixed(0)} PLN/MWh`);
+    this._setText("hac-re-g13", g13Zone);
+
+    setStatus("hac-rce-low-st", rceMwh < 150 && rceMwh > 0 && hour >= 7 && hour < 22 ? "on" : "off");
+    this._setText("hac-rl-mwh", `${rceMwh.toFixed(0)} PLN`);
+    const rceTrend = rceNext > rceMwh ? "📈 Rośnie" : rceNext < rceMwh ? "📉 Spada" : "→ Stabilna";
+    this._setText("hac-rl-trend", rceTrend);
+
+    setStatus("hac-rce-high-st", rceMwh > 300 && hour >= 7 && hour < 13 ? "on" : (rceMwh > 300 ? "wait" : "off"));
+    this._setText("hac-rh-mwh", `${rceMwh.toFixed(0)} PLN`);
+    this._setText("hac-rh-trend", rceTrend);
+
+    const rceDoubleActive = rceMwh > 500 && hour >= peakStart && hour < peakEnd;
+    setStatus("hac-rce-peak-st", rceDoubleActive ? "on" : "off");
+    this._setText("hac-rp-rce", `${rceMwh.toFixed(0)} PLN/MWh`);
+    this._setText("hac-rp-soc", `${soc}%`);
+
+    setStatus("hac-rce-neg-st", rceMwh < 0 ? "on" : "off");
+    this._setText("hac-rn-mwh", `${rceMwh.toFixed(0)} PLN`);
+    this._setText("hac-rn-blr", boilerState === "on" ? "✅ ON" : "OFF");
+
+    // ═══ W3: SOC SAFETY ═══
+    setStatus("hac-soc-11-st", hour === 11 && soc < 50 ? "on" : (hour < 11 ? "wait" : "off"));
+    this._setText("hac-s11-soc", `${soc}%`);
+
+    setStatus("hac-soc-12-st", hour === 12 && soc < 70 ? "on" : (hour < 12 ? "wait" : "off"));
+    this._setText("hac-s12-soc", `${soc}%`);
+
+    setStatus("hac-soc-low-st", soc < 20 ? "on" : soc < 30 ? "wait" : "off");
+    this._setText("hac-sl-soc", `${soc}%`);
+
+    setStatus("hac-weak-fcst-st", fcstTmrw < 5 && hour >= 18 ? "on" : "off");
+    this._setText("hac-wf-fcst", `${fcstTmrw.toFixed(1)} kWh`);
+    this._setText("hac-wf-dod", fcstTmrw < 5 ? "70%" : "95%");
+
+    setStatus("hac-restore-dod-st", pvPower > 500 ? "on" : "off");
+    this._setText("hac-rd-pv", this._pw(pvPower));
+
+    // ═══ W4: VOLTAGE + SURPLUS ═══
+    setStatus("hac-volt-blr-st", vMax > 252 ? "on" : "off");
+    this._setText("hac-vb-vmax", `${vMax.toFixed(1)} V`);
+    this._setText("hac-vb-blr", boilerState === "on" ? "✅ ON" : "OFF");
+
+    setStatus("hac-volt-ac-st", vMax > 253 ? "on" : "off");
+    this._setText("hac-va-vmax", `${vMax.toFixed(1)} V`);
+    this._setText("hac-va-ac", acState === "on" ? "✅ ON" : "OFF");
+
+    setStatus("hac-volt-chrg-st", vMax > 254 ? "on" : "off");
+    this._setText("hac-vc-vmax", `${vMax.toFixed(1)} V`);
+    this._setText("hac-vc-soc", `${soc}%`);
+
+    setStatus("hac-sur-blr-st", surplus > 2000 && soc > 80 ? "on" : (surplus > 1000 ? "wait" : "off"));
+    this._setText("hac-sb-sur", this._pw(surplus));
+    this._setText("hac-sb-soc", `${soc}%`);
+
+    setStatus("hac-sur-ac-st", surplus > 3000 && soc > 85 && boilerState === "on" ? "on" : "off");
+    this._setText("hac-sa-sur", this._pw(surplus));
+    this._setText("hac-sa-soc", `${soc}%`);
+
+    setStatus("hac-sur-sock-st", surplus > 4000 && soc > 90 && boilerState === "on" && acState === "on" ? "on" : "off");
+    this._setText("hac-ss-sur", this._pw(surplus));
+    this._setText("hac-ss-soc", `${soc}%`);
+
+    setStatus("hac-emergency-st", soc < 50 && (boilerState === "on" || acState === "on") ? "on" : "off");
+    this._setText("hac-em-soc", `${soc}%`);
+
+    // ═══ W5: SMART PRE-PEAK ═══
+    setStatus("hac-pp-0530-st", hour >= 5 && hour < 7 && soc < 80 && fcstToday < 10 ? "on" : (hour < 5 ? "wait" : "off"));
+    this._setText("hac-p5-fcst", `${fcstToday.toFixed(1)} kWh`);
+    this._setText("hac-p5-soc", `${soc}%`);
+
+    setStatus("hac-pp-1000-st", hour >= 10 && hour < 11 && soc < 60 && radiation < 200 ? "on" : (hour < 10 ? "wait" : "off"));
+    this._setText("hac-p10-rad", `${radiation.toFixed(0)} W/m²`);
+    this._setText("hac-p10-uv", uvIndex.toFixed(1));
+
+    setStatus("hac-pp-1330-st", !isSummer && hour >= 13 && hour < 14 && min >= 30 && soc < 80 && fcstRem < 5 ? "on" : (!isSummer && hour < 14 ? "wait" : "off"));
+    this._setText("hac-p13-rem", `${fcstRem.toFixed(1)} kWh`);
+    this._setText("hac-p13-soc", `${soc}%`);
+
+    setStatus("hac-pp-1800-st", isSummer && hour >= 18 && hour < 19 && soc < 70 && radiation < 100 ? "on" : (isSummer && hour < 19 ? "wait" : "off"));
+    this._setText("hac-p18-rad", `${radiation.toFixed(0)} W/m²`);
+    this._setText("hac-p18-soc", `${soc}%`);
+
+    setStatus("hac-pp-cloud-st", radiation < 50 && soc < 70 && hour >= 8 && hour < 18 ? "on" : "off");
+    this._setText("hac-pc-rad", `${radiation.toFixed(0)} W/m²`);
+    this._setText("hac-pc-pv", this._pw(pvPower));
+
+    setStatus("hac-pp-rain-st", rainRate > 0.5 && soc < 70 ? "on" : "off");
+    this._setText("hac-pr-rain", `${rainRate.toFixed(1)} mm/h`);
+    this._setText("hac-pr-pv", this._pw(pvPower));
+
+    // ═══ OTHER ═══
+    const boilerSchedule = [6, 7, 14, 15, 17, 18];
+    const boilerOn = (hour === 6 || hour === 14 || hour === 17);
+    setStatus("hac-boiler-st", boilerState === "on" ? "on" : boilerOn ? "wait" : "off");
+    this._setText("hac-bl-state", boilerState === "on" ? "✅ ON" : "OFF");
+    const nextBoiler = boilerSchedule.find(h => h > hour) || boilerSchedule[0];
+    this._setText("hac-bl-time", `Następny: ${String(nextBoiler).padStart(2,'0')}:00`);
+
+    this._setText("hac-pm-sensor", "—");
+    this._setText("hac-pm-pump", pumpState === "on" ? "✅ ON" : "OFF");
+    setStatus("hac-pump-st", pumpState === "on" ? "on" : "off");
+
+    setStatus("hac-report-st", hour === 21 ? "on" : (hour > 21 ? "off" : "wait"));
+    const pvTodayVal = parseFloat(this._fm("pv_today")) || 0;
+    const expTodayVal = this._nm("grid_export_today") || 0;
+    const impTodayVal = this._nm("grid_import_today") || 0;
+    this._setText("hac-rpt-pv", `${pvTodayVal.toFixed(1)} kWh`);
+    const balance = expTodayVal - impTodayVal;
+    this._setText("hac-rpt-bal", `${balance > 0 ? '+' : ''}${balance.toFixed(1)} kWh`);
+
+    // Phase imbalance
+    const pL1 = Math.abs(this._nm("power_l1") || 0);
+    const pL2 = Math.abs(this._nm("power_l2") || 0);
+    const pL3 = Math.abs(this._nm("power_l3") || 0);
+    const phaseMax = Math.max(pL1, pL2, pL3);
+    const phaseMin = Math.min(pL1, pL2, pL3);
+    const phaseImbalance = phaseMax - phaseMin;
+    setStatus("hac-phase-st", phaseImbalance > 3000 ? "on" : "off");
+    this._setText("hac-ph-l1", `${(pL1/1000).toFixed(1)} kW`);
+    this._setText("hac-ph-l2", `${(pL2/1000).toFixed(1)} kW`);
+
+    // ── Count active automations per layer ──
+    const countActive = (layerId) => {
+      const body = this.shadowRoot.getElementById(layerId);
+      if (!body) return { total: 0, active: 0 };
+      const cards = body.querySelectorAll('.hems-auto-card');
+      const active = body.querySelectorAll('.hems-auto-card.is-active');
+      return { total: cards.length, active: active.length };
+    };
+
+    const w1 = countActive('hems-w1-body');
+    const w2 = countActive('hems-w2-body');
+    const w3 = countActive('hems-w3-body');
+    const w4 = countActive('hems-w4-body');
+    const w5 = countActive('hems-w5-body');
+    const other = countActive('hems-other-body');
+
+    this._setText("hems-w1-count", `${w1.active}/${w1.total} aktywnych`);
+    this._setText("hems-w2-count", `${w2.active}/${w2.total} aktywnych`);
+    this._setText("hems-w3-count", `${w3.active}/${w3.total} aktywnych`);
+    this._setText("hems-w4-count", `${w4.active}/${w4.total} aktywnych`);
+    this._setText("hems-w5-count", `${w5.active}/${w5.total} aktywnych`);
+    this._setText("hems-other-count", `${other.active}/${other.total} aktywnych`);
+
+    // Overall active count
+    const totalActive = w1.active + w2.active + w3.active + w4.active + w5.active + other.active;
+    const statusEl = this.shadowRoot.getElementById("hems-arb-status");
+    if (statusEl) {
+      statusEl.textContent = totalActive > 0 ? `● ${totalActive} AKTYWNYCH` : "○ STAN GOTOWOŚCI";
+      statusEl.style.color = totalActive > 0 ? "#2ecc71" : "#64748b";
+    }
+  }
+
   _loadCronSettings() {
     const s = this._settings;
     const chkH = this.shadowRoot.getElementById("chk-cron-hems");
@@ -2058,7 +2355,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); }
 
   /* ── Moon phase calculation ─────────────────── */
   _getMoonPhase(date) {
@@ -2630,11 +2927,17 @@ class SmartingHomePanel extends HTMLElement {
     const tier = (this._s("sensor.smartinghome_license_tier") || "FREE").toUpperCase();
     if (badge) {
       badge.textContent = tier;
-      badge.className = `badge ${tier === "PRO" ? "pro" : "free"}`;
+      badge.className = `badge ${tier === "PRO" || tier === "ENTERPRISE" ? "pro" : "free"}`;
     }
-    // Settings: show upgrade prompt for FREE users
+    // Settings: toggle upgrade prompt vs PRO box
     const upgradeBox = this.shadowRoot.getElementById("settings-upgrade-box");
-    if (upgradeBox) upgradeBox.style.display = (tier === "PRO" || tier === "ENTERPRISE") ? "none" : "block";
+    const proBox = this.shadowRoot.getElementById("settings-pro-box");
+    const isPro = (tier === "PRO" || tier === "ENTERPRISE");
+    if (upgradeBox) upgradeBox.style.display = isPro ? "none" : "block";
+    if (proBox) proBox.style.display = isPro ? "block" : "none";
+    // Settings: update PRO tier label
+    const tierLabel = this.shadowRoot.getElementById("settings-license-tier");
+    if (tierLabel) tierLabel.textContent = tier;
     // Settings: API key status
     this._updateKeyStatus();
     // ROI Tab
@@ -3578,6 +3881,125 @@ class SmartingHomePanel extends HTMLElement {
         }
         .sh-toggle input:checked + .sh-toggle-slider { background: rgba(0,212,255,0.3); }
         .sh-toggle input:checked + .sh-toggle-slider:before { transform: translateX(16px); background: #00d4ff; }
+
+        /* ═══════════════════════════════════════ */
+        /* ═══  HEMS ARBITRAGE DASHBOARD      ═══ */
+        /* ═══════════════════════════════════════ */
+        .hems-header-strip {
+          display: grid; grid-template-columns: 1fr auto;
+          align-items: center; gap: 12px;
+          padding: 16px 18px;
+          background: linear-gradient(135deg, rgba(0,212,255,0.08), rgba(0,230,118,0.05));
+          border: 1px solid rgba(0,212,255,0.12); border-radius: 16px;
+          margin-bottom: 14px;
+        }
+        .hems-header-strip .hems-h-title {
+          font-size: 15px; font-weight: 800; color: #fff;
+          display: flex; align-items: center; gap: 8px;
+        }
+        .hems-header-strip .hems-h-badges {
+          display: flex; gap: 6px; flex-wrap: wrap;
+        }
+        .hems-h-badge {
+          padding: 3px 10px; border-radius: 20px; font-size: 10px;
+          font-weight: 700; letter-spacing: 0.3px;
+        }
+        .hems-h-badge.mode { background: rgba(0,212,255,0.15); color: #00d4ff; border: 1px solid rgba(0,212,255,0.2); }
+        .hems-h-badge.active { background: rgba(46,204,113,0.15); color: #2ecc71; border: 1px solid rgba(46,204,113,0.2); }
+        .hems-h-badge.tier { background: rgba(247,183,49,0.15); color: #f7b731; border: 1px solid rgba(247,183,49,0.2); }
+        .hems-kpis {
+          display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px;
+        }
+        .hems-kpi {
+          background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+          border-radius: 12px; padding: 12px; text-align: center;
+        }
+        .hems-kpi .kpi-label { font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; }
+        .hems-kpi .kpi-val { font-size: 20px; font-weight: 800; margin-top: 4px; }
+        .hems-layer {
+          margin-bottom: 10px; border: 1px solid rgba(255,255,255,0.06);
+          border-radius: 14px; overflow: hidden;
+          background: rgba(255,255,255,0.015);
+        }
+        .hems-layer-header {
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 12px 16px; cursor: pointer;
+          background: rgba(255,255,255,0.03);
+          transition: background 0.2s;
+          user-select: none;
+        }
+        .hems-layer-header:hover { background: rgba(255,255,255,0.06); }
+        .hems-layer-header .hl-left { display: flex; align-items: center; gap: 8px; }
+        .hems-layer-header .hl-tag {
+          font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 6px;
+          text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .hems-layer-header .hl-name { font-size: 13px; font-weight: 700; color: #e2e8f0; }
+        .hems-layer-header .hl-chevron {
+          font-size: 14px; color: #64748b; transition: transform 0.3s;
+        }
+        .hems-layer.collapsed .hl-chevron { transform: rotate(-90deg); }
+        .hems-layer-body {
+          display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+          gap: 8px; padding: 12px;
+          max-height: 2000px; overflow: hidden;
+          transition: max-height 0.4s ease, padding 0.3s, opacity 0.3s;
+          opacity: 1;
+        }
+        .hems-layer.collapsed .hems-layer-body {
+          max-height: 0; padding: 0 12px; opacity: 0;
+        }
+        .hems-auto-card {
+          background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+          border-radius: 12px; padding: 14px;
+          transition: all 0.3s; position: relative; overflow: hidden;
+        }
+        .hems-auto-card:hover {
+          background: rgba(255,255,255,0.06);
+          border-color: rgba(255,255,255,0.12);
+        }
+        .hems-auto-card .hac-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+        .hems-auto-card .hac-icon { font-size: 18px; }
+        .hems-auto-card .hac-name { font-size: 12px; font-weight: 700; color: #e2e8f0; flex: 1; margin-left: 8px; }
+        .hems-auto-card .hac-status {
+          font-size: 9px; font-weight: 700; padding: 2px 8px;
+          border-radius: 10px; text-transform: uppercase; letter-spacing: 0.3px;
+        }
+        .hems-auto-card .hac-status.on { background: rgba(46,204,113,0.15); color: #2ecc71; }
+        .hems-auto-card .hac-status.wait { background: rgba(247,183,49,0.15); color: #f7b731; }
+        .hems-auto-card .hac-status.off { background: rgba(100,116,139,0.15); color: #64748b; }
+        .hems-auto-card .hac-desc { font-size: 10px; color: #94a3b8; line-height: 1.4; margin-bottom: 8px; }
+        .hems-auto-card .hac-sensors {
+          display: grid; grid-template-columns: 1fr 1fr; gap: 3px;
+          font-size: 10px;
+        }
+        .hems-auto-card .hac-sensors .hs-label { color: #64748b; }
+        .hems-auto-card .hac-sensors .hs-val { color: #a0aec0; font-weight: 600; text-align: right; }
+        .hems-auto-card.is-active {
+          border-color: rgba(46,204,113,0.25);
+          background: rgba(46,204,113,0.04);
+        }
+        .hems-auto-card.is-active::before {
+          content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+          background: linear-gradient(90deg, #2ecc71, #00d4ff);
+        }
+        @keyframes hemsPulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(46,204,113,0.2); }
+          50% { box-shadow: 0 0 12px 2px rgba(46,204,113,0.15); }
+        }
+        .hems-auto-card.is-active { animation: hemsPulse 3s ease-in-out infinite; }
+
+        @media (max-width: 768px) {
+          .hems-kpis { grid-template-columns: repeat(2, 1fr); }
+          .hems-layer-body { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+          .hems-header-strip { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 480px) {
+          .hems-kpis { grid-template-columns: 1fr 1fr; gap: 6px; }
+          .hems-kpi .kpi-val { font-size: 16px; }
+          .hems-layer-body { grid-template-columns: 1fr; }
+          .hems-auto-card .hac-sensors { grid-template-columns: 1fr 1fr; }
+        }
       </style>
 
       <div class="panel-container">
@@ -4522,24 +4944,438 @@ class SmartingHomePanel extends HTMLElement {
 
         <!-- ═══════ TAB: HEMS ═══════ -->
         <div class="tab-content" data-tab="hems">
-          <div class="grid-cards gc-2">
-            <div class="card" style="grid-column: 1 / -1">
-              <div class="card-title">🤖 AI Energy Advisor</div>
-              <div style="display:flex; gap:10px; align-items:flex-start;">
-                <div style="font-size:28px; filter:drop-shadow(0 0 5px rgba(0,212,255,0.5));">🤖</div>
-                <div class="recommendation" style="flex:1" id="v-hems-rec-hems">Ładowanie porady z asystenta...</div>
-              </div>
+
+          <!-- ═══ HEMS HEADER STRIP ═══ -->
+          <div class="hems-header-strip">
+            <div class="hems-h-title">🏗️ Autonomiczny System Zarządzania Energią</div>
+            <div class="hems-h-badges">
+              <span class="hems-h-badge active" id="hems-arb-status">● AKTYWNY</span>
+              <span class="hems-h-badge mode" id="hems-arb-mode">AUTO</span>
+              <span class="hems-h-badge tier" id="hems-arb-tier">PRO</span>
             </div>
-            <div class="card" style="grid-column: 1 / -1">
-              <div class="card-title">⚙️ Sterowanie Ręczne Trybem HEMS</div>
-              <div class="actions">
-                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'auto'})">🔄 Tryb Auto</button>
-                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'sell'})">💰 Max Sprzedaż</button>
-                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'charge'})">🔋 Zmuś Ładowanie</button>
-                <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'peak_save'})">🏠 Szczyt (Z domu)</button>
+          </div>
+
+          <!-- ═══ KPI STRIP ═══ -->
+          <div class="hems-kpis">
+            <div class="hems-kpi">
+              <div class="kpi-label">🔋 SOC</div>
+              <div class="kpi-val" id="hems-kpi-soc" style="color:#2ecc71">—%</div>
+            </div>
+            <div class="hems-kpi">
+              <div class="kpi-label">💰 RCE teraz</div>
+              <div class="kpi-val" id="hems-kpi-rce" style="color:#00d4ff">— zł</div>
+            </div>
+            <div class="hems-kpi">
+              <div class="kpi-label">⏰ Strefa G13</div>
+              <div class="kpi-val" id="hems-kpi-g13" style="color:#f7b731">—</div>
+            </div>
+            <div class="hems-kpi">
+              <div class="kpi-label">⚡ Tryb falownika</div>
+              <div class="kpi-val" id="hems-kpi-inv" style="color:#a0aec0; font-size:14px">—</div>
+            </div>
+          </div>
+
+          <!-- ═══ MANUAL CONTROLS ═══ -->
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-title">⚙️ Sterowanie Ręczne Trybem HEMS</div>
+            <div class="actions">
+              <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'auto'})">🔄 Tryb Auto</button>
+              <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'sell'})">💰 Max Sprzedaż</button>
+              <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'charge'})">🔋 Zmuś Ładowanie</button>
+              <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'peak_save'})">🏠 Szczyt (Z domu)</button>
+            </div>
+          </div>
+
+          <!-- ═══ AI ADVISOR ═══ -->
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-title">🤖 AI Energy Advisor</div>
+            <div style="display:flex; gap:10px; align-items:flex-start;">
+              <div style="font-size:28px; filter:drop-shadow(0 0 5px rgba(0,212,255,0.5));">🤖</div>
+              <div class="recommendation" style="flex:1" id="v-hems-rec-hems">Ładowanie porady z asystenta...</div>
+            </div>
+          </div>
+
+          <!-- ═══ W1: HARMONOGRAM G13 ═══ -->
+          <div class="hems-layer" id="hems-layer-w1">
+            <div class="hems-layer-header" onclick="this.getRootNode().host._toggleHEMSSection('w1')">
+              <div class="hl-left">
+                <span class="hl-tag" style="background:rgba(230,126,34,0.15);color:#e67e22">W1</span>
+                <span class="hl-name">Harmonogram G13</span>
+                <span style="font-size:10px;color:#64748b" id="hems-w1-count">5 automatyzacji</span>
+              </div>
+              <span class="hl-chevron">▼</span>
+            </div>
+            <div class="hems-layer-body" id="hems-w1-body">
+              <!-- Sprzedaż 07:00 -->
+              <div class="hems-auto-card" id="hac-morning-sell">
+                <div class="hac-top"><span class="hac-icon">☀️</span><span class="hac-name">Sprzedaż (07:00)</span><span class="hac-status" id="hac-morning-sell-st">—</span></div>
+                <div class="hac-desc">G13 szczyt poranny (0.91 zł). Sprzedawaj 7-13 Pn-Pt.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">RCE:</span><span class="hs-val" id="hac-ms-rce">—</span>
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-ms-soc">—</span>
+                </div>
+              </div>
+              <!-- Ładowanie 13:00 -->
+              <div class="hems-auto-card" id="hac-midday-charge">
+                <div class="hac-top"><span class="hac-icon">🔋</span><span class="hac-name">Ładowanie (13:00)</span><span class="hac-status" id="hac-midday-charge-st">—</span></div>
+                <div class="hac-desc">Off-peak (0.63 zł). Ładuj baterię 13:00-szczyt Pn-Pt.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">RCE:</span><span class="hs-val" id="hac-mc-rce">—</span>
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-mc-soc">—</span>
+                </div>
+              </div>
+              <!-- Szczyt wieczorny -->
+              <div class="hems-auto-card" id="hac-evening-peak">
+                <div class="hac-top"><span class="hac-icon">💰</span><span class="hac-name">Szczyt wieczorny</span><span class="hac-status" id="hac-evening-peak-st">—</span></div>
+                <div class="hac-desc">G13 szczyt (1.50 zł). Bateria zasila dom.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">G13:</span><span class="hs-val" id="hac-ep-g13">—</span>
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-ep-soc">—</span>
+                </div>
+              </div>
+              <!-- Weekend -->
+              <div class="hems-auto-card" id="hac-weekend">
+                <div class="hac-top"><span class="hac-icon">🏖️</span><span class="hac-name">Weekend</span><span class="hac-status" id="hac-weekend-st">—</span></div>
+                <div class="hac-desc">Off-peak cały dzień → autokonsumpcja.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">RCE:</span><span class="hs-val" id="hac-wk-rce">—</span>
+                  <span class="hs-label">Najtaniej:</span><span class="hs-val" id="hac-wk-cheap">—</span>
+                </div>
+              </div>
+              <!-- Arbitraż nocny -->
+              <div class="hems-auto-card" id="hac-night-arb">
+                <div class="hac-top"><span class="hac-icon">🌙</span><span class="hac-name">Arbitraż nocny</span><span class="hac-status" id="hac-night-arb-st">—</span></div>
+                <div class="hac-desc">Nocne ładowanie z sieci (0.63 zł → 1.50 zł) gdy słaba prognoza PV.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">Prognoza:</span><span class="hs-val" id="hac-na-fcst">—</span>
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-na-soc">—</span>
+                </div>
               </div>
             </div>
           </div>
+
+          <!-- ═══ W2: RCE DYNAMICZNE ═══ -->
+          <div class="hems-layer" id="hems-layer-w2">
+            <div class="hems-layer-header" onclick="this.getRootNode().host._toggleHEMSSection('w2')">
+              <div class="hl-left">
+                <span class="hl-tag" style="background:rgba(0,212,255,0.15);color:#00d4ff">W2</span>
+                <span class="hl-name">RCE Dynamiczne</span>
+                <span style="font-size:10px;color:#64748b" id="hems-w2-count">6 automatyzacji</span>
+              </div>
+              <span class="hl-chevron">▼</span>
+            </div>
+            <div class="hems-layer-body" id="hems-w2-body">
+              <!-- Najtańsze okno -->
+              <div class="hems-auto-card" id="hac-rce-cheap">
+                <div class="hac-top"><span class="hac-icon">🟢</span><span class="hac-name">Najtańsze okno → ładuj</span><span class="hac-status" id="hac-rce-cheap-st">—</span></div>
+                <div class="hac-desc">Binary sensor PSE: najtańsze okno aktywne → ładuj baterię.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">Okno:</span><span class="hs-val" id="hac-rc-win">—</span>
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-rc-soc">—</span>
+                </div>
+              </div>
+              <!-- Najdroższe okno -->
+              <div class="hems-auto-card" id="hac-rce-exp">
+                <div class="hac-top"><span class="hac-icon">🔴</span><span class="hac-name">Najdroższe okno → alert</span><span class="hac-status" id="hac-rce-exp-st">—</span></div>
+                <div class="hac-desc">Najdroższe okno aktywne → bateria zasila dom, max oszczędność.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">RCE:</span><span class="hs-val" id="hac-re-rce">—</span>
+                  <span class="hs-label">G13:</span><span class="hs-val" id="hac-re-g13">—</span>
+                </div>
+              </div>
+              <!-- Niska cena -->
+              <div class="hems-auto-card" id="hac-rce-low">
+                <div class="hac-top"><span class="hac-icon">📉</span><span class="hac-name">Niska cena → ładuj</span><span class="hac-status" id="hac-rce-low-st">—</span></div>
+                <div class="hac-desc">RCE &lt; 150 PLN/MWh → nie opłaca się sprzedawać. Ładuj baterię.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">RCE (MWh):</span><span class="hs-val" id="hac-rl-mwh">—</span>
+                  <span class="hs-label">Trend:</span><span class="hs-val" id="hac-rl-trend">—</span>
+                </div>
+              </div>
+              <!-- Cena wzrosła -->
+              <div class="hems-auto-card" id="hac-rce-high">
+                <div class="hac-top"><span class="hac-icon">📈</span><span class="hac-name">Cena wzrosła → sprzedaj</span><span class="hac-status" id="hac-rce-high-st">—</span></div>
+                <div class="hac-desc">RCE &gt; 300 PLN/MWh → opłaca się sprzedawać.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">RCE (MWh):</span><span class="hs-val" id="hac-rh-mwh">—</span>
+                  <span class="hs-label">Trend:</span><span class="hs-val" id="hac-rh-trend">—</span>
+                </div>
+              </div>
+              <!-- Peak wieczorny -->
+              <div class="hems-auto-card" id="hac-rce-peak">
+                <div class="hac-top"><span class="hac-icon">💰💰</span><span class="hac-name">RCE Peak + G13 Szczyt</span><span class="hac-status" id="hac-rce-peak-st">—</span></div>
+                <div class="hac-desc">RCE &gt; 500 PLN/MWh wieczorem + G13 szczyt → max zysk!</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">RCE:</span><span class="hs-val" id="hac-rp-rce">—</span>
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-rp-soc">—</span>
+                </div>
+              </div>
+              <!-- Ujemna cena -->
+              <div class="hems-auto-card" id="hac-rce-neg">
+                <div class="hac-top"><span class="hac-icon">🤑</span><span class="hac-name">Ujemna cena → DARMOWA!</span><span class="hac-status" id="hac-rce-neg-st">—</span></div>
+                <div class="hac-desc">RCE ujemna → darmowa energia! Ładuj baterię + bojler ON.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">RCE (MWh):</span><span class="hs-val" id="hac-rn-mwh">—</span>
+                  <span class="hs-label">Bojler:</span><span class="hs-val" id="hac-rn-blr">—</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ═══ W3: BEZPIECZEŃSTWO SOC ═══ -->
+          <div class="hems-layer" id="hems-layer-w3">
+            <div class="hems-layer-header" onclick="this.getRootNode().host._toggleHEMSSection('w3')">
+              <div class="hl-left">
+                <span class="hl-tag" style="background:rgba(231,76,60,0.15);color:#e74c3c">W3</span>
+                <span class="hl-name">Bezpieczeństwo SOC</span>
+                <span style="font-size:10px;color:#64748b" id="hems-w3-count">5 automatyzacji</span>
+              </div>
+              <span class="hl-chevron">▼</span>
+            </div>
+            <div class="hems-layer-body" id="hems-w3-body">
+              <!-- SOC 11:00 -->
+              <div class="hems-auto-card" id="hac-soc-11">
+                <div class="hac-top"><span class="hac-icon">⚠️</span><span class="hac-name">SOC check 11:00</span><span class="hac-status" id="hac-soc-11-st">—</span></div>
+                <div class="hac-desc">SOC &lt; 50% o 11:00 → ładuj baterię przed szczytem.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-s11-soc">—</span>
+                  <span class="hs-label">Próg:</span><span class="hs-val">&lt;50%</span>
+                </div>
+              </div>
+              <!-- SOC 12:00 -->
+              <div class="hems-auto-card" id="hac-soc-12">
+                <div class="hac-top"><span class="hac-icon">⚠️</span><span class="hac-name">SOC check 12:00</span><span class="hac-status" id="hac-soc-12-st">—</span></div>
+                <div class="hac-desc">SOC &lt; 70% o 12:00 → ostatnia szansa na baterię.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-s12-soc">—</span>
+                  <span class="hs-label">Próg:</span><span class="hs-val">&lt;70%</span>
+                </div>
+              </div>
+              <!-- Ochrona SOC -->
+              <div class="hems-auto-card" id="hac-soc-low">
+                <div class="hac-top"><span class="hac-icon">🔋</span><span class="hac-name">Ochrona SOC &lt; 20%</span><span class="hac-status" id="hac-soc-low-st">—</span></div>
+                <div class="hac-desc">Krytyczny poziom → wymuś ładowanie baterii.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-sl-soc">—</span>
+                  <span class="hs-label">Próg:</span><span class="hs-val">&lt;20%</span>
+                </div>
+              </div>
+              <!-- Słaba prognoza -->
+              <div class="hems-auto-card" id="hac-weak-fcst">
+                <div class="hac-top"><span class="hac-icon">🌧️</span><span class="hac-name">Słaba prognoza → DOD</span><span class="hac-status" id="hac-weak-fcst-st">—</span></div>
+                <div class="hac-desc">Jutro &lt; 5 kWh → zachowaj baterię (DOD → 70%).</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">Jutro:</span><span class="hs-val" id="hac-wf-fcst">—</span>
+                  <span class="hs-label">DOD:</span><span class="hs-val" id="hac-wf-dod">—</span>
+                </div>
+              </div>
+              <!-- Przywróć DOD -->
+              <div class="hems-auto-card" id="hac-restore-dod">
+                <div class="hac-top"><span class="hac-icon">☀️</span><span class="hac-name">Przywróć DOD</span><span class="hac-status" id="hac-restore-dod-st">—</span></div>
+                <div class="hac-desc">PV &gt; 500W przez 10 min → DOD z powrotem na 95%.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">PV:</span><span class="hs-val" id="hac-rd-pv">—</span>
+                  <span class="hs-label">Próg:</span><span class="hs-val">&gt;500W</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ═══ W4: KASKADY NAPIĘCIA + NADWYŻKI PV ═══ -->
+          <div class="hems-layer collapsed" id="hems-layer-w4">
+            <div class="hems-layer-header" onclick="this.getRootNode().host._toggleHEMSSection('w4')">
+              <div class="hl-left">
+                <span class="hl-tag" style="background:rgba(155,89,182,0.15);color:#9b59b6">W4</span>
+                <span class="hl-name">Kaskady napięcia + nadwyżki PV</span>
+                <span style="font-size:10px;color:#64748b" id="hems-w4-count">10 automatyzacji</span>
+              </div>
+              <span class="hl-chevron">▼</span>
+            </div>
+            <div class="hems-layer-body" id="hems-w4-body">
+              <!-- Napięcie: Bojler -->
+              <div class="hems-auto-card" id="hac-volt-blr">
+                <div class="hac-top"><span class="hac-icon">⚡</span><span class="hac-name">Napięcie → Bojler</span><span class="hac-status" id="hac-volt-blr-st">—</span></div>
+                <div class="hac-desc">&gt;252V → Bojler ON (zagospodarowanie nadwyżki).</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">V max:</span><span class="hs-val" id="hac-vb-vmax">—</span>
+                  <span class="hs-label">Bojler:</span><span class="hs-val" id="hac-vb-blr">—</span>
+                </div>
+              </div>
+              <!-- Napięcie: Klima -->
+              <div class="hems-auto-card" id="hac-volt-ac">
+                <div class="hac-top"><span class="hac-icon">⚡⚡</span><span class="hac-name">Napięcie → Klima</span><span class="hac-status" id="hac-volt-ac-st">—</span></div>
+                <div class="hac-desc">&gt;253V → Klima ON (bojler już działa).</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">V max:</span><span class="hs-val" id="hac-va-vmax">—</span>
+                  <span class="hs-label">Klima:</span><span class="hs-val" id="hac-va-ac">—</span>
+                </div>
+              </div>
+              <!-- Napięcie: Ładuj baterię -->
+              <div class="hems-auto-card" id="hac-volt-chrg">
+                <div class="hac-top"><span class="hac-icon">🔴</span><span class="hac-name">Krytyczne napięcie</span><span class="hac-status" id="hac-volt-chrg-st">—</span></div>
+                <div class="hac-desc">&gt;254V → Ładuj baterię natychmiast!</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">V max:</span><span class="hs-val" id="hac-vc-vmax">—</span>
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-vc-soc">—</span>
+                </div>
+              </div>
+              <!-- Nadwyżka: Bojler -->
+              <div class="hems-auto-card" id="hac-sur-blr">
+                <div class="hac-top"><span class="hac-icon">☀️</span><span class="hac-name">Nadwyżka → Bojler</span><span class="hac-status" id="hac-sur-blr-st">—</span></div>
+                <div class="hac-desc">&gt;2kW nadwyżki + SOC &gt;80% → Bojler ON.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">Nadwyżka:</span><span class="hs-val" id="hac-sb-sur">—</span>
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-sb-soc">—</span>
+                </div>
+              </div>
+              <!-- Nadwyżka: Klima -->
+              <div class="hems-auto-card" id="hac-sur-ac">
+                <div class="hac-top"><span class="hac-icon">❄️</span><span class="hac-name">Nadwyżka → Klima</span><span class="hac-status" id="hac-sur-ac-st">—</span></div>
+                <div class="hac-desc">&gt;3kW nadwyżki + SOC &gt;85% + bojler ON → Klima ON.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">Nadwyżka:</span><span class="hs-val" id="hac-sa-sur">—</span>
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-sa-soc">—</span>
+                </div>
+              </div>
+              <!-- Nadwyżka: Gniazdko -->
+              <div class="hems-auto-card" id="hac-sur-sock">
+                <div class="hac-top"><span class="hac-icon">🔌</span><span class="hac-name">Nadwyżka → Gniazdko 2</span><span class="hac-status" id="hac-sur-sock-st">—</span></div>
+                <div class="hac-desc">&gt;4kW nadwyżki + SOC &gt;90% + bojler + klima → Gniazdko ON.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">Nadwyżka:</span><span class="hs-val" id="hac-ss-sur">—</span>
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-ss-soc">—</span>
+                </div>
+              </div>
+              <!-- Awaryjne OFF -->
+              <div class="hems-auto-card" id="hac-emergency">
+                <div class="hac-top"><span class="hac-icon">🚨</span><span class="hac-name">Awaryjne OFF</span><span class="hac-status" id="hac-emergency-st">—</span></div>
+                <div class="hac-desc">SOC &lt; 50% → wyłącz wszystkie obciążenia.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-em-soc">—</span>
+                  <span class="hs-label">Próg:</span><span class="hs-val">&lt;50%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ═══ W5: SMART PRE-PEAK ═══ -->
+          <div class="hems-layer collapsed" id="hems-layer-w5">
+            <div class="hems-layer-header" onclick="this.getRootNode().host._toggleHEMSSection('w5')">
+              <div class="hl-left">
+                <span class="hl-tag" style="background:rgba(52,152,219,0.15);color:#3498db">W5</span>
+                <span class="hl-name">Smart Pre-Peak (pogoda + PV)</span>
+                <span style="font-size:10px;color:#64748b" id="hems-w5-count">6 punktów kontrolnych</span>
+              </div>
+              <span class="hl-chevron">▼</span>
+            </div>
+            <div class="hems-layer-body" id="hems-w5-body">
+              <!-- 05:30 -->
+              <div class="hems-auto-card" id="hac-pp-0530">
+                <div class="hac-top"><span class="hac-icon">🌧️⚡</span><span class="hac-name">05:30 poranny check</span><span class="hac-status" id="hac-pp-0530-st">—</span></div>
+                <div class="hac-desc">SOC &lt;80% + PV &lt;10kWh → ładuj z sieci (0.63 zł) do 07:00.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">PV prognoza:</span><span class="hs-val" id="hac-p5-fcst">—</span>
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-p5-soc">—</span>
+                </div>
+              </div>
+              <!-- 10:00 -->
+              <div class="hems-auto-card" id="hac-pp-1000">
+                <div class="hac-top"><span class="hac-icon">🌥️</span><span class="hac-name">10:00 weryfikacja Ecowitt</span><span class="hac-status" id="hac-pp-1000-st">—</span></div>
+                <div class="hac-desc">SOC &lt;60% + niska radiacja → priorytet PV→bateria.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">Radiacja:</span><span class="hs-val" id="hac-p10-rad">—</span>
+                  <span class="hs-label">UV:</span><span class="hs-val" id="hac-p10-uv">—</span>
+                </div>
+              </div>
+              <!-- 13:30 -->
+              <div class="hems-auto-card" id="hac-pp-1330">
+                <div class="hac-top"><span class="hac-icon">⚠️🔋</span><span class="hac-name">13:30 ostatnia szansa (zima)</span><span class="hac-status" id="hac-pp-1330-st">—</span></div>
+                <div class="hac-desc">SOC &lt;80% + PV rem &lt;5kWh → ładuj! Szczyt za 2.5h.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">PV rem.:</span><span class="hs-val" id="hac-p13-rem">—</span>
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-p13-soc">—</span>
+                </div>
+              </div>
+              <!-- 18:00 -->
+              <div class="hems-auto-card" id="hac-pp-1800">
+                <div class="hac-top"><span class="hac-icon">☀️⚠️</span><span class="hac-name">18:00 pre-peak lato</span><span class="hac-status" id="hac-pp-1800-st">—</span></div>
+                <div class="hac-desc">SOC &lt;70% + słaba radiacja → ładuj! Szczyt o 19:00 (lato).</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">Radiacja:</span><span class="hs-val" id="hac-p18-rad">—</span>
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-p18-soc">—</span>
+                </div>
+              </div>
+              <!-- Nagłe zachmurzenie -->
+              <div class="hems-auto-card" id="hac-pp-cloud">
+                <div class="hac-top"><span class="hac-icon">☁️</span><span class="hac-name">Nagłe zachmurzenie</span><span class="hac-status" id="hac-pp-cloud-st">—</span></div>
+                <div class="hac-desc">Radiacja &lt;50 W/m² + SOC &lt;70% → priorytet bateria.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">Radiacja:</span><span class="hs-val" id="hac-pc-rad">—</span>
+                  <span class="hs-label">PV:</span><span class="hs-val" id="hac-pc-pv">—</span>
+                </div>
+              </div>
+              <!-- Deszcz -->
+              <div class="hems-auto-card" id="hac-pp-rain">
+                <div class="hac-top"><span class="hac-icon">🌧️</span><span class="hac-name">Deszcz → priorytet bateria</span><span class="hac-status" id="hac-pp-rain-st">—</span></div>
+                <div class="hac-desc">Opady &gt;0.5mm/h + SOC &lt;70% → cały PV → bateria.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">Deszcz:</span><span class="hs-val" id="hac-pr-rain">—</span>
+                  <span class="hs-label">PV:</span><span class="hs-val" id="hac-pr-pv">—</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ═══ INNE AUTOMATYZACJE ═══ -->
+          <div class="hems-layer collapsed" id="hems-layer-other">
+            <div class="hems-layer-header" onclick="this.getRootNode().host._toggleHEMSSection('other')">
+              <div class="hl-left">
+                <span class="hl-tag" style="background:rgba(149,165,166,0.15);color:#95a5a6">+</span>
+                <span class="hl-name">Inne automatyzacje</span>
+                <span style="font-size:10px;color:#64748b" id="hems-other-count">4 automatyzacje</span>
+              </div>
+              <span class="hl-chevron">▼</span>
+            </div>
+            <div class="hems-layer-body" id="hems-other-body">
+              <!-- Boiler harmonogram -->
+              <div class="hems-auto-card" id="hac-boiler">
+                <div class="hac-top"><span class="hac-icon">🔥</span><span class="hac-name">Harmonogram boilera</span><span class="hac-status" id="hac-boiler-st">—</span></div>
+                <div class="hac-desc">Automatyczne wł/wył: 06/07, 14/15, 17/18.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">Bojler:</span><span class="hs-val" id="hac-bl-state">—</span>
+                  <span class="hs-label">Czas:</span><span class="hs-val" id="hac-bl-time">—</span>
+                </div>
+              </div>
+              <!-- Pompa piwnica -->
+              <div class="hems-auto-card" id="hac-pump">
+                <div class="hac-top"><span class="hac-icon">💧</span><span class="hac-name">Pompa piwnica</span><span class="hac-status" id="hac-pump-st">—</span></div>
+                <div class="hac-desc">Czujnik zalania → pompa ON/OFF z 1 min opóźnieniem.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">Czujnik:</span><span class="hs-val" id="hac-pm-sensor">—</span>
+                  <span class="hs-label">Pompa:</span><span class="hs-val" id="hac-pm-pump">—</span>
+                </div>
+              </div>
+              <!-- Raport dobowy -->
+              <div class="hems-auto-card" id="hac-report">
+                <div class="hac-top"><span class="hac-icon">📊</span><span class="hac-name">Raport dobowy (21:00)</span><span class="hac-status" id="hac-report-st">—</span></div>
+                <div class="hac-desc">Codzienny raport PV, dom, export, import, bilans, RCE avg.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">PV dziś:</span><span class="hs-val" id="hac-rpt-pv">—</span>
+                  <span class="hs-label">Bilans:</span><span class="hs-val" id="hac-rpt-bal">—</span>
+                </div>
+              </div>
+              <!-- Nierównowaga faz -->
+              <div class="hems-auto-card" id="hac-phase">
+                <div class="hac-top"><span class="hac-icon">⚖️</span><span class="hac-name">Nierównowaga faz</span><span class="hac-status" id="hac-phase-st">—</span></div>
+                <div class="hac-desc">Różnica faz &gt; 3kW przez 10 min → alert.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">L1:</span><span class="hs-val" id="hac-ph-l1">—</span>
+                  <span class="hs-label">L2:</span><span class="hs-val" id="hac-ph-l2">—</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
         </div>
 
         <!-- ═══════ TAB: ROI / OPŁACALNOŚĆ ═══════ -->
@@ -5199,25 +6035,57 @@ class SmartingHomePanel extends HTMLElement {
               </div>
             </div>
 
-            <!-- ⭐ Upgrade Prompt (FREE only) -->
-            <div class="card" style="grid-column: 1 / -1" id="settings-upgrade-box">
-              <div class="upgrade-box">
-                <div style="font-size:15px; font-weight:700; color:#f7b731">⭐ Odblokuj pełną moc Smarting HOME</div>
-                <div style="font-size:12px; color:#a0aec0; margin-top:6px; line-height:1.5">
-                  Wersja <strong style="color:#00d4ff">PRO</strong> oferuje:<br>
-                  🧠 Pełny silnik HEMS z 3-warstwową optymalizacją<br>
-                  📈 Arbitraż nocny (zysk ~177 PLN/mies.)<br>
-                  🛡️ Kaskada napięciowa i ochrona SOC<br>
-                  📊 7 gotowych blueprintów automatyzacji
+            <!-- 🔑 License Status -->
+            <div class="card" style="grid-column: 1 / -1" id="settings-license-box">
+              <!-- FREE: Upgrade Prompt -->
+              <div id="settings-upgrade-box">
+                <div class="upgrade-box">
+                  <div style="font-size:15px; font-weight:700; color:#f7b731">⭐ Odblokuj pełną moc Smarting HOME</div>
+                  <div style="font-size:12px; color:#a0aec0; margin-top:6px; line-height:1.5">
+                    Wersja <strong style="color:#00d4ff">PRO</strong> oferuje:<br>
+                    🧠 Pełny silnik HEMS z 3-warstwową optymalizacją<br>
+                    📈 Arbitraż nocny (zysk ~177 PLN/mies.)<br>
+                    🛡️ Kaskada napięciowa i ochrona SOC<br>
+                    📊 7 gotowych blueprintów automatyzacji
+                  </div>
+                  <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px">
+                    <a href="https://smartinghome.pl/buy" target="_blank" style="display:inline-block; padding:8px 20px; border-radius:8px; background:linear-gradient(135deg,#f7b731,#e67e22); color:#0a1628; font-weight:700; font-size:12px; text-decoration:none; transition:all 0.2s">🛒 Kup licencję PRO</a>
+                    <div style="font-size:10px; color:#64748b; align-self:center">Masz już klucz? Wejdź w: Ustawienia → Urządzenia → Smarting HOME → Konfiguruj → ⚙️ Settings & Upgrade</div>
+                  </div>
                 </div>
-                <a href="https://smartinghome.pl/buy" target="_blank" style="display:inline-block; margin-top:10px; padding:8px 20px; border-radius:8px; background:linear-gradient(135deg,#f7b731,#e67e22); color:#0a1628; font-weight:700; font-size:12px; text-decoration:none; transition:all 0.2s">🛒 Kup licencję PRO</a>
+              </div>
+              <!-- PRO: License Active -->
+              <div id="settings-pro-box" style="display:none">
+                <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px">
+                  <div style="width:48px; height:48px; border-radius:12px; background:linear-gradient(135deg,#f7b731,#e67e22); display:flex; align-items:center; justify-content:center; font-size:24px">⭐</div>
+                  <div>
+                    <div style="font-size:15px; font-weight:700; color:#f7b731">Licencja PRO aktywna</div>
+                    <div style="font-size:11px; color:#94a3b8">Tier: <span id="settings-license-tier" style="color:#00d4ff; font-weight:700">PRO</span></div>
+                  </div>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px">
+                  <div style="padding:8px 12px; background:rgba(46,204,113,0.06); border:1px solid rgba(46,204,113,0.15); border-radius:8px">
+                    <div style="font-size:9px; color:#64748b; text-transform:uppercase">Status</div>
+                    <div style="font-size:13px; font-weight:700; color:#2ecc71">✅ Aktywna</div>
+                  </div>
+                  <div style="padding:8px 12px; background:rgba(0,212,255,0.06); border:1px solid rgba(0,212,255,0.15); border-radius:8px">
+                    <div style="font-size:9px; color:#64748b; text-transform:uppercase">Funkcje</div>
+                    <div style="font-size:11px; color:#00d4ff; font-weight:600">HEMS + AI + Blueprinty</div>
+                  </div>
+                </div>
+                <div style="padding:10px; border-radius:8px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06)">
+                  <div style="font-size:10px; color:#94a3b8; line-height:1.6">
+                    Aby zarządzać licencją (zmiana ustawień, usunięcie klucza), przejdź do:<br>
+                    <strong style="color:#fff">Ustawienia → Urządzenia → Smarting HOME → Konfiguruj</strong>
+                  </div>
+                </div>
               </div>
             </div>
 
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.13.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.14.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
