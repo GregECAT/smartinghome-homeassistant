@@ -250,6 +250,24 @@ class AICronScheduler:
 
         while self._running:
             try:
+                # Refresh AI keys from settings.json (may have changed via panel)
+                settings = self._read_settings()
+                gk = settings.get("gemini_api_key", "")
+                ak = settings.get("anthropic_api_key", "")
+                if gk and gk != self._ai._gemini_key:
+                    self._ai._gemini_key = gk
+                    _LOGGER.debug("AI Cron: refreshed Gemini key from settings")
+                if ak and ak != self._ai._anthropic_key:
+                    self._ai._anthropic_key = ak
+                    _LOGGER.debug("AI Cron: refreshed Anthropic key from settings")
+                # Also refresh model selections
+                gm = settings.get("gemini_model", "")
+                am = settings.get("anthropic_model", "")
+                if gm:
+                    self._ai._gemini_model = gm
+                if am:
+                    self._ai._anthropic_model = am
+
                 if not self._ai.any_available:
                     _LOGGER.debug(
                         "AI Cron '%s' skipped — no AI provider configured", job_type

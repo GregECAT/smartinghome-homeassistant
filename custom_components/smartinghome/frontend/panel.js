@@ -141,6 +141,10 @@ class SmartingHomePanel extends HTMLElement {
         // Re-apply PV labels and all data after settings loaded
         if (this._hass) this._updateAll();
         this._renderWeatherForecast();
+        // Restore Ecowitt settings
+        const ecoChk = this.shadowRoot.getElementById('chk-ecowitt-enabled');
+        if (ecoChk && this._settings.ecowitt_enabled !== undefined) ecoChk.checked = this._settings.ecowitt_enabled;
+        if (this._settings.ecowitt_enabled) this._detectEcowittSensors();
       }
     } catch(e) { /* file not yet created */ }
   }
@@ -609,6 +613,130 @@ class SmartingHomePanel extends HTMLElement {
       return;
     }
     el.innerHTML = cards.join('');
+  }
+
+  _updateEcowittCard() {
+    const el = this.shadowRoot.getElementById("ecowitt-weather-card");
+    if (!el) return;
+    const enabled = this._settings.ecowitt_enabled;
+    el.style.display = enabled ? '' : 'none';
+    if (!enabled || !this._hass?.states) return;
+
+    const s = (id) => {
+      const st = this._hass.states[id];
+      return (st && st.state !== 'unknown' && st.state !== 'unavailable') ? st.state : null;
+    };
+    const n = (id) => { const v = parseFloat(s(id)); return isNaN(v) ? null : v; };
+
+    // Read Ecowitt sensors directly from HA states
+    const temp = n('sensor.ecowitt_outdoor_temp_9747');
+    const feelsLike = n('sensor.ecowitt_feels_like_temp_ch3');
+    const humidity = n('sensor.ecowitt_outdoor_humidity_9747');
+    const dewpoint = n('sensor.ecowitt_dewpoint_9747');
+    const wind = n('sensor.ecowitt_wind_speed_9747');
+    const gust = n('sensor.ecowitt_wind_gust_9747');
+    const windDir = n('sensor.ecowitt_wind_direction_9747');
+    const rainRate = n('sensor.ecowitt_rain_rate_9747');
+    const dailyRain = n('sensor.ecowitt_daily_rain_9747');
+    const solar = n('sensor.ecowitt_solar_radiation_9747');
+    const lux = n('sensor.ecowitt_solar_lux_9747');
+    const uv = n('sensor.ecowitt_uv_index_9747');
+    const pressure = n('sensor.ecowitt_pressure_relative');
+
+    const windDirLabel = (deg) => {
+      if (deg === null) return '';
+      const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+      return dirs[Math.round(deg / 22.5) % 16];
+    };
+    const uvLabel = (v) => {
+      if (v === null) return '—';
+      if (v <= 2) return `${v} (niski)`;
+      if (v <= 5) return `${v} (umiarkowany)`;
+      if (v <= 7) return `${v} (wysoki)`;
+      if (v <= 10) return `${v} (bardzo wysoki)`;
+      return `${v} (ekstremalny)`;
+    };
+    const uvColor = (v) => {
+      if (v === null) return '#64748b';
+      if (v <= 2) return '#2ecc71';
+      if (v <= 5) return '#f7b731';
+      if (v <= 7) return '#f39c12';
+      return '#e74c3c';
+    };
+
+    const body = this.shadowRoot.getElementById('ecowitt-body');
+    if (!body) return;
+
+    body.innerHTML = `
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px">
+        <div style="background:rgba(255,255,255,0.03); border-radius:10px; padding:12px; border:1px solid rgba(255,255,255,0.06)">
+          <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">🌡️ Temperatura</div>
+          <div style="font-size:24px; font-weight:900; color:#fff; margin-top:4px">${temp !== null ? temp.toFixed(1) + '°C' : '—'}</div>
+          <div style="font-size:10px; color:#94a3b8; margin-top:2px">Odczuwalna: ${feelsLike !== null ? feelsLike.toFixed(1) + '°C' : '—'}</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03); border-radius:10px; padding:12px; border:1px solid rgba(255,255,255,0.06)">
+          <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">💧 Wilgotność</div>
+          <div style="font-size:24px; font-weight:900; color:#3498db; margin-top:4px">${humidity !== null ? humidity + '%' : '—'}</div>
+          <div style="font-size:10px; color:#94a3b8; margin-top:2px">Punkt rosy: ${dewpoint !== null ? dewpoint.toFixed(1) + '°C' : '—'}</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03); border-radius:10px; padding:12px; border:1px solid rgba(255,255,255,0.06)">
+          <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">💨 Wiatr</div>
+          <div style="font-size:20px; font-weight:800; color:#00d4ff; margin-top:4px">${wind !== null ? wind.toFixed(1) + ' km/h' : '—'}</div>
+          <div style="font-size:10px; color:#94a3b8; margin-top:2px">Porywy: ${gust !== null ? gust.toFixed(1) + ' km/h' : '—'} | ${windDir !== null ? windDir + '° ' + windDirLabel(windDir) : '—'}</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03); border-radius:10px; padding:12px; border:1px solid rgba(255,255,255,0.06)">
+          <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">🌧️ Opady</div>
+          <div style="font-size:20px; font-weight:800; color:${rainRate > 0 ? '#3498db' : '#2ecc71'}; margin-top:4px">${rainRate !== null ? rainRate.toFixed(1) + ' mm/h' : '—'}</div>
+          <div style="font-size:10px; color:#94a3b8; margin-top:2px">Dziennie: ${dailyRain !== null ? dailyRain.toFixed(1) + ' mm' : '—'}</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03); border-radius:10px; padding:12px; border:1px solid rgba(255,255,255,0.06)">
+          <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">☀️ Promieniowanie</div>
+          <div style="font-size:20px; font-weight:800; color:#f7b731; margin-top:4px">${solar !== null ? solar.toFixed(0) + ' W/m²' : '—'}</div>
+          <div style="font-size:10px; color:#94a3b8; margin-top:2px">${lux !== null ? Math.round(lux).toLocaleString('pl-PL') + ' lx' : '—'}</div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03); border-radius:10px; padding:12px; border:1px solid rgba(255,255,255,0.06)">
+          <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">🔆 UV & Ciśnienie</div>
+          <div style="font-size:16px; font-weight:800; color:${uvColor(uv)}; margin-top:4px">UV ${uvLabel(uv)}</div>
+          <div style="font-size:10px; color:#94a3b8; margin-top:2px">🌡️ ${pressure !== null ? pressure.toFixed(1) + ' hPa' : '—'}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  _saveEcowittSettings() {
+    const chk = this.shadowRoot.getElementById('chk-ecowitt-enabled');
+    if (!chk) return;
+    const enabled = chk.checked;
+    this._settings.ecowitt_enabled = enabled;
+    this._savePanelSettings({ ecowitt_enabled: enabled });
+    // Update ecowitt detection status
+    this._detectEcowittSensors();
+    // Refresh card visibility
+    this._updateEcowittCard();
+    const st = this.shadowRoot.getElementById('v-ecowitt-save-status');
+    if (st) { st.textContent = enabled ? '✅ Ecowitt włączony!' : '❌ Ecowitt wyłączony'; setTimeout(() => { st.textContent = ''; }, 4000); }
+  }
+
+  _detectEcowittSensors() {
+    const statusEl = this.shadowRoot.getElementById('ecowitt-detect-status');
+    if (!statusEl || !this._hass?.states) return;
+    const sensors = [
+      'sensor.ecowitt_outdoor_temp_9747',
+      'sensor.ecowitt_outdoor_humidity_9747',
+      'sensor.ecowitt_wind_speed_9747',
+      'sensor.ecowitt_solar_radiation_9747',
+    ];
+    const found = sensors.filter(s => this._hass.states[s] && this._hass.states[s].state !== 'unavailable');
+    if (found.length >= 3) {
+      statusEl.innerHTML = '✅ <strong>Wykryto stację WH90</strong> — ' + found.length + '/4 główne sensory aktywne';
+      statusEl.style.color = '#2ecc71';
+    } else if (found.length > 0) {
+      statusEl.innerHTML = '⚠️ Częściowo wykryto — ' + found.length + '/4 sensory';
+      statusEl.style.color = '#f39c12';
+    } else {
+      statusEl.innerHTML = '❌ Nie wykryto sensorów Ecowitt. Zainstaluj integrację <strong>Ecowitt Local</strong> w HA.';
+      statusEl.style.color = '#e74c3c';
+    }
   }
 
   _calcHEMSScore() {
@@ -1185,7 +1313,7 @@ class SmartingHomePanel extends HTMLElement {
     });
   }
 
-  _testApiKey(provider) {
+  async _testApiKey(provider) {
     const btn = this.shadowRoot.getElementById(`test-btn-${provider}`);
     if (btn) { btn.textContent = "⏳ Testowanie..."; btn.disabled = true; }
     const keyInput = this.shadowRoot.getElementById(`inp-${provider}-key`);
@@ -1211,10 +1339,12 @@ class SmartingHomePanel extends HTMLElement {
       return;
     }
     if (this._hass) {
-      // Save ONLY this provider's key, don't touch the other one
-      this._hass.callService("smartinghome", "save_settings", {
-        [`${provider}_api_key`]: keyValue,
-      });
+      // Save this provider's key first, then test with the key value directly
+      try {
+        await this._hass.callService("smartinghome", "save_settings", {
+          [`${provider}_api_key`]: keyValue,
+        });
+      } catch(e) { /* ignore save errors, still try to test */ }
       if (provider === 'gemini') this._geminiDirty = false;
       else this._anthropicDirty = false;
       this._hass.callService("smartinghome", "test_api_key", { provider, api_key: keyValue });
@@ -1229,7 +1359,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._calcHEMSScore(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); }
 
   _updateSunWidget() {
     const now = new Date();
@@ -1508,29 +1638,36 @@ class SmartingHomePanel extends HTMLElement {
       }
     }
 
-    // Weather — auto-discover weather entity from HA
-    const weatherPriority = ["weather.dom", "weather.home", "weather.accuweather", "weather.forecast_home", "weather.openweathermap"];
-    let weatherState = null;
-    // Try priority list first
-    for (const we of weatherPriority) {
-      if (this._hass?.states[we]) { weatherState = this._hass.states[we]; break; }
-    }
-    // Fallback: find any weather.* entity
-    if (!weatherState && this._hass?.states) {
-      const wk = Object.keys(this._hass.states).find(k => k.startsWith('weather.'));
-      if (wk) weatherState = this._hass.states[wk];
-    }
-    if (weatherState) {
-      const wTemp = weatherState.attributes?.temperature;
-      const wHumid = weatherState.attributes?.humidity;
-      const wCloud = weatherState.attributes?.cloud_coverage;
-      this._setText("v-weather", wTemp != null ? `${Math.round(wTemp)}°C` : "");
-      this._setText("v-clouds", wCloud != null ? `${Math.round(wCloud)}%` : (wHumid != null ? `${Math.round(wHumid)}%` : "—%"));
+    // Weather — prefer Ecowitt if enabled, then auto-discover weather entity
+    if (this._settings.ecowitt_enabled && this._hass?.states?.['sensor.ecowitt_outdoor_temp_9747']) {
+      const ecoTemp = this._n('sensor.ecowitt_outdoor_temp_9747');
+      const ecoHumid = this._n('sensor.ecowitt_outdoor_humidity_9747');
+      this._setText("v-weather", ecoTemp != null ? `${Math.round(ecoTemp)}°C` : "");
+      this._setText("v-clouds", ecoHumid != null ? `${ecoHumid}%` : "—%");
+      // Update v-clouds label to 'Wilgotność' since Ecowitt doesn't have cloud%
+      const cloudLabel = this.shadowRoot.querySelector('#v-clouds')?.closest('.summary-item')?.querySelector('.si-label');
+      if (cloudLabel) cloudLabel.textContent = '💧 Wilgotność';
     } else {
-      // Fallback to mapped sensors
-      const wt = this._nm("weather_temp");
-      this._setText("v-weather", wt !== null ? `${wt.toFixed(0)}°C` : "");
-      this._setText("v-clouds", this._fm("weather_cloud_cover", 0) + "%");
+      const weatherPriority = ["weather.dom", "weather.home", "weather.accuweather", "weather.forecast_home", "weather.openweathermap"];
+      let weatherState = null;
+      for (const we of weatherPriority) {
+        if (this._hass?.states[we]) { weatherState = this._hass.states[we]; break; }
+      }
+      if (!weatherState && this._hass?.states) {
+        const wk = Object.keys(this._hass.states).find(k => k.startsWith('weather.'));
+        if (wk) weatherState = this._hass.states[wk];
+      }
+      if (weatherState) {
+        const wTemp = weatherState.attributes?.temperature;
+        const wHumid = weatherState.attributes?.humidity;
+        const wCloud = weatherState.attributes?.cloud_coverage;
+        this._setText("v-weather", wTemp != null ? `${Math.round(wTemp)}°C` : "");
+        this._setText("v-clouds", wCloud != null ? `${Math.round(wCloud)}%` : (wHumid != null ? `${Math.round(wHumid)}%` : "—%"));
+      } else {
+        const wt = this._nm("weather_temp");
+        this._setText("v-weather", wt !== null ? `${wt.toFixed(0)}°C` : "");
+        this._setText("v-clouds", this._fm("weather_cloud_cover", 0) + "%");
+      }
     }
 
     // Animated flows (GoodWe BT: batt>0=discharge, batt<0=charge)
@@ -1551,6 +1688,8 @@ class SmartingHomePanel extends HTMLElement {
 
     if (invModel.includes("deye") || userChoice.includes("deye")) {
       imgName = "deye";
+    } else if (invModel.includes("growatt") || userChoice.includes("growatt")) {
+      imgName = "growatt";
     } else if (invModel.includes("goodwe") || userChoice.includes("goodwe")) {
       imgName = "goodwe";
     }
@@ -1559,7 +1698,12 @@ class SmartingHomePanel extends HTMLElement {
     if (imgEl && imgEl.getAttribute("data-model") !== imgName) {
       imgEl.setAttribute("data-model", imgName);
       const iconEl = this.shadowRoot.getElementById("v-inv-icon");
-      const remoteFallback = `https://smartinghome.pl/wp-content/uploads/2026/03/${imgName === 'deye' ? 'Deye-1' : 'GoodWe-1'}.png`;
+      const remoteFallbackMap = {
+        deye: 'https://smartinghome.pl/wp-content/uploads/2026/03/Deye-1.png',
+        growatt: 'https://smartinghome.pl/wp-content/uploads/2026/03/Growatt.png',
+        goodwe: 'https://smartinghome.pl/wp-content/uploads/2026/03/GoodWe-1.png',
+      };
+      const remoteFallback = remoteFallbackMap[imgName] || remoteFallbackMap.goodwe;
       // Only try local paths if user has uploaded a custom image
       if (this._settings.custom_inverter_image) {
         const localBrand = `/local/smartinghome/${imgName}.png`;
@@ -2590,6 +2734,14 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
+          <!-- 🌦️ Ecowitt Real-Time Weather -->
+          <div class="card" style="margin-top:10px" id="ecowitt-weather-card">
+            <div class="card-title">🌦️ Pogoda teraz — Ecowitt WH90</div>
+            <div id="ecowitt-body" style="padding:4px 0">
+              <div style="text-align:center; color:#64748b; font-size:11px">Włącz Ecowitt w ⚙️ Ustawieniach</div>
+            </div>
+          </div>
+
           <!-- 📊 HEMS Score -->
           <div class="card" style="margin-top:10px">
             <div class="card-title">📊 Sprawność HEMS</div>
@@ -3470,6 +3622,22 @@ class SmartingHomePanel extends HTMLElement {
               <div id="ai-logs-status" style="font-size:11px; color:#2ecc71; margin-top:6px"></div>
             </div>
 
+            <!-- 🌦️ Ecowitt Integration -->
+            <div class="card" style="grid-column: 1 / -1">
+              <div class="card-title">🌦️ Integracja Ecowitt — Lokalna stacja pogodowa</div>
+              <div style="font-size:11px; color:#94a3b8; margin-bottom:10px">Włącz integrację z Ecowitt aby użyć lokalnych sensorów pogodowych WH90 do wyświetlania natychmiastowej pogody w panelu.</div>
+              <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; background:rgba(0,212,255,0.04); border-radius:8px; border:1px solid rgba(0,212,255,0.1)">
+                <input type="checkbox" id="chk-ecowitt-enabled" style="accent-color:#00d4ff; width:18px; height:18px" />
+                <div style="flex:1">
+                  <div style="font-size:13px; font-weight:700; color:#fff">🌦️ Włącz Ecowitt</div>
+                  <div style="font-size:10px; color:#64748b">Automatycznie mapuj sensory Ecowitt WH90 i wyświetlaj dane pogodowe na żywo</div>
+                </div>
+              </div>
+              <div id="ecowitt-detect-status" style="font-size:11px; color:#64748b; margin-top:8px; padding:6px 12px">— Kliknij Zapisz aby wykryć sensory</div>
+              <button class="save-btn" style="margin-top:10px" onclick="this.getRootNode().host._saveEcowittSettings()">💾 Zapisz ustawienia Ecowitt</button>
+              <div id="v-ecowitt-save-status" style="font-size:11px; color:#2ecc71; margin-top:6px"></div>
+            </div>
+
             <!-- ⚡ Tariff Plan -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">⚡ Taryfa energetyczna</div>
@@ -3508,10 +3676,10 @@ class SmartingHomePanel extends HTMLElement {
               <div style="margin-top:12px; padding:10px; border-radius:8px; background:rgba(0,212,255,0.04); border:1px solid rgba(0,212,255,0.1)">
                 <div style="font-size:11px; font-weight:700; color:#00d4ff; margin-bottom:6px">💡 Zalecenia</div>
                 <div style="font-size:10px; color:#94a3b8; line-height:1.6">
-                  • <strong>Domyślne zdjęcia:</strong> GoodWe i Deye wczytywane automatycznie z smartinghome.pl<br>
+                  • <strong>Domyślne zdjęcia:</strong> GoodWe, Deye i Growatt wczytywane automatycznie z smartinghome.pl<br>
                   • <strong>Format:</strong> PNG z przezroczystym tłem (transparent) — najlepszy efekt<br>
                   • <strong>Rozmiar:</strong> 500–800px szerokości, proporcjonalne<br>
-                  • <strong>Nazwa pliku:</strong> <code style="color:#f39c12">goodwe.png</code> lub <code style="color:#f39c12">deye.png</code> (nadpisuje domyślne) lub <code style="color:#f39c12">inverter.png</code><br>
+                  • <strong>Nazwa pliku:</strong> <code style="color:#f39c12">goodwe.png</code> lub <code style="color:#f39c12">deye.png</code> lub <code style="color:#f39c12">growatt.png</code> (nadpisuje domyślne) lub <code style="color:#f39c12">inverter.png</code><br>
                   • <strong>Ścieżka:</strong> <code style="color:#00d4ff">/config/www/smartinghome/</code>
                 </div>
               </div>
@@ -3563,7 +3731,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.9</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.10.10</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
