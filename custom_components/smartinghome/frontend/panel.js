@@ -172,15 +172,438 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
 
+  /* ── Custom Modal System ───────────────── */
+  _showModal(html) {
+    const overlay = this.shadowRoot.getElementById('sh-modal-overlay');
+    const body = this.shadowRoot.getElementById('sh-modal-body');
+    if (!overlay || !body) return;
+    body.innerHTML = html;
+    overlay.classList.add('active');
+    const firstInput = body.querySelector('input[type="text"], input[type="number"]');
+    if (firstInput) setTimeout(() => firstInput.focus(), 100);
+  }
+  _closeModal() {
+    const overlay = this.shadowRoot.getElementById('sh-modal-overlay');
+    if (overlay) overlay.classList.remove('active');
+  }
+
   _editPvLabel(idx) {
     const current = (this._settings.pv_labels || {})[`pv${idx}`] || `PV${idx}`;
-    const newLabel = prompt(`Zmień etykietę PV${idx}:`, current);
-    if (newLabel !== null && newLabel.trim()) {
+    const html = `
+      <div class="sh-modal-title">✏️ Zmień etykietę PV${idx}</div>
+      <div class="sh-modal-label">Nazwa stringa</div>
+      <input class="sh-modal-input" type="text" id="sh-input-pv-label" value="${current.replace(/"/g, '&quot;')}" />
+      <div class="sh-modal-actions">
+        <button class="sh-modal-btn" onclick="this.getRootNode().host._closeModal()">Anuluj</button>
+        <button class="sh-modal-btn primary" onclick="this.getRootNode().host._savePvLabel(${idx})">OK</button>
+      </div>
+    `;
+    this._showModal(html);
+    // Enter key support
+    setTimeout(() => {
+      const inp = this.shadowRoot.getElementById('sh-input-pv-label');
+      if (inp) inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') this._savePvLabel(idx); });
+    }, 120);
+  }
+  _savePvLabel(idx) {
+    const inp = this.shadowRoot.getElementById('sh-input-pv-label');
+    if (!inp) return;
+    const newLabel = inp.value.trim();
+    if (newLabel) {
       const labels = this._settings.pv_labels || {};
-      labels[`pv${idx}`] = newLabel.trim();
+      labels[`pv${idx}`] = newLabel;
       this._savePanelSettings({ pv_labels: labels });
       const el = this.shadowRoot.getElementById(`pv${idx}-label`);
-      if (el) el.textContent = newLabel.trim();
+      if (el) el.textContent = newLabel;
+      // Also update sub-string displays if present
+      this._renderSubstringBoxes();
+    }
+    this._closeModal();
+  }
+
+  /* ── PV String Configuration ────────────── */
+  _getMaxStrings() {
+    const tier = (this._s("sensor.smartinghome_license_tier") || "FREE").toUpperCase();
+    return tier === "PRO" || tier === "ENTERPRISE" ? 10 : 4;
+  }
+
+  _getTotalStringCount() {
+    const cfg = this._settings.pv_string_config || {};
+    let count = 0;
+    for (let i = 1; i <= 4; i++) {
+      const sc = cfg[`pv${i}`];
+      if (sc && sc.has_substrings && sc.substrings && sc.substrings.length > 1) {
+        count += sc.substrings.length;
+      } else {
+        // Check if physical string has data
+        const p = this._nm(`pv${i}_power`);
+        if (p !== null || i <= 2) count++;
+      }
+    }
+    return count;
+  }
+
+  _directionFactors() {
+    // Returns factor for each direction at current hour (sinusoidal model)
+    const hour = new Date().getHours() + new Date().getMinutes() / 60;
+    const solarNoon = 12.5; // approximate solar noon in Poland
+    // Sun angle from south (0 = south, ±180 = north)
+    const sunAngle = (hour - solarNoon) * 15; // degrees per hour
+
+    const dirs = {
+      'S':  { peak: 12.5, spread: 5.0, base: 0.15 },
+      'SE': { peak: 10.0, spread: 4.5, base: 0.12 },
+      'SW': { peak: 15.0, spread: 4.5, base: 0.12 },
+      'E':  { peak: 8.0,  spread: 4.0, base: 0.08 },
+      'W':  { peak: 17.0, spread: 4.0, base: 0.08 },
+      'NE': { peak: 7.5,  spread: 3.5, base: 0.05 },
+      'NW': { peak: 17.5, spread: 3.5, base: 0.05 },
+      'N':  { peak: 12.5, spread: 6.0, base: 0.03 },
+    };
+
+    // Sunrise/sunset approx 6-18 in spring, adjusted
+    const sunrise = 6.0;
+    const sunset = 18.5;
+
+    const result = {};
+    for (const [dir, cfg] of Object.entries(dirs)) {
+      if (hour < sunrise || hour > sunset) {
+        result[dir] = 0;
+      } else {
+        // Gaussian-like curve centered on peak hour
+        const dist = hour - cfg.peak;
+        const factor = Math.exp(-(dist * dist) / (2 * cfg.spread * cfg.spread));
+        // Scale to max factor based on direction
+        const maxFactors = { 'S': 1.0, 'SE': 0.85, 'SW': 0.85, 'E': 0.65, 'W': 0.65, 'NE': 0.45, 'NW': 0.45, 'N': 0.30 };
+        result[dir] = Math.max(cfg.base, factor * maxFactors[dir]);
+      }
+    }
+    return result;
+  }
+
+  _tiltFactor(tilt) {
+    // Optimal tilt ~35° in Poland. Deviation reduces efficiency.
+    const optimal = 35;
+    const diff = Math.abs(tilt - optimal);
+    return Math.max(0.5, 1.0 - (diff * diff) / 3000);
+  }
+
+  _calcSubstringRatios(stringIdx) {
+    const cfg = this._settings.pv_string_config || {};
+    const sc = cfg[`pv${stringIdx}`];
+    if (!sc || !sc.has_substrings || !sc.substrings || sc.substrings.length < 2) return null;
+
+    const dirFactors = this._directionFactors();
+    const weights = sc.substrings.map(sub => {
+      const dFactor = dirFactors[sub.direction] || 0.5;
+      const tFactor = this._tiltFactor(sub.tilt || 35);
+      return (sub.panel_count || 1) * (sub.panel_power || 400) * dFactor * tFactor;
+    });
+    const totalWeight = weights.reduce((a, b) => a + b, 0) || 1;
+    return weights.map(w => w / totalWeight);
+  }
+
+  _openPvStringConfig(idx) {
+    const cfg = this._settings.pv_string_config || {};
+    const sc = cfg[`pv${idx}`] || { has_substrings: false, substrings: [{ direction: 'S', panel_count: 10, panel_power: 405, tilt: 35 }] };
+    const pvLabel = (this._settings.pv_labels || {})[`pv${idx}`] || `PV${idx}`;
+    const maxStrings = this._getMaxStrings();
+    const tier = (this._s("sensor.smartinghome_license_tier") || "FREE").toUpperCase();
+
+    // Store temp config for modal editing
+    this._tempStringConfig = JSON.parse(JSON.stringify(sc));
+    this._tempStringIdx = idx;
+
+    this._renderStringConfigModal(idx, pvLabel, tier, maxStrings);
+  }
+
+  _renderStringConfigModal(idx, pvLabel, tier, maxStrings) {
+    const sc = this._tempStringConfig;
+    const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+    const dirLabels = { 'N': 'Północ', 'NE': 'Pn-Wsch', 'E': 'Wschód', 'SE': 'Pd-Wsch', 'S': 'Południe', 'SW': 'Pd-Zach', 'W': 'Zachód', 'NW': 'Pn-Zach' };
+
+    let subCardsHtml = '';
+    if (sc.has_substrings && sc.substrings) {
+      sc.substrings.forEach((sub, i) => {
+        subCardsHtml += `
+          <div class="substring-card">
+            <div class="sc-header">
+              <span class="sc-title">Podstring ${i + 1}</span>
+              ${sc.substrings.length > 1 ? `<button class="sh-modal-btn danger" style="padding:4px 10px; font-size:10px" onclick="this.getRootNode().host._removeSubstring(${i})">✕ Usuń</button>` : ''}
+            </div>
+            <div class="sc-grid">
+              <div class="sc-field">
+                <label>🧭 Kierunek paneli</label>
+                <select id="sh-ss-dir-${i}" onchange="this.getRootNode().host._updateTempSubstring(${i}, 'direction', this.value)">
+                  ${directions.map(d => `<option value="${d}" ${sub.direction === d ? 'selected' : ''}>${d} — ${dirLabels[d]}</option>`).join('')}
+                </select>
+              </div>
+              <div class="sc-field">
+                <label>📐 Kąt nachylenia (°)</label>
+                <input type="number" min="0" max="90" value="${sub.tilt || 35}" onchange="this.getRootNode().host._updateTempSubstring(${i}, 'tilt', parseFloat(this.value))" />
+              </div>
+              <div class="sc-field">
+                <label>🔢 Ilość paneli</label>
+                <input type="number" min="1" max="50" value="${sub.panel_count || 10}" onchange="this.getRootNode().host._updateTempSubstring(${i}, 'panel_count', parseInt(this.value))" />
+              </div>
+              <div class="sc-field">
+                <label>⚡ Moc panela (Wp)</label>
+                <input type="number" min="100" max="800" value="${sub.panel_power || 405}" onchange="this.getRootNode().host._updateTempSubstring(${i}, 'panel_power', parseInt(this.value))" />
+              </div>
+            </div>
+          </div>
+        `;
+      });
+    } else {
+      // Single string — show basic config
+      const sub = (sc.substrings && sc.substrings[0]) || { direction: 'S', panel_count: 10, panel_power: 405, tilt: 35 };
+      subCardsHtml = `
+        <div class="substring-card">
+          <div class="sc-header"><span class="sc-title">Konfiguracja stringa</span></div>
+          <div class="sc-grid">
+            <div class="sc-field">
+              <label>🧭 Kierunek paneli</label>
+              <select id="sh-ss-dir-0" onchange="this.getRootNode().host._updateTempSubstring(0, 'direction', this.value)">
+                ${directions.map(d => `<option value="${d}" ${sub.direction === d ? 'selected' : ''}>${d} — ${dirLabels[d]}</option>`).join('')}
+              </select>
+            </div>
+            <div class="sc-field">
+              <label>📐 Kąt nachylenia (°)</label>
+              <input type="number" min="0" max="90" value="${sub.tilt || 35}" onchange="this.getRootNode().host._updateTempSubstring(0, 'tilt', parseFloat(this.value))" />
+            </div>
+            <div class="sc-field">
+              <label>🔢 Ilość paneli</label>
+              <input type="number" min="1" max="50" value="${sub.panel_count || 10}" onchange="this.getRootNode().host._updateTempSubstring(0, 'panel_count', parseInt(this.value))" />
+            </div>
+            <div class="sc-field">
+              <label>⚡ Moc panela (Wp)</label>
+              <input type="number" min="100" max="800" value="${sub.panel_power || 405}" onchange="this.getRootNode().host._updateTempSubstring(0, 'panel_power', parseInt(this.value))" />
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // Calculate live preview
+    const previewHtml = this._renderSubstringPreview(idx);
+
+    const html = `
+      <div class="sh-modal-title">⚙️ Konfiguracja ${pvLabel}</div>
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px">
+        <label class="sh-toggle">
+          <input type="checkbox" id="sh-has-substrings" ${sc.has_substrings ? 'checked' : ''}
+            onchange="this.getRootNode().host._toggleSubstrings(this.checked)" />
+          <span class="sh-toggle-slider"></span>
+        </label>
+        <span style="font-size:12px; color:#94a3b8">Ma podstringi (obwody równoległe)</span>
+        <span style="font-size:10px; color:#64748b; margin-left:auto">${tier} — max ${maxStrings} stringów</span>
+      </div>
+      <div id="sh-substrings-list">
+        ${subCardsHtml}
+      </div>
+      ${sc.has_substrings ? `<button class="sh-modal-btn" style="width:100%; margin-top:4px; font-size:11px; padding:8px"
+        onclick="this.getRootNode().host._addSubstring()">+ Dodaj podstring</button>` : ''}
+      <div id="sh-config-preview">${previewHtml}</div>
+      <div class="sh-modal-actions">
+        <button class="sh-modal-btn" onclick="this.getRootNode().host._closeModal()">Anuluj</button>
+        <button class="sh-modal-btn primary" onclick="this.getRootNode().host._saveStringConfig()">💾 Zapisz</button>
+      </div>
+    `;
+    this._showModal(html);
+  }
+
+  _renderSubstringPreview(idx) {
+    const sc = this._tempStringConfig;
+    if (!sc.substrings || sc.substrings.length === 0) return '';
+
+    const parentPower = this._nm(`pv${idx}_power`) || 0;
+    const parentVoltage = this._n(this._m(`pv${idx}_voltage`)) || 0;
+    const parentCurrent = this._n(this._m(`pv${idx}_current`)) || 0;
+    const pvTodayVal = this._nm('pv_today') || 0;
+    const totalPv = this._nm('pv_power') || 1;
+    const stringKwh = pvTodayVal * (parentPower / (totalPv || 1));
+
+    if (!sc.has_substrings || sc.substrings.length < 2) {
+      const sub = sc.substrings[0];
+      const totalWp = (sub.panel_count || 1) * (sub.panel_power || 400);
+      return `
+        <div class="sh-modal-preview">
+          <div class="prev-title">📊 Podgląd na żywo</div>
+          <div class="prev-row">
+            <span class="prev-name">Moc instalacji</span>
+            <span class="prev-vals">${(totalWp / 1000).toFixed(2)} kWp (${sub.panel_count || 0} × ${sub.panel_power || 0} Wp)</span>
+          </div>
+          <div class="prev-row">
+            <span class="prev-name">Aktualna moc</span>
+            <span class="prev-vals" style="color:#f7b731; font-weight:700">${this._pw(parentPower)}</span>
+          </div>
+          <div class="prev-row">
+            <span class="prev-name">Parametry</span>
+            <span class="prev-vals">${parentVoltage.toFixed(1)} V · ${parentCurrent.toFixed(1)} A</span>
+          </div>
+          <div class="prev-row">
+            <span class="prev-name">Produkcja dziś</span>
+            <span class="prev-vals">${stringKwh.toFixed(1)} kWh</span>
+          </div>
+        </div>
+      `;
+    }
+
+    // Multi sub-string preview with proportional calculations
+    const dirFactors = this._directionFactors();
+    const weights = sc.substrings.map(sub => {
+      const dFactor = dirFactors[sub.direction] || 0.5;
+      const tFactor = this._tiltFactor(sub.tilt || 35);
+      return (sub.panel_count || 1) * (sub.panel_power || 400) * dFactor * tFactor;
+    });
+    const totalWeight = weights.reduce((a, b) => a + b, 0) || 1;
+    const ratios = weights.map(w => w / totalWeight);
+
+    let rowsHtml = sc.substrings.map((sub, i) => {
+      const ratio = ratios[i];
+      const subPower = parentPower * ratio;
+      const subVoltage = parentVoltage; // voltage same on parallel connection
+      const subCurrent = parentCurrent * ratio;
+      const subKwh = stringKwh * ratio;
+      const totalWp = (sub.panel_count || 1) * (sub.panel_power || 400);
+      const dirLabels = { 'N': 'Północ', 'NE': 'Pn-Wsch', 'E': 'Wschód', 'SE': 'Pd-Wsch', 'S': 'Południe', 'SW': 'Pd-Zach', 'W': 'Zachód', 'NW': 'Pn-Zach' };
+      return `
+        <div class="prev-row" style="flex-wrap:wrap; padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.04)">
+          <span class="prev-name" style="width:100%; margin-bottom:3px">Podstring ${i + 1} — ${dirLabels[sub.direction] || sub.direction} ${sub.tilt}° (${totalWp / 1000} kWp)</span>
+          <span class="prev-vals" style="width:100%">
+            <span style="color:#f7b731; font-weight:700">${this._pw(subPower)}</span> ·
+            ${subKwh.toFixed(1)} kWh ·
+            ${subVoltage.toFixed(1)} V · ${subCurrent.toFixed(1)} A ·
+            <span style="color:#00d4ff; font-weight:600">${(ratio * 100).toFixed(1)}%</span>
+          </span>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="sh-modal-preview">
+        <div class="prev-title">📊 Podgląd na żywo — podział proporcjonalny</div>
+        ${rowsHtml}
+        <div class="prev-row" style="padding-top:8px; font-weight:700">
+          <span class="prev-name">Σ Suma</span>
+          <span class="prev-vals" style="color:#f7b731">${this._pw(parentPower)} · ${stringKwh.toFixed(1)} kWh · ${parentVoltage.toFixed(1)} V · ${parentCurrent.toFixed(1)} A</span>
+        </div>
+      </div>
+    `;
+  }
+
+  _toggleSubstrings(checked) {
+    this._tempStringConfig.has_substrings = checked;
+    if (checked && (!this._tempStringConfig.substrings || this._tempStringConfig.substrings.length < 2)) {
+      // Add a second substring as default
+      if (!this._tempStringConfig.substrings) this._tempStringConfig.substrings = [];
+      if (this._tempStringConfig.substrings.length === 0) {
+        this._tempStringConfig.substrings.push({ direction: 'S', panel_count: 6, panel_power: 405, tilt: 35 });
+      }
+      this._tempStringConfig.substrings.push({ direction: 'W', panel_count: 4, panel_power: 405, tilt: 35 });
+    }
+    const idx = this._tempStringIdx;
+    const pvLabel = (this._settings.pv_labels || {})[`pv${idx}`] || `PV${idx}`;
+    const tier = (this._s("sensor.smartinghome_license_tier") || "FREE").toUpperCase();
+    this._renderStringConfigModal(idx, pvLabel, tier, this._getMaxStrings());
+  }
+
+  _addSubstring() {
+    const maxStrings = this._getMaxStrings();
+    const currentTotal = this._getTotalStringCount();
+    if (currentTotal >= maxStrings) {
+      // Show limit warning within modal
+      const prev = this.shadowRoot.getElementById('sh-config-preview');
+      if (prev) prev.innerHTML = `<div style="color:#e74c3c; font-size:11px; padding:8px; text-align:center">⚠️ Limit stringów (${maxStrings}) osiągnięty. Ulepsz do PRO aby dodać więcej.</div>`;
+      return;
+    }
+    this._tempStringConfig.substrings.push({ direction: 'S', panel_count: 4, panel_power: 405, tilt: 35 });
+    const idx = this._tempStringIdx;
+    const pvLabel = (this._settings.pv_labels || {})[`pv${idx}`] || `PV${idx}`;
+    const tier = (this._s("sensor.smartinghome_license_tier") || "FREE").toUpperCase();
+    this._renderStringConfigModal(idx, pvLabel, tier, this._getMaxStrings());
+  }
+
+  _removeSubstring(subIdx) {
+    this._tempStringConfig.substrings.splice(subIdx, 1);
+    if (this._tempStringConfig.substrings.length < 2) {
+      this._tempStringConfig.has_substrings = false;
+    }
+    const idx = this._tempStringIdx;
+    const pvLabel = (this._settings.pv_labels || {})[`pv${idx}`] || `PV${idx}`;
+    const tier = (this._s("sensor.smartinghome_license_tier") || "FREE").toUpperCase();
+    this._renderStringConfigModal(idx, pvLabel, tier, this._getMaxStrings());
+  }
+
+  _updateTempSubstring(subIdx, field, value) {
+    if (!this._tempStringConfig.substrings[subIdx]) return;
+    this._tempStringConfig.substrings[subIdx][field] = value;
+    // Update preview
+    const prev = this.shadowRoot.getElementById('sh-config-preview');
+    if (prev) prev.innerHTML = this._renderSubstringPreview(this._tempStringIdx);
+  }
+
+  _saveStringConfig() {
+    const idx = this._tempStringIdx;
+    const cfg = this._settings.pv_string_config || {};
+    cfg[`pv${idx}`] = JSON.parse(JSON.stringify(this._tempStringConfig));
+    this._savePanelSettings({ pv_string_config: cfg });
+    this._closeModal();
+    this._renderSubstringBoxes();
+    if (this._hass) this._updateFlow();
+  }
+
+  _renderSubstringBoxes() {
+    // Dynamically render sub-string boxes in the PV area
+    const container = this.shadowRoot.querySelector('.pv-strings');
+    if (!container) return;
+
+    const cfg = this._settings.pv_string_config || {};
+    const pvLabels = this._settings.pv_labels || {};
+
+    // Clear existing dynamic boxes
+    container.querySelectorAll('.pv-substring-box').forEach(el => el.remove());
+
+    for (let i = 1; i <= 4; i++) {
+      const sc = cfg[`pv${i}`];
+      const mainBox = this.shadowRoot.getElementById(`pv${i}-box`);
+      if (!mainBox) continue;
+
+      if (sc && sc.has_substrings && sc.substrings && sc.substrings.length >= 2) {
+        // Hide main box, show sub-strings instead
+        mainBox.style.display = 'none';
+
+        const ratios = this._calcSubstringRatios(i);
+        const parentPower = this._nm(`pv${i}_power`) || 0;
+        const parentVoltage = this._n(this._m(`pv${i}_voltage`)) || 0;
+        const parentCurrent = this._n(this._m(`pv${i}_current`)) || 0;
+        const pvTodayVal = this._nm('pv_today') || 0;
+        const totalPv = this._nm('pv_power') || 1;
+        const stringKwh = pvTodayVal * (parentPower / (totalPv || 1));
+        const dirLabels = { 'N': 'Pn', 'NE': 'PnE', 'E': 'Wsch', 'SE': 'PdE', 'S': 'Pd', 'SW': 'PdZ', 'W': 'Zach', 'NW': 'PnZ' };
+        const pvLabel = pvLabels[`pv${i}`] || `PV${i}`;
+
+        sc.substrings.forEach((sub, si) => {
+          const ratio = ratios ? ratios[si] : (1 / sc.substrings.length);
+          const subPower = parentPower * ratio;
+          const subVoltage = parentVoltage;
+          const subCurrent = parentCurrent * ratio;
+          const subKwh = stringKwh * ratio;
+
+          const box = document.createElement('div');
+          box.className = 'pv-string pv-substring-box';
+          box.dataset.parentIdx = i;
+          box.innerHTML = `
+            <div class="pv-name" style="cursor:pointer" onclick="this.getRootNode().host._editPvLabel(${i})" title="Kliknij aby zmienić nazwę">${pvLabel} — ${dirLabels[sub.direction] || sub.direction}
+              <span class="pv-config-btn" onclick="event.stopPropagation(); this.getRootNode().host._openPvStringConfig(${i})" title="Konfiguracja stringa">⚙️</span>
+            </div>
+            <div class="pv-val">${this._pw(subPower)}</div>
+            <div class="pv-detail">${subVoltage.toFixed(1)} V · ${subCurrent.toFixed(1)} A</div>
+            <div style="font-size:9px; color:#94a3b8; margin-top:2px">↑ ${subKwh.toFixed(1)} kWh</div>
+          `;
+          container.appendChild(box);
+        });
+      }
     }
   }
 
@@ -1845,6 +2268,8 @@ class SmartingHomePanel extends HTMLElement {
       const labelEl = this.shadowRoot.getElementById(`pv${i}-label`);
       if (labelEl && pvLabels[`pv${i}`]) labelEl.textContent = pvLabels[`pv${i}`];
     }
+    // Render sub-string boxes (proportional split)
+    this._renderSubstringBoxes();
 
     // Home / Load
     this._setText("v-load", this._pw(load));
@@ -3047,6 +3472,109 @@ class SmartingHomePanel extends HTMLElement {
           .settings-field input { font-size: 12px; padding: 8px 10px; }
           .save-btn { font-size: 12px; padding: 8px 18px; }
         }
+
+        /* ── Custom Modal ────────────── */
+        .sh-modal-overlay {
+          display: none; position: fixed; inset: 0; z-index: 10000;
+          background: rgba(0,0,0,0.65); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+          align-items: center; justify-content: center;
+        }
+        .sh-modal-overlay.active { display: flex; animation: shModalFadeIn 0.2s ease; }
+        @keyframes shModalFadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes shModalSlideIn { from { transform: translateY(-20px) scale(0.95); opacity: 0; } to { transform: translateY(0) scale(1); opacity: 1; } }
+        .sh-modal {
+          background: linear-gradient(145deg, #1a2744, #0f1d35);
+          border: 1px solid rgba(0,212,255,0.15); border-radius: 18px;
+          padding: 28px; min-width: 380px; max-width: 560px; width: 90vw;
+          box-shadow: 0 25px 60px rgba(0,0,0,0.5), 0 0 40px rgba(0,212,255,0.08);
+          animation: shModalSlideIn 0.25s ease;
+          max-height: 85vh; overflow-y: auto;
+        }
+        .sh-modal-title {
+          font-size: 16px; font-weight: 800; color: #fff; margin-bottom: 18px;
+          display: flex; align-items: center; gap: 8px;
+        }
+        .sh-modal-label { font-size: 11px; color: #94a3b8; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .sh-modal-input {
+          width: 100%; padding: 10px 14px; border-radius: 10px;
+          background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+          color: #fff; font-size: 14px; outline: none; box-sizing: border-box;
+          transition: border-color 0.2s;
+        }
+        .sh-modal-input:focus { border-color: rgba(0,212,255,0.5); }
+        .sh-modal-select {
+          width: 100%; padding: 8px 12px; border-radius: 10px;
+          background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+          color: #fff; font-size: 12px; outline: none; box-sizing: border-box;
+          appearance: none; cursor: pointer;
+        }
+        .sh-modal-select option { background: #1a2744; color: #fff; }
+        .sh-modal-actions {
+          display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;
+        }
+        .sh-modal-btn {
+          padding: 9px 22px; border-radius: 10px; font-size: 13px; font-weight: 700;
+          border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.06);
+          color: #94a3b8; cursor: pointer; transition: all 0.2s;
+        }
+        .sh-modal-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+        .sh-modal-btn.primary {
+          background: linear-gradient(135deg, #00d4ff, #0099cc);
+          color: #0a1628; border-color: transparent;
+        }
+        .sh-modal-btn.primary:hover { filter: brightness(1.15); }
+        .sh-modal-btn.danger {
+          background: rgba(231,76,60,0.15); color: #e74c3c; border-color: rgba(231,76,60,0.2);
+        }
+        .sh-modal-btn.danger:hover { background: rgba(231,76,60,0.25); }
+        .sh-modal-divider { border: none; border-top: 1px solid rgba(255,255,255,0.06); margin: 14px 0; }
+        .substring-card {
+          background: rgba(247,183,49,0.06); border: 1px solid rgba(247,183,49,0.12);
+          border-radius: 12px; padding: 12px; margin-bottom: 8px;
+        }
+        .substring-card .sc-header {
+          display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;
+        }
+        .substring-card .sc-title { font-size: 11px; font-weight: 700; color: #f7b731; }
+        .substring-card .sc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .substring-card .sc-field label { font-size: 9px; color: #64748b; display: block; margin-bottom: 3px; }
+        .substring-card .sc-field input,
+        .substring-card .sc-field select {
+          width: 100%; padding: 6px 8px; border-radius: 8px;
+          background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+          color: #fff; font-size: 12px; outline: none; box-sizing: border-box;
+        }
+        .substring-card .sc-field select { appearance: none; cursor: pointer; }
+        .substring-card .sc-field select option { background: #1a2744; }
+        .pv-config-btn {
+          display: inline-flex; align-items: center; justify-content: center;
+          width: 18px; height: 18px; border-radius: 6px; font-size: 10px;
+          background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08);
+          color: #64748b; cursor: pointer; transition: all 0.2s; margin-left: 4px;
+          vertical-align: middle; line-height: 1;
+        }
+        .pv-config-btn:hover { background: rgba(0,212,255,0.15); color: #00d4ff; border-color: rgba(0,212,255,0.2); }
+        .sh-modal-preview {
+          background: rgba(0,212,255,0.04); border: 1px solid rgba(0,212,255,0.1);
+          border-radius: 10px; padding: 12px; margin-top: 12px;
+        }
+        .sh-modal-preview .prev-title { font-size: 10px; color: #00d4ff; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+        .sh-modal-preview .prev-row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 11px; }
+        .sh-modal-preview .prev-row .prev-name { color: #f7b731; }
+        .sh-modal-preview .prev-row .prev-vals { color: #94a3b8; }
+        .sh-toggle { position: relative; display: inline-block; width: 36px; height: 20px; }
+        .sh-toggle input { opacity: 0; width: 0; height: 0; }
+        .sh-toggle-slider {
+          position: absolute; cursor: pointer; inset: 0; background: rgba(255,255,255,0.1);
+          border-radius: 20px; transition: 0.3s;
+        }
+        .sh-toggle-slider:before {
+          content: ''; position: absolute; height: 14px; width: 14px;
+          left: 3px; bottom: 3px; background: #94a3b8;
+          border-radius: 50%; transition: 0.3s;
+        }
+        .sh-toggle input:checked + .sh-toggle-slider { background: rgba(0,212,255,0.3); }
+        .sh-toggle input:checked + .sh-toggle-slider:before { transform: translateX(16px); background: #00d4ff; }
       </style>
 
       <div class="panel-container">
@@ -3174,10 +3702,10 @@ class SmartingHomePanel extends HTMLElement {
                       <div class="node-sub" id="v-pv-today">— kWh dziś</div>
                       <div style="font-size:10px; color:#f7b731; margin-top:2px; font-weight:600" id="v-pv-total-kwh"></div>
                       <div class="pv-strings" style="display:flex; gap:6px; flex-wrap:wrap; margin-top:10px">
-                        <div class="pv-string" id="pv1-box"><div class="pv-name" id="pv1-label" onclick="this.getRootNode().host._editPvLabel(1)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV1</div><div class="pv-val" id="v-pv1-p">—</div><div class="pv-detail"><span id="v-pv1-v">— V</span> · <span id="v-pv1-a">— A</span></div><div style="font-size:9px; color:#94a3b8; margin-top:2px" id="v-pv1-kwh"></div></div>
-                        <div class="pv-string" id="pv2-box"><div class="pv-name" id="pv2-label" onclick="this.getRootNode().host._editPvLabel(2)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV2</div><div class="pv-val" id="v-pv2-p">—</div><div class="pv-detail"><span id="v-pv2-v">— V</span> · <span id="v-pv2-a">— A</span></div><div style="font-size:9px; color:#94a3b8; margin-top:2px" id="v-pv2-kwh"></div></div>
-                        <div class="pv-string" id="pv3-box" style="display:none"><div class="pv-name" id="pv3-label" onclick="this.getRootNode().host._editPvLabel(3)" style="cursor:pointer">PV3</div><div class="pv-val" id="v-pv3-p">—</div><div class="pv-detail"><span id="v-pv3-v">—</span></div></div>
-                        <div class="pv-string" id="pv4-box" style="display:none"><div class="pv-name" id="pv4-label" onclick="this.getRootNode().host._editPvLabel(4)" style="cursor:pointer">PV4</div><div class="pv-val" id="v-pv4-p">—</div><div class="pv-detail"><span id="v-pv4-v">—</span></div></div>
+                        <div class="pv-string" id="pv1-box"><div class="pv-name" id="pv1-label" onclick="this.getRootNode().host._editPvLabel(1)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV1<span class="pv-config-btn" onclick="event.stopPropagation(); this.getRootNode().host._openPvStringConfig(1)" title="Konfiguracja stringa">⚙️</span></div><div class="pv-val" id="v-pv1-p">—</div><div class="pv-detail"><span id="v-pv1-v">— V</span> · <span id="v-pv1-a">— A</span></div><div style="font-size:9px; color:#94a3b8; margin-top:2px" id="v-pv1-kwh"></div></div>
+                        <div class="pv-string" id="pv2-box"><div class="pv-name" id="pv2-label" onclick="this.getRootNode().host._editPvLabel(2)" style="cursor:pointer" title="Kliknij aby zmienić nazwę">PV2<span class="pv-config-btn" onclick="event.stopPropagation(); this.getRootNode().host._openPvStringConfig(2)" title="Konfiguracja stringa">⚙️</span></div><div class="pv-val" id="v-pv2-p">—</div><div class="pv-detail"><span id="v-pv2-v">— V</span> · <span id="v-pv2-a">— A</span></div><div style="font-size:9px; color:#94a3b8; margin-top:2px" id="v-pv2-kwh"></div></div>
+                        <div class="pv-string" id="pv3-box" style="display:none"><div class="pv-name" id="pv3-label" onclick="this.getRootNode().host._editPvLabel(3)" style="cursor:pointer">PV3<span class="pv-config-btn" onclick="event.stopPropagation(); this.getRootNode().host._openPvStringConfig(3)" title="Konfiguracja stringa">⚙️</span></div><div class="pv-val" id="v-pv3-p">—</div><div class="pv-detail"><span id="v-pv3-v">—</span></div></div>
+                        <div class="pv-string" id="pv4-box" style="display:none"><div class="pv-name" id="pv4-label" onclick="this.getRootNode().host._editPvLabel(4)" style="cursor:pointer">PV4<span class="pv-config-btn" onclick="event.stopPropagation(); this.getRootNode().host._openPvStringConfig(4)" title="Konfiguracja stringa">⚙️</span></div><div class="pv-val" id="v-pv4-p">—</div><div class="pv-detail"><span id="v-pv4-v">—</span></div></div>
                       </div>
                     </div>
                     <div id="pv-eco-sidebar" style="display:none; flex-shrink:0; width:110px; border-left:1px solid rgba(255,255,255,0.06); padding-left:10px">
@@ -4686,7 +5214,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.12.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.13.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -4694,6 +5222,14 @@ class SmartingHomePanel extends HTMLElement {
 
           </div>
         </div>
+
+        <!-- Custom Modal Overlay -->
+        <div class="sh-modal-overlay" id="sh-modal-overlay" onclick="if(event.target===this) this.getRootNode().host._closeModal()">
+          <div class="sh-modal" onclick="event.stopPropagation()">
+            <div id="sh-modal-body"></div>
+          </div>
+        </div>
+
       </div>
     `;
 
