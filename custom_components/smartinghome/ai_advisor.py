@@ -330,7 +330,7 @@ User question: {question}"""
             }
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=payload,
-                                        timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                                        timeout=aiohttp.ClientTimeout(total=120)) as resp:
                     if resp.status == 200:
                         result = await resp.json()
                         candidates = result.get("candidates", [])
@@ -413,7 +413,7 @@ User question: {question}"""
             }
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=payload, headers=headers,
-                                        timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                                        timeout=aiohttp.ClientTimeout(total=120)) as resp:
                     if resp.status == 200:
                         result = await resp.json()
                         content = result.get("content", [])
