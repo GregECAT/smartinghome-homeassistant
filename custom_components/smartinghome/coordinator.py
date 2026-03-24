@@ -140,6 +140,11 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._rce_enabled = entry.data.get(CONF_RCE_ENABLED, True)
         self._ecowitt_enabled = entry.data.get(CONF_ECOWITT_ENABLED, False)
         self._sensor_map = entry.data.get(CONF_SENSOR_MAP, {})
+        self._strategy_controller = None
+
+    def set_strategy_controller(self, controller) -> None:
+        """Set the strategy controller for autonomous HEMS control."""
+        self._strategy_controller = controller
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from HA state machine and compute HEMS values."""
@@ -157,6 +162,30 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if self._ecowitt_enabled:
                 ecowitt = self._read_ecowitt_sensors()
                 computed.update(ecowitt)
+
+            # Execute strategy controller tick (autonomous HEMS control)
+            if self._strategy_controller:
+                try:
+                    merged = {**raw, **computed}
+                    ctrl_result = await self._strategy_controller.execute_tick(merged)
+                    computed["autopilot_status"] = ctrl_result
+                    computed["autopilot_active_strategy"] = (
+                        self._strategy_controller.active_strategy.value
+                    )
+                    computed["autopilot_enabled"] = (
+                        self._strategy_controller.enabled
+                    )
+                    computed["autopilot_decision_log"] = (
+                        self._strategy_controller.decision_log[-10:]
+                    )
+                    computed["autopilot_disabled_automations"] = list(
+                        self._strategy_controller.disabled_automations
+                    )
+                except Exception as ctrl_err:
+                    _LOGGER.error(
+                        "Strategy controller tick failed: %s", ctrl_err
+                    )
+                    computed["autopilot_status"] = {"error": str(ctrl_err)}
 
             return {**raw, **computed}
 

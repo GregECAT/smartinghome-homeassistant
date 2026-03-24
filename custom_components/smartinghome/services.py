@@ -33,6 +33,7 @@ from .ai_advisor import AIAdvisor
 from .license import LicenseManager
 from .cron_scheduler import AICronScheduler
 from .autopilot_engine import AutopilotEngine, build_autopilot_ai_prompt
+from .strategy_controller import StrategyController
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,6 +41,8 @@ SERVICE_UPLOAD_IMAGE = "upload_inverter_image"
 SERVICE_SAVE_SETTINGS = "save_settings"
 SERVICE_TEST_API_KEY = "test_api_key"
 SERVICE_SAVE_PANEL_SETTINGS = "save_panel_settings"
+SERVICE_SET_AUTOPILOT_STRATEGY = "set_autopilot_strategy"
+SERVICE_DEACTIVATE_AUTOPILOT = "deactivate_autopilot"
 
 SETTINGS_FILE = "settings.json"
 
@@ -110,11 +113,20 @@ RUN_AUTOPILOT_SCHEMA = vol.Schema(
     }
 )
 
+SET_AUTOPILOT_STRATEGY_SCHEMA = vol.Schema(
+    {
+        vol.Required("strategy"): vol.In(
+            [s.value for s in AutopilotStrategy]
+        ),
+    }
+)
+
 
 async def async_setup_services(
     hass: HomeAssistant,
     coordinator: SmartingHomeCoordinator,
     license_mgr: LicenseManager,
+    strategy_controller: StrategyController | None = None,
 ) -> AICronScheduler:
     """Register Smarting HOME services. Returns the AI cron scheduler."""
     entry = coordinator.entry
@@ -497,6 +509,47 @@ async def async_setup_services(
             strategy_str, estimation.get("net_savings", 0), estimation.get("vs_no_management", 0),
         )
 
+    # ── Set Autopilot Strategy service ──
+
+    async def handle_set_autopilot_strategy(call: ServiceCall) -> None:
+        """Handle set_autopilot_strategy — activate a strategy on the controller."""
+        if not strategy_controller:
+            _LOGGER.warning("Strategy controller not available")
+            return
+
+        strategy_str = call.data["strategy"]
+        try:
+            strategy = AutopilotStrategy(strategy_str)
+        except ValueError:
+            _LOGGER.error("Unknown strategy: %s", strategy_str)
+            return
+
+        await strategy_controller.activate_strategy(strategy)
+
+        # Persist to settings.json
+        _update_settings_file(hass, {
+            AUTOPILOT_SETTINGS_KEY: strategy.value,
+        })
+
+        _LOGGER.info("Autopilot strategy set to: %s", strategy.value)
+
+    # ── Deactivate Autopilot service ──
+
+    async def handle_deactivate_autopilot(call: ServiceCall) -> None:
+        """Deactivate autopilot — restore automations and go manual."""
+        if not strategy_controller:
+            _LOGGER.warning("Strategy controller not available")
+            return
+
+        await strategy_controller.deactivate()
+
+        # Clear saved strategy
+        _update_settings_file(hass, {
+            AUTOPILOT_SETTINGS_KEY: "",
+        })
+
+        _LOGGER.info("Autopilot deactivated, automations restored")
+
     # Register all services
     hass.services.async_register(
         DOMAIN, SERVICE_SET_MODE, handle_set_mode, schema=SET_MODE_SCHEMA
@@ -537,8 +590,15 @@ async def async_setup_services(
         DOMAIN, SERVICE_RUN_AUTOPILOT, handle_run_autopilot,
         schema=RUN_AUTOPILOT_SCHEMA,
     )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SET_AUTOPILOT_STRATEGY, handle_set_autopilot_strategy,
+        schema=SET_AUTOPILOT_STRATEGY_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_DEACTIVATE_AUTOPILOT, handle_deactivate_autopilot,
+    )
 
-    _LOGGER.info("Registered %d Smarting HOME services", 11)
+    _LOGGER.info("Registered %d Smarting HOME services", 13)
 
     # Start AI Cron Scheduler
     cron = AICronScheduler(
@@ -564,5 +624,7 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_TEST_API_KEY,
         SERVICE_SAVE_PANEL_SETTINGS,
         SERVICE_RUN_AUTOPILOT,
+        SERVICE_SET_AUTOPILOT_STRATEGY,
+        SERVICE_DEACTIVATE_AUTOPILOT,
     ]:
         hass.services.async_remove(DOMAIN, service)
