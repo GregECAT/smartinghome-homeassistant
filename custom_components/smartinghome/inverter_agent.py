@@ -1,30 +1,43 @@
-"""Inverter Sub-Agent — State-aware command executor.
+"""Inverter Sub-Agent — State-aware command executor with entity discovery.
 
 Wraps EnergyManager with HA state reading. Before executing any command,
 checks if the system is ALREADY in the desired state and skips if so.
 Reports back what was actually changed vs already correct.
 
+Entity Discovery:
+    On first tick, scans HA state machine for all entities matching the
+    inverter brand (goodwe/deye/growatt), categorizes them by capability
+    (number/select/switch), reads attributes (min/max/options), and
+    persists the capability map to settings.json.
+
 Architecture:
     AI Controller (Main Agent)  →  decides WHAT should happen
-    InverterAgent (Sub-Agent)   →  checks state, executes ONLY if needed
+    InverterAgent (Sub-Agent)   →  discovers devices, checks state, executes ONLY if needed
 
 Future: GoodWeAgent / DeyeAgent / GrowattAgent inherit from base class.
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    CONF_INVERTER_BRAND,
     DEFAULT_GOODWE_DEVICE_ID,
     DEFAULT_BATTERY_CHARGE_CURRENT_MAX,
     DEFAULT_BATTERY_CHARGE_CURRENT_BLOCK,
     DEFAULT_DOD_ON_GRID,
     DEFAULT_EXPORT_LIMIT,
+    INVERTER_BRAND_GOODWE,
+    INVERTER_BRAND_DEYE,
+    INVERTER_BRAND_GROWATT,
     NUMBER_DOD_ON_GRID,
     SELECT_WORK_MODE,
     SWITCH_BOILER,
@@ -38,6 +51,30 @@ _LOGGER = logging.getLogger(__name__)
 
 # Minimum seconds between identical commands to the same target
 _COMMAND_COOLDOWN = 120  # 2 minutes
+
+# Settings persistence path
+_SETTINGS_PATH = Path("/config/www/smartinghome/settings.json")
+
+# Brand → entity_id patterns for discovery
+_BRAND_PATTERNS: dict[str, list[str]] = {
+    INVERTER_BRAND_GOODWE: ["goodwe", "gw_"],
+    INVERTER_BRAND_DEYE: ["deye", "sun_", "sunsynk"],
+    INVERTER_BRAND_GROWATT: ["growatt", "grw_"],
+}
+
+# Well-known capability mappings (entity pattern → capability name)
+_CAPABILITY_HINTS: dict[str, str] = {
+    "depth_of_discharge": "dod_control",
+    "dod": "dod_control",
+    "export_limit": "export_limit_control",
+    "grid_export": "export_limit_control",
+    "work_mode": "work_mode_control",
+    "tryb_pracy": "work_mode_control",
+    "battery_charge_current": "charge_current_control",
+    "battery_discharge_current": "discharge_current_control",
+    "backup_soc": "backup_soc_control",
+    "eco_mode": "eco_mode_control",
+}
 
 
 @dataclass
@@ -72,11 +109,13 @@ _SWITCH_LABELS: dict[str, str] = {
 
 
 class InverterAgent:
-    """State-aware command executor for GoodWe inverter + managed loads.
+    """State-aware command executor for inverter + managed loads.
 
-    Reads HA entity states before executing commands.
-    Only sends commands when actual state differs from desired state.
-    Tracks last command timestamps to prevent spam.
+    Features:
+    - Entity discovery: scans HA for all controllable entities
+    - State awareness: reads entity states before sending commands
+    - Command deduplication: skips if already in desired state
+    - Capability persistence: saves discovered entities to settings.json
     """
 
     def __init__(
@@ -84,11 +123,13 @@ class InverterAgent:
         hass: HomeAssistant,
         energy_manager: EnergyManager,
         device_id: str = DEFAULT_GOODWE_DEVICE_ID,
+        inverter_brand: str = INVERTER_BRAND_GOODWE,
         dry_run: bool = False,
     ) -> None:
         self.hass = hass
         self._em = energy_manager
         self._device_id = device_id
+        self._inverter_brand = inverter_brand
         self._dry_run = dry_run
 
         # Cooldown tracking: "tool:target" → last_exec_timestamp
@@ -98,9 +139,132 @@ class InverterAgent:
         self._commanded_charging: bool | None = None
         self._commanded_dod: int | None = None
 
+        # Entity discovery
+        self.capabilities_discovered: bool = False
+        self._capabilities: dict[str, Any] = {}
+
     # ------------------------------------------------------------------
-    #  Device Status — read from HA state machine
+    #  Entity Discovery — scan HA state machine
     # ------------------------------------------------------------------
+
+    async def discover_capabilities(self) -> None:
+        """Scan HA state machine and build capability map.
+
+        Discovers:
+        1. number.* entities matching inverter brand → DOD, export limit, etc.
+        2. select.* entities matching inverter brand → work mode selector
+        3. switch.* entities → all controllable switches
+        4. Maps each to a capability name for AI reference
+
+        Persists results to settings.json for restart survival.
+        """
+        brand = self._inverter_brand
+        patterns = _BRAND_PATTERNS.get(brand, [brand])
+
+        controls: dict[str, Any] = {}
+        switches: dict[str, Any] = {}
+        sensors_count = 0
+
+        # --- Scan number.* entities (DOD, export limit, charge current...) ---
+        for state in self.hass.states.async_all("number"):
+            entity_id = state.entity_id
+            if not any(p in entity_id for p in patterns):
+                continue
+
+            attrs = state.attributes or {}
+            capability = self._identify_capability(entity_id)
+            controls[entity_id] = {
+                "type": "number",
+                "capability": capability,
+                "friendly_name": attrs.get("friendly_name", entity_id),
+                "current": state.state,
+                "min": attrs.get("min", 0),
+                "max": attrs.get("max", 100),
+                "step": attrs.get("step", 1),
+                "unit": attrs.get("unit_of_measurement", ""),
+            }
+
+        # --- Scan select.* entities (work mode...) ---
+        for state in self.hass.states.async_all("select"):
+            entity_id = state.entity_id
+            if not any(p in entity_id for p in patterns):
+                continue
+
+            attrs = state.attributes or {}
+            capability = self._identify_capability(entity_id)
+            controls[entity_id] = {
+                "type": "select",
+                "capability": capability,
+                "friendly_name": attrs.get("friendly_name", entity_id),
+                "current": state.state,
+                "options": attrs.get("options", []),
+            }
+
+        # --- Scan switch.* entities (ALL switches, not just inverter) ---
+        for state in self.hass.states.async_all("switch"):
+            entity_id = state.entity_id
+            attrs = state.attributes or {}
+            friendly = attrs.get("friendly_name", entity_id)
+            switches[entity_id] = {
+                "friendly_name": friendly,
+                "state": state.state,
+                "device_class": attrs.get("device_class", ""),
+            }
+
+        # --- Count sensors matching brand ---
+        for state in self.hass.states.async_all("sensor"):
+            if any(p in state.entity_id for p in patterns):
+                sensors_count += 1
+
+        # Build capability map
+        self._capabilities = {
+            "inverter_brand": brand,
+            "discovered_at": datetime.now().isoformat(),
+            "controls": controls,
+            "switches": switches,
+            "sensors_count": sensors_count,
+            "patterns_used": patterns,
+        }
+
+        self.capabilities_discovered = True
+
+        _LOGGER.info(
+            "InverterAgent: discovered %d controls, %d switches, %d sensors (brand: %s, patterns: %s)",
+            len(controls),
+            len(switches),
+            sensors_count,
+            brand,
+            patterns,
+        )
+
+        # Persist to settings.json
+        await self._persist_capabilities()
+
+    def _identify_capability(self, entity_id: str) -> str:
+        """Map entity_id to a capability name using pattern matching."""
+        eid_lower = entity_id.lower()
+        for pattern, capability in _CAPABILITY_HINTS.items():
+            if pattern in eid_lower:
+                return capability
+        return "unknown"
+
+    async def _persist_capabilities(self) -> None:
+        """Save discovered capabilities to settings.json."""
+        try:
+            if _SETTINGS_PATH.exists():
+                settings = json.loads(_SETTINGS_PATH.read_text(encoding="utf-8"))
+            else:
+                _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+                settings = {}
+
+            settings["inverter_capabilities"] = self._capabilities
+            _SETTINGS_PATH.write_text(
+                json.dumps(settings, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _LOGGER.info("InverterAgent: capabilities persisted to %s", _SETTINGS_PATH)
+        except Exception as err:
+            _LOGGER.warning("InverterAgent: failed to persist capabilities: %s", err)
 
     def get_device_status(self) -> dict[str, Any]:
         """Read ALL managed device states from HA.
@@ -393,7 +557,7 @@ class InverterAgent:
         self._last_command[key] = time.time()
 
     def format_status_for_prompt(self) -> str:
-        """Format device status as a string for the AI prompt."""
+        """Format device status + discovered capabilities for AI prompt."""
         status = self.get_device_status()
         switches = status["switches"]
         sw_lines = "\n".join(
@@ -411,7 +575,8 @@ class InverterAgent:
 
         last_cmd_str = "\n".join(last_cmds) if last_cmds else "    - none"
 
-        return f"""═══ DEVICE STATUS (InverterAgent: {status['inverter_brand']}) ═══
+        # Device status section
+        prompt = f"""═══ DEVICE STATUS (InverterAgent: {status['inverter_brand']}) ═══
   Charging: {'✅ ACTIVE' if status['charging_active'] else '⬜ DISABLED'} (battery: {status['battery_power']:.0f}W)
   Work Mode: {status['work_mode']}
   DOD on Grid: {status['dod_on_grid']}%
@@ -420,3 +585,30 @@ class InverterAgent:
   Recent commands:
 {last_cmd_str}
   Dry-run: {'YES (log-only)' if status['dry_run'] else 'NO (live)'}"""
+
+        # Add discovered capabilities if available
+        if self._capabilities and self._capabilities.get("controls"):
+            ctrl_lines = []
+            for eid, info in self._capabilities["controls"].items():
+                if info["type"] == "number":
+                    ctrl_lines.append(
+                        f"    - {eid}: {info['current']}{info.get('unit', '')} "
+                        f"(range: {info['min']}-{info['max']}, step: {info['step']}) "
+                        f"[{info['capability']}]"
+                    )
+                elif info["type"] == "select":
+                    opts = ", ".join(str(o) for o in info.get("options", [])[:5])
+                    ctrl_lines.append(
+                        f"    - {eid}: \"{info['current']}\" "
+                        f"(options: {opts}) [{info['capability']}]"
+                    )
+
+            if ctrl_lines:
+                prompt += f"""
+
+═══ DEVICE CAPABILITIES (discovered) ═══
+  Controls ({len(ctrl_lines)}):
+""" + "\n".join(ctrl_lines)
+                prompt += f"\n  Sensors: {self._capabilities.get('sensors_count', '?')} entities matching brand"
+
+        return prompt
