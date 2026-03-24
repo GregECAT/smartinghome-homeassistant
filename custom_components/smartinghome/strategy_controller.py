@@ -562,11 +562,15 @@ class StrategyController:
 
         # W3: SOC Emergency (highest priority)
         if soc < SOC_EMERGENCY:
-            if await self._throttled_action("soc_emergency"):
+            # We must execute force_charge frequently (every 60s) to fight the integration auto-reset
+            if await self._throttled_action("soc_emergency_execute", cooldown=60):
                 await self._em.force_charge()
-                actions_taken.append("W3: ⚠️ SOC emergency — wymuszono ładowanie")
-                self._log_decision("soc_emergency", f"SOC={soc:.0f}% < {SOC_EMERGENCY}% — ładowanie awaryjne")
                 self._charging_enabled = True
+                actions_taken.append("W3: ⚠️ SOC emergency — wymuszono ładowanie")
+                
+                # But only log to the UI every 15 minutes to avoid spam
+                if await self._throttled_action("soc_emergency_log", cooldown=900):
+                    self._log_decision("soc_emergency", f"SOC={soc:.0f}% < {SOC_EMERGENCY}% — ładowanie awaryjne (Modbus BT)")
 
         # W0: Grid Import Guard
         w0_actions = await self._execute_w0_grid_import_guard(

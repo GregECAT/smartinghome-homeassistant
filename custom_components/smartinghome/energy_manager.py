@@ -100,13 +100,27 @@ class EnergyManager:
             pass  # No automatic actions
 
     async def force_charge(self) -> None:
-        """Force battery charging — enables grid→battery charging."""
-        _LOGGER.info("Forcing battery charge (work_mode=eco_charge)")
+        """Force battery charging — enables grid→battery charging via BT-specific Modbus override."""
+        _LOGGER.info("Forcing battery charge (Modbus 47511=4 BT-Charge)")
         await self._enable_charging()
-        # CRITICAL: Set work mode to eco_charge to enable grid→battery charging
-        # In general mode, inverter won't charge from grid (only PV→battery)
-        # eco_charge is confirmed working from user's night arbitrage automation
-        await self._set_work_mode("eco_charge")
+        
+        # Opcjonalnie upewniamy się, że po stronie HA integracja ma 'general', żeby
+        # nie próbowała wtłoczyć 'eco_charge', co ograniczy moc
+        await self._set_work_mode("general")
+        
+        # Metoda 2: Bezpośredni zapis po Modbus
+        # W rejestrze 47511 wartość 4 wg dokumentacji to 'Force Discharge', 
+        # ale na GoodWe BT powoduje to pełne ŁADOWANIE z sieci.
+        await self.hass.services.async_call(
+            "modbus",
+            "write_register",
+            {
+                "hub": "goodwe_rs485",
+                "slave": 247,
+                "address": 47511,
+                "value": 4,
+            },
+        )
         self._current_mode = HEMSMode.CHARGE
 
     async def force_discharge(self) -> None:
