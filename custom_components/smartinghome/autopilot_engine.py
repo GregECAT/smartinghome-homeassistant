@@ -661,6 +661,7 @@ AI_CONTROLLER_TOOLS = {
 
 def build_ai_controller_prompt(
     current_data: dict[str, Any],
+    device_status_text: str = "",
 ) -> str:
     """Build a concise prompt for AI to return structured JSON commands.
 
@@ -669,6 +670,7 @@ def build_ai_controller_prompt(
     - Requires ONLY valid JSON response
     - Lists available tools the AI can call
     - Focuses on immediate action (this tick), not 24h plans
+    - Includes DEVICE STATUS from InverterAgent (state awareness)
     """
     now = datetime.now()
     day_names = ['Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota', 'Niedziela']
@@ -701,6 +703,11 @@ def build_ai_controller_prompt(
         f'  - "{name}": {desc}' for name, desc in AI_CONTROLLER_TOOLS.items()
     )
 
+    # Device status section (from InverterAgent)
+    device_section = ""
+    if device_status_text:
+        device_section = f"\n{device_status_text}\n"
+
     prompt = f"""You are an autonomous energy controller for a home solar+battery system in Poland (G13 tariff).
 
 YOUR JOB: Decide what action to take RIGHT NOW based on current system state. Respond ONLY with valid JSON.
@@ -721,7 +728,7 @@ YOUR JOB: Decide what action to take RIGHT NOW based on current system state. Re
   Grid Power: {current_data.get('grid_power', 0)} W (positive=import)
   PV Surplus: {current_data.get('pv_surplus', 0)} W
   Battery Capacity: {bat_cap_kwh:.1f} kWh
-
+{device_section}
 ═══ TARIFF & PRICING ═══
   Current zone: {current_zone.value} ({current_price:.2f} PLN/kWh)
   Upcoming zones:
@@ -747,6 +754,8 @@ YOUR JOB: Decide what action to take RIGHT NOW based on current system state. Re
 6. If PV surplus > 2000W and SOC > 80% → switch_on boiler to use free energy
 7. If RCE > 500 PLN/MWh and SOC > 30% → force_discharge (sell at high price)
 8. NEVER discharge below 10% SOC (safety layer handles this externally)
+9. CHECK DEVICE STATUS above — if charging is ALREADY active, use "no_action" instead of "force_charge"!
+10. If a switch is ALREADY ON, do NOT send switch_on again — use "no_action"!
 
 ═══ RESPONSE FORMAT ═══
 CRITICAL: Respond with ONLY valid JSON. No markdown, no explanations, no text before/after JSON.
@@ -763,3 +772,4 @@ If no action needed, use: {{"tool": "no_action", "params": {{"reason": "..."}}}}
 Maximum 3 commands per response. Order by priority (most important first)."""
 
     return prompt
+

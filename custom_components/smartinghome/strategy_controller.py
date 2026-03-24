@@ -55,6 +55,7 @@ from .const import (
     BINARY_RCE_EXPENSIVE,
 )
 from .energy_manager import EnergyManager
+from .inverter_agent import InverterAgent
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -153,9 +154,15 @@ class StrategyController:
         # AI Controller state
         self._ai: AIAdvisor | None = None
         self._ai_cached_commands: dict[str, Any] | None = None
+        self._ai_commands_executed: bool = False  # True when cached commands have been executed
         self._ai_last_call: float = 0.0
         self._ai_call_interval: int = 300  # default 5 min, AI can override via next_check_minutes
         self._ai_dry_run: bool = False  # Set True to log-only without executing
+
+        # InverterAgent — state-aware command executor
+        self._inverter_agent = InverterAgent(
+            hass, energy_manager, dry_run=self._ai_dry_run,
+        )
 
     def set_ai_advisor(self, ai_advisor: AIAdvisor) -> None:
         """Inject AI advisor reference (called after services setup)."""
@@ -785,11 +792,14 @@ class StrategyController:
             try:
                 from .autopilot_engine import build_ai_controller_prompt
 
-                prompt = build_ai_controller_prompt(data)
+                # Get device status from InverterAgent for AI prompt
+                device_status_text = self._inverter_agent.format_status_for_prompt()
+                prompt = build_ai_controller_prompt(data, device_status_text)
                 ai_result = await self._ai.ask_controller(prompt)
 
                 self._ai_last_call = now
                 self._ai_cached_commands = ai_result
+                self._ai_commands_executed = False  # new commands, not yet executed
 
                 # Update interval from AI response
                 next_min = ai_result.get("next_check_minutes", 5)
@@ -805,8 +815,8 @@ class StrategyController:
                 _LOGGER.error("AI Controller call failed: %s", err)
                 # Keep using cached commands if available
 
-        # Execute cached AI commands
-        if self._ai_cached_commands:
+        # Execute cached AI commands — only ONCE (InverterAgent handles dedup)
+        if self._ai_cached_commands and not self._ai_commands_executed:
             reasoning = self._ai_cached_commands.get("reasoning", "")
             commands = self._ai_cached_commands.get("commands", [])
 
@@ -814,19 +824,30 @@ class StrategyController:
                 tool = cmd.get("tool", "no_action")
                 params = cmd.get("params", {})
 
-                if tool == "no_action":
-                    reason = params.get("reason", "brak akcji")
-                    actions.append(f"🧠 AI CTRL: {reason}")
-                    continue
+                # Use InverterAgent for state-aware execution
+                result = await self._inverter_agent.execute(tool, params)
 
-                result = await self._execute_ai_command(tool, params)
-                if result:
-                    actions.append(result)
+                if result.executed:
+                    actions.append(result.message)
+                    self._log_decision("ai_cmd", result.message)
+                elif result.skipped and result.reason:
+                    # Log skip only at debug level to avoid spam
+                    _LOGGER.debug(
+                        "AI CTRL: %s → SKIP (%s)", tool, result.reason
+                    )
+                    # Still track the decision for UI (but mark as skip)
+                    if tool != "no_action":
+                        actions.append(f"🧠 AI CTRL: {tool} → ✅ (already active)")
+                    else:
+                        actions.append(f"🧠 AI CTRL: {result.reason}")
+
+            # Mark as executed — don't re-execute same commands every tick
+            self._ai_commands_executed = True
 
             # Log reasoning as decision
-            if reasoning and elapsed >= self._ai_call_interval:
+            if reasoning:
                 self._log_decision("ai_ctrl", f"🧠 {reasoning}")
-        else:
+        elif not self._ai_cached_commands:
             # No cached commands yet — fallback to weather-adaptive
             w_actions = await self._strategy_weather_adaptive(
                 soc, pv, load, surplus, g13_zone, g13_price,
