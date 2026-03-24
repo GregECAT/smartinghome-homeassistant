@@ -7071,6 +7071,62 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
+          <!-- ═══ LIVE STRATEGY DASHBOARD (above presets) ═══ -->
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-title">⚡ Live — Strategia w akcji</div>
+
+            <!-- Current tick status bar -->
+            <div id="ap-live-status" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(85px, 1fr)); gap:5px; margin-bottom:10px">
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:6px 8px; text-align:center">
+                <div style="font-size:7px; color:#64748b; text-transform:uppercase">Strategia</div>
+                <div id="ap-live-strategy" style="font-size:10px; font-weight:600; color:#f8fafc">—</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:6px 8px; text-align:center">
+                <div style="font-size:7px; color:#64748b; text-transform:uppercase">Strefa G13</div>
+                <div id="ap-live-zone" style="font-size:10px; font-weight:600; color:#f8fafc">—</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:6px 8px; text-align:center">
+                <div style="font-size:7px; color:#64748b; text-transform:uppercase">SOC</div>
+                <div id="ap-live-soc" style="font-size:10px; font-weight:600; color:#2ecc71">—</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:6px 8px; text-align:center">
+                <div style="font-size:7px; color:#64748b; text-transform:uppercase">PV</div>
+                <div id="ap-live-pv" style="font-size:10px; font-weight:600; color:#f7b731">—</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:6px 8px; text-align:center">
+                <div style="font-size:7px; color:#64748b; text-transform:uppercase">Zużycie</div>
+                <div id="ap-live-load" style="font-size:10px; font-weight:600; color:#e74c3c">—</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:6px 8px; text-align:center">
+                <div style="font-size:7px; color:#64748b; text-transform:uppercase">Nadwyżka</div>
+                <div id="ap-live-surplus" style="font-size:10px; font-weight:600; color:#2ecc71">—</div>
+              </div>
+            </div>
+
+            <!-- Current actions from this tick -->
+            <div style="margin-bottom:8px">
+              <div style="font-size:8px; color:#64748b; text-transform:uppercase; margin-bottom:3px; letter-spacing:0.5px">🔄 Aktywne akcje (ostatni tick)</div>
+              <div id="ap-live-actions" style="font-size:10px; color:#94a3b8; min-height:24px; padding:5px 7px; background:rgba(255,255,255,0.02); border-radius:6px; border-left:3px solid #334155">
+                <span style="color:#64748b">Oczekiwanie na dane...</span>
+              </div>
+            </div>
+
+            <!-- AI Reasoning (visible only for AI strategy) -->
+            <div id="ap-ai-reasoning-wrap" style="display:none; margin-bottom:8px">
+              <div style="font-size:8px; color:#64748b; text-transform:uppercase; margin-bottom:3px; letter-spacing:0.5px">🧠 AI Controller — Rozumowanie</div>
+              <div id="ap-ai-reasoning" style="font-size:10px; color:#a78bfa; min-height:24px; padding:5px 7px; background:rgba(124,58,237,0.06); border-radius:6px; border-left:3px solid #7c3aed">
+              </div>
+            </div>
+
+            <!-- Decision log feed -->
+            <div>
+              <div style="font-size:8px; color:#64748b; text-transform:uppercase; margin-bottom:3px; letter-spacing:0.5px">📋 Historia decyzji</div>
+              <div id="ap-activity-log" style="font-size:10px; color:#94a3b8; max-height:180px; overflow-y:auto">
+                <div style="color:#64748b; text-align:center; padding:8px">Brak aktywności</div>
+              </div>
+            </div>
+          </div>
+
           <!-- ═══ STRATEGY PRESET SELECTOR (compact) ═══ -->
           <div class="card" style="margin-bottom:14px">
             <div class="card-title" style="display:flex; justify-content:space-between; align-items:center">
@@ -7082,62 +7138,6 @@ class SmartingHomePanel extends HTMLElement {
 
           <!-- ═══ ACTION SECTIONS (W0-W5) — rendered dynamically ═══ -->
           <div id="ap-action-sections"></div>
-
-          <!-- ═══ LIVE STRATEGY DASHBOARD ═══ -->
-          <div class="card" style="margin-bottom:14px">
-            <div class="card-title">⚡ Live — Strategia w akcji</div>
-
-            <!-- Current tick status bar -->
-            <div id="ap-live-status" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(100px, 1fr)); gap:6px; margin-bottom:12px">
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
-                <div style="font-size:8px; color:#64748b; text-transform:uppercase">Strategia</div>
-                <div id="ap-live-strategy" style="font-size:11px; font-weight:600; color:#f8fafc">—</div>
-              </div>
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
-                <div style="font-size:8px; color:#64748b; text-transform:uppercase">Strefa G13</div>
-                <div id="ap-live-zone" style="font-size:11px; font-weight:600; color:#f8fafc">—</div>
-              </div>
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
-                <div style="font-size:8px; color:#64748b; text-transform:uppercase">SOC</div>
-                <div id="ap-live-soc" style="font-size:11px; font-weight:600; color:#2ecc71">—</div>
-              </div>
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
-                <div style="font-size:8px; color:#64748b; text-transform:uppercase">PV</div>
-                <div id="ap-live-pv" style="font-size:11px; font-weight:600; color:#f7b731">—</div>
-              </div>
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
-                <div style="font-size:8px; color:#64748b; text-transform:uppercase">Zużycie</div>
-                <div id="ap-live-load" style="font-size:11px; font-weight:600; color:#e74c3c">—</div>
-              </div>
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
-                <div style="font-size:8px; color:#64748b; text-transform:uppercase">Nadwyżka</div>
-                <div id="ap-live-surplus" style="font-size:11px; font-weight:600; color:#2ecc71">—</div>
-              </div>
-            </div>
-
-            <!-- Current actions from this tick -->
-            <div style="margin-bottom:10px">
-              <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px">🔄 Aktywne akcje (ostatni tick)</div>
-              <div id="ap-live-actions" style="font-size:11px; color:#94a3b8; min-height:28px; padding:6px 8px; background:rgba(255,255,255,0.02); border-radius:6px; border-left:3px solid #334155">
-                <span style="color:#64748b">Oczekiwanie na dane...</span>
-              </div>
-            </div>
-
-            <!-- AI Reasoning (visible only for AI strategy) -->
-            <div id="ap-ai-reasoning-wrap" style="display:none; margin-bottom:10px">
-              <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px">🧠 AI Controller — Rozumowanie</div>
-              <div id="ap-ai-reasoning" style="font-size:11px; color:#a78bfa; min-height:28px; padding:6px 8px; background:rgba(124,58,237,0.06); border-radius:6px; border-left:3px solid #7c3aed">
-              </div>
-            </div>
-
-            <!-- Decision log feed -->
-            <div>
-              <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px">📋 Historia decyzji</div>
-              <div id="ap-activity-log" style="font-size:11px; color:#94a3b8; max-height:250px; overflow-y:auto">
-                <div style="color:#64748b; text-align:center; padding:12px">Brak aktywności</div>
-              </div>
-            </div>
-          </div>
 
           <!-- ═══ AI PROVIDER SELECTOR ═══ -->
           <div class="card" style="margin-bottom:14px">
@@ -7540,7 +7540,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.22.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.22.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -7709,19 +7709,19 @@ class SmartingHomePanel extends HTMLElement {
       if (catActions.length === 0) continue;
 
       const activeInCat = catActions.filter(a => a.always || presetActions.has(a.id));
-      const countLabel = `${activeInCat.length}/${catActions.length} aktywnych`;
+      const countLabel = `${activeInCat.length}/${catActions.length}`;
 
       html += `
-        <div class="card" style="margin-bottom:10px">
-          <div style="display:flex; justify-content:space-between; align-items:center; cursor:pointer; padding-bottom:8px"
+        <div class="card" style="margin-bottom:8px; padding:10px 14px">
+          <div style="display:flex; justify-content:space-between; align-items:center; cursor:pointer"
                onclick="this.getRootNode().host._toggleApSection('${cat.id}')">
-            <div class="card-title" style="margin:0; padding:0">${cat.label}</div>
-            <div style="display:flex; align-items:center; gap:8px">
-              <span style="font-size:10px; color:#64748b">${countLabel}</span>
-              <span id="ap-cat-arrow-${cat.id}" style="font-size:10px; color:#64748b; transition:transform 0.2s">▼</span>
+            <div style="font-size:11px; font-weight:700; color:#f8fafc; letter-spacing:0.3px">${cat.label}</div>
+            <div style="display:flex; align-items:center; gap:6px">
+              <span style="font-size:9px; color:#64748b">${countLabel}</span>
+              <span id="ap-cat-arrow-${cat.id}" style="font-size:9px; color:#64748b; transition:transform 0.2s">▼</span>
             </div>
           </div>
-          <div id="ap-cat-body-${cat.id}" style="display:flex; flex-direction:column; gap:6px">
+          <div id="ap-cat-body-${cat.id}" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:5px; margin-top:8px">
             ${catActions.map(a => this._renderActionCard(a, presetActions, cat.color)).join('')}
           </div>
         </div>`;
@@ -7732,27 +7732,26 @@ class SmartingHomePanel extends HTMLElement {
 
   _renderActionCard(action, presetActions, catColor) {
     const isActive = action.always || presetActions.has(action.id);
-    const statusIcon = isActive ? '◐' : '○';
-    const statusLabel = isActive ? 'CZEKA' : 'IDLE';
-    const statusColor = isActive ? '#f7b731' : '#475569';
-    const opacity = isActive ? '1' : '0.5';
+    const statusDot = isActive ? '●' : '○';
+    const statusColor = isActive ? '#2ecc71' : '#475569';
     const borderColor = isActive ? catColor : 'rgba(255,255,255,0.06)';
-    const alwaysBadge = action.always ? '<span style="font-size:7px; background:rgba(231,76,60,0.2); color:#e74c3c; padding:1px 5px; border-radius:6px; font-weight:700; margin-left:4px">ALWAYS</span>' : '';
+    const bgColor = isActive ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.015)';
+    const opacity = isActive ? '1' : '0.6';
+    const alwaysDot = action.always ? '<span style="font-size:5px; color:#e74c3c; vertical-align:super">★</span>' : '';
 
     return `
-      <div class="hems-auto-card" id="ap-action-${action.id}" style="opacity:${opacity}; border-left:3px solid ${borderColor}; padding:8px 12px; border-radius:8px; background:rgba(255,255,255,0.02); display:flex; align-items:center; gap:10px; transition:all 0.3s">
-        <div style="font-size:20px; min-width:28px; text-align:center">${action.icon}</div>
-        <div style="flex:1; min-width:0">
-          <div style="display:flex; align-items:center; gap:6px; margin-bottom:2px">
-            <span style="font-size:12px; font-weight:700; color:#f8fafc">${action.name}</span>
-            ${alwaysBadge}
-            <span style="font-size:8px; color:${statusColor}; font-weight:700">${statusIcon} ${statusLabel}</span>
-          </div>
-          <div style="font-size:10px; color:#94a3b8; line-height:1.3">${action.desc}</div>
+      <div class="ap-tile" id="ap-action-${action.id}"
+           style="opacity:${opacity}; border-left:3px solid ${borderColor}; padding:6px 8px; border-radius:6px; background:${bgColor}; cursor:pointer; transition:all 0.3s; position:relative"
+           onclick="this.getRootNode().host._triggerAction('${action.id}')"
+           title="${action.desc}">
+        <div style="display:flex; align-items:center; gap:4px; margin-bottom:2px">
+          <span style="font-size:14px">${action.icon}</span>
+          <span style="font-size:9px; font-weight:700; color:#f8fafc; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1">${action.name}${alwaysDot}</span>
         </div>
-        <button style="padding:4px 8px; border-radius:6px; background:rgba(46,204,113,0.1); border:1px solid rgba(46,204,113,0.2); color:#2ecc71; font-size:10px; font-weight:700; cursor:pointer; white-space:nowrap; transition:all 0.2s"
-          onclick="this.getRootNode().host._triggerAction('${action.id}')"
-          title="Ręczne wyzwolenie">▶️</button>
+        <div style="display:flex; align-items:center; justify-content:space-between">
+          <span style="font-size:7px; color:${statusColor}; font-weight:700">${statusDot} ${isActive ? 'CZEKA' : 'IDLE'}</span>
+          <span style="font-size:8px; color:#475569">▶</span>
+        </div>
       </div>`;
   }
 
@@ -7766,17 +7765,18 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   async _triggerAction(actionId) {
-    const btn = this.shadowRoot.querySelector(`#ap-action-${actionId} button`);
-    if (btn) { btn.innerHTML = '⏳'; btn.disabled = true; }
+    const tile = this.shadowRoot.getElementById(`ap-action-${actionId}`);
+    const origBg = tile ? tile.style.background : '';
+    if (tile) tile.style.background = 'rgba(46,204,113,0.15)';
 
     try {
       await this._hass.callService('smartinghome', 'trigger_autopilot_action', {
         action_id: actionId,
       });
-      if (btn) { btn.innerHTML = '✅'; setTimeout(() => { btn.innerHTML = '▶️'; btn.disabled = false; }, 2000); }
+      if (tile) { tile.style.background = 'rgba(46,204,113,0.25)'; setTimeout(() => { tile.style.background = origBg; }, 1500); }
     } catch (err) {
       console.error('[SH] Trigger action failed:', err);
-      if (btn) { btn.innerHTML = '❌'; setTimeout(() => { btn.innerHTML = '▶️'; btn.disabled = false; }, 2000); }
+      if (tile) { tile.style.background = 'rgba(231,76,60,0.2)'; setTimeout(() => { tile.style.background = origBg; }, 1500); }
     }
   }
 
