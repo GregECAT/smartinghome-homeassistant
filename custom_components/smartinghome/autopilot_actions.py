@@ -231,6 +231,29 @@ def _slot_dod() -> SensorSlot:
 def build_all_actions() -> list[AutopilotAction]:
     """Build the complete list of autopilot actions."""
     return [
+        # ═══ AI DIRECT OVERRIDES ════════════════════════════════
+
+        AutopilotAction(
+            id="ai_grid_charge",
+            name="AI: Wymuszone ładowanie",
+            icon="🧠🔋",
+            description="AI decyzja: Zmuszenie falownika do ładowania z sieci ze względu na strategię.",
+            category=ActionCategory.W0_SAFETY,
+            sensor_slots=[_slot_soc(), _slot_grid()],
+            default_params={},
+            commands=[{"tool": "force_charge", "params": {}}],
+        ),
+        AutopilotAction(
+            id="ai_grid_sell",
+            name="AI: Wymuszona sprzedaż",
+            icon="🧠💰",
+            description="AI decyzja: Zasilanie domu z baterii i ew. sprzedaż do sieci (wysoka cena).",
+            category=ActionCategory.W0_SAFETY,
+            sensor_slots=[_slot_soc(), _slot_grid()],
+            default_params={},
+            commands=[{"tool": "force_discharge", "params": {}}],
+        ),
+
         # ═══ W0: SAFETY GUARD ═══════════════════════════════════
 
         AutopilotAction(
@@ -672,6 +695,7 @@ STRATEGY_ACTION_MAP: Final[dict[AutopilotStrategy, list[str]]] = {
     ],
     AutopilotStrategy.AI_FULL_AUTONOMY: [
         # AI decides — enable all actions, AI selects which to trigger
+        "ai_grid_charge", "ai_grid_sell",
         "sell_07", "charge_13", "evening_peak", "weekend",
         "night_arbitrage", "cheapest_window", "most_expensive_window",
         "low_price_charge", "high_price_sell", "rce_peak_g13", "negative_price",
