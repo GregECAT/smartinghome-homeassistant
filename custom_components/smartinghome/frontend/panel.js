@@ -4805,8 +4805,8 @@ class SmartingHomePanel extends HTMLElement {
           background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
           border-radius: 12px; padding: 12px; text-align: center;
         }
-        .hems-kpi .kpi-label { font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; }
-        .hems-kpi .kpi-val { font-size: 20px; font-weight: 800; margin-top: 4px; }
+        .hems-kpi .kpi-label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; }
+        .hems-kpi .kpi-val { font-size: 22px; font-weight: 800; margin-top: 4px; }
         .hems-layer {
           margin-bottom: 10px; border: 1px solid rgba(255,255,255,0.06);
           border-radius: 14px; overflow: hidden;
@@ -4822,10 +4822,10 @@ class SmartingHomePanel extends HTMLElement {
         .hems-layer-header:hover { background: rgba(255,255,255,0.06); }
         .hems-layer-header .hl-left { display: flex; align-items: center; gap: 8px; }
         .hems-layer-header .hl-tag {
-          font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 6px;
+          font-size: 10px; font-weight: 700; padding: 3px 10px; border-radius: 6px;
           text-transform: uppercase; letter-spacing: 0.5px;
         }
-        .hems-layer-header .hl-name { font-size: 13px; font-weight: 700; color: #e2e8f0; }
+        .hems-layer-header .hl-name { font-size: 15px; font-weight: 700; color: #e2e8f0; }
         .hems-layer-header .hl-chevron {
           font-size: 14px; color: #64748b; transition: transform 0.3s;
         }
@@ -4850,19 +4850,19 @@ class SmartingHomePanel extends HTMLElement {
           border-color: rgba(255,255,255,0.12);
         }
         .hems-auto-card .hac-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-        .hems-auto-card .hac-icon { font-size: 18px; }
-        .hems-auto-card .hac-name { font-size: 12px; font-weight: 700; color: #e2e8f0; flex: 1; margin-left: 8px; }
+        .hems-auto-card .hac-icon { font-size: 20px; }
+        .hems-auto-card .hac-name { font-size: 13px; font-weight: 700; color: #e2e8f0; flex: 1; margin-left: 8px; }
         .hems-auto-card .hac-status {
-          font-size: 9px; font-weight: 700; padding: 2px 8px;
+          font-size: 10px; font-weight: 700; padding: 3px 10px;
           border-radius: 10px; text-transform: uppercase; letter-spacing: 0.3px;
         }
         .hems-auto-card .hac-status.on { background: rgba(46,204,113,0.15); color: #2ecc71; }
         .hems-auto-card .hac-status.wait { background: rgba(247,183,49,0.15); color: #f7b731; }
         .hems-auto-card .hac-status.off { background: rgba(100,116,139,0.15); color: #64748b; }
-        .hems-auto-card .hac-desc { font-size: 10px; color: #94a3b8; line-height: 1.4; margin-bottom: 8px; }
+        .hems-auto-card .hac-desc { font-size: 12px; color: #94a3b8; line-height: 1.4; margin-bottom: 8px; }
         .hems-auto-card .hac-sensors {
-          display: grid; grid-template-columns: 1fr 1fr; gap: 3px;
-          font-size: 10px;
+          display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
+          font-size: 12px;
         }
         .hems-auto-card .hac-sensors .hs-label { color: #64748b; }
         .hems-auto-card .hac-sensors .hs-val { color: #a0aec0; font-weight: 600; text-align: right; }
@@ -4901,13 +4901,13 @@ class SmartingHomePanel extends HTMLElement {
           border-radius: 16px;
         }
         .ap-header-strip .ap-h-title {
-          font-size: 14px; font-weight: 800; color: #fff;
+          font-size: 16px; font-weight: 800; color: #fff;
           background: linear-gradient(90deg, #7c3aed, #00d4ff);
           -webkit-background-clip: text; -webkit-text-fill-color: transparent;
         }
         .ap-badges { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
         .ap-badge {
-          padding: 3px 10px; border-radius: 20px; font-size: 9px; font-weight: 700;
+          padding: 4px 12px; border-radius: 20px; font-size: 10px; font-weight: 700;
           text-transform: uppercase; letter-spacing: 0.5px;
         }
         .ap-badge.active { background: rgba(46,204,113,0.15); color: #2ecc71; }
@@ -4942,12 +4942,12 @@ class SmartingHomePanel extends HTMLElement {
           0%, 100% { box-shadow: 0 0 0 0 rgba(124,58,237,0.15); }
           50% { box-shadow: 0 0 16px 3px rgba(124,58,237,0.1); }
         }
-        .ap-sc-icon { font-size: 20px; margin-bottom: 6px; }
-        .ap-sc-name { font-size: 12px; font-weight: 700; color: #fff; margin-bottom: 4px; }
-        .ap-sc-desc { font-size: 9px; color: #94a3b8; line-height: 1.4; }
+        .ap-sc-icon { font-size: 22px; margin-bottom: 6px; }
+        .ap-sc-name { font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 4px; }
+        .ap-sc-desc { font-size: 11px; color: #94a3b8; line-height: 1.4; }
         .ap-sc-savings {
           margin-top: 8px; padding: 6px 10px; border-radius: 8px;
-          background: rgba(46,204,113,0.08); font-size: 11px; font-weight: 700;
+          background: rgba(46,204,113,0.08); font-size: 12px; font-weight: 700;
           color: #2ecc71; text-align: center;
         }
 
@@ -4967,7 +4967,7 @@ class SmartingHomePanel extends HTMLElement {
           transition: height 0.5s ease;
         }
         .ap-th-label {
-          font-size: 7px; color: #64748b; padding: 2px 0;
+          font-size: 9px; color: #64748b; padding: 2px 0;
         }
         .ap-th.charge .ap-th-bar { background: linear-gradient(180deg, #2ecc71, #27ae60); }
         .ap-th.discharge .ap-th-bar { background: linear-gradient(180deg, #e74c3c, #c0392b); }
@@ -4984,19 +4984,19 @@ class SmartingHomePanel extends HTMLElement {
           padding: 12px; border-radius: 12px; text-align: center;
           border: 1px solid rgba(255,255,255,0.04);
         }
-        .ap-est-label { font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 0.8px; }
-        .ap-est-val { font-size: 20px; font-weight: 800; margin-top: 4px; }
+        .ap-est-label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.8px; }
+        .ap-est-val { font-size: 22px; font-weight: 800; margin-top: 4px; }
 
         .ap-ai-analysis {
           padding: 14px; border-radius: 12px;
           background: rgba(124,58,237,0.05); border: 1px solid rgba(124,58,237,0.15);
-          font-size: 12px; color: #cbd5e1; line-height: 1.6;
+          font-size: 13px; color: #cbd5e1; line-height: 1.6;
           max-height: 800px; overflow-y: auto;
         }
-        .ap-ai-analysis h2 { font-size: 14px; color: #fff; margin: 12px 0 6px; }
-        .ap-ai-analysis h3 { font-size: 12px; color: #a78bfa; margin: 8px 0 4px; }
+        .ap-ai-analysis h2 { font-size: 16px; color: #fff; margin: 12px 0 6px; }
+        .ap-ai-analysis h3 { font-size: 14px; color: #a78bfa; margin: 8px 0 4px; }
         .ap-ai-analysis strong { color: #fff; }
-        .ap-ai-analysis table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 8px 0; }
+        .ap-ai-analysis table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; }
         .ap-ai-analysis th, .ap-ai-analysis td {
           padding: 4px 8px; border: 1px solid rgba(255,255,255,0.08); text-align: left;
         }
@@ -7171,52 +7171,52 @@ class SmartingHomePanel extends HTMLElement {
             <div class="card-title">⚡ Live — Strategia w akcji</div>
 
             <!-- Current tick status bar -->
-            <div id="ap-live-status" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(85px, 1fr)); gap:5px; margin-bottom:10px">
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:6px 8px; text-align:center">
-                <div style="font-size:7px; color:#64748b; text-transform:uppercase">Strategia</div>
-                <div id="ap-live-strategy" style="font-size:10px; font-weight:600; color:#f8fafc">—</div>
+            <div id="ap-live-status" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(95px, 1fr)); gap:6px; margin-bottom:10px">
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:10px; color:#64748b; text-transform:uppercase">Strategia</div>
+                <div id="ap-live-strategy" style="font-size:13px; font-weight:600; color:#f8fafc">—</div>
               </div>
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:6px 8px; text-align:center">
-                <div style="font-size:7px; color:#64748b; text-transform:uppercase">Strefa G13</div>
-                <div id="ap-live-zone" style="font-size:10px; font-weight:600; color:#f8fafc">—</div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:10px; color:#64748b; text-transform:uppercase">Strefa G13</div>
+                <div id="ap-live-zone" style="font-size:13px; font-weight:600; color:#f8fafc">—</div>
               </div>
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:6px 8px; text-align:center">
-                <div style="font-size:7px; color:#64748b; text-transform:uppercase">SOC</div>
-                <div id="ap-live-soc" style="font-size:10px; font-weight:600; color:#2ecc71">—</div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:10px; color:#64748b; text-transform:uppercase">SOC</div>
+                <div id="ap-live-soc" style="font-size:13px; font-weight:600; color:#2ecc71">—</div>
               </div>
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:6px 8px; text-align:center">
-                <div style="font-size:7px; color:#64748b; text-transform:uppercase">PV</div>
-                <div id="ap-live-pv" style="font-size:10px; font-weight:600; color:#f7b731">—</div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:10px; color:#64748b; text-transform:uppercase">PV</div>
+                <div id="ap-live-pv" style="font-size:13px; font-weight:600; color:#f7b731">—</div>
               </div>
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:6px 8px; text-align:center">
-                <div style="font-size:7px; color:#64748b; text-transform:uppercase">Zużycie</div>
-                <div id="ap-live-load" style="font-size:10px; font-weight:600; color:#e74c3c">—</div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:10px; color:#64748b; text-transform:uppercase">Zużycie</div>
+                <div id="ap-live-load" style="font-size:13px; font-weight:600; color:#e74c3c">—</div>
               </div>
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:6px 8px; text-align:center">
-                <div style="font-size:7px; color:#64748b; text-transform:uppercase">Nadwyżka</div>
-                <div id="ap-live-surplus" style="font-size:10px; font-weight:600; color:#2ecc71">—</div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:10px; color:#64748b; text-transform:uppercase">Nadwyżka</div>
+                <div id="ap-live-surplus" style="font-size:13px; font-weight:600; color:#2ecc71">—</div>
               </div>
             </div>
 
             <!-- Current actions from this tick -->
             <div style="margin-bottom:8px">
-              <div style="font-size:8px; color:#64748b; text-transform:uppercase; margin-bottom:3px; letter-spacing:0.5px">🔄 Aktywne akcje (ostatni tick)</div>
-              <div id="ap-live-actions" style="font-size:10px; color:#94a3b8; min-height:24px; padding:5px 7px; background:rgba(255,255,255,0.02); border-radius:6px; border-left:3px solid #334155">
+              <div style="font-size:10px; color:#64748b; text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px">🔄 Aktywne akcje (ostatni tick)</div>
+              <div id="ap-live-actions" style="font-size:12px; color:#94a3b8; min-height:24px; padding:6px 8px; background:rgba(255,255,255,0.02); border-radius:6px; border-left:3px solid #334155">
                 <span style="color:#64748b">Oczekiwanie na dane...</span>
               </div>
             </div>
 
             <!-- AI Reasoning (visible only for AI strategy) -->
             <div id="ap-ai-reasoning-wrap" style="display:none; margin-bottom:8px">
-              <div style="font-size:8px; color:#64748b; text-transform:uppercase; margin-bottom:3px; letter-spacing:0.5px">🧠 AI Controller — Rozumowanie</div>
-              <div id="ap-ai-reasoning" style="font-size:10px; color:#a78bfa; min-height:24px; padding:5px 7px; background:rgba(124,58,237,0.06); border-radius:6px; border-left:3px solid #7c3aed">
+              <div style="font-size:10px; color:#64748b; text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px">🧠 AI Controller — Rozumowanie</div>
+              <div id="ap-ai-reasoning" style="font-size:12px; color:#a78bfa; min-height:24px; padding:6px 8px; background:rgba(124,58,237,0.06); border-radius:6px; border-left:3px solid #7c3aed">
               </div>
             </div>
 
             <!-- Decision log feed -->
             <div>
-              <div style="font-size:8px; color:#64748b; text-transform:uppercase; margin-bottom:3px; letter-spacing:0.5px">📋 Historia decyzji</div>
-              <div id="ap-activity-log" style="font-size:10px; color:#94a3b8; max-height:180px; overflow-y:auto">
+              <div style="font-size:10px; color:#64748b; text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px">📋 Historia decyzji</div>
+              <div id="ap-activity-log" style="font-size:12px; color:#94a3b8; max-height:200px; overflow-y:auto">
                 <div style="color:#64748b; text-align:center; padding:8px">Brak aktywności</div>
               </div>
             </div>
@@ -7226,7 +7226,7 @@ class SmartingHomePanel extends HTMLElement {
           <div class="card" style="margin-bottom:14px">
             <div class="card-title" style="display:flex; justify-content:space-between; align-items:center">
               <span>📋 Preset strategii</span>
-              <span style="font-size:9px; color:#64748b">Wybierz preset → aktywuje zestaw akcji</span>
+              <span style="font-size:11px; color:#64748b">Wybierz preset → aktywuje zestaw akcji</span>
             </div>
             <div style="display:flex; flex-wrap:wrap; gap:6px" id="ap-strategy-presets"></div>
           </div>
