@@ -7540,7 +7540,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.22.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.22.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -7709,19 +7709,19 @@ class SmartingHomePanel extends HTMLElement {
       if (catActions.length === 0) continue;
 
       const activeInCat = catActions.filter(a => a.always || presetActions.has(a.id));
-      const countLabel = `${activeInCat.length}/${catActions.length}`;
+      const countLabel = `${activeInCat.length}/${catActions.length} aktywnych`;
 
       html += `
-        <div class="card" style="margin-bottom:8px; padding:10px 14px">
+        <div class="card" style="margin-bottom:10px; padding:10px 14px">
           <div style="display:flex; justify-content:space-between; align-items:center; cursor:pointer"
                onclick="this.getRootNode().host._toggleApSection('${cat.id}')">
-            <div style="font-size:11px; font-weight:700; color:#f8fafc; letter-spacing:0.3px">${cat.label}</div>
+            <div style="font-size:11px; font-weight:700; color:${cat.color}; letter-spacing:0.3px">${cat.label}</div>
             <div style="display:flex; align-items:center; gap:6px">
               <span style="font-size:9px; color:#64748b">${countLabel}</span>
               <span id="ap-cat-arrow-${cat.id}" style="font-size:9px; color:#64748b; transition:transform 0.2s">▼</span>
             </div>
           </div>
-          <div id="ap-cat-body-${cat.id}" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:5px; margin-top:8px">
+          <div id="ap-cat-body-${cat.id}" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(170px, 1fr)); gap:6px; margin-top:8px">
             ${catActions.map(a => this._renderActionCard(a, presetActions, cat.color)).join('')}
           </div>
         </div>`;
@@ -7732,26 +7732,32 @@ class SmartingHomePanel extends HTMLElement {
 
   _renderActionCard(action, presetActions, catColor) {
     const isActive = action.always || presetActions.has(action.id);
-    const statusDot = isActive ? '●' : '○';
-    const statusColor = isActive ? '#2ecc71' : '#475569';
+    const statusLabel = isActive ? 'CZEKA' : 'IDLE';
+    const statusBg = isActive ? 'rgba(46,204,113,0.15)' : 'rgba(71,85,105,0.2)';
+    const statusBorder = isActive ? 'rgba(46,204,113,0.4)' : 'rgba(71,85,105,0.3)';
+    const statusTextColor = isActive ? '#2ecc71' : '#64748b';
     const borderColor = isActive ? catColor : 'rgba(255,255,255,0.06)';
-    const bgColor = isActive ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.015)';
-    const opacity = isActive ? '1' : '0.6';
-    const alwaysDot = action.always ? '<span style="font-size:5px; color:#e74c3c; vertical-align:super">★</span>' : '';
+    const bgColor = isActive ? 'rgba(255,255,255,0.035)' : 'rgba(255,255,255,0.015)';
+    const opacity = isActive ? '1' : '0.55';
+    const alwaysBadge = action.always
+      ? `<span style="font-size:7px; background:rgba(231,76,60,0.2); color:#e74c3c; padding:1px 4px; border-radius:4px; font-weight:700; margin-left:auto">ALWAYS</span>`
+      : '';
+
+    // Truncate description to 60 chars
+    const shortDesc = action.desc.length > 60 ? action.desc.substring(0, 57) + '…' : action.desc;
 
     return `
-      <div class="ap-tile" id="ap-action-${action.id}"
-           style="opacity:${opacity}; border-left:3px solid ${borderColor}; padding:6px 8px; border-radius:6px; background:${bgColor}; cursor:pointer; transition:all 0.3s; position:relative"
+      <div class="ap-card" id="ap-action-${action.id}"
+           style="opacity:${opacity}; border-left:3px solid ${borderColor}; padding:8px 10px; border-radius:8px; background:${bgColor}; cursor:pointer; transition:all 0.3s; display:flex; flex-direction:column; gap:4px"
            onclick="this.getRootNode().host._triggerAction('${action.id}')"
            title="${action.desc}">
-        <div style="display:flex; align-items:center; gap:4px; margin-bottom:2px">
-          <span style="font-size:14px">${action.icon}</span>
-          <span style="font-size:9px; font-weight:700; color:#f8fafc; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1">${action.name}${alwaysDot}</span>
+        <div style="display:flex; align-items:center; gap:5px">
+          <span style="font-size:16px">${action.icon}</span>
+          <span style="font-size:10px; font-weight:700; color:#f8fafc; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${action.name}</span>
+          ${alwaysBadge}
+          <span style="font-size:7px; padding:1px 5px; border-radius:4px; font-weight:700; background:${statusBg}; border:1px solid ${statusBorder}; color:${statusTextColor}">${statusLabel}</span>
         </div>
-        <div style="display:flex; align-items:center; justify-content:space-between">
-          <span style="font-size:7px; color:${statusColor}; font-weight:700">${statusDot} ${isActive ? 'CZEKA' : 'IDLE'}</span>
-          <span style="font-size:8px; color:#475569">▶</span>
-        </div>
+        <div style="font-size:8px; color:#94a3b8; line-height:1.3; min-height:18px">${shortDesc}</div>
       </div>`;
   }
 

@@ -736,11 +736,18 @@ User question: {question}"""
             if not isinstance(parsed["commands"], list):
                 raise ValueError("'commands' is not a list")
 
-            # Validate each command
+            # Validate each command — supports both {"action":"id"} and {"tool":"name"}
             valid_tools = {"force_charge", "force_discharge", "set_dod",
                            "set_export_limit", "switch_on", "switch_off", "no_action"}
             validated_commands = []
             for cmd in parsed["commands"][:3]:  # Max 3 commands
+                # Action-based command: pass through for controller to resolve
+                action_id = cmd.get("action")
+                if action_id:
+                    validated_commands.append({"action": action_id})
+                    continue
+
+                # Raw tool command: validate tool name
                 tool = cmd.get("tool", "")
                 if tool not in valid_tools:
                     _LOGGER.warning("AI Controller: unknown tool '%s', skipping", tool)
