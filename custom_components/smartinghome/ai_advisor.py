@@ -618,11 +618,13 @@ User question: {question}"""
         self,
         prompt: str,
         provider: str = "auto",
+        raw_json: bool = False,
     ) -> dict[str, Any]:
         """Ask AI to return structured JSON commands for inverter control.
 
         Returns a parsed dict with keys: reasoning, commands, next_check_minutes.
         On ANY error, returns a safe no_action fallback.
+        If raw_json=True, returns raw parsed JSON without controller validation.
         """
         import json as _json
 
@@ -717,6 +719,22 @@ User question: {question}"""
         if not raw_text.strip():
             return dict(self._CONTROLLER_NO_ACTION, reasoning="Empty AI response")
 
+        # Raw JSON mode: skip controller validation (for Strategist)
+        if raw_json:
+            try:
+                import json as _json2
+                text2 = raw_text.strip()
+                if text2.startswith("```"):
+                    text2 = text2.split("\n", 1)[1] if "\n" in text2 else text2[3:]
+                    if text2.endswith("```"): text2 = text2[:-3]
+                    text2 = text2.strip()
+                parsed2 = _json2.loads(text2)
+                if isinstance(parsed2, dict):
+                    return parsed2
+            except Exception as err2:
+                _LOGGER.warning("AI Strategist: JSON parse error: %s | raw: %s", err2, raw_text[:200])
+            return {}
+
         try:
             # Strip markdown code fences if present
             text = raw_text.strip()
@@ -725,6 +743,13 @@ User question: {question}"""
                 if text.endswith("```"):
                     text = text[:-3]
                 text = text.strip()
+
+            # Normalize non-compliant key names BEFORE parsing
+            # AI sometimes uses "analysis" or "explanation" instead of "reasoning"
+            import re as _re
+            text = _re.sub(r'"analysis"', '"reasoning"', text)
+            text = _re.sub(r'"explanation"', '"reasoning"', text)
+            text = _re.sub(r'"plan"', '"reasoning"', text)
 
             parsed = None
             try:

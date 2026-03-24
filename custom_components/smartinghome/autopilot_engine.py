@@ -804,10 +804,12 @@ Respond ONLY with valid JSON.
 5. PV surplus > 2kW + SOC > 80% → switch_on boiler
 6. CHECK DEVICE STATUS — if already active, use "no_action"!
 
-═══ RESPONSE FORMAT (MUST be COMPACT JSON, max 200 chars reasoning) ═══
-CRITICAL: ONLY valid JSON. No markdown. Keep reasoning to MAX 10 WORDS in Polish.
+═══ RESPONSE FORMAT ═══
+ONLY valid JSON. No text, no markdown, no explanation outside JSON.
+FORBIDDEN keys: "analysis", "explanation", "plan". Use ONLY: "reasoning", "commands", "next_check_minutes".
+"reasoning" = MAX 10 WORDS in Polish. NOT a paragraph.
 {{
-  "reasoning": "Szczyt, rozładowuję",
+  "reasoning": "Szczyt, rozładuj",
   "commands": [{{"action": "evening_peak"}}],
   "next_check_minutes": 5
 }}
