@@ -7111,6 +7111,13 @@ class SmartingHomePanel extends HTMLElement {
               </div>
             </div>
 
+            <!-- AI Reasoning (visible only for AI strategy) -->
+            <div id="ap-ai-reasoning-wrap" style="display:none; margin-bottom:10px">
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px">🧠 AI Controller — Rozumowanie</div>
+              <div id="ap-ai-reasoning" style="font-size:11px; color:#a78bfa; min-height:28px; padding:6px 8px; background:rgba(124,58,237,0.06); border-radius:6px; border-left:3px solid #7c3aed">
+              </div>
+            </div>
+
             <!-- Decision log feed -->
             <div>
               <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px">📋 Historia decyzji</div>
@@ -7506,7 +7513,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.20.9</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.21.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -7949,10 +7956,23 @@ class SmartingHomePanel extends HTMLElement {
               } else {
                 actionsEl.innerHTML = actions.map(a => {
                   const isWarning = a.includes('⚠️') || a.includes('emergency');
-                  const color = isWarning ? '#f7b731' : '#2ecc71';
+                  const isAI = a.includes('AI CTRL') || a.includes('AI DRY-RUN');
+                  const color = isWarning ? '#f7b731' : isAI ? '#a78bfa' : '#2ecc71';
                   return `<div style="padding:2px 0; color:${color}">→ ${a}</div>`;
                 }).join('');
-                actionsEl.style.borderLeftColor = '#2ecc71';
+                actionsEl.style.borderLeftColor = actions.some(a => a.includes('AI CTRL')) ? '#7c3aed' : '#2ecc71';
+              }
+            }
+
+            // ── AI Reasoning display ──
+            const aiReasoningWrap = this.shadowRoot.getElementById('ap-ai-reasoning-wrap');
+            const aiReasoningEl = this.shadowRoot.getElementById('ap-ai-reasoning');
+            if (aiReasoningWrap && aiReasoningEl) {
+              if (live.ai_reasoning && live.strategy === 'ai_full_autonomy') {
+                aiReasoningWrap.style.display = 'block';
+                aiReasoningEl.textContent = live.ai_reasoning;
+              } else {
+                aiReasoningWrap.style.display = 'none';
               }
             }
           }
@@ -7962,7 +7982,9 @@ class SmartingHomePanel extends HTMLElement {
           const logEl = this.shadowRoot.getElementById('ap-activity-log');
           if (logEl && log && log.length > 0) {
             logEl.innerHTML = log.slice().reverse().map(entry => {
-              const icon = entry.action?.includes('emergency') ? '🚨' :
+              const icon = entry.action?.includes('ai_ctrl') ? '🧠' :
+                           entry.action?.includes('ai_cmd') ? '🤖' :
+                           entry.action?.includes('emergency') ? '🚨' :
                            entry.action?.includes('charge') ? '🔋' :
                            entry.action?.includes('export') ? '⚡' :
                            entry.action?.includes('voltage') ? '🔌' :

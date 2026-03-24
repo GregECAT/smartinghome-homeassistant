@@ -642,3 +642,124 @@ Use tables for comparisons. Be concise but comprehensive. Focus on actionable in
 
     return prompt
 
+
+# ═══════════════════════════════════════════════════════════════
+# AI CONTROLLER PROMPT — structured JSON toolcalling
+# ═══════════════════════════════════════════════════════════════
+
+# Available tools the AI can call — these map to EnergyManager methods
+AI_CONTROLLER_TOOLS = {
+    "force_charge": "Force battery charging from grid+PV (call when battery needs charging)",
+    "force_discharge": "Force battery discharge (sell/self-consume, call when selling makes sense)",
+    "set_dod": "Set max depth of discharge (params: dod: int 0-100). Higher = more capacity available",
+    "set_export_limit": "Set grid export limit in watts (params: limit: int). 0 = no export",
+    "switch_on": "Turn on managed load (params: entity: 'boiler'|'ac'|'socket2')",
+    "switch_off": "Turn off managed load (params: entity: 'boiler'|'ac'|'socket2')",
+    "no_action": "Do nothing this tick (params: reason: string). Use when current state is optimal",
+}
+
+
+def build_ai_controller_prompt(
+    current_data: dict[str, Any],
+) -> str:
+    """Build a concise prompt for AI to return structured JSON commands.
+
+    Unlike the advisory prompt (build_autopilot_ai_prompt), this one:
+    - Does NOT request analysis text or markdown
+    - Requires ONLY valid JSON response
+    - Lists available tools the AI can call
+    - Focuses on immediate action (this tick), not 24h plans
+    """
+    now = datetime.now()
+    day_names = ['Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota', 'Niedziela']
+    month = now.month
+    weekday = now.weekday()
+    hour = now.hour
+
+    # G13 zone
+    current_zone = _get_g13_zone(hour, month, weekday)
+    current_price = _get_g13_price(current_zone)
+
+    # Next zone info — what's coming in the next hours
+    next_zones = []
+    for h_offset in range(1, 4):
+        fh = (hour + h_offset) % 24
+        fz = _get_g13_zone(fh, month, weekday)
+        fp = _get_g13_price(fz)
+        next_zones.append(f"+{h_offset}h ({fh:02d}:00): {fz.value} ({fp:.2f} PLN/kWh)")
+
+    # RCE data
+    rce_mwh = float(current_data.get('rce_price') or 250)
+    rce_sell = float(current_data.get('rce_sell') or (rce_mwh / 1000) * RCE_PROSUMER_COEFFICIENT)
+
+    # Battery
+    bat_cap = current_data.get('battery_capacity') or DEFAULT_BATTERY_CAPACITY
+    bat_cap_kwh = float(bat_cap) / 1000
+
+    # Tools description
+    tools_desc = "\n".join(
+        f'  - "{name}": {desc}' for name, desc in AI_CONTROLLER_TOOLS.items()
+    )
+
+    prompt = f"""You are an autonomous energy controller for a home solar+battery system in Poland (G13 tariff).
+
+YOUR JOB: Decide what action to take RIGHT NOW based on current system state. Respond ONLY with valid JSON.
+
+═══ AVAILABLE TOOLS ═══
+{tools_desc}
+
+═══ MANAGED ENTITIES ═══
+  - "boiler": Water heater 3.8kW (switch.bojler_3800)
+  - "ac": Air conditioning (switch.klimatyzacja_socket_1)
+  - "socket2": Smart socket (switch.drugie_gniazdko)
+
+═══ CURRENT STATE ({now.strftime('%Y-%m-%d')} {day_names[weekday]} {now.strftime('%H:%M')}) ═══
+  PV Power: {current_data.get('pv_power', 0)} W
+  Load: {current_data.get('load', 0)} W
+  Battery SOC: {current_data.get('battery_soc', 0)}%
+  Battery Power: {current_data.get('battery_power', 0)} W (positive=charging)
+  Grid Power: {current_data.get('grid_power', 0)} W (positive=import)
+  PV Surplus: {current_data.get('pv_surplus', 0)} W
+  Battery Capacity: {bat_cap_kwh:.1f} kWh
+
+═══ TARIFF & PRICING ═══
+  Current zone: {current_zone.value} ({current_price:.2f} PLN/kWh)
+  Upcoming zones:
+    {chr(10) + "    ".join(next_zones)}
+  G13 prices: off_peak=0.63, morning_peak=0.91, afternoon_peak=1.50 PLN/kWh
+  RCE: {rce_mwh:.1f} PLN/MWh (sell: {rce_sell:.4f} PLN/kWh)
+  RCE next hour: {current_data.get('rce_next_hour', 'N/A')} PLN/MWh
+  RCE +2h: {current_data.get('rce_2h', 'N/A')} PLN/MWh
+  RCE +3h: {current_data.get('rce_3h', 'N/A')} PLN/MWh
+
+═══ WEATHER ═══
+  Conditions: {current_data.get('weather_condition', 'N/A')}, {current_data.get('weather_temp', 'N/A')}°C
+  Clouds: {current_data.get('weather_clouds', 'N/A')}%
+  PV forecast remaining today: {current_data.get('forecast_remaining', 0)} kWh
+  PV forecast tomorrow: {current_data.get('forecast_tomorrow', 0)} kWh
+
+═══ KEY RULES ═══
+1. ARBITRAGE IS KING: Buy at off_peak (0.63), self-consume at afternoon_peak (1.50) = 0.87 PLN/kWh margin
+2. If approaching afternoon_peak AND SOC < 90% → force_charge NOW (even from grid at 0.63)
+3. During afternoon_peak → force_discharge to avoid importing at 1.50
+4. Pre-peak (13:00-15:59): charge battery + heat water (boiler) using cheap electricity
+5. Night (22:00-06:00): charge battery from grid if tomorrow's PV forecast < 5 kWh
+6. If PV surplus > 2000W and SOC > 80% → switch_on boiler to use free energy
+7. If RCE > 500 PLN/MWh and SOC > 30% → force_discharge (sell at high price)
+8. NEVER discharge below 10% SOC (safety layer handles this externally)
+
+═══ RESPONSE FORMAT ═══
+Respond with ONLY this JSON (no other text, no markdown, no explanations):
+{{
+  "reasoning": "One sentence in Polish explaining your decision",
+  "commands": [
+    {{"tool": "tool_name", "params": {{}}}},
+    ...
+  ],
+  "next_check_minutes": 5
+}}
+
+If no action needed, use: {{"tool": "no_action", "params": {{"reason": "..."}}}}
+Maximum 3 commands per response. Order by priority (most important first)."""
+
+    return prompt
