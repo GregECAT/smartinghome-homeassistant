@@ -662,19 +662,13 @@ AI_CONTROLLER_TOOLS = {
 def build_action_catalog_text(
     action_states: dict[str, Any] | None = None,
 ) -> str:
-    """Build a comprehensive action catalog text for AI prompts.
+    """Build a concise action catalog for AI prompts.
 
-    Generates a structured reference of ALL available autopilot actions,
-    grouped by W-layer category, with descriptions, commands, and current
-    statuses to give the AI full awareness of the system's capabilities.
-
-    Args:
-        action_states: Optional dict of {action_id: status_str} from controller.
-                       If None, only static catalog is generated.
+    One-liner per action: status + id + description.
+    Keeps total size small to avoid prompt truncation.
     """
     from .autopilot_actions import (
         build_all_actions,
-        ActionCategory,
         CATEGORY_LABELS,
         CATEGORY_ORDER,
     )
@@ -683,10 +677,7 @@ def build_action_catalog_text(
     states = action_states or {}
 
     lines: list[str] = []
-    lines.append("═══ ACTION CATALOG (35 autopilot actions) ═══")
-    lines.append("You can trigger actions by name using: {\"action\": \"action_id\"}")
-    lines.append("Actions marked ALWAYS run regardless of strategy preset.")
-    lines.append("")
+    lines.append("═ ACTIONS (use {\"action\":\"id\"} to trigger) ═")
 
     for cat in CATEGORY_ORDER:
         cat_actions = [a for a in actions if a.category == cat]
@@ -694,35 +685,19 @@ def build_action_catalog_text(
             continue
 
         label = CATEGORY_LABELS.get(cat, str(cat))
-        lines.append(f"── {label} ──")
+        lines.append(f"[{label}]")
 
         for a in cat_actions:
-            # Status indicator
-            status = states.get(a.id, "idle")
-            status_icon = {"active": "●", "waiting": "◐", "idle": "○", "disabled": "✗"}.get(status, "○")
+            st = states.get(a.id, "idle")
+            icon = {"active": "●", "waiting": "◐", "idle": "○", "disabled": "✗"}.get(st, "○")
+            alw = "!" if a.always_active else ""
+            lines.append(f" {icon}{alw} {a.id}")
 
-            # Always badge
-            always = " [ALWAYS]" if a.always_active else ""
-
-            # Commands summary
-            cmds = ", ".join(
-                c["tool"] + (f"({c['params'].get('entity', '')})" if c.get("params", {}).get("entity") else "")
-                for c in a.commands
-            )
-
-            lines.append(
-                f"  {status_icon} {a.id}{always}: {a.description}"
-                f"\n      → cmds: [{cmds}]"
-            )
-
-        lines.append("")
-
-    # Active actions summary (concise)
+    # Active summary
     if states:
         active = [aid for aid, s in states.items() if s in ("active", "waiting")]
         if active:
-            lines.append(f"═══ CURRENTLY ACTIVE/WAITING: {', '.join(active)} ═══")
-        lines.append("")
+            lines.append(f"ACTIVE: {','.join(active)}")
 
     return "\n".join(lines)
 
