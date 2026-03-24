@@ -607,7 +607,7 @@ User question: {question}"""
     #  AI Controller — JSON toolcalling for real-time inverter control
     # ------------------------------------------------------------------
 
-    _CONTROLLER_MAX_TOKENS = 1024
+    _CONTROLLER_MAX_TOKENS = 2048
     _CONTROLLER_NO_ACTION = {
         "reasoning": "AI unavailable — fallback to no_action",
         "commands": [{"tool": "no_action", "params": {"reason": "AI response error"}}],

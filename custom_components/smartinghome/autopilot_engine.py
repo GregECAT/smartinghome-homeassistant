@@ -749,12 +749,12 @@ YOUR JOB: Decide what action to take RIGHT NOW based on current system state. Re
 8. NEVER discharge below 10% SOC (safety layer handles this externally)
 
 ═══ RESPONSE FORMAT ═══
-Respond with ONLY this JSON (no other text, no markdown, no explanations):
+CRITICAL: Respond with ONLY valid JSON. No markdown, no explanations, no text before/after JSON.
+Keep "reasoning" to MAX 2 sentences in Polish. Be extremely concise.
 {{
-  "reasoning": "One sentence in Polish explaining your decision",
+  "reasoning": "Krótkie uzasadnienie decyzji (max 2 zdania)",
   "commands": [
-    {{"tool": "tool_name", "params": {{}}}},
-    ...
+    {{"tool": "tool_name", "params": {{}}}}
   ],
   "next_check_minutes": 5
 }}

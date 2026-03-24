@@ -96,7 +96,6 @@ HEMS_SENSOR_DESCRIPTIONS: list[SensorEntityDescription] = [
         key="goodwe_battery_energy_available",
         name="Battery Energy Available",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.MEASUREMENT,
         icon=ICON_BATTERY,
     ),

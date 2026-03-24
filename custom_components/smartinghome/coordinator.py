@@ -539,9 +539,9 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         def _do_write() -> None:
             try:
-                settings_path = _Path(
-                    self.hass.config.path("custom_components/smartinghome/settings.json")
-                )
+                settings_dir = _Path(self.hass.config.path("www")) / "smartinghome"
+                settings_dir.mkdir(parents=True, exist_ok=True)
+                settings_path = settings_dir / "settings.json"
                 stored: dict[str, Any] = {}
                 if settings_path.exists():
                     stored = _json.loads(settings_path.read_text())
@@ -558,6 +558,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "g13_zone": ctrl_result.get("g13_zone"),
                     "g13_price": ctrl_result.get("g13_price"),
                     "rce_price_mwh": ctrl_result.get("rce_price_mwh"),
+                    "ai_reasoning": ctrl_result.get("ai_reasoning", ""),
                     "timestamp": ctrl_result.get("timestamp"),
                 }
 
