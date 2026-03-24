@@ -7717,13 +7717,13 @@ class SmartingHomePanel extends HTMLElement {
       const statusEl = this.shadowRoot.getElementById('ap-status');
       if (statusEl) { statusEl.textContent = '● AKTYWNY'; statusEl.style.color = '#2ecc71'; }
 
-      // Update strategy savings across cards
+      // Update strategy savings across cards — show vs_no_management (meaningful metric)
       if (plan.strategy) {
         const savingsEl = this.shadowRoot.getElementById(`ap-savings-${plan.strategy}`);
         if (savingsEl) {
-          const net = plan.net_savings || 0;
-          savingsEl.textContent = net >= 0 ? `+${net.toFixed(2)} zł` : `${net.toFixed(2)} zł`;
-          savingsEl.style.color = net >= 0 ? '#2ecc71' : '#e74c3c';
+          const vs = plan.vs_no_management || 0;
+          savingsEl.textContent = vs >= 0 ? `+${vs.toFixed(2)} zł` : `${vs.toFixed(2)} zł`;
+          savingsEl.style.color = vs >= 0 ? '#2ecc71' : '#e74c3c';
         }
       }
 

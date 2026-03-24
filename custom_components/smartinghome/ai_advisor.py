@@ -514,14 +514,92 @@ User question: {question}"""
         """Ask AI to analyze and optimize an autopilot strategy.
 
         Uses a specialized prompt from autopilot_engine.build_autopilot_ai_prompt().
+        Makes direct API calls to avoid adding redundant _build_context().
+        Uses higher token limit for comprehensive autopilot analysis.
         """
-        if provider == "anthropic" and self.anthropic_available:
-            return await self.ask_anthropic(prompt, data)
-        elif provider == "gemini" and self.gemini_available:
-            return await self.ask_gemini(prompt, data)
+        AUTOPILOT_MAX_TOKENS = 16384  # Autopilot needs more room than regular queries
+
+        if not self._check_rate_limit():
+            return "Rate limit reached. Please try again later."
+
+        self._call_timestamps.append(time.time())
+
+        # Resolve provider
+        use_gemini = False
+        use_anthropic = False
+        if provider == "gemini" and self.gemini_available:
+            use_gemini = True
+        elif provider == "anthropic" and self.anthropic_available:
+            use_anthropic = True
         elif provider == "auto":
             if self.gemini_available:
-                return await self.ask_gemini(prompt, data)
+                use_gemini = True
             elif self.anthropic_available:
-                return await self.ask_anthropic(prompt, data)
-        return "No AI provider configured. Add Google Gemini or Anthropic Claude API key in settings."
+                use_anthropic = True
+
+        if not use_gemini and not use_anthropic:
+            return "No AI provider configured. Add Google Gemini or Anthropic Claude API key in settings."
+
+        try:
+            import aiohttp
+
+            if use_gemini:
+                url = (
+                    f"https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{self._gemini_model}:generateContent?key={self._gemini_key}"
+                )
+                payload = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "maxOutputTokens": AUTOPILOT_MAX_TOKENS,
+                        "temperature": AI_TEMPERATURE,
+                    },
+                }
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, json=payload,
+                                            timeout=aiohttp.ClientTimeout(total=180)) as resp:
+                        if resp.status == 200:
+                            result = await resp.json()
+                            candidates = result.get("candidates", [])
+                            if candidates:
+                                finish_reason = candidates[0].get("finishReason", "UNKNOWN")
+                                if finish_reason == "MAX_TOKENS":
+                                    _LOGGER.warning("Autopilot Gemini response truncated (MAX_TOKENS)")
+                                parts = candidates[0].get("content", {}).get("parts", [])
+                                if parts:
+                                    return parts[0].get("text", "No response text.")
+                            return "No response from Gemini."
+                        err_text = await resp.text()
+                        _LOGGER.error("Autopilot Gemini HTTP %s: %s", resp.status, err_text)
+                        return f"Gemini error (HTTP {resp.status})"
+
+            else:  # use_anthropic
+                url = "https://api.anthropic.com/v1/messages"
+                headers = {
+                    "x-api-key": self._anthropic_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                }
+                payload = {
+                    "model": self._anthropic_model,
+                    "max_tokens": AUTOPILOT_MAX_TOKENS,
+                    "temperature": AI_TEMPERATURE,
+                    "messages": [{"role": "user", "content": prompt}],
+                }
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, json=payload, headers=headers,
+                                            timeout=aiohttp.ClientTimeout(total=180)) as resp:
+                        if resp.status == 200:
+                            result = await resp.json()
+                            content = result.get("content", [])
+                            if content:
+                                return content[0].get("text", "No response text.")
+                            return "No response from Anthropic."
+                        err_text = await resp.text()
+                        _LOGGER.error("Autopilot Anthropic HTTP %s: %s", resp.status, err_text)
+                        return f"Anthropic error (HTTP {resp.status})"
+
+        except Exception as err:
+            _LOGGER.error("Autopilot AI error [%s]: %s", type(err).__name__, err, exc_info=True)
+            return f"Autopilot AI error: {type(err).__name__}: {err}"
+
