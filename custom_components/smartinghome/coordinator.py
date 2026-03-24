@@ -183,7 +183,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
 
                     # Persist live autopilot data for frontend polling
-                    self._write_autopilot_live(ctrl_result)
+                    await self._write_autopilot_live(ctrl_result)
 
                 except Exception as ctrl_err:
                     _LOGGER.error(
@@ -532,43 +532,46 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return "✅ System operating in auto mode"
 
-    def _write_autopilot_live(self, ctrl_result: dict[str, Any]) -> None:
+    async def _write_autopilot_live(self, ctrl_result: dict[str, Any]) -> None:
         """Persist live autopilot tick data into settings.json for frontend polling."""
         import json as _json
         from pathlib import Path as _Path
 
-        try:
-            settings_path = _Path(
-                self.hass.config.path("custom_components/smartinghome/settings.json")
-            )
-            stored: dict[str, Any] = {}
-            if settings_path.exists():
-                stored = _json.loads(settings_path.read_text())
-
-            stored["autopilot_live"] = {
-                "enabled": ctrl_result.get("enabled", False),
-                "strategy": ctrl_result.get("strategy", ""),
-                "strategy_label": ctrl_result.get("strategy_label", ""),
-                "actions": ctrl_result.get("actions", []),
-                "soc": ctrl_result.get("soc"),
-                "pv": ctrl_result.get("pv"),
-                "load": ctrl_result.get("load"),
-                "surplus": ctrl_result.get("surplus"),
-                "g13_zone": ctrl_result.get("g13_zone"),
-                "g13_price": ctrl_result.get("g13_price"),
-                "rce_price_mwh": ctrl_result.get("rce_price_mwh"),
-                "timestamp": ctrl_result.get("timestamp"),
-            }
-
-            # Also persist decision log (last 15 entries)
-            if self._strategy_controller:
-                stored["autopilot_decision_log"] = (
-                    self._strategy_controller.decision_log[-15:]
+        def _do_write() -> None:
+            try:
+                settings_path = _Path(
+                    self.hass.config.path("custom_components/smartinghome/settings.json")
                 )
+                stored: dict[str, Any] = {}
+                if settings_path.exists():
+                    stored = _json.loads(settings_path.read_text())
 
-            settings_path.write_text(
-                _json.dumps(stored, ensure_ascii=False, indent=2)
-            )
-        except Exception:
-            pass  # Non-critical — don't break coordinator
+                stored["autopilot_live"] = {
+                    "enabled": ctrl_result.get("enabled", False),
+                    "strategy": ctrl_result.get("strategy", ""),
+                    "strategy_label": ctrl_result.get("strategy_label", ""),
+                    "actions": ctrl_result.get("actions", []),
+                    "soc": ctrl_result.get("soc"),
+                    "pv": ctrl_result.get("pv"),
+                    "load": ctrl_result.get("load"),
+                    "surplus": ctrl_result.get("surplus"),
+                    "g13_zone": ctrl_result.get("g13_zone"),
+                    "g13_price": ctrl_result.get("g13_price"),
+                    "rce_price_mwh": ctrl_result.get("rce_price_mwh"),
+                    "timestamp": ctrl_result.get("timestamp"),
+                }
+
+                # Also persist decision log (last 15 entries)
+                if self._strategy_controller:
+                    stored["autopilot_decision_log"] = (
+                        self._strategy_controller.decision_log[-15:]
+                    )
+
+                settings_path.write_text(
+                    _json.dumps(stored, ensure_ascii=False, indent=2)
+                )
+            except Exception:
+                pass  # Non-critical — don't break coordinator
+
+        await self.hass.async_add_executor_job(_do_write)
 

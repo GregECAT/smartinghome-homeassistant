@@ -7724,6 +7724,16 @@ class SmartingHomePanel extends HTMLElement {
     const providerSelect = this.shadowRoot.getElementById('ap-provider-select');
     const provider = providerSelect ? providerSelect.value : 'auto';
 
+    // Visual feedback — disable button and show spinner
+    const btn = this.shadowRoot.querySelector('[onclick*="_runAutopilotEstimation"]');
+    const btnOrigText = btn ? btn.innerHTML : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.style.opacity = '0.6';
+      btn.style.cursor = 'wait';
+      btn.innerHTML = '⏳ Analizuję...';
+    }
+
     // Update status
     const statusEl = this.shadowRoot.getElementById('ap-status');
     if (statusEl) { statusEl.textContent = '⏳ ANALIZUJĘ...'; statusEl.style.color = '#f7b731'; }
@@ -7735,17 +7745,39 @@ class SmartingHomePanel extends HTMLElement {
         with_ai: true,
       });
 
+      // Button success state
+      if (btn) { btn.innerHTML = '✅ Gotowe!'; }
+
       // Wait for result event via polling settings.json
       setTimeout(() => this._loadAutopilotPlan(), 2000);
       setTimeout(() => this._loadAutopilotPlan(), 8000);
       setTimeout(() => this._loadAutopilotPlan(), 15000);
       setTimeout(() => this._loadAutopilotPlan(), 30000);
 
-    } catch (err) {
-      console.error('Autopilot estimation failed:', err);
+      // Restore button after 3s
+      setTimeout(() => {
+        if (btn) {
+          btn.disabled = false;
+          btn.style.opacity = '1';
+          btn.style.cursor = 'pointer';
+          btn.innerHTML = btnOrigText;
+        }
+      }, 3000);
+    } catch (e) {
+      if (btn) {
+        btn.innerHTML = '❌ Błąd!';
+        setTimeout(() => {
+          btn.disabled = false;
+          btn.style.opacity = '1';
+          btn.style.cursor = 'pointer';
+          btn.innerHTML = btnOrigText;
+        }, 3000);
+      }
       if (statusEl) { statusEl.textContent = '❌ BŁĄD'; statusEl.style.color = '#e74c3c'; }
     }
   }
+
+
 
   async _loadAutopilotPlan() {
     try {

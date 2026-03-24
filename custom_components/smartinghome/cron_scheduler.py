@@ -184,7 +184,7 @@ class AICronScheduler:
         return d / SETTINGS_FILE
 
     def _read_settings(self) -> dict:
-        """Read settings from JSON."""
+        """Read settings from JSON (sync — safe for executor context)."""
         p = self._get_settings_path()
         if p.exists():
             try:
@@ -193,12 +193,16 @@ class AICronScheduler:
                 return {}
         return {}
 
-    def _update_settings(self, updates: dict) -> None:
-        """Merge updates into settings.json."""
+    def _write_settings_sync(self, updates: dict) -> None:
+        """Merge updates into settings.json (sync — for executor)."""
         current = self._read_settings()
         current.update(updates)
         p = self._get_settings_path()
         p.write_text(json.dumps(current, indent=2, ensure_ascii=False))
+
+    async def _update_settings(self, updates: dict) -> None:
+        """Merge updates into settings.json (async-safe)."""
+        await self.hass.async_add_executor_job(self._write_settings_sync, updates)
 
     async def async_start(self) -> None:
         """Start all enabled cron jobs."""
@@ -323,7 +327,7 @@ class AICronScheduler:
                         "provider": provider,
                         "date": now_date,
                     }
-                    self._update_settings({result_key: entry})
+                    await self._update_settings({result_key: entry})
 
                     # --- AI Logs ---
                     log_entry = {
@@ -340,7 +344,7 @@ class AICronScheduler:
                     max_logs = int(settings.get("ai_logs_max", 50))
                     if len(logs) > max_logs:
                         logs = logs[-max_logs:]
-                    self._update_settings({"ai_logs": logs})
+                    await self._update_settings({"ai_logs": logs})
 
                     # Fire HA bus event for live frontend update
                     self.hass.bus.async_fire(
@@ -372,7 +376,7 @@ class AICronScheduler:
                     max_logs = int(settings.get("ai_logs_max", 50))
                     if len(logs) > max_logs:
                         logs = logs[-max_logs:]
-                    self._update_settings({"ai_logs": logs})
+                    await self._update_settings({"ai_logs": logs})
                 except Exception:
                     pass
 
