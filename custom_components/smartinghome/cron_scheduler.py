@@ -433,8 +433,9 @@ class AICronScheduler:
 
                     # Determine status
                     is_error = result.startswith("Gemini error") or result.startswith("Anthropic error") or result.startswith("No response")
+                    is_rate_limited = "Rate limit reached" in result
                     is_truncated = len(result) > 100 and not result.rstrip().endswith((".", "!", "?", ")", "]", "```"))
-                    status = "error" if is_error else "truncated" if is_truncated else "ok"
+                    status = "rate_limited" if is_rate_limited else "error" if is_error else "truncated" if is_truncated else "ok"
 
                     entry = {
                         "text": result,
