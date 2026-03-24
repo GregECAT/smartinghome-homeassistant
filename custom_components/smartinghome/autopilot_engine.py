@@ -541,12 +541,12 @@ def build_autopilot_ai_prompt(
         )
 
     # RCE sell price calculation
-    rce_mwh = float(current_data.get('rce_price', 250))
-    rce_sell = current_data.get('rce_sell', (rce_mwh / 1000) * RCE_PROSUMER_COEFFICIENT)
+    rce_mwh = float(current_data.get('rce_price') or 250)
+    rce_sell = float(current_data.get('rce_sell') or (rce_mwh / 1000) * RCE_PROSUMER_COEFFICIENT)
 
     # Battery capacity
-    bat_cap = current_data.get('battery_capacity', DEFAULT_BATTERY_CAPACITY)
-    bat_cap_kwh = float(bat_cap) / 1000
+    bat_cap = current_data.get('battery_capacity') or DEFAULT_BATTERY_CAPACITY
+    bat_cap_kwh = float(bat_cap or DEFAULT_BATTERY_CAPACITY) / 1000
 
     prompt = f"""You are an expert energy management AI for a home solar+battery system in Poland with G13 multi-zone tariff.
 

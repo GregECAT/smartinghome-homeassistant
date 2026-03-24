@@ -225,7 +225,7 @@ HEMS_SENSOR_DESCRIPTIONS: list[SensorEntityDescription] = [
         name="PV Forecast Today (Total)",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=SensorStateClass.TOTAL,
         icon=ICON_FORECAST,
     ),
     SensorEntityDescription(
@@ -233,7 +233,7 @@ HEMS_SENSOR_DESCRIPTIONS: list[SensorEntityDescription] = [
         name="PV Forecast Remaining Today",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=SensorStateClass.TOTAL,
         icon=ICON_FORECAST,
     ),
     SensorEntityDescription(
@@ -241,7 +241,7 @@ HEMS_SENSOR_DESCRIPTIONS: list[SensorEntityDescription] = [
         name="PV Forecast Tomorrow (Total)",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=SensorStateClass.TOTAL,
         icon=ICON_FORECAST,
     ),
     SensorEntityDescription(
@@ -271,7 +271,7 @@ HEMS_SENSOR_DESCRIPTIONS: list[SensorEntityDescription] = [
         name="Home Consumption from PV Today",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=SensorStateClass.TOTAL_INCREASING,
         icon=ICON_PV,
     ),
     SensorEntityDescription(
@@ -279,7 +279,7 @@ HEMS_SENSOR_DESCRIPTIONS: list[SensorEntityDescription] = [
         name="Net Grid Today",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=SensorStateClass.TOTAL,
         icon=ICON_GRID,
     ),
     # —— System Status ——
