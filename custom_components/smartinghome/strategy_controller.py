@@ -169,6 +169,11 @@ class StrategyController:
         self._ai = ai_advisor
         _LOGGER.info("AI Controller: advisor connected (dry_run=%s)", self._ai_dry_run)
 
+    def set_inverter_brand(self, brand: str) -> None:
+        """Set inverter brand for entity discovery."""
+        self._inverter_agent._inverter_brand = brand
+        _LOGGER.info("InverterAgent: brand set to %s", brand)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -240,6 +245,13 @@ class StrategyController:
         """
         if not self._enabled:
             return {"enabled": False, "strategy": self._active_strategy.value}
+
+        # Trigger entity discovery on first tick (HA state machine populated)
+        if not self._inverter_agent.capabilities_discovered:
+            try:
+                await self._inverter_agent.discover_capabilities()
+            except Exception as err:
+                _LOGGER.warning("Entity discovery failed: %s", err)
 
         now = datetime.now()
         hour = now.hour
