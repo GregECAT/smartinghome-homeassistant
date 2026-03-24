@@ -70,7 +70,7 @@ class SmartingHomePanel extends HTMLElement {
     this.shadowRoot.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
     this.shadowRoot.querySelectorAll(".tab-content").forEach(c => c.classList.toggle("active", c.dataset.tab === tab));
     if (tab === 'winter') { this._initWinterTab(); this._loadWinterData(); }
-    if (tab === 'wind') { this._initWindTab(); this._loadWindData(); }
+    if (tab === 'wind') { this._initWindTab(); this._loadWindData(); this._fetchWindHistoricalStats(); }
     if (tab === 'hems') { this._updateHEMSArbitrage(); }
     if (tab === 'history') { this._updateHistoryTab(); }
   }
@@ -1378,6 +1378,90 @@ class SmartingHomePanel extends HTMLElement {
     this._recalcWindProfitability();
   }
 
+  /* ── Wind Historical Stats (Recorder API) ─── */
+  async _fetchWindHistoricalStats() {
+    if (this._windHistData && (Date.now() - (this._windHistFetchedAt || 0)) < 300000) {
+      this._applyWindHistData();
+      return;
+    }
+    if (!this._hass) return;
+
+    const subtitleEl = this.shadowRoot.getElementById('wind-monthly-subtitle');
+    if (subtitleEl) subtitleEl.textContent = '⏳ Pobieranie danych historycznych z Recorder...';
+
+    try {
+      const now = new Date();
+      const start = new Date(now);
+      start.setDate(start.getDate() - 365);
+      start.setHours(0, 0, 0, 0);
+
+      const stats = await this._hass.callWS({
+        type: 'recorder/statistics_during_period',
+        start_time: start.toISOString(),
+        end_time: now.toISOString(),
+        statistic_ids: ['sensor.ecowitt_wind_speed_9747'],
+        period: 'hour',
+        types: ['mean'],
+      });
+
+      const arr = stats['sensor.ecowitt_wind_speed_9747'] || [];
+      if (arr.length === 0) {
+        console.warn('Smarting HOME Wind: No Recorder data found for ecowitt_wind_speed_9747');
+        this._windHistData = null;
+        if (subtitleEl) subtitleEl.textContent = 'Brak danych historycznych — wyświetlam profil szacunkowy dla Polski.';
+        this._applyWindHistData();
+        return;
+      }
+
+      // Group by month → compute average wind speed per month
+      const monthlyBuckets = {};
+      let totalSum = 0, totalCount = 0;
+      const uniqueDays = new Set();
+
+      arr.forEach(s => {
+        if (s.mean === null || s.mean === undefined) return;
+        const d = new Date(s.start);
+        const mKey = d.getMonth();
+        const dKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+
+        if (!monthlyBuckets[mKey]) monthlyBuckets[mKey] = { sum: 0, count: 0 };
+        monthlyBuckets[mKey].sum += s.mean;
+        monthlyBuckets[mKey].count++;
+
+        totalSum += s.mean;
+        totalCount++;
+        uniqueDays.add(dKey);
+      });
+
+      const overallAvgKmh = totalCount > 0 ? totalSum / totalCount : 0;
+      const daysCollected = uniqueDays.size;
+
+      // Build monthly averages (km/h)
+      const monthlyAvg = {};
+      for (const [m, b] of Object.entries(monthlyBuckets)) {
+        monthlyAvg[parseInt(m)] = b.sum / b.count;
+      }
+
+      this._windHistData = { monthlyAvg, overallAvgKmh, daysCollected, totalRecords: arr.length };
+      this._windHistFetchedAt = Date.now();
+      console.log(`Smarting HOME Wind: Loaded ${arr.length} hourly records from ${daysCollected} days, avg ${overallAvgKmh.toFixed(1)} km/h`);
+
+      if (subtitleEl) subtitleEl.textContent = `Na podstawie rzeczywistych danych z Ecowitt WH90 (${daysCollected} dni pomiarów).`;
+
+      this._applyWindHistData();
+    } catch (e) {
+      console.warn('Smarting HOME Wind: Recorder query failed', e);
+      this._windHistData = null;
+      if (subtitleEl) subtitleEl.textContent = 'Błąd pobierania danych — wyświetlam profil szacunkowy.';
+      this._applyWindHistData();
+    }
+  }
+
+  _applyWindHistData() {
+    this._recalcWindProfitability();
+    this._renderWindMonthlyChart();
+  }
+
   _recalcWindProfitability() {
     const g = (id) => parseFloat(this.shadowRoot.getElementById(id)?.value) || 0;
     const nominalKw = g('wind-turbine-power') || 3;
@@ -1386,8 +1470,18 @@ class SmartingHomePanel extends HTMLElement {
     const priceKwh = g('wind-turbine-price') || 0.87;
     const cutIn = g('wind-turbine-cutin') || 3;
 
-    const n = (id) => { const st = this._hass?.states?.[id]; return (st && st.state !== 'unknown' && st.state !== 'unavailable') ? parseFloat(st.state) : null; };
-    const wind = n('sensor.ecowitt_wind_speed_9747') || 0;
+    // Use historical average if available, otherwise fall back to current reading
+    let userWindKmh = 0;
+    let dataSource = 'bieżący odczyt';
+    let daysInfo = '';
+    if (this._windHistData && this._windHistData.overallAvgKmh > 0) {
+      userWindKmh = this._windHistData.overallAvgKmh;
+      dataSource = 'średnia historyczna';
+      daysInfo = ` (${this._windHistData.daysCollected} dni)`;
+    } else {
+      const n = (id) => { const st = this._hass?.states?.[id]; return (st && st.state !== 'unknown' && st.state !== 'unavailable') ? parseFloat(st.state) : null; };
+      userWindKmh = n('sensor.ecowitt_wind_speed_9747') || 0;
+    }
 
     // Average wind classes for Poland (m/s)
     const windClasses = [
@@ -1395,7 +1489,7 @@ class SmartingHomePanel extends HTMLElement {
       { name: 'Umiarkowany (4 m/s)', speed: 14.4 },
       { name: 'Dobry (5 m/s)', speed: 18 },
       { name: 'Bardzo dobry (6 m/s)', speed: 21.6 },
-      { name: 'Twoja lokalizacja', speed: wind },
+      { name: 'Twoja lokalizacja', speed: userWindKmh },
     ];
 
     const profitEl = this.shadowRoot.getElementById('wind-profit-cards');
@@ -1403,13 +1497,19 @@ class SmartingHomePanel extends HTMLElement {
 
     const cards = windClasses.map((wc, i) => {
       const isUser = i === windClasses.length - 1;
+      const windMs = wc.speed / 3.6;
       let avgPower = 0;
-      if ((wc.speed / 3.6) >= cutIn) {
+      if (windMs >= cutIn) {
         avgPower = this._calcWindPower(wc.speed, diameter);
         if (avgPower > nominalKw * 1000) avgPower = nominalKw * 1000;
       }
-      // Capacity factor for small turbines: ~15-25%
-      const capacityFactor = isUser ? 0.20 : (i === 0 ? 0.12 : i === 1 ? 0.18 : i === 2 ? 0.22 : 0.28);
+      // Capacity factor: for reference classes use fixed values, for user calculate from real wind
+      let capacityFactor;
+      if (isUser) {
+        capacityFactor = nominalKw > 0 ? Math.min(0.45, avgPower / (nominalKw * 1000)) : 0;
+      } else {
+        capacityFactor = i === 0 ? 0.12 : i === 1 ? 0.18 : i === 2 ? 0.22 : 0.28;
+      }
       const yearlyKwh = nominalKw * 8760 * capacityFactor;
       const yearlySavings = yearlyKwh * priceKwh;
       const payback = investment > 0 && yearlySavings > 0 ? investment / yearlySavings : null;
@@ -1420,8 +1520,9 @@ class SmartingHomePanel extends HTMLElement {
       const border = isUser ? 'rgba(0,212,255,0.25)' : 'rgba(255,255,255,0.06)';
 
       return `<div style="background:${bg}; border:1px solid ${border}; border-radius:14px; padding:16px; position:relative">
-        ${isUser ? '<div style="position:absolute; top:8px; right:8px; font-size:8px; color:#00d4ff; font-weight:700">📍 TWOJA LOKALIZACJA</div>' : ''}
+        ${isUser ? `<div style="position:absolute; top:8px; right:8px; font-size:8px; color:#00d4ff; font-weight:700">📍 TWOJA LOKALIZACJA${daysInfo}</div>` : ''}
         <div style="font-size:12px; font-weight:700; color:${color}; margin-bottom:8px">${wc.name}</div>
+        ${isUser ? `<div style="font-size:9px; color:#64748b; margin-bottom:6px">Źródło: ${dataSource} · ${(userWindKmh / 3.6).toFixed(1)} m/s · ${userWindKmh.toFixed(1)} km/h</div>` : ''}
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:10px">
           <div style="color:#64748b">Roczna produkcja:</div><div style="color:#f7b731; font-weight:600">${yearlyKwh.toFixed(0)} kWh</div>
           <div style="color:#64748b">Roczne oszczędności:</div><div style="color:#2ecc71; font-weight:600">${yearlySavings.toFixed(0)} zł</div>
@@ -1434,22 +1535,23 @@ class SmartingHomePanel extends HTMLElement {
 
     profitEl.innerHTML = cards.join('');
 
-    // Recommendation
+    // Recommendation — based on historical average
     const recEl = this.shadowRoot.getElementById('wind-recommendation');
-    if (recEl && wind > 0) {
-      const avgMs = wind / 3.6;
+    if (recEl && userWindKmh > 0) {
+      const avgMs = userWindKmh / 3.6;
+      const srcLabel = this._windHistData ? `na podstawie ${this._windHistData.daysCollected} dni pomiarów` : 'na podstawie bieżącego odczytu';
       if (avgMs >= 5) {
         recEl.innerHTML = `<div style="font-size:48px; text-align:center; margin-bottom:8px">✅</div>
           <div style="font-size:16px; font-weight:800; color:#2ecc71; text-align:center">Lokalizacja KORZYSTNA</div>
-          <div style="font-size:11px; color:#94a3b8; text-align:center; margin-top:4px; line-height:1.6">Średnia prędkość wiatru ${avgMs.toFixed(1)} m/s jest wystarczająca do opłacalnej eksploatacji przydomowej turbiny wiatrowej. Czas zwrotu inwestycji może wynosić poniżej 10 lat.</div>`;
+          <div style="font-size:11px; color:#94a3b8; text-align:center; margin-top:4px; line-height:1.6">Średnia prędkość wiatru ${avgMs.toFixed(1)} m/s (${srcLabel}) jest wystarczająca do opłacalnej eksploatacji przydomowej turbiny wiatrowej. Czas zwrotu inwestycji może wynosić poniżej 10 lat.</div>`;
       } else if (avgMs >= 3.5) {
         recEl.innerHTML = `<div style="font-size:48px; text-align:center; margin-bottom:8px">⚠️</div>
           <div style="font-size:16px; font-weight:800; color:#f7b731; text-align:center">Lokalizacja UMIARKOWANA</div>
-          <div style="font-size:11px; color:#94a3b8; text-align:center; margin-top:4px; line-height:1.6">Średnia prędkość wiatru ${avgMs.toFixed(1)} m/s jest na granicy opłacalności. Rozważ turbinę o niskim progu startu (cut-in < 2.5 m/s) lub hybrydę PV + wiatr.</div>`;
+          <div style="font-size:11px; color:#94a3b8; text-align:center; margin-top:4px; line-height:1.6">Średnia prędkość wiatru ${avgMs.toFixed(1)} m/s (${srcLabel}) jest na granicy opłacalności. Rozważ turbinę o niskim progu startu (cut-in < 2.5 m/s) lub hybrydę PV + wiatr.</div>`;
       } else {
         recEl.innerHTML = `<div style="font-size:48px; text-align:center; margin-bottom:8px">❌</div>
           <div style="font-size:16px; font-weight:800; color:#e74c3c; text-align:center">Lokalizacja NIEKORZYSTNA</div>
-          <div style="font-size:11px; color:#94a3b8; text-align:center; margin-top:4px; line-height:1.6">Średnia prędkość wiatru ${avgMs.toFixed(1)} m/s jest zbyt niska dla opłacalnej turbiny wiatrowej. Zalecamy inwestycję w fotowoltaikę lub system hybrydowy z magazynem energii.</div>`;
+          <div style="font-size:11px; color:#94a3b8; text-align:center; margin-top:4px; line-height:1.6">Średnia prędkość wiatru ${avgMs.toFixed(1)} m/s (${srcLabel}) jest zbyt niska dla opłacalnej turbiny wiatrowej. Zalecamy inwestycję w fotowoltaikę lub system hybrydowy z magazynem energii.</div>`;
       }
     }
 
@@ -1461,15 +1563,34 @@ class SmartingHomePanel extends HTMLElement {
     const chartEl = this.shadowRoot.getElementById('wind-monthly-chart');
     if (!chartEl) return;
 
-    // Monthly wind capacity factors for Poland (approximate)
-    const monthlyFactors = [0.28, 0.26, 0.24, 0.20, 0.16, 0.14, 0.12, 0.13, 0.16, 0.22, 0.26, 0.28];
     const monthNames = ['Sty','Lut','Mar','Kwi','Maj','Cze','Lip','Sie','Wrz','Paź','Lis','Gru'];
     const g = (id) => parseFloat(this.shadowRoot.getElementById(id)?.value) || 0;
     const nominalKw = g('wind-turbine-power') || 3;
+    const diameter = g('wind-turbine-diameter') || 3.2;
+    const cutIn = g('wind-turbine-cutin') || 3;
 
-    const monthlyData = monthlyFactors.map((cf, i) => {
-      const kwh = nominalKw * 730 * cf; // hours per month ~730
-      return { month: monthNames[i], kwh, cf };
+    // Fallback: hardcoded monthly capacity factors for Poland
+    const fallbackFactors = [0.28, 0.26, 0.24, 0.20, 0.16, 0.14, 0.12, 0.13, 0.16, 0.22, 0.26, 0.28];
+    const hasHistData = this._windHistData && Object.keys(this._windHistData.monthlyAvg).length > 0;
+
+    const monthlyData = monthNames.map((name, i) => {
+      let kwh;
+      if (hasHistData && this._windHistData.monthlyAvg[i] !== undefined) {
+        // Real data: compute kWh from average wind speed in this month
+        const avgKmh = this._windHistData.monthlyAvg[i];
+        const avgMs = avgKmh / 3.6;
+        let power = 0;
+        if (avgMs >= cutIn) {
+          power = this._calcWindPower(avgKmh, diameter);
+          if (power > nominalKw * 1000) power = nominalKw * 1000;
+        }
+        kwh = (power * 730) / 1000; // ~730 hours per month
+      } else {
+        // Fallback
+        kwh = nominalKw * 730 * fallbackFactors[i];
+      }
+      const isReal = hasHistData && this._windHistData.monthlyAvg[i] !== undefined;
+      return { month: name, kwh, isReal };
     });
 
     const maxKwh = Math.max(...monthlyData.map(d => d.kwh), 1);
@@ -1478,12 +1599,28 @@ class SmartingHomePanel extends HTMLElement {
     chartEl.innerHTML = monthlyData.map((d, i) => {
       const h = Math.max(4, (d.kwh / maxKwh) * 140);
       const isCurrent = i === currentMonth;
+      const barColor = d.isReal
+        ? (isCurrent ? 'linear-gradient(180deg, #00d4ff, #0099cc)' : 'linear-gradient(180deg, rgba(0,212,255,0.6), rgba(0,212,255,0.25))')
+        : (isCurrent ? 'linear-gradient(180deg, #f39c12, #e67e22)' : 'linear-gradient(180deg, rgba(243,156,18,0.3), rgba(243,156,18,0.1))');
+      const labelColor = d.isReal ? '#00d4ff' : '#f39c12';
       return `<div style="flex:1; display:flex; flex-direction:column; align-items:center; gap:2px">
-        <div style="font-size:9px; font-weight:700; color:#00d4ff">${d.kwh.toFixed(0)}</div>
-        <div style="width:100%; max-width:28px; height:${h}px; background:${isCurrent ? 'linear-gradient(180deg, #00d4ff, #0099cc)' : 'linear-gradient(180deg, rgba(0,212,255,0.4), rgba(0,212,255,0.15))'};border-radius:4px 4px 0 0; ${isCurrent ? 'box-shadow: 0 0 8px rgba(0,212,255,0.4)' : ''}"></div>
+        <div style="font-size:9px; font-weight:700; color:${labelColor}">${d.kwh.toFixed(0)}</div>
+        <div style="width:100%; max-width:28px; height:${h}px; background:${barColor}; border-radius:4px 4px 0 0; ${isCurrent ? 'box-shadow: 0 0 8px rgba(0,212,255,0.4)' : ''}"></div>
         <div style="font-size:8px; color:${isCurrent ? '#00d4ff' : '#64748b'}; font-weight:${isCurrent ? '700' : '400'}">${d.month}</div>
       </div>`;
     }).join('');
+
+    // Legend
+    const legendEl = this.shadowRoot.getElementById('wind-chart-legend');
+    if (legendEl) {
+      if (hasHistData) {
+        const realCount = monthlyData.filter(d => d.isReal).length;
+        const estCount = 12 - realCount;
+        legendEl.innerHTML = `<span style="color:#00d4ff">■</span> Dane z Recorder (${realCount} mies.)${estCount > 0 ? ` <span style="margin-left:8px; color:#f39c12">■</span> Szacunek (${estCount} mies.)` : ''}`;
+      } else {
+        legendEl.innerHTML = '<span style="color:#f39c12">■</span> Szacunek — brak danych historycznych';
+      }
+    }
   }
 
   _calcHEMSScore() {
@@ -6402,8 +6539,9 @@ class SmartingHomePanel extends HTMLElement {
           <!-- Monthly chart -->
           <div class="card" style="margin-bottom:12px">
             <div class="card-title">📉 Szacunkowa produkcja miesięczna (kWh)</div>
-            <div style="font-size:10px; color:#94a3b8; margin-bottom:8px">Na podstawie typowego profilu wiatru w Polsce i parametrów Twojej turbiny.</div>
+            <div id="wind-monthly-subtitle" style="font-size:10px; color:#94a3b8; margin-bottom:8px">Ładowanie danych historycznych...</div>
             <div id="wind-monthly-chart" style="display:flex; align-items:flex-end; gap:4px; height:180px; padding:10px 0"></div>
+            <div id="wind-chart-legend" style="font-size:9px; color:#64748b; text-align:center; margin-top:6px"></div>
           </div>
 
           <!-- Recommendation -->
@@ -6875,7 +7013,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.16.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.17.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
