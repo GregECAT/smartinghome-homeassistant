@@ -159,6 +159,13 @@ class StrategyController:
         self._ai_call_interval: int = 300  # default 5 min, AI can override via next_check_minutes
         self._ai_dry_run: bool = False  # Set True to log-only without executing
 
+        # AI Strategist — 24h strategic plan (cron-based)
+        self._strategic_plan: dict[str, Any] | None = None
+        self._strategist_last_call: float = 0.0
+        self._strategist_interval: int = 900  # default 15 min, AI can override
+        self._current_block_key: str = ""  # "HH:MM-HH:MM" of currently executing block
+        self._block_commands_executed: bool = False  # True when current block commands done
+
         # InverterAgent — state-aware command executor
         self._inverter_agent = InverterAgent(
             hass, energy_manager, dry_run=self._ai_dry_run,
@@ -779,18 +786,19 @@ class StrategyController:
         g13_zone: G13Zone, g13_price: float, rce_mwh: float,
         hour: int, forecast_tomorrow: float, data: dict,
     ) -> list[str]:
-        """🧠 AI Full Autonomy: AI-driven control via JSON toolcalling.
+        """🧠 AI Full Autonomy — Strategist + Executor architecture.
 
-        Every N minutes (default 5), queries AI for structured JSON commands.
-        Between AI calls, uses cached commands. Falls back to weather-adaptive
-        if AI is unavailable.
+        Strategist (cron): generates 24h plan with time_blocks every 15-60 min.
+        Executor (tick):   reads cached plan, finds current block, dispatches
+                           commands via InverterAgent (state-aware, no API call).
+
+        Falls back to quick AI controller if plan is stale or unavailable.
         """
         actions: list[str] = []
         now = time.time()
 
         # Check if AI advisor is available
         if self._ai is None:
-            # Fallback: use weather-adaptive strategy
             w_actions = await self._strategy_weather_adaptive(
                 soc, pv, load, surplus, g13_zone, g13_price,
                 rce_mwh, hour, forecast_tomorrow, data,
@@ -798,76 +806,229 @@ class StrategyController:
             actions.extend(w_actions)
             return actions
 
-        # Throttle: only call AI every N minutes
+        # ── STRATEGIST CRON ──────────────────────────────────────
+        # Run AI Strategist if interval elapsed
+        strategist_elapsed = now - self._strategist_last_call
+        if strategist_elapsed >= self._strategist_interval:
+            await self._run_ai_strategist(data)
+
+        # ── EXECUTOR ─────────────────────────────────────────────
+        # Find current time block from cached strategic plan
+        block = self._find_current_time_block()
+
+        if block:
+            block_key = f"{block['start']}-{block['end']}"
+
+            # If we entered a new block, reset execution flag
+            if block_key != self._current_block_key:
+                self._current_block_key = block_key
+                self._block_commands_executed = False
+                _LOGGER.info(
+                    "AI Executor: entered block %s (%s) — %s",
+                    block_key,
+                    block.get("strategy", "?"),
+                    block.get("reasoning", "")[:80],
+                )
+
+            # Execute block commands ONCE per block
+            if not self._block_commands_executed:
+                commands = block.get("commands", [])
+                for cmd in commands:
+                    tool = cmd.get("tool", "no_action")
+                    params = cmd.get("params", {})
+
+                    result = await self._inverter_agent.execute(tool, params)
+
+                    if result.executed:
+                        actions.append(result.message)
+                        self._log_decision("ai_exec", result.message)
+                    elif result.skipped and result.reason:
+                        _LOGGER.debug("AI Executor: %s → SKIP (%s)", tool, result.reason)
+                        if tool != "no_action":
+                            actions.append(f"🧠 AI Exec: {tool} → ✅ (already active)")
+                        else:
+                            actions.append(f"🧠 AI Exec: {result.reason}")
+
+                self._block_commands_executed = True
+
+                # Log block reasoning
+                reasoning = block.get("reasoning", "")
+                if reasoning:
+                    self._log_decision("ai_exec", f"🧠 Block {block_key}: {reasoning}")
+
+            # Show current block info
+            actions.append(
+                f"🧠 Plan: block {block_key} ({block.get('zone', '?')}, "
+                f"{block.get('strategy', '?')})"
+            )
+
+        elif self._strategic_plan:
+            # Plan exists but no matching block (edge case)
+            actions.append("🧠 Plan: no matching time block for current time")
+        else:
+            # No strategic plan available — fallback to quick AI controller
+            await self._fallback_quick_ai(data, actions, now)
+
+        # AI reasoning for frontend
+        if self._strategic_plan:
+            analysis = self._strategic_plan.get("analysis", "")
+            if analysis:
+                self._ai_cached_commands = {"reasoning": analysis}
+
+        return actions
+
+    # ------------------------------------------------------------------
+    #  AI STRATEGIST — cron-based deep 24h planning
+    # ------------------------------------------------------------------
+
+    async def _run_ai_strategist(self, data: dict) -> None:
+        """Run AI Strategist — generates 24h strategic plan with time_blocks.
+
+        Called on cron (every 15-60 min). Produces a structured plan that
+        the Executor follows tick by tick without needing AI API calls.
+        """
+        if self._ai is None:
+            return
+
+        try:
+            from .autopilot_engine import build_ai_strategist_prompt
+
+            # Build estimation if available
+            estimation = data.get("estimation", {})
+            if not estimation:
+                estimation = {
+                    "hourly_plan": [],
+                    "total_import_kwh": 0, "total_export_kwh": 0,
+                    "total_cost": 0, "total_revenue": 0,
+                    "net_savings": 0, "total_self_consumption_kwh": 0,
+                    "vs_no_management": 0,
+                }
+
+            device_status_text = self._inverter_agent.format_status_for_prompt()
+            prompt = build_ai_strategist_prompt(data, estimation, device_status_text)
+            plan = await self._ai.ask_controller(prompt)
+
+            if plan and plan.get("time_blocks"):
+                self._strategic_plan = plan
+                self._strategist_last_call = time.time()
+
+                # Reset block execution tracking
+                self._current_block_key = ""
+                self._block_commands_executed = False
+
+                # Update strategist interval from AI response
+                next_min = plan.get("next_analysis_minutes", 15)
+                self._strategist_interval = max(300, min(next_min * 60, 3600))
+
+                # Persist plan to settings.json
+                await self._persist_strategic_plan(plan)
+
+                _LOGGER.info(
+                    "AI Strategist: generated %d time-blocks (next in %d min): %s",
+                    len(plan["time_blocks"]),
+                    next_min,
+                    plan.get("analysis", "?")[:100],
+                )
+                self._log_decision(
+                    "ai_strategist",
+                    f"🧠 Strategist: {len(plan['time_blocks'])} bloków — {plan.get('analysis', '')[:80]}",
+                )
+            else:
+                _LOGGER.warning("AI Strategist: no time_blocks in response")
+        except Exception as err:
+            _LOGGER.error("AI Strategist call failed: %s", err)
+
+    async def _persist_strategic_plan(self, plan: dict) -> None:
+        """Save strategic plan to settings.json."""
+        import json
+        from pathlib import Path
+
+        settings_path = Path("/config/www/smartinghome/settings.json")
+        try:
+            if settings_path.exists():
+                settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            else:
+                settings_path.parent.mkdir(parents=True, exist_ok=True)
+                settings = {}
+
+            settings["ai_strategic_plan"] = plan
+            settings_path.write_text(
+                json.dumps(settings, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception as err:
+            _LOGGER.warning("Failed to persist strategic plan: %s", err)
+
+    def _find_current_time_block(self) -> dict | None:
+        """Find the time_block matching the current time."""
+        if not self._strategic_plan or not self._strategic_plan.get("time_blocks"):
+            return None
+
+        now = datetime.now()
+        now_minutes = now.hour * 60 + now.minute
+
+        for block in self._strategic_plan["time_blocks"]:
+            try:
+                start_parts = block["start"].split(":")
+                end_parts = block["end"].split(":")
+                start_min = int(start_parts[0]) * 60 + int(start_parts[1])
+                end_min = int(end_parts[0]) * 60 + int(end_parts[1])
+
+                # Handle midnight wrap (e.g., 21:00 - 07:00)
+                if end_min <= start_min:
+                    if now_minutes >= start_min or now_minutes < end_min:
+                        return block
+                else:
+                    if start_min <= now_minutes < end_min:
+                        return block
+            except (ValueError, KeyError, IndexError):
+                continue
+
+        return None
+
+    async def _fallback_quick_ai(
+        self, data: dict, actions: list[str], now: float,
+    ) -> None:
+        """Fallback: quick AI controller call if strategist plan unavailable."""
         elapsed = now - self._ai_last_call
         if elapsed >= self._ai_call_interval:
             try:
                 from .autopilot_engine import build_ai_controller_prompt
 
-                # Get device status from InverterAgent for AI prompt
                 device_status_text = self._inverter_agent.format_status_for_prompt()
                 prompt = build_ai_controller_prompt(data, device_status_text)
                 ai_result = await self._ai.ask_controller(prompt)
 
                 self._ai_last_call = now
                 self._ai_cached_commands = ai_result
-                self._ai_commands_executed = False  # new commands, not yet executed
+                self._ai_commands_executed = False
 
-                # Update interval from AI response
                 next_min = ai_result.get("next_check_minutes", 5)
-                self._ai_call_interval = max(60, min(next_min * 60, 1800))  # 1-30 min
+                self._ai_call_interval = max(60, min(next_min * 60, 1800))
 
                 _LOGGER.info(
-                    "AI Controller: received %d commands (next check in %d min): %s",
+                    "AI Controller (fallback): %d commands (next in %d min)",
                     len(ai_result.get("commands", [])),
                     next_min,
-                    ai_result.get("reasoning", "?"),
                 )
             except Exception as err:
-                _LOGGER.error("AI Controller call failed: %s", err)
-                # Keep using cached commands if available
+                _LOGGER.error("AI Controller fallback failed: %s", err)
 
-        # Execute cached AI commands — only ONCE (InverterAgent handles dedup)
+        # Execute cached quick commands
         if self._ai_cached_commands and not self._ai_commands_executed:
-            reasoning = self._ai_cached_commands.get("reasoning", "")
             commands = self._ai_cached_commands.get("commands", [])
-
             for cmd in commands:
                 tool = cmd.get("tool", "no_action")
                 params = cmd.get("params", {})
 
-                # Use InverterAgent for state-aware execution
                 result = await self._inverter_agent.execute(tool, params)
-
                 if result.executed:
                     actions.append(result.message)
                     self._log_decision("ai_cmd", result.message)
-                elif result.skipped and result.reason:
-                    # Log skip only at debug level to avoid spam
-                    _LOGGER.debug(
-                        "AI CTRL: %s → SKIP (%s)", tool, result.reason
-                    )
-                    # Still track the decision for UI (but mark as skip)
-                    if tool != "no_action":
-                        actions.append(f"🧠 AI CTRL: {tool} → ✅ (already active)")
-                    else:
-                        actions.append(f"🧠 AI CTRL: {result.reason}")
+                elif result.skipped and tool != "no_action":
+                    actions.append(f"🧠 AI CTRL: {tool} → ✅ (already active)")
 
-            # Mark as executed — don't re-execute same commands every tick
             self._ai_commands_executed = True
-
-            # Log reasoning as decision
-            if reasoning:
-                self._log_decision("ai_ctrl", f"🧠 {reasoning}")
-        elif not self._ai_cached_commands:
-            # No cached commands yet — fallback to weather-adaptive
-            w_actions = await self._strategy_weather_adaptive(
-                soc, pv, load, surplus, g13_zone, g13_price,
-                rce_mwh, hour, forecast_tomorrow, data,
-            )
-            actions.extend(w_actions)
-
-        return actions
 
     async def _execute_ai_command(self, tool: str, params: dict) -> str | None:
         """Execute a single AI command. Returns action description or None."""
