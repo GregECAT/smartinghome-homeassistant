@@ -4417,6 +4417,7 @@ class SmartingHomePanel extends HTMLElement {
         /* --- BATTERY GRAPHIC --- */
         .battery-graphic {
           width: 32px;
+          min-height: 120px;
           border: 2px solid rgba(255,255,255,0.2);
           border-radius: 6px;
           padding: 4px;
@@ -5283,7 +5284,7 @@ class SmartingHomePanel extends HTMLElement {
 
               <!-- 🔋 BATTERY (left, below PV) -->
               <div class="batt-area">
-                <div class="node" id="batt-node" style="border-color: rgba(0,212,255,0.2); transition: border-color 0.5s, box-shadow 0.5s; flex-direction: row; align-items: stretch; gap: 16px; padding: 16px;">
+                <div class="node" id="batt-node" style="border-color: rgba(0,212,255,0.2); transition: border-color 0.5s, box-shadow 0.5s; display:flex; flex-direction: row; align-items: stretch; gap: 16px; padding: 16px;">
                   <!-- Left Graphic -->
                   <div class="battery-graphic" id="batt-graphic">
                     <div class="batt-bar"></div><div class="batt-bar"></div><div class="batt-bar"></div><div class="batt-bar"></div><div class="batt-bar"></div>
