@@ -3395,6 +3395,7 @@ class SmartingHomePanel extends HTMLElement {
   /* ── History Tab ────────────────────────── */
   _histPeriod = "day";
   _histDate = new Date();
+  _histCalendarDirty = true;
 
   _switchHistoryPeriod(p) {
     this._histPeriod = p;
@@ -3402,18 +3403,12 @@ class SmartingHomePanel extends HTMLElement {
       const btn = this.shadowRoot.getElementById(`hist-period-${k}`);
       if (btn) btn.classList.toggle("active", k === p);
     });
-    // Show nav only for 'day' (other periods use live utility meters)
-    const navCt = this.shadowRoot.getElementById('hist-nav-container');
-    if (navCt) navCt.style.display = p === 'day' ? 'flex' : 'none';
-    const navLabel = this.shadowRoot.getElementById('hist-date-label');
-    if (p !== 'day' && navLabel) {
-      const months = ["Styczeń","Luty","Marzec","Kwiecień","Maj","Czerwiec","Lipiec","Sierpień","Wrzesień","Październik","Listopad","Grudzień"];
-      const now = new Date();
-      if (p === 'week') { const w = Math.ceil(((now - new Date(now.getFullYear(),0,1)) / 86400000 + 1) / 7); navLabel.textContent = `Bieżący tydzień (${w})`; }
-      else if (p === 'month') navLabel.textContent = `${months[now.getMonth()]} ${now.getFullYear()}`;
-      else navLabel.textContent = `${now.getFullYear()}`;
-    }
+    // Show/hide ◀▶ buttons (only useful for 'day' since other periods use live utility meters)
+    this.shadowRoot.querySelectorAll('.hist-nav-arrow').forEach(el => {
+      el.style.display = p === 'day' ? 'inline-flex' : 'none';
+    });
     this._histDate = new Date();
+    this._histCalendarDirty = true;
     this._updateHistoryTab();
   }
 
@@ -3422,13 +3417,20 @@ class SmartingHomePanel extends HTMLElement {
     const d = this._histDate;
     d.setDate(d.getDate() + dir);
     // Don't go into the future
-    const now = new Date(); now.setHours(23,59,59,999);
-    if (d > now) { d.setTime(now.getTime()); d.setHours(0,0,0,0); }
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    const sel = new Date(d); sel.setHours(0,0,0,0);
+    if (sel > today) {
+      this._histDate = new Date();
+      this._histDate.setHours(0,0,0,0);
+    }
+    this._histCalendarDirty = true;
     this._updateHistoryTab();
   }
 
   _histToday() {
     this._histDate = new Date();
+    this._histCalendarDirty = true;
     this._updateHistoryTab();
   }
 
@@ -3501,20 +3503,21 @@ class SmartingHomePanel extends HTMLElement {
     let dateStr = '';
     if (p === 'day') {
       dateStr = `${now.getDate()} ${months[now.getMonth()]} ${now.getFullYear()}`;
-      if (!isToday) dateStr += ' (historia)';
+      if (!isToday) dateStr += ' ⏳';
     } else if (p === 'week') {
-      const w = Math.ceil(((now - new Date(now.getFullYear(),0,1)) / 86400000 + 1) / 7);
+      const w = Math.ceil(((new Date() - new Date(new Date().getFullYear(),0,1)) / 86400000 + 1) / 7);
       dateStr = `Bieżący tydzień (${w})`;
     } else if (p === 'month') {
-      dateStr = `${months[now.getMonth()]} ${now.getFullYear()}`;
+      dateStr = `${months[new Date().getMonth()]} ${new Date().getFullYear()}`;
     } else {
-      dateStr = `${now.getFullYear()}`;
+      dateStr = `${new Date().getFullYear()}`;
     }
     this._setText('hist-date-label', dateStr);
 
-    // Show/hide nav
-    const navCt = this.shadowRoot.getElementById('hist-nav-container');
-    if (navCt) navCt.style.display = p === 'day' ? 'flex' : 'none';
+    // Show/hide ◀▶ buttons
+    this.shadowRoot.querySelectorAll('.hist-nav-arrow').forEach(el => {
+      el.style.display = p === 'day' ? 'inline-flex' : 'none';
+    });
 
     // KPI Energy
     this._setText('hist-pv-val', `${d.pvVal.toFixed(1)} kWh`);
@@ -3568,8 +3571,11 @@ class SmartingHomePanel extends HTMLElement {
     // String table
     this._renderHistStrings(d);
 
-    // Calendar heatmap
-    this._renderHistCalendar();
+    // Calendar heatmap — only re-render when dirty (not on 5s refresh cycle)
+    if (this._histCalendarDirty) {
+      this._histCalendarDirty = false;
+      this._renderHistCalendar();
+    }
 
     // Battery
     this._setText('hist-bat-chg', `${d.batChg.toFixed(1)} kWh`);
@@ -6433,11 +6439,11 @@ class SmartingHomePanel extends HTMLElement {
               <button class="hist-period-btn" id="hist-period-month" onclick="this.getRootNode().host._switchHistoryPeriod('month')">🗓️ Miesiąc</button>
               <button class="hist-period-btn" id="hist-period-year" onclick="this.getRootNode().host._switchHistoryPeriod('year')">📊 Rok</button>
             </div>
-            <div id="hist-nav-container" style="display:flex; align-items:center; gap:6px; flex:1; justify-content:center">
-              <button class="hist-nav-btn" onclick="this.getRootNode().host._histNavigate(-1)">◀</button>
+            <div style="display:flex; align-items:center; gap:6px; flex:1; justify-content:center">
+              <button class="hist-nav-btn hist-nav-arrow" onclick="this.getRootNode().host._histNavigate(-1)">◀</button>
               <span style="font-size:13px; font-weight:700; color:#e0e6ed; min-width:160px; text-align:center" id="hist-date-label">—</span>
-              <button class="hist-nav-btn" onclick="this.getRootNode().host._histNavigate(1)">▶</button>
-              <button class="hist-nav-btn" onclick="this.getRootNode().host._histToday()" style="font-size:10px; padding:5px 10px">Dziś</button>
+              <button class="hist-nav-btn hist-nav-arrow" onclick="this.getRootNode().host._histNavigate(1)">▶</button>
+              <button class="hist-nav-btn hist-nav-arrow" onclick="this.getRootNode().host._histToday()" style="font-size:10px; padding:5px 10px">Dziś</button>
             </div>
             <div style="display:flex; gap:4px; align-items:center">
               <button class="hist-export-btn" onclick="this.getRootNode().host._exportHistoryData('csv')">📄 CSV</button>
@@ -6869,7 +6875,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.16.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.16.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
