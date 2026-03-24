@@ -1312,6 +1312,18 @@ class StrategyController:
 
         # Handle action-based commands
         if action:
+            # Dedup: skip if action was already triggered recently (within 4 min)
+            action_obj = self._action_map.get(action)
+            if action_obj and action_obj.last_triggered:
+                import time
+                elapsed = time.time() - action_obj.last_triggered
+                if elapsed < 240:  # 4 min cooldown
+                    _LOGGER.debug(
+                        "AI Controller: action '%s' skipped (triggered %.0fs ago)",
+                        action, elapsed,
+                    )
+                    return None
+
             try:
                 result = await self.trigger_action(action)
                 msg = f"{prefix}: action({action}) → {result.get('status', 'ok')}"

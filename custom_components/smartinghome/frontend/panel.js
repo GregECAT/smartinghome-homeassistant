@@ -7540,7 +7540,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.22.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.22.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -7732,13 +7732,29 @@ class SmartingHomePanel extends HTMLElement {
 
   _renderActionCard(action, presetActions, catColor) {
     const isActive = action.always || presetActions.has(action.id);
-    const statusLabel = isActive ? 'CZEKA' : 'IDLE';
-    const statusBg = isActive ? 'rgba(46,204,113,0.15)' : 'rgba(71,85,105,0.2)';
-    const statusBorder = isActive ? 'rgba(46,204,113,0.4)' : 'rgba(71,85,105,0.3)';
-    const statusTextColor = isActive ? '#2ecc71' : '#64748b';
-    const borderColor = isActive ? catColor : 'rgba(255,255,255,0.06)';
-    const bgColor = isActive ? 'rgba(255,255,255,0.035)' : 'rgba(255,255,255,0.015)';
-    const opacity = isActive ? '1' : '0.55';
+    const isLive = this._activeActions && this._activeActions.has(action.id);
+    
+    let statusLabel, statusBg, statusBorder, statusTextColor;
+    if (isLive) {
+      statusLabel = 'AKTYWNE';
+      statusBg = 'rgba(46,204,113,0.2)';
+      statusBorder = 'rgba(46,204,113,0.5)';
+      statusTextColor = '#2ecc71';
+    } else if (isActive) {
+      statusLabel = 'CZEKA';
+      statusBg = 'rgba(46,204,113,0.15)';
+      statusBorder = 'rgba(46,204,113,0.4)';
+      statusTextColor = '#2ecc71';
+    } else {
+      statusLabel = 'IDLE';
+      statusBg = 'rgba(71,85,105,0.2)';
+      statusBorder = 'rgba(71,85,105,0.3)';
+      statusTextColor = '#64748b';
+    }
+
+    const borderColor = isLive ? '#2ecc71' : (isActive ? catColor : 'rgba(255,255,255,0.06)');
+    const bgColor = isLive ? 'rgba(46,204,113,0.06)' : (isActive ? 'rgba(255,255,255,0.035)' : 'rgba(255,255,255,0.015)');
+    const opacity = (isActive || isLive) ? '1' : '0.55';
     const alwaysBadge = action.always
       ? `<span style="font-size:7px; background:rgba(231,76,60,0.2); color:#e74c3c; padding:1px 4px; border-radius:4px; font-weight:700; margin-left:auto">ALWAYS</span>`
       : '';
@@ -7755,7 +7771,7 @@ class SmartingHomePanel extends HTMLElement {
           <span style="font-size:16px">${action.icon}</span>
           <span style="font-size:10px; font-weight:700; color:#f8fafc; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${action.name}</span>
           ${alwaysBadge}
-          <span style="font-size:7px; padding:1px 5px; border-radius:4px; font-weight:700; background:${statusBg}; border:1px solid ${statusBorder}; color:${statusTextColor}">${statusLabel}</span>
+          <span data-status-badge style="font-size:7px; padding:1px 5px; border-radius:4px; font-weight:700; background:${statusBg}; border:1px solid ${statusBorder}; color:${statusTextColor}">${statusLabel}</span>
         </div>
         <div style="font-size:8px; color:#94a3b8; line-height:1.3; min-height:18px">${shortDesc}</div>
       </div>`;
@@ -7779,7 +7795,26 @@ class SmartingHomePanel extends HTMLElement {
       await this._hass.callService('smartinghome', 'trigger_autopilot_action', {
         action_id: actionId,
       });
-      if (tile) { tile.style.background = 'rgba(46,204,113,0.25)'; setTimeout(() => { tile.style.background = origBg; }, 1500); }
+      if (tile) {
+        // Flash green
+        tile.style.background = 'rgba(46,204,113,0.25)';
+        tile.style.opacity = '1';
+        tile.style.borderLeftColor = '#2ecc71';
+        // Update status badge to AKTYWNE
+        const badge = tile.querySelector('[data-status-badge]');
+        if (badge) {
+          badge.textContent = 'AKTYWNE';
+          badge.style.background = 'rgba(46,204,113,0.2)';
+          badge.style.borderColor = 'rgba(46,204,113,0.5)';
+          badge.style.color = '#2ecc71';
+        }
+        // Track active action for live dashboard
+        if (!this._activeActions) this._activeActions = new Set();
+        this._activeActions.add(actionId);
+        setTimeout(() => { tile.style.background = origBg; }, 2000);
+        // Refresh live dashboard
+        this._updateLiveDecisionLog();
+      }
     } catch (err) {
       console.error('[SH] Trigger action failed:', err);
       if (tile) { tile.style.background = 'rgba(231,76,60,0.2)'; setTimeout(() => { tile.style.background = origBg; }, 1500); }
