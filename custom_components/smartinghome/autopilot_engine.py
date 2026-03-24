@@ -550,12 +550,14 @@ def build_autopilot_ai_prompt(
 
     prompt = f"""You are an expert energy management AI for a home solar+battery system in Poland with G13 multi-zone tariff.
 
-TASK: Analyze the following 24-hour energy plan for strategy "{AUTOPILOT_STRATEGY_LABELS.get(strategy, strategy.value)}" and provide:
-1. Critical analysis of the current plan — what's wrong and why
-2. A refined hourly action plan in JSON format
-3. Estimated savings comparison (current plan vs optimized vs no management)
-4. Risk assessment
-5. Specific recommendations for HEMS automation layers (W0-W5)
+TASK: Analyze the 24-hour energy plan for strategy "{AUTOPILOT_STRATEGY_LABELS.get(strategy, strategy.value)}" and provide a CONCISE analysis.
+
+CRITICAL: Keep your response under 3000 words. Be direct and actionable, avoid lengthy explanations.
+
+Provide EXACTLY 3 sections:
+1. ## 📊 Analiza strategii — what's wrong with the current plan (max 5 bullet points)
+2. ## 🎯 Zoptymalizowany plan — key corrections per time block (morning/afternoon/evening/night), NOT hourly JSON
+3. ## 💰 Oszczędności — estimated savings table (current vs optimized) and top 3 HEMS automation recommendations
 
 ═══ SYSTEM CONFIGURATION ═══
 - Battery Capacity: {bat_cap_kwh:.1f} kWh

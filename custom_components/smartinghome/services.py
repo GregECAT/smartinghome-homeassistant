@@ -140,7 +140,7 @@ async def async_setup_services(
         return d / SETTINGS_FILE
 
     def _read_settings(h: HomeAssistant) -> dict:
-        """Read settings from JSON."""
+        """Read settings from JSON (sync — call via executor for async contexts)."""
         p = _get_settings_path(h)
         if p.exists():
             try:
@@ -149,13 +149,17 @@ async def async_setup_services(
                 return {}
         return {}
 
-    def _update_settings_file(h: HomeAssistant, updates: dict) -> None:
-        """Merge updates into settings.json."""
+    def _write_settings_sync(h: HomeAssistant, updates: dict) -> None:
+        """Merge updates into settings.json (sync — for executor)."""
         current = _read_settings(h)
         current.update(updates)
         p = _get_settings_path(h)
         p.write_text(json.dumps(current, indent=2, ensure_ascii=False))
         _LOGGER.debug("Settings updated: %s", list(updates.keys()))
+
+    async def _update_settings_file(h: HomeAssistant, updates: dict) -> None:
+        """Merge updates into settings.json (async-safe)."""
+        await h.async_add_executor_job(_write_settings_sync, h, updates)
 
     energy_mgr = EnergyManager(hass, device_id)
 
@@ -325,7 +329,7 @@ async def async_setup_services(
                 updates[status_key] = val
 
         if updates:
-            _update_settings_file(hass, updates)
+            await _update_settings_file(hass, updates)
 
         _LOGGER.info("API keys/models updated via panel (updates=%s)", list(updates.keys()))
 
@@ -406,7 +410,7 @@ async def async_setup_services(
             {"provider": provider, "status": status},
         )
         # Also save to settings.json
-        _update_settings_file(hass, {f"{provider}_key_status": status})
+        await _update_settings_file(hass, {f"{provider}_key_status": status})
         _LOGGER.info("API key test for %s: %s", provider, status)
 
     async def handle_save_panel_settings(call: ServiceCall) -> None:
@@ -420,7 +424,7 @@ async def async_setup_services(
         # SAFETY: never let panel settings overwrite API keys
         for danger_key in ("gemini_api_key", "anthropic_api_key"):
             incoming.pop(danger_key, None)
-        _update_settings_file(hass, incoming)
+        await _update_settings_file(hass, incoming)
         _LOGGER.info("Panel settings saved: %s", list(incoming.keys()))
 
     # Autopilot engine — instantiated per-request with actual data
@@ -577,7 +581,7 @@ async def async_setup_services(
             "ai_analysis": ai_analysis,
             "provider": provider,
         }
-        _update_settings_file(hass, {AUTOPILOT_PLAN_KEY: result})
+        await _update_settings_file(hass, {AUTOPILOT_PLAN_KEY: result})
 
         # Fire event for live frontend update
         hass.bus.async_fire(
@@ -607,7 +611,7 @@ async def async_setup_services(
         await strategy_controller.activate_strategy(strategy)
 
         # Persist to settings.json
-        _update_settings_file(hass, {
+        await _update_settings_file(hass, {
             AUTOPILOT_SETTINGS_KEY: strategy.value,
         })
 
@@ -624,7 +628,7 @@ async def async_setup_services(
         await strategy_controller.deactivate()
 
         # Clear saved strategy
-        _update_settings_file(hass, {
+        await _update_settings_file(hass, {
             AUTOPILOT_SETTINGS_KEY: "",
         })
 
