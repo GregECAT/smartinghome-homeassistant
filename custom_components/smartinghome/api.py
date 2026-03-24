@@ -83,6 +83,13 @@ class SmartingHomeAPI:
             "device_id": self._device_id or None,
         }
 
+        _LOGGER.info(
+            "Validating license: key=%s..., device_id=%s, version=%s",
+            self._license_key[:12] if self._license_key else "(none)",
+            self._device_id or "(none)",
+            self._integration_version,
+        )
+
         try:
             async with self._session.post(
                 url, json=payload, headers=headers, timeout=TIMEOUT
