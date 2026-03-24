@@ -4459,6 +4459,10 @@ class SmartingHomePanel extends HTMLElement {
           100% { opacity: 1; box-shadow: 0 0 8px currentColor; }
         }
 
+        /* General SOC progress bars (used in tabs) */
+        .soc-bar { width: 100%; height: 100%; background: rgba(255,255,255,0.05); border-radius: 4px; overflow: hidden; }
+        .soc-fill { height: 100%; transition: width 0.5s, background-color 0.5s; background-color: #2ecc71; }
+
         /* Summary bar */
         .summary-bar {
           display: flex; gap: 16px; flex-wrap: wrap; align-items: center; justify-content: center;
