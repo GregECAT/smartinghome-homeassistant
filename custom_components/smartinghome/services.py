@@ -32,7 +32,7 @@ from .energy_manager import EnergyManager
 from .ai_advisor import AIAdvisor
 from .license import LicenseManager
 from .cron_scheduler import AICronScheduler
-from .autopilot_engine import AutopilotEngine, build_autopilot_ai_prompt
+from .autopilot_engine import AutopilotEngine, build_autopilot_ai_prompt, DEFAULT_BATTERY_CAPACITY
 from .strategy_controller import StrategyController
 
 _LOGGER = logging.getLogger(__name__)
@@ -423,8 +423,8 @@ async def async_setup_services(
         _update_settings_file(hass, incoming)
         _LOGGER.info("Panel settings saved: %s", list(incoming.keys()))
 
-    # ── Autopilot service ──
-    autopilot_engine = AutopilotEngine()
+    # Autopilot engine — instantiated per-request with actual data
+    # (no longer using hardcoded defaults)
 
     async def handle_run_autopilot(call: ServiceCall) -> None:
         """Handle run_autopilot service — AI-powered strategy estimation."""
@@ -446,6 +446,23 @@ async def async_setup_services(
             strategy = AutopilotStrategy.MAX_SELF_CONSUMPTION
 
         data = coordinator.data or {}
+
+        # Instantiate AutopilotEngine with actual system values
+        battery_cap = float(
+            data.get("sensor.battery_capacity")
+            or data.get("battery_capacity_wh")
+            or DEFAULT_BATTERY_CAPACITY
+        )
+        pv_peak = float(
+            data.get("sensor.pv_rated_power")
+            or data.get("pv_peak_w")
+            or 0
+        )
+        autopilot_engine = AutopilotEngine(
+            battery_capacity_wh=battery_cap,
+            pv_peak_w=pv_peak,
+        )
+
         ai_data = {
             "pv_power": data.get("sensor.pv_power"),
             "grid_power": data.get("sensor.meter_active_power_total"),
