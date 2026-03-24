@@ -106,6 +106,32 @@ class SmartingHomePanel extends HTMLElement {
   _nm(k) { return this._n(this._m(k)); }
   _setText(id, val) { const el = this.shadowRoot.getElementById(id); if (el) el.textContent = val; }
   _callService(domain, service, data = {}) { if (this._hass) this._hass.callService(domain, service, data); }
+  _tier() {
+    // Try known entity_id patterns first
+    const ids = [
+      "sensor.smartinghome_license_tier",
+      "sensor.smarting_home_energy_management_license_tier",
+      "sensor.smarting_home_license_tier",
+    ];
+    for (const id of ids) {
+      const v = this._s(id);
+      if (v && v !== "unknown" && v !== "unavailable") {
+        if (this._lastTierEntity !== id) { console.log("[SH] License tier from:", id, "=", v); this._lastTierEntity = id; }
+        return v.toUpperCase();
+      }
+    }
+    // Fallback: search all states for *license_tier*
+    if (this._hass?.states) {
+      for (const [eid, st] of Object.entries(this._hass.states)) {
+        if (eid.includes("license_tier") && st.state && st.state !== "unknown" && st.state !== "unavailable") {
+          if (this._lastTierEntity !== eid) { console.log("[SH] License tier FOUND via search:", eid, "=", st.state); this._lastTierEntity = eid; }
+          return st.state.toUpperCase();
+        }
+      }
+    }
+    if (!this._lastTierWarnLogged) { console.warn("[SH] No license_tier sensor found in HA states. Defaulting to FREE."); this._lastTierWarnLogged = true; }
+    return "FREE";
+  }
 
   async _loadSettings() {
     try {
@@ -228,7 +254,7 @@ class SmartingHomePanel extends HTMLElement {
 
   /* ── PV String Configuration ────────────── */
   _getMaxStrings() {
-    const tier = (this._s("sensor.smartinghome_license_tier") || "FREE").toUpperCase();
+    const tier = this._tier();
     return tier === "PRO" || tier === "ENTERPRISE" ? 10 : 4;
   }
 
@@ -313,7 +339,7 @@ class SmartingHomePanel extends HTMLElement {
     const sc = cfg[`pv${idx}`] || { has_substrings: false, substrings: [{ direction: 'S', panel_count: 10, panel_power: 405, tilt: 35 }] };
     const pvLabel = (this._settings.pv_labels || {})[`pv${idx}`] || `PV${idx}`;
     const maxStrings = this._getMaxStrings();
-    const tier = (this._s("sensor.smartinghome_license_tier") || "FREE").toUpperCase();
+    const tier = this._tier();
 
     // Store temp config for modal editing
     this._tempStringConfig = JSON.parse(JSON.stringify(sc));
@@ -509,7 +535,7 @@ class SmartingHomePanel extends HTMLElement {
     }
     const idx = this._tempStringIdx;
     const pvLabel = (this._settings.pv_labels || {})[`pv${idx}`] || `PV${idx}`;
-    const tier = (this._s("sensor.smartinghome_license_tier") || "FREE").toUpperCase();
+    const tier = this._tier();
     this._renderStringConfigModal(idx, pvLabel, tier, this._getMaxStrings());
   }
 
@@ -525,7 +551,7 @@ class SmartingHomePanel extends HTMLElement {
     this._tempStringConfig.substrings.push({ direction: 'S', panel_count: 4, panel_power: 405, tilt: 35 });
     const idx = this._tempStringIdx;
     const pvLabel = (this._settings.pv_labels || {})[`pv${idx}`] || `PV${idx}`;
-    const tier = (this._s("sensor.smartinghome_license_tier") || "FREE").toUpperCase();
+    const tier = this._tier();
     this._renderStringConfigModal(idx, pvLabel, tier, this._getMaxStrings());
   }
 
@@ -536,7 +562,7 @@ class SmartingHomePanel extends HTMLElement {
     }
     const idx = this._tempStringIdx;
     const pvLabel = (this._settings.pv_labels || {})[`pv${idx}`] || `PV${idx}`;
-    const tier = (this._s("sensor.smartinghome_license_tier") || "FREE").toUpperCase();
+    const tier = this._tier();
     this._renderStringConfigModal(idx, pvLabel, tier, this._getMaxStrings());
   }
 
@@ -1643,9 +1669,8 @@ class SmartingHomePanel extends HTMLElement {
 
     // License tier badge
     const tierEl = this.shadowRoot.getElementById("hems-arb-tier");
-    const licTier = this._s("sensor.smartinghome_license") || "free";
-    const attrTier = this.hass?.states?.["sensor.smartinghome_license"]?.attributes?.license_tier || licTier;
-    if (tierEl) tierEl.textContent = attrTier.toUpperCase();
+    const licTier = this._tier();
+    if (tierEl) tierEl.textContent = licTier;
 
     // ── Helper: set card status ──
     const setStatus = (id, status) => {
@@ -2924,7 +2949,7 @@ class SmartingHomePanel extends HTMLElement {
     }
     // License
     const badge = this.shadowRoot.getElementById("v-license");
-    const tier = (this._s("sensor.smartinghome_license_tier") || "FREE").toUpperCase();
+    const tier = this._tier();
     if (badge) {
       badge.textContent = tier;
       badge.className = `badge ${tier === "PRO" || tier === "ENTERPRISE" ? "pro" : "free"}`;
