@@ -37,6 +37,27 @@ PANEL_FILENAME = "panel.js"
 PANEL_WWW_DIR = "community/smartinghome"
 
 
+class SmartingHomeDashboardProxy:
+    """Proxy so Smarting HOME appears in the default-panel dropdown.
+
+    HA's "Pick default panel" dropdown reads from
+    hass.data[LOVELACE_DATA].dashboards.  By injecting this lightweight
+    proxy, fetchDashboards() returns our panel alongside real Lovelace
+    dashboards — without changing how the panel actually renders.
+    """
+
+    def __init__(self, url_path: str, title: str, icon: str) -> None:
+        self.config = {
+            "id": url_path,
+            "url_path": url_path,
+            "title": title,
+            "icon": icon,
+            "show_in_sidebar": True,
+            "require_admin": False,
+            "mode": "storage",
+        }
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: SmartingHomeConfigEntry
 ) -> bool:
@@ -45,11 +66,28 @@ async def async_setup_entry(
 
     hass.data.setdefault(DOMAIN, {})
 
+    # Get device identity (HA instance UUID)
+    try:
+        from homeassistant.helpers.instance_id import async_get as async_get_instance_id
+        device_id = await async_get_instance_id(hass)
+    except Exception:
+        device_id = str(hass.data.get("core.uuid", entry.entry_id))
+
+    ha_version = hass.config.version or "unknown"
+
     # Initialize API client with device identity
     session = async_get_clientsession(hass)
     license_key = entry.data.get(CONF_LICENSE_KEY, "")
-    device_id = str(hass.data.get("core.uuid", entry.entry_id))
-    ha_version = hass.config.version or "unknown"
+    license_mode = entry.data.get(CONF_LICENSE_MODE, LICENSE_MODE_FREE)
+
+    _LOGGER.info(
+        "License config: mode=%s, key=%s..., device_id=%s, ha=%s",
+        license_mode,
+        license_key[:12] if license_key else "(none)",
+        device_id[:12] if device_id else "(none)",
+        ha_version,
+    )
+
     api = SmartingHomeAPI(
         session,
         license_key,
@@ -59,7 +97,6 @@ async def async_setup_entry(
     )
 
     # Initialize license manager
-    license_mode = entry.data.get(CONF_LICENSE_MODE, LICENSE_MODE_FREE)
     license_mgr = LicenseManager(hass, api, license_mode=license_mode)
 
     # Validate license on startup
@@ -179,6 +216,20 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
     except Exception as err:
         _LOGGER.warning("Panel already registered or error: %s", err)
 
+    # Inject dashboard proxy so panel appears in default-panel dropdown
+    try:
+        from homeassistant.components.lovelace.const import LOVELACE_DATA
+
+        lovelace_data = hass.data.get(LOVELACE_DATA)
+        if lovelace_data is not None:
+            proxy = SmartingHomeDashboardProxy(DOMAIN, PANEL_TITLE, PANEL_ICON)
+            lovelace_data.dashboards[DOMAIN] = proxy
+            _LOGGER.info("Injected dashboard proxy for default-panel dropdown ✅")
+        else:
+            _LOGGER.debug("Lovelace data not available yet, skipping proxy")
+    except Exception as err:
+        _LOGGER.debug("Could not inject dashboard proxy: %s", err)
+
 
 async def async_unload_entry(
     hass: HomeAssistant, entry: SmartingHomeConfigEntry
@@ -203,6 +254,17 @@ async def async_unload_entry(
             async_remove_panel(hass, DOMAIN)
         except Exception:
             _LOGGER.debug("Panel already removed or not registered")
+
+        # Remove dashboard proxy
+        try:
+            from homeassistant.components.lovelace.const import LOVELACE_DATA
+
+            lovelace_data = hass.data.get(LOVELACE_DATA)
+            if lovelace_data and DOMAIN in lovelace_data.dashboards:
+                del lovelace_data.dashboards[DOMAIN]
+                _LOGGER.debug("Removed dashboard proxy")
+        except Exception:
+            _LOGGER.debug("Dashboard proxy already removed")
 
     return unload_ok
 
