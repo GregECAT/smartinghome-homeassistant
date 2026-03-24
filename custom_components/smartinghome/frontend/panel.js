@@ -7183,11 +7183,52 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
-          <!-- ═══ ACTIVITY LOG ═══ -->
-          <div class="card">
-            <div class="card-title">📋 Log decyzji Autopilota</div>
-            <div id="ap-activity-log" style="font-size:11px; color:#94a3b8">
-              <div style="color:#64748b; text-align:center; padding:12px">Brak aktywności</div>
+          <!-- ═══ LIVE STRATEGY DASHBOARD ═══ -->
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-title">⚡ Live — Strategia w akcji</div>
+
+            <!-- Current tick status bar -->
+            <div id="ap-live-status" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(100px, 1fr)); gap:6px; margin-bottom:12px">
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:8px; color:#64748b; text-transform:uppercase">Strategia</div>
+                <div id="ap-live-strategy" style="font-size:11px; font-weight:600; color:#f8fafc">—</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:8px; color:#64748b; text-transform:uppercase">Strefa G13</div>
+                <div id="ap-live-zone" style="font-size:11px; font-weight:600; color:#f8fafc">—</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:8px; color:#64748b; text-transform:uppercase">SOC</div>
+                <div id="ap-live-soc" style="font-size:11px; font-weight:600; color:#2ecc71">—</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:8px; color:#64748b; text-transform:uppercase">PV</div>
+                <div id="ap-live-pv" style="font-size:11px; font-weight:600; color:#f7b731">—</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:8px; color:#64748b; text-transform:uppercase">Zużycie</div>
+                <div id="ap-live-load" style="font-size:11px; font-weight:600; color:#e74c3c">—</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:8px; color:#64748b; text-transform:uppercase">Nadwyżka</div>
+                <div id="ap-live-surplus" style="font-size:11px; font-weight:600; color:#2ecc71">—</div>
+              </div>
+            </div>
+
+            <!-- Current actions from this tick -->
+            <div style="margin-bottom:10px">
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px">🔄 Aktywne akcje (ostatni tick)</div>
+              <div id="ap-live-actions" style="font-size:11px; color:#94a3b8; min-height:28px; padding:6px 8px; background:rgba(255,255,255,0.02); border-radius:6px; border-left:3px solid #334155">
+                <span style="color:#64748b">Oczekiwanie na dane...</span>
+              </div>
+            </div>
+
+            <!-- Decision log feed -->
+            <div>
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px">📋 Historia decyzji</div>
+              <div id="ap-activity-log" style="font-size:11px; color:#94a3b8; max-height:250px; overflow-y:auto">
+                <div style="color:#64748b; text-align:center; padding:12px">Brak aktywności</div>
+              </div>
             </div>
           </div>
 
@@ -7806,26 +7847,20 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   _updateLiveDecisionLog() {
-    // Read decision log from coordinator data (autopilot_decision_log)
+    // Read live autopilot data from settings.json (written by coordinator every tick)
     if (!this._hass) return;
-    const logEl = this.shadowRoot.getElementById('ap-activity-log');
-    if (!logEl) return;
 
-    // Read from coordinator data via sensor attributes
-    const coordData = this._hass.states['sensor.smartinghome_hems_recommendation'];
-    const statusEl = this.shadowRoot.getElementById('ap-status');
-
-    // Try reading autopilot status from settings.json autopilot log
     try {
       fetch('/local/smartinghome/settings.json?t=' + Date.now())
         .then(r => r.json())
         .then(s => {
+          // ── Sync strategy state ──
           const saved = s.autopilot_active_strategy;
           if (saved && saved !== this._autopilotActiveStrategy) {
             this._autopilotActiveStrategy = saved;
             this._renderStrategyCards();
           }
-          // Show/hide deactivate button based on saved strategy
+          const statusEl = this.shadowRoot.getElementById('ap-status');
           const deactBtn = this.shadowRoot.getElementById('ap-deactivate-btn');
           if (statusEl && saved) {
             statusEl.textContent = '● AKTYWNY';
@@ -7839,6 +7874,66 @@ class SmartingHomePanel extends HTMLElement {
             statusEl.textContent = '● GOTOWY';
             statusEl.style.color = '#64748b';
             if (deactBtn) deactBtn.style.display = 'none';
+          }
+
+          // ── Live tick status bar ──
+          const live = s.autopilot_live;
+          if (live) {
+            const setText = (id, val) => {
+              const el = this.shadowRoot.getElementById(id);
+              if (el) el.textContent = val;
+            };
+
+            setText('ap-live-strategy', live.strategy_label || live.strategy || '—');
+
+            // G13 zone with color
+            const zoneEl = this.shadowRoot.getElementById('ap-live-zone');
+            if (zoneEl) {
+              const zoneMap = { off_peak: '🌙 Off-peak', morning_peak: '☀️ Szczyt poranny', afternoon_peak: '⚡ Szczyt popołudniowy' };
+              const zoneColors = { off_peak: '#2ecc71', morning_peak: '#e74c3c', afternoon_peak: '#e74c3c' };
+              zoneEl.textContent = zoneMap[live.g13_zone] || live.g13_zone || '—';
+              zoneEl.style.color = zoneColors[live.g13_zone] || '#f8fafc';
+            }
+
+            setText('ap-live-soc', live.soc != null ? `${Math.round(live.soc)}%` : '—');
+            setText('ap-live-pv', live.pv != null ? `${Math.round(live.pv)} W` : '—');
+            setText('ap-live-load', live.load != null ? `${Math.round(live.load)} W` : '—');
+            setText('ap-live-surplus', live.surplus != null ? `${Math.round(live.surplus)} W` : '—');
+
+            // ── Current actions from this tick ──
+            const actionsEl = this.shadowRoot.getElementById('ap-live-actions');
+            if (actionsEl) {
+              const actions = live.actions || [];
+              if (actions.length === 0) {
+                actionsEl.innerHTML = '<span style="color:#64748b">✅ Brak akcji — system pracuje w trybie auto</span>';
+                actionsEl.style.borderLeftColor = '#334155';
+              } else {
+                actionsEl.innerHTML = actions.map(a => {
+                  const isWarning = a.includes('⚠️') || a.includes('emergency');
+                  const color = isWarning ? '#f7b731' : '#2ecc71';
+                  return `<div style="padding:2px 0; color:${color}">→ ${a}</div>`;
+                }).join('');
+                actionsEl.style.borderLeftColor = '#2ecc71';
+              }
+            }
+          }
+
+          // ── Decision log feed ──
+          const log = s.autopilot_decision_log;
+          const logEl = this.shadowRoot.getElementById('ap-activity-log');
+          if (logEl && log && log.length > 0) {
+            logEl.innerHTML = log.slice().reverse().map(entry => {
+              const icon = entry.action?.includes('emergency') ? '🚨' :
+                           entry.action?.includes('charge') ? '🔋' :
+                           entry.action?.includes('export') ? '⚡' :
+                           entry.action?.includes('voltage') ? '🔌' :
+                           entry.action?.includes('surplus') ? '☀️' :
+                           entry.action?.includes('soc') ? '🔋' : '📌';
+              return `<div style="display:flex; justify-content:space-between; padding:4px 8px; border-bottom:1px solid rgba(255,255,255,0.04)">
+                <span><strong style="color:#f8fafc">${entry.time || '—'}</strong> ${icon} ${entry.message || entry.action || '—'}</span>
+                <span style="color:#475569; font-size:9px">${entry.strategy || ''}</span>
+              </div>`;
+            }).join('');
           }
         })
         .catch(() => {});
