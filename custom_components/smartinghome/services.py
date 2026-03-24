@@ -693,6 +693,7 @@ async def async_setup_services(
         hass,
         ai_advisor,
         get_coordinator_data=lambda: coordinator.data or {},
+        strategy_controller=strategy_controller,
     )
     await cron.async_start()
     return cron

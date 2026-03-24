@@ -1025,6 +1025,8 @@ class SmartingHomePanel extends HTMLElement {
       cron_report_interval: parseInt(this.shadowRoot.getElementById("sel-cron-report")?.value || "360"),
       cron_anomaly_enabled: this.shadowRoot.getElementById("chk-cron-anomaly")?.checked ?? true,
       cron_anomaly_interval: parseInt(this.shadowRoot.getElementById("sel-cron-anomaly")?.value || "60"),
+      cron_autopilot_enabled: this.shadowRoot.getElementById("chk-cron-autopilot")?.checked ?? true,
+      cron_autopilot_interval: parseInt(this.shadowRoot.getElementById("sel-cron-autopilot")?.value || "10"),
     };
     this._savePanelSettings(updates);
     const st = this.shadowRoot.getElementById("v-cron-save-status");
@@ -2145,26 +2147,30 @@ class SmartingHomePanel extends HTMLElement {
     const chkH = this.shadowRoot.getElementById("chk-cron-hems");
     const chkR = this.shadowRoot.getElementById("chk-cron-report");
     const chkA = this.shadowRoot.getElementById("chk-cron-anomaly");
+    const chkAP = this.shadowRoot.getElementById("chk-cron-autopilot");
     if (chkH && s.cron_hems_enabled !== undefined) chkH.checked = s.cron_hems_enabled;
     if (chkR && s.cron_report_enabled !== undefined) chkR.checked = s.cron_report_enabled;
     if (chkA && s.cron_anomaly_enabled !== undefined) chkA.checked = s.cron_anomaly_enabled;
+    if (chkAP && s.cron_autopilot_enabled !== undefined) chkAP.checked = s.cron_autopilot_enabled;
     const selH = this.shadowRoot.getElementById("sel-cron-hems");
     const selR = this.shadowRoot.getElementById("sel-cron-report");
     const selA = this.shadowRoot.getElementById("sel-cron-anomaly");
+    const selAP = this.shadowRoot.getElementById("sel-cron-autopilot");
     if (selH && s.cron_hems_interval) selH.value = String(s.cron_hems_interval);
     if (selR && s.cron_report_interval) selR.value = String(s.cron_report_interval);
     if (selA && s.cron_anomaly_interval) selA.value = String(s.cron_anomaly_interval);
+    if (selAP && s.cron_autopilot_interval) selAP.value = String(s.cron_autopilot_interval);
     this._updateCronStatus();
   }
 
   _updateCronStatus() {
     const s = this._settings;
-    ["hems", "report", "anomaly"].forEach(job => {
-      const key = job === "hems" ? "ai_hems_advice" : job === "report" ? "ai_daily_report" : "ai_anomaly_report";
+    ["hems", "report", "anomaly", "autopilot"].forEach(job => {
+      const key = job === "hems" ? "ai_hems_advice" : job === "report" ? "ai_daily_report" : job === "anomaly" ? "ai_anomaly_report" : "ai_autopilot_log";
       const el = this.shadowRoot.getElementById(`cron-status-${job}`);
       if (el && s[key] && s[key].timestamp) {
         el.textContent = "\u23f0 Ostatnio: " + s[key].timestamp;
-        el.style.color = "#2ecc71";
+        el.style.color = job === "autopilot" ? "#9b59b6" : "#2ecc71";
       }
     });
   }
@@ -7351,6 +7357,21 @@ class SmartingHomePanel extends HTMLElement {
                   </select>
                   <div style="font-size:9px; color:#64748b; min-width:100px" id="cron-status-anomaly">—</div>
                 </div>
+                <!-- Autopilot Controller -->
+                <div style="display:flex; align-items:center; gap:10px; padding:8px 12px; background:rgba(255,255,255,0.03); border-radius:8px; flex-wrap:wrap">
+                  <input type="checkbox" id="chk-cron-autopilot" checked style="accent-color:#9b59b6; width:16px; height:16px" />
+                  <div style="flex:1; min-width:160px">
+                    <div style="font-size:12px; font-weight:600; color:#fff">🧠 Autopilot Controller</div>
+                    <div style="font-size:10px; color:#64748b">Log wykonanych komend AI na falowniku</div>
+                  </div>
+                  <select id="sel-cron-autopilot" style="padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:6px; color:#fff; font-size:11px">
+                    <option value="5">co 5 min</option>
+                    <option value="10" selected>co 10 min</option>
+                    <option value="15">co 15 min</option>
+                    <option value="30">co 30 min</option>
+                  </select>
+                  <div style="font-size:9px; color:#64748b; min-width:100px" id="cron-status-autopilot">—</div>
+                </div>
               </div>
               <button class="save-btn" style="margin-top:12px" onclick="this.getRootNode().host._saveCronSettings()">💾 Zapisz harmonogram AI</button>
               <div id="v-cron-save-status" style="font-size:11px; color:#2ecc71; margin-top:6px"></div>
@@ -7513,7 +7534,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.21.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.21.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
