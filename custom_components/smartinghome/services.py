@@ -43,6 +43,8 @@ SERVICE_TEST_API_KEY = "test_api_key"
 SERVICE_SAVE_PANEL_SETTINGS = "save_panel_settings"
 SERVICE_SET_AUTOPILOT_STRATEGY = "set_autopilot_strategy"
 SERVICE_DEACTIVATE_AUTOPILOT = "deactivate_autopilot"
+SERVICE_TRIGGER_AUTOPILOT_ACTION = "trigger_autopilot_action"
+SERVICE_TOGGLE_AUTOPILOT_ACTION = "toggle_autopilot_action"
 
 SETTINGS_FILE = "settings.json"
 
@@ -118,6 +120,19 @@ SET_AUTOPILOT_STRATEGY_SCHEMA = vol.Schema(
         vol.Required("strategy"): vol.In(
             [s.value for s in AutopilotStrategy]
         ),
+    }
+)
+
+TRIGGER_ACTION_SCHEMA = vol.Schema(
+    {
+        vol.Required("action_id"): cv.string,
+    }
+)
+
+TOGGLE_ACTION_SCHEMA = vol.Schema(
+    {
+        vol.Required("action_id"): cv.string,
+        vol.Required("enabled"): cv.boolean,
     }
 )
 
@@ -638,6 +653,42 @@ async def async_setup_services(
 
         _LOGGER.info("Autopilot deactivated, automations restored")
 
+    # ── Trigger Autopilot Action service ──
+
+    async def handle_trigger_autopilot_action(call: ServiceCall) -> None:
+        """Handle trigger_autopilot_action — manually fire an action."""
+        if not strategy_controller:
+            _LOGGER.warning("Strategy controller not available")
+            return
+
+        action_id = call.data["action_id"]
+        result = await strategy_controller.trigger_action(action_id)
+
+        hass.bus.async_fire(
+            f"{DOMAIN}_action_triggered",
+            result,
+        )
+        _LOGGER.info("Action triggered: %s → %s", action_id, result)
+
+    # ── Toggle Autopilot Action service ──
+
+    async def handle_toggle_autopilot_action(call: ServiceCall) -> None:
+        """Handle toggle_autopilot_action — enable/disable an action."""
+        if not strategy_controller:
+            _LOGGER.warning("Strategy controller not available")
+            return
+
+        action_id = call.data["action_id"]
+        enabled = call.data["enabled"]
+        ok = strategy_controller.toggle_action(action_id, enabled)
+
+        if ok:
+            hass.bus.async_fire(
+                f"{DOMAIN}_action_toggled",
+                {"action_id": action_id, "enabled": enabled},
+            )
+        _LOGGER.info("Action toggled: %s → %s", action_id, "ON" if enabled else "OFF")
+
     # Register all services
     hass.services.async_register(
         DOMAIN, SERVICE_SET_MODE, handle_set_mode, schema=SET_MODE_SCHEMA
@@ -685,8 +736,16 @@ async def async_setup_services(
     hass.services.async_register(
         DOMAIN, SERVICE_DEACTIVATE_AUTOPILOT, handle_deactivate_autopilot,
     )
+    hass.services.async_register(
+        DOMAIN, SERVICE_TRIGGER_AUTOPILOT_ACTION, handle_trigger_autopilot_action,
+        schema=TRIGGER_ACTION_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_TOGGLE_AUTOPILOT_ACTION, handle_toggle_autopilot_action,
+        schema=TOGGLE_ACTION_SCHEMA,
+    )
 
-    _LOGGER.info("Registered %d Smarting HOME services", 13)
+    _LOGGER.info("Registered %d Smarting HOME services", 15)
 
     # Start AI Cron Scheduler
     cron = AICronScheduler(
@@ -715,5 +774,7 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_RUN_AUTOPILOT,
         SERVICE_SET_AUTOPILOT_STRATEGY,
         SERVICE_DEACTIVATE_AUTOPILOT,
+        SERVICE_TRIGGER_AUTOPILOT_ACTION,
+        SERVICE_TOGGLE_AUTOPILOT_ACTION,
     ]:
         hass.services.async_remove(DOMAIN, service)

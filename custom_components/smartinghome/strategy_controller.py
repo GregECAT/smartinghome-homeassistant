@@ -64,6 +64,17 @@ from .const import (
 )
 from .energy_manager import EnergyManager
 from .inverter_agent import InverterAgent
+from .autopilot_actions import (
+    AutopilotAction,
+    ActionStatus,
+    ActionCategory,
+    CATEGORY_LABELS,
+    CATEGORY_ORDER,
+    build_all_actions,
+    get_active_action_ids,
+    get_actions_by_category,
+    STRATEGY_ACTION_MAP,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -220,6 +231,14 @@ class StrategyController:
             hass, energy_manager, dry_run=self._ai_dry_run,
         )
 
+        # Action-based system
+        self._all_actions: list[AutopilotAction] = build_all_actions()
+        self._action_map: dict[str, AutopilotAction] = {
+            a.id: a for a in self._all_actions
+        }
+        self._action_sensor_overrides: dict[str, dict[str, str]] = {}  # action_id → {slot_key: entity_id}
+        self._active_action_ids: set[str] = set()  # currently active action IDs
+
     def set_ai_advisor(self, ai_advisor: AIAdvisor) -> None:
         """Inject AI advisor reference (called after services setup)."""
         self._ai = ai_advisor
@@ -254,6 +273,10 @@ class StrategyController:
         self._enabled = True
         self._last_action.clear()  # allow immediate actions after switch
 
+        # Update active action set based on strategy preset
+        self._active_action_ids = get_active_action_ids(strategy)
+        self._update_action_statuses()
+
         # Disable conflicting automations
         await self._disable_conflicting_automations()
 
@@ -263,7 +286,8 @@ class StrategyController:
             f"Zmieniono strategię: {AUTOPILOT_STRATEGY_LABELS.get(old, old)} → {label}",
         )
         _LOGGER.info(
-            "Strategy activated: %s → %s", old, strategy.value,
+            "Strategy activated: %s → %s (actions: %d)",
+            old, strategy.value, len(self._active_action_ids),
         )
 
         # Fire event for frontend
@@ -274,6 +298,7 @@ class StrategyController:
                 "label": label,
                 "previous": old.value,
                 "disabled_automations": list(self._disabled_automations),
+                "active_actions": list(self._active_action_ids),
             },
         )
 
@@ -289,6 +314,190 @@ class StrategyController:
             msg += f" (przywrócono {len(restored)} automatyzacji)"
         self._log_decision("deactivated", msg)
         _LOGGER.info("Strategy controller deactivated, restored: %s", restored)
+
+    # ══════════════════════════════════════════════════════════════
+    # Action-based system — public API
+    # ══════════════════════════════════════════════════════════════
+
+    def _update_action_statuses(self) -> None:
+        """Update status of all actions based on active action IDs."""
+        for action in self._all_actions:
+            if action.id in self._active_action_ids:
+                # Action is in the active set — set to waiting (will be set to active on tick)
+                if action.status == ActionStatus.DISABLED:
+                    continue  # User disabled it manually
+                action.status = ActionStatus.WAITING
+            else:
+                if action.always_active:
+                    action.status = ActionStatus.WAITING
+                else:
+                    action.status = ActionStatus.IDLE
+
+    def get_all_actions_state(self) -> list[dict[str, Any]]:
+        """Get serialized state of all actions for frontend.
+
+        Returns list of action dicts grouped by category, with live sensor values.
+        """
+        result = []
+        for action in self._all_actions:
+            d = action.to_dict()
+            # Add override info
+            overrides = self._action_sensor_overrides.get(action.id, {})
+            d["sensor_overrides"] = overrides
+            d["is_active_in_strategy"] = (
+                action.id in self._active_action_ids or action.always_active
+            )
+            result.append(d)
+        return result
+
+    def _get_action_states_for_ai(self) -> dict[str, str]:
+        """Get simple action_id → status mapping for AI prompt injection."""
+        return {
+            action.id: action.status.value
+            for action in self._all_actions
+        }
+
+    def get_actions_grouped(self) -> dict[str, Any]:
+        """Get actions grouped by category with labels, for structured frontend rendering."""
+        actions_state = self.get_all_actions_state()
+        grouped: dict[str, Any] = {}
+        for cat in CATEGORY_ORDER:
+            cat_key = str(cat)
+            cat_actions = [a for a in actions_state if a["category"] == cat_key]
+            active_count = sum(1 for a in cat_actions if a["status"] == ActionStatus.ACTIVE)
+            grouped[cat_key] = {
+                "label": CATEGORY_LABELS.get(cat, cat_key),
+                "actions": cat_actions,
+                "total": len(cat_actions),
+                "active": active_count,
+            }
+        return grouped
+
+    async def trigger_action(self, action_id: str) -> dict[str, Any]:
+        """Manually trigger a specific action (button press from UI).
+
+        Returns dict with result status and messages.
+        """
+        action = self._action_map.get(action_id)
+        if not action:
+            return {"success": False, "error": f"Unknown action: {action_id}"}
+
+        _LOGGER.info("Manual trigger: %s (%s)", action.name, action_id)
+        self._log_decision(
+            f"manual_trigger_{action_id}",
+            f"▶️ Ręczne wyzwolenie: {action.icon} {action.name}",
+        )
+
+        results = []
+        for cmd in action.commands:
+            tool = cmd.get("tool", "")
+            params = cmd.get("params", {})
+            try:
+                result = await self._execute_command(tool, params)
+                results.append(f"✅ {tool}: {result}")
+            except Exception as err:
+                results.append(f"❌ {tool}: {err}")
+                _LOGGER.error("Command %s failed: %s", tool, err)
+
+        action.status = ActionStatus.ACTIVE
+        import time
+        action.last_triggered = time.time()
+
+        return {"success": True, "action": action_id, "results": results}
+
+    async def _execute_command(self, tool: str, params: dict) -> str:
+        """Execute a single command from an action's command list."""
+        em = self._em
+
+        if tool == "force_charge":
+            await em.force_charge()
+            return "Force charge started"
+        elif tool == "force_discharge":
+            await em.force_discharge()
+            return "Force discharge started"
+        elif tool == "set_dod":
+            dod = params.get("dod", 95)
+            await em._set_dod(dod)
+            return f"DOD set to {dod}%"
+        elif tool == "switch_on":
+            entity = params.get("entity", "")
+            entity_map = {
+                "boiler": SWITCH_BOILER,
+                "ac": SWITCH_AC,
+                "socket2": SWITCH_SOCKET2,
+            }
+            entity_id = entity_map.get(entity, entity)
+            if entity_id:
+                await self.hass.services.async_call(
+                    "switch", "turn_on", {"entity_id": entity_id}
+                )
+            return f"Switch ON: {entity_id}"
+        elif tool == "switch_off":
+            entity = params.get("entity", "")
+            entity_map = {
+                "boiler": SWITCH_BOILER,
+                "ac": SWITCH_AC,
+                "socket2": SWITCH_SOCKET2,
+            }
+            entity_id = entity_map.get(entity, entity)
+            if entity_id:
+                await self.hass.services.async_call(
+                    "switch", "turn_off", {"entity_id": entity_id}
+                )
+            return f"Switch OFF: {entity_id}"
+        elif tool == "no_action":
+            reason = params.get("reason", "No action needed")
+            return reason
+        else:
+            return f"Unknown tool: {tool}"
+
+    def update_action_sensor(
+        self, action_id: str, slot_key: str, entity_id: str
+    ) -> bool:
+        """Override a sensor slot mapping for a specific action.
+
+        Returns True if successful.
+        """
+        action = self._action_map.get(action_id)
+        if not action:
+            _LOGGER.warning("Cannot override sensor: unknown action %s", action_id)
+            return False
+
+        # Validate slot exists
+        slot_exists = any(s.key == slot_key for s in action.sensor_slots)
+        if not slot_exists:
+            _LOGGER.warning(
+                "Cannot override sensor: unknown slot %s in action %s",
+                slot_key, action_id,
+            )
+            return False
+
+        if action_id not in self._action_sensor_overrides:
+            self._action_sensor_overrides[action_id] = {}
+        self._action_sensor_overrides[action_id][slot_key] = entity_id
+
+        _LOGGER.info(
+            "Sensor override: %s.%s → %s", action_id, slot_key, entity_id,
+        )
+        return True
+
+    def toggle_action(self, action_id: str, enabled: bool) -> bool:
+        """Enable or disable a specific action."""
+        action = self._action_map.get(action_id)
+        if not action:
+            return False
+
+        if enabled:
+            action.status = ActionStatus.WAITING
+            self._active_action_ids.add(action_id)
+        else:
+            action.status = ActionStatus.DISABLED
+            self._active_action_ids.discard(action_id)
+
+        _LOGGER.info(
+            "Action %s: %s", action_id, "enabled" if enabled else "disabled",
+        )
+        return True
 
     async def execute_tick(self, data: dict[str, Any]) -> dict[str, Any]:
         """Execute one control cycle.  Called every coordinator tick.
@@ -955,7 +1164,8 @@ class StrategyController:
 
             device_status_text = self._inverter_agent.format_status_for_prompt()
             ai_data = _build_ai_data(data)
-            prompt = build_ai_strategist_prompt(ai_data, estimation, device_status_text)
+            action_states = self._get_action_states_for_ai()
+            prompt = build_ai_strategist_prompt(ai_data, estimation, device_status_text, action_states)
             plan = await self._ai.ask_controller(prompt)
 
             if plan and plan.get("time_blocks"):
@@ -1047,7 +1257,8 @@ class StrategyController:
 
                 device_status_text = self._inverter_agent.format_status_for_prompt()
                 ai_data = _build_ai_data(data)
-                prompt = build_ai_controller_prompt(ai_data, device_status_text)
+                action_states = self._get_action_states_for_ai()
+                prompt = build_ai_controller_prompt(ai_data, device_status_text, action_states)
                 ai_result = await self._ai.ask_controller(prompt)
 
                 self._ai_last_call = now
@@ -1069,21 +1280,46 @@ class StrategyController:
         if self._ai_cached_commands and not self._ai_commands_executed:
             commands = self._ai_cached_commands.get("commands", [])
             for cmd in commands:
+                action_id = cmd.get("action")
                 tool = cmd.get("tool", "no_action")
                 params = cmd.get("params", {})
 
-                result = await self._inverter_agent.execute(tool, params)
-                if result.executed:
-                    actions.append(result.message)
-                    self._log_decision("ai_cmd", result.message)
-                elif result.skipped and tool != "no_action":
-                    actions.append(f"🧠 AI CTRL: {tool} → ✅ (already active)")
+                if action_id:
+                    result_msg = await self._execute_ai_command(tool, params, action=action_id)
+                else:
+                    result = await self._inverter_agent.execute(tool, params)
+                    if result.executed:
+                        result_msg = result.message
+                        self._log_decision("ai_cmd", result.message)
+                    elif result.skipped and tool != "no_action":
+                        result_msg = f"🧠 AI CTRL: {tool} → ✅ (already active)"
+                    else:
+                        result_msg = None
+
+                if result_msg:
+                    actions.append(result_msg)
 
             self._ai_commands_executed = True
 
-    async def _execute_ai_command(self, tool: str, params: dict) -> str | None:
-        """Execute a single AI command. Returns action description or None."""
+    async def _execute_ai_command(self, tool: str, params: dict, action: str | None = None) -> str | None:
+        """Execute a single AI command. Returns action description or None.
+
+        Supports both:
+          - {"action": "action_id"} → find action in registry, run its commands
+          - {"tool": "tool_name", "params": {...}} → raw tool call
+        """
         prefix = "🧠 AI CTRL" if not self._ai_dry_run else "🧠 AI DRY-RUN"
+
+        # Handle action-based commands
+        if action:
+            try:
+                result = await self.trigger_action(action)
+                msg = f"{prefix}: action({action}) → {result.get('status', 'ok')}"
+                self._log_decision("ai_action", msg)
+                return msg
+            except Exception as err:
+                _LOGGER.error("AI Controller: action '%s' failed: %s", action, err)
+                return f"{prefix}: ❌ action({action}) failed: {err}"
 
         try:
             if tool == "force_charge":
