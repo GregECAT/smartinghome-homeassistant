@@ -2960,11 +2960,41 @@ class SmartingHomePanel extends HTMLElement {
       }
     }
 
-    // SOC bar
-    const socBar = this.shadowRoot.getElementById("soc-fill");
-    if (socBar) {
-      socBar.style.width = `${Math.min(100, Math.max(0, soc))}%`;
-      socBar.style.background = soc > 50 ? "#2ecc71" : soc > 20 ? "#f39c12" : "#e74c3c";
+    // Battery Graphic Bars (10 levels)
+    const battGraphic = this.shadowRoot.getElementById("batt-graphic");
+    if (battGraphic) {
+      const barsCount = 10;
+      const activeBars = Math.round((soc / 100) * barsCount);
+      let color = '#2ecc71';
+      if (soc <= 20) color = '#e74c3c';
+      else if (soc <= 50) color = '#f39c12';
+
+      const battBars = battGraphic.querySelectorAll('.batt-bar');
+      battBars.forEach((bar, index) => {
+        // bars are ordered top to bottom: index 0 is 100%, index 9 is 10%
+        const barLevel = barsCount - index;
+        bar.style.animation = 'none';
+        bar.style.opacity = '1';
+
+        if (barLevel <= activeBars) {
+          bar.style.backgroundColor = color;
+          bar.style.color = color; // for box-shadow currentColor
+          
+          if (batt < -10) {
+            // Charging
+            bar.style.animation = `batt-pulse-up 1.5s infinite ${barLevel * 0.15}s`;
+          } else if (batt > 10) {
+            // Discharging
+            bar.style.animation = `batt-pulse-down 1.5s infinite ${(barsCount - barLevel) * 0.15}s`;
+          } else {
+            bar.style.boxShadow = `0 0 8px ${color}80`;
+          }
+        } else {
+          bar.style.backgroundColor = 'rgba(255,255,255,0.05)';
+          bar.style.boxShadow = 'none';
+          bar.style.color = 'transparent';
+        }
+      });
     }
     const socEl = this.shadowRoot.getElementById("v-soc");
     if (socEl) socEl.style.color = soc > 50 ? "#2ecc71" : soc > 20 ? "#f39c12" : "#e74c3c";
@@ -4384,9 +4414,48 @@ class SmartingHomePanel extends HTMLElement {
           50% { opacity: 0.4; }
         }
 
-        /* SOC bar */
-        .soc-bar { width: 100%; height: 8px; background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; margin: 6px 0; }
-        .soc-fill { height: 100%; border-radius: 4px; transition: width 1s, background 1s; }
+        /* --- BATTERY GRAPHIC --- */
+        .battery-graphic {
+          width: 32px;
+          border: 2px solid rgba(255,255,255,0.2);
+          border-radius: 6px;
+          padding: 4px;
+          display: flex;
+          flex-direction: column;
+          justify-content: flex-end;
+          gap: 3px;
+          position: relative;
+          background: rgba(0,0,0,0.2);
+          flex-shrink: 0;
+        }
+        .battery-graphic::before {
+          content: '';
+          position: absolute;
+          top: -6px;
+          left: 50%;
+          transform: translateX(-50%);
+          width: 14px;
+          height: 4px;
+          background: rgba(255,255,255,0.2);
+          border-radius: 2px 2px 0 0;
+        }
+        .batt-bar {
+          flex: 1;
+          width: 100%;
+          background: rgba(255,255,255,0.05);
+          border-radius: 2px;
+          transition: background-color 0.5s ease;
+        }
+        @keyframes batt-pulse-up {
+          0%   { opacity: 0.3; transform: scale(0.95); }
+          50%  { opacity: 1; transform: scale(1); box-shadow: 0 0 10px currentColor; }
+          100% { opacity: 0.3; transform: scale(0.95); }
+        }
+        @keyframes batt-pulse-down {
+          0%   { opacity: 1; transform: scale(1); box-shadow: 0 0 10px currentColor; }
+          50%  { opacity: 0.3; transform: scale(0.95); }
+          100% { opacity: 1; transform: scale(1); box-shadow: 0 0 10px currentColor; }
+        }
 
         /* Summary bar */
         .summary-bar {
@@ -5214,17 +5283,27 @@ class SmartingHomePanel extends HTMLElement {
 
               <!-- 🔋 BATTERY (left, below PV) -->
               <div class="batt-area">
-                <div class="node" id="batt-node" style="border-color: rgba(0,212,255,0.2); transition: border-color 0.5s, box-shadow 0.5s">
-                  <div class="node-title">🔋 Bateria</div>
-                  <div style="display:flex; align-items:baseline; gap:8px">
-                    <div class="node-big" id="v-soc" style="color:#2ecc71">—%</div>
-                    <div style="font-size:16px; font-weight:700; color:#fff" id="v-batt">— W</div>
+                <div class="node" id="batt-node" style="border-color: rgba(0,212,255,0.2); transition: border-color 0.5s, box-shadow 0.5s; flex-direction: row; align-items: stretch; gap: 16px; padding: 16px;">
+                  <!-- Left Graphic -->
+                  <div class="battery-graphic" id="batt-graphic">
+                    <div class="batt-bar"></div><div class="batt-bar"></div><div class="batt-bar"></div><div class="batt-bar"></div><div class="batt-bar"></div>
+                    <div class="batt-bar"></div><div class="batt-bar"></div><div class="batt-bar"></div><div class="batt-bar"></div><div class="batt-bar"></div>
                   </div>
-                  <div class="node-dir" id="v-batt-dir" style="color:#00d4ff">STANDBY</div>
-                  <div class="soc-bar"><div class="soc-fill" id="soc-fill" style="width:0%"></div></div>
-                  <div class="node-detail">
-                    <div><span id="v-batt-v">— V</span> · <span id="v-batt-a">— A</span> · <span id="v-batt-temp">—°C</span></div>
-                    <div id="v-batt-charge">↑ — kWh</div><div id="v-batt-discharge">↓ — kWh</div>
+                  <!-- Right Details -->
+                  <div style="flex: 1; display: flex; flex-direction: column; justify-content: center;">
+                    <div class="node-title">🔋 Bateria</div>
+                    <div style="display:flex; align-items:baseline; gap:8px; margin-top:4px;">
+                      <div class="node-big" id="v-soc" style="color:#2ecc71">—%</div>
+                      <div style="font-size:16px; font-weight:700; color:#fff" id="v-batt">— W</div>
+                    </div>
+                    <div class="node-dir" id="v-batt-dir" style="color:#00d4ff; margin-top:2px;">STANDBY</div>
+                    <div class="node-detail" style="margin-top:auto; padding-top:8px;">
+                      <div><span id="v-batt-v">— V</span> · <span id="v-batt-a">— A</span> · <span id="v-batt-temp">—°C</span></div>
+                      <div style="display:flex; justify-content:space-between; margin-top:4px;">
+                        <span id="v-batt-charge">↑ — kWh</span>
+                        <span id="v-batt-discharge">↓ — kWh</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>

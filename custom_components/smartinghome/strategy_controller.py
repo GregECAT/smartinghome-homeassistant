@@ -1340,7 +1340,7 @@ class StrategyController:
             ai_data = _build_ai_data(data)
             action_states = self._get_action_states_for_ai()
             prompt = build_ai_strategist_prompt(ai_data, estimation, device_status_text, action_states)
-            plan = await self._ai.ask_controller(prompt)
+            plan = await self._ai.ask_controller(prompt, raw_json=True)
 
             if plan and plan.get("time_blocks"):
                 self._strategic_plan = plan
