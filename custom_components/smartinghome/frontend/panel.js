@@ -7751,9 +7751,9 @@ class SmartingHomePanel extends HTMLElement {
       statusTextColor = '#2ecc71';
     } else if (isActive) {
       statusLabel = 'CZEKA';
-      statusBg = 'rgba(46,204,113,0.15)';
-      statusBorder = 'rgba(46,204,113,0.4)';
-      statusTextColor = '#2ecc71';
+      statusBg = 'rgba(148,163,184,0.15)';
+      statusBorder = 'rgba(148,163,184,0.35)';
+      statusTextColor = '#94a3b8';
     } else {
       statusLabel = 'IDLE';
       statusBg = 'rgba(71,85,105,0.2)';
@@ -7814,9 +7814,10 @@ class SmartingHomePanel extends HTMLElement {
         card.style.opacity = '1';
       } else if (status === 'waiting') {
         badge.textContent = 'CZEKA';
-        badge.style.background = 'rgba(46,204,113,0.15)';
-        badge.style.borderColor = 'rgba(46,204,113,0.4)';
-        badge.style.color = '#2ecc71';
+        badge.style.background = 'rgba(148,163,184,0.15)';
+        badge.style.borderColor = 'rgba(148,163,184,0.35)';
+        badge.style.color = '#94a3b8';
+        card.style.borderLeftColor = '';
         card.style.opacity = '1';
       } else if (status === 'idle') {
         badge.textContent = 'IDLE';
