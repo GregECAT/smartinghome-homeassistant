@@ -47,10 +47,18 @@ from .const import (
     SENSOR_GRID_VOLTAGE_L2,
     SENSOR_GRID_VOLTAGE_L3,
     SENSOR_BATTERY_SOC,
+    SENSOR_BATTERY_POWER,
     SENSOR_PV_POWER,
     SENSOR_LOAD_TOTAL,
     SENSOR_GRID_POWER_TOTAL,
     SENSOR_RCE_PRICE,
+    SENSOR_RCE_SELL_PROSUMER,
+    SENSOR_RCE_NEXT_HOUR,
+    SENSOR_RCE_2H,
+    SENSOR_RCE_3H,
+    SENSOR_RCE_AVG_TODAY,
+    SENSOR_RCE_MIN_TODAY,
+    SENSOR_RCE_MAX_TODAY,
     BINARY_RCE_CHEAPEST,
     BINARY_RCE_EXPENSIVE,
 )
@@ -94,6 +102,47 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (ValueError, TypeError):
         return default
+
+
+def _build_ai_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Translate coordinator entity-ID keys to simplified prompt keys.
+
+    The coordinator uses HA entity IDs (e.g., SENSOR_BATTERY_SOC = 'sensor.battery_state_of_charge')
+    but prompt builders expect simplified keys (e.g., 'battery_soc').
+    """
+    return {
+        # Core energy
+        "pv_power": _safe_float(data.get(SENSOR_PV_POWER)),
+        "load": _safe_float(data.get(SENSOR_LOAD_TOTAL)),
+        "battery_soc": _safe_float(data.get(SENSOR_BATTERY_SOC)),
+        "battery_power": _safe_float(data.get(SENSOR_BATTERY_POWER)),
+        "grid_power": _safe_float(data.get(SENSOR_GRID_POWER_TOTAL)),
+        "pv_surplus": _safe_float(data.get("hems_pv_surplus_power")),
+        "battery_capacity": DEFAULT_BATTERY_CAPACITY,
+        # RCE
+        "rce_price": _safe_float(data.get(SENSOR_RCE_PRICE)),
+        "rce_sell": _safe_float(data.get("rce_sell_price")),
+        "rce_next_hour": data.get(SENSOR_RCE_NEXT_HOUR),
+        "rce_2h": data.get(SENSOR_RCE_2H),
+        "rce_3h": data.get(SENSOR_RCE_3H),
+        "rce_avg_today": data.get("rce_average_today"),
+        "rce_min_today": data.get("rce_min_today"),
+        "rce_max_today": data.get("rce_max_today"),
+        "rce_trend": str(data.get("rce_price_trend", "")),
+        # Weather  (from HA weather entity or ecowitt)
+        "weather_condition": data.get("weather_condition"),
+        "weather_temp": data.get("weather_temp") or data.get("ecowitt_temp"),
+        "weather_clouds": data.get("weather_clouds"),
+        "weather_humidity": data.get("ecowitt_humidity"),
+        "weather_wind_speed": data.get("ecowitt_wind_speed"),
+        "weather_pressure": data.get("ecowitt_pressure"),
+        # Forecasts
+        "forecast_today": _safe_float(data.get("pv_forecast_today_total")),
+        "forecast_remaining": _safe_float(data.get("pv_forecast_remaining_today_total")),
+        "forecast_tomorrow": _safe_float(data.get("pv_forecast_tomorrow_total")),
+        # Voltage
+        "voltage_l1": _safe_float(data.get(SENSOR_GRID_VOLTAGE_L1)),
+    }
 
 
 def _get_g13_zone(hour: int, month: int, weekday: int) -> G13Zone:
@@ -905,7 +954,8 @@ class StrategyController:
                 }
 
             device_status_text = self._inverter_agent.format_status_for_prompt()
-            prompt = build_ai_strategist_prompt(data, estimation, device_status_text)
+            ai_data = _build_ai_data(data)
+            prompt = build_ai_strategist_prompt(ai_data, estimation, device_status_text)
             plan = await self._ai.ask_controller(prompt)
 
             if plan and plan.get("time_blocks"):
@@ -996,7 +1046,8 @@ class StrategyController:
                 from .autopilot_engine import build_ai_controller_prompt
 
                 device_status_text = self._inverter_agent.format_status_for_prompt()
-                prompt = build_ai_controller_prompt(data, device_status_text)
+                ai_data = _build_ai_data(data)
+                prompt = build_ai_controller_prompt(ai_data, device_status_text)
                 ai_result = await self._ai.ask_controller(prompt)
 
                 self._ai_last_call = now
