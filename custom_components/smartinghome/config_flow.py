@@ -126,7 +126,14 @@ class SmartingHomeConfigFlow(
 
             # Validate license key
             session = async_get_clientsession(self.hass)
-            api = SmartingHomeAPI(session, self._license_key)
+            device_id = str(self.hass.data.get("core.uuid", ""))
+            ha_version = self.hass.config.version or "unknown"
+            api = SmartingHomeAPI(
+                session, self._license_key,
+                device_id=device_id,
+                ha_version=ha_version,
+                integration_version="1.14.0",
+            )
 
             try:
                 info = await api.validate_license()
@@ -471,7 +478,14 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
             if license_key:
                 # Validate the license key
                 session = async_get_clientsession(self.hass)
-                api = SmartingHomeAPI(session, license_key)
+                device_id = str(self.hass.data.get("core.uuid", ""))
+                ha_version = self.hass.config.version or "unknown"
+                api = SmartingHomeAPI(
+                    session, license_key,
+                    device_id=device_id,
+                    ha_version=ha_version,
+                    integration_version="1.14.0",
+                )
 
                 try:
                     info = await api.validate_license()
