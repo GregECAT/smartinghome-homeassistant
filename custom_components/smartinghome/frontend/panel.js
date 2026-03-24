@@ -7059,6 +7059,9 @@ class SmartingHomePanel extends HTMLElement {
               <span class="ap-badge active" id="ap-status">● GOTOWY</span>
               <span class="ap-badge provider" id="ap-provider-badge">—</span>
               <span class="ap-badge tier" id="ap-tier-badge">PRO</span>
+              <button id="ap-deactivate-btn"
+                style="padding:4px 12px; border-radius:8px; background:rgba(231,76,60,0.15); border:1px solid rgba(231,76,60,0.3); color:#e74c3c; font-size:10px; font-weight:700; cursor:pointer; display:none; transition:all 0.3s"
+                onclick="this.getRootNode().host._deactivateAutopilot()">⏹ WYŁĄCZ AUTOPILOT</button>
             </div>
           </div>
 
@@ -7508,6 +7511,7 @@ class SmartingHomePanel extends HTMLElement {
     this._updateAutopilotContext();
     this._loadAutopilotPlan();
     this._updateAutopilotProviderUI();
+    this._updateLiveDecisionLog();
   }
 
   _renderStrategyCards() {
@@ -7529,19 +7533,66 @@ class SmartingHomePanel extends HTMLElement {
       <div class="ap-strategy-card ${s.id === active ? 'ap-active' : ''}"
            onclick="this.getRootNode().host._switchAutopilotStrategy('${s.id}')">
         <div class="ap-sc-icon">${s.icon}</div>
-        <div class="ap-sc-name">${s.name}</div>
+        <div class="ap-sc-name">${s.name}${s.id === active ? ' <span style="font-size:8px; background:#2ecc71; color:#0a1628; padding:1px 6px; border-radius:10px; animation:pulse 2s infinite; font-weight:800">ACTIVE</span>' : ''}</div>
         <div class="ap-sc-desc">${s.desc}</div>
         <div class="ap-sc-savings" id="ap-savings-${s.id}">—</div>
       </div>
     `).join('');
   }
 
-  _switchAutopilotStrategy(strategyId) {
+  async _switchAutopilotStrategy(strategyId) {
     this._autopilotActiveStrategy = strategyId;
     this._renderStrategyCards();
-    // Clear previous results when strategy changes
+
+    // Update status badge
+    const statusEl = this.shadowRoot.getElementById('ap-status');
+    if (statusEl) { statusEl.textContent = '⏳ AKTYWUJĘ...'; statusEl.style.color = '#f7b731'; }
+
+    try {
+      // Call backend service to activate strategy
+      await this._hass.callService('smartinghome', 'set_autopilot_strategy', {
+        strategy: strategyId,
+      });
+      console.log('[SH] Strategy activated:', strategyId);
+      if (statusEl) { statusEl.textContent = '● AKTYWNY'; statusEl.style.color = '#2ecc71'; }
+    } catch (err) {
+      console.error('[SH] Strategy activation failed:', err);
+      if (statusEl) { statusEl.textContent = '❌ BŁĄD'; statusEl.style.color = '#e74c3c'; }
+    }
+
+    // Clear previous estimation results
     const timeline = this.shadowRoot.getElementById('ap-timeline');
-    if (timeline) timeline.innerHTML = '<div style="width:100%; display:flex; align-items:center; justify-content:center; color:#64748b; font-size:11px">Kliknij "Uruchom estymację" aby wygenerować plan</div>';
+    if (timeline) timeline.innerHTML = '<div style="width:100%; display:flex; align-items:center; justify-content:center; color:#64748b; font-size:11px">Strategia aktywna — sterowanie automatyczne co 30s</div>';
+
+    // Show deactivate button
+    const deactBtn = this.shadowRoot.getElementById('ap-deactivate-btn');
+    if (deactBtn) deactBtn.style.display = 'inline-block';
+  }
+
+  async _deactivateAutopilot() {
+    const statusEl = this.shadowRoot.getElementById('ap-status');
+    if (statusEl) { statusEl.textContent = '⏳ WYŁĄCZAM...'; statusEl.style.color = '#f7b731'; }
+
+    try {
+      await this._hass.callService('smartinghome', 'deactivate_autopilot', {});
+      console.log('[SH] Autopilot deactivated');
+
+      this._autopilotActiveStrategy = null;
+      this._renderStrategyCards();
+
+      if (statusEl) { statusEl.textContent = '● GOTOWY'; statusEl.style.color = '#64748b'; }
+
+      // Hide deactivate button
+      const deactBtn = this.shadowRoot.getElementById('ap-deactivate-btn');
+      if (deactBtn) deactBtn.style.display = 'none';
+
+      // Show restored automations message
+      const timeline = this.shadowRoot.getElementById('ap-timeline');
+      if (timeline) timeline.innerHTML = '<div style="width:100%; display:flex; align-items:center; justify-content:center; color:#2ecc71; font-size:11px">✅ Autopilot wyłączony — automatyzacje przywrócone</div>';
+    } catch (err) {
+      console.error('[SH] Deactivation failed:', err);
+      if (statusEl) { statusEl.textContent = '❌ BŁĄD'; statusEl.style.color = '#e74c3c'; }
+    }
   }
 
   _updateAutopilotContext() {
@@ -7752,6 +7803,35 @@ class SmartingHomePanel extends HTMLElement {
     if (entries.length > 10) {
       for (let i = 10; i < entries.length; i++) entries[i].remove();
     }
+  }
+
+  _updateLiveDecisionLog() {
+    // Read decision log from coordinator data (autopilot_decision_log)
+    if (!this._hass) return;
+    const logEl = this.shadowRoot.getElementById('ap-activity-log');
+    if (!logEl) return;
+
+    // Read from coordinator data via sensor attributes
+    const coordData = this._hass.states['sensor.smartinghome_hems_recommendation'];
+    const statusEl = this.shadowRoot.getElementById('ap-status');
+
+    // Try reading autopilot status from settings.json autopilot log
+    try {
+      fetch('/local/smartinghome/settings.json?t=' + Date.now())
+        .then(r => r.json())
+        .then(s => {
+          const saved = s.autopilot_active_strategy;
+          if (saved && saved !== this._autopilotActiveStrategy) {
+            this._autopilotActiveStrategy = saved;
+            this._renderStrategyCards();
+          }
+          if (statusEl && saved) {
+            statusEl.textContent = '● AKTYWNY';
+            statusEl.style.color = '#2ecc71';
+          }
+        })
+        .catch(() => {});
+    } catch (e) {}
   }
 
   _markdownToHtml(md) {

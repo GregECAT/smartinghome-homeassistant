@@ -26,6 +26,9 @@ from .const import (
 from .coordinator import SmartingHomeCoordinator
 from .license import LicenseManager
 from .services import async_setup_services, async_unload_services
+from .strategy_controller import StrategyController
+from .energy_manager import EnergyManager
+from .const import AutopilotStrategy, CONF_DEVICE_ID, DEFAULT_GOODWE_DEVICE_ID
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -154,11 +157,37 @@ async def async_setup_entry(
     # Set up platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Register services (returns AI cron scheduler)
-    cron_scheduler = await async_setup_services(hass, coordinator, license_mgr)
+    # Create Strategy Controller for autonomous HEMS
+    device_id_for_ems = entry.data.get(CONF_DEVICE_ID, "") or entry.data.get("device_id", DEFAULT_GOODWE_DEVICE_ID)
+    energy_mgr = EnergyManager(hass, device_id_for_ems)
+    strategy_ctrl = StrategyController(hass, energy_mgr)
+    coordinator.set_strategy_controller(strategy_ctrl)
 
-    # Store cron reference for cleanup
+    # Register services (returns AI cron scheduler)
+    cron_scheduler = await async_setup_services(
+        hass, coordinator, license_mgr, strategy_ctrl,
+    )
+
+    # Restore saved strategy from settings.json
+    try:
+        import json
+        settings_path = Path(hass.config.path("www")) / "smartinghome" / "settings.json"
+        if settings_path.exists():
+            settings = json.loads(settings_path.read_text())
+            saved_strategy = settings.get("autopilot_active_strategy")
+            if saved_strategy:
+                await strategy_ctrl.activate_strategy(
+                    AutopilotStrategy(saved_strategy)
+                )
+                _LOGGER.info(
+                    "Restored autopilot strategy: %s", saved_strategy
+                )
+    except Exception as err:
+        _LOGGER.debug("Could not restore autopilot strategy: %s", err)
+
+    # Store references for cleanup
     hass.data[DOMAIN][entry.entry_id]["cron_scheduler"] = cron_scheduler
+    hass.data[DOMAIN][entry.entry_id]["strategy_controller"] = strategy_ctrl
 
     # Register custom panel in sidebar
     try:
