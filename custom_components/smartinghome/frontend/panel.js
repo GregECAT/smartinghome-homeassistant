@@ -197,6 +197,13 @@ class SmartingHomePanel extends HTMLElement {
         if (this._settings.ecowitt_enabled) this._detectEcowittSensors();
       }
     } catch(e) { /* file not yet created */ }
+    // Subscribe to action states even if settings didn't load
+    if (this._hass && !this._actionStateSub) {
+      this._actionStateSub = this._hass.connection.subscribeEvents((ev) => {
+        this._actionStates = ev.data || {};
+        this._updateActionBadgesFromState();
+      }, "smartinghome_action_states");
+    }
   }
 
   _savePanelSettings(updates) {

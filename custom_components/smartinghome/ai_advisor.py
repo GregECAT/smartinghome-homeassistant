@@ -809,4 +809,25 @@ User question: {question}"""
                 "next_check_minutes": 5,
             }
 
+        # Fallback: if there's a "reasoning" or "analysis" key, return no_action
+        # This handles ultra-short truncations like: { "reasoning": "Szczyt,
+        reasoning_match = re.search(r'"(?:reasoning|analysis)"\s*:\s*"([^"]*)', text)
+        if reasoning_match:
+            snippet = reasoning_match.group(1)[:80]
+            _LOGGER.info("AI Controller: repaired truncated JSON (no commands), reasoning: %s", snippet)
+            return {
+                "reasoning": f"(truncated) {snippet}",
+                "commands": [{"tool": "no_action", "params": {"reason": "truncated response"}}],
+                "next_check_minutes": 5,
+            }
+
+        # Last resort: if text starts with { but is too short, return no_action
+        if text.strip().startswith("{") and len(text.strip()) < 100:
+            _LOGGER.info("AI Controller: repaired ultra-short truncated JSON (%d chars)", len(text.strip()))
+            return {
+                "reasoning": "(ultra-short truncated response)",
+                "commands": [{"tool": "no_action", "params": {"reason": "truncated"}}],
+                "next_check_minutes": 5,
+            }
+
         return None
