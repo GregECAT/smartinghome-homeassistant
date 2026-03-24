@@ -73,7 +73,11 @@ async def async_setup_entry(
     except Exception:
         device_id = str(hass.data.get("core.uuid", entry.entry_id))
 
-    ha_version = hass.config.version or "unknown"
+    try:
+        from homeassistant.const import __version__ as ha_ver
+        ha_version = ha_ver
+    except Exception:
+        ha_version = "unknown"
 
     # Initialize API client with device identity
     session = async_get_clientsession(hass)
