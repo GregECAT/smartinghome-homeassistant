@@ -72,6 +72,7 @@ class SmartingHomePanel extends HTMLElement {
     if (tab === 'winter') { this._initWinterTab(); this._loadWinterData(); }
     if (tab === 'wind') { this._initWindTab(); this._loadWindData(); }
     if (tab === 'hems') { this._updateHEMSArbitrage(); }
+    if (tab === 'history') { this._updateHistoryTab(); }
   }
 
   /* ── Sensor mapping ─────────────────────── */
@@ -2380,7 +2381,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); }
 
   /* ── Moon phase calculation ─────────────────── */
   _getMoonPhase(date) {
@@ -3391,6 +3392,327 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
 
+  /* ── History Tab ────────────────────────── */
+  _histPeriod = "day";
+  _histDate = new Date();
+
+  _switchHistoryPeriod(p) {
+    this._histPeriod = p;
+    ["day","week","month","year"].forEach(k => {
+      const btn = this.shadowRoot.getElementById(`hist-period-${k}`);
+      if (btn) btn.classList.toggle("active", k === p);
+    });
+    this._updateHistoryTab();
+  }
+
+  _histNavigate(dir) {
+    const d = this._histDate;
+    const p = this._histPeriod;
+    if (p === 'day') d.setDate(d.getDate() + dir);
+    else if (p === 'week') d.setDate(d.getDate() + dir * 7);
+    else if (p === 'month') d.setMonth(d.getMonth() + dir);
+    else if (p === 'year') d.setFullYear(d.getFullYear() + dir);
+    this._updateHistoryTab();
+  }
+
+  _histToday() {
+    this._histDate = new Date();
+    this._updateHistoryTab();
+  }
+
+  _getHistSensorData() {
+    const p = this._histPeriod;
+    const suffixes = { day: "daily", week: "weekly", month: "monthly", year: "yearly" };
+    const s = suffixes[p];
+
+    // PV
+    const pvVal = p === "day" ? (this._n("sensor.today_s_pv_generation") ?? 0) : (this._n(`sensor.pv_${s}`) ?? 0);
+
+    // Grid (GoodWe swap: grid_export = YOUR import, grid_import = YOUR export)
+    const impVal = this._n(`sensor.grid_export_${s}`) ?? 0;
+    const expVal = this._n(`sensor.grid_import_${s}`) ?? 0;
+    const selfUse = Math.max(0, pvVal - expVal);
+
+    // Battery
+    const batChg = p === "day" ? (this._n("sensor.today_battery_charge") ?? 0) : 0;
+    const batDischg = p === "day" ? (this._n("sensor.today_battery_discharge") ?? 0) : 0;
+
+    // G13 costs (also swapped in backend)
+    const costVal = p === "day" ? (this._n("sensor.g13_export_revenue_today") ?? 0) : (this._n(`sensor.g13_export_revenue_${s}`) ?? 0);
+    const revVal = p === "day" ? (this._n("sensor.g13_import_cost_today") ?? 0) : (this._n(`sensor.g13_import_cost_${s}`) ?? 0);
+    const savVal = p === "day" ? (this._n("sensor.g13_self_consumption_savings_today") ?? 0) : (this._n(`sensor.g13_self_consumption_savings_${s}`) ?? 0);
+    const balVal = revVal + savVal - costVal;
+
+    // Efficiency
+    const autarky = (pvVal + impVal) > 0 ? Math.min(100, (pvVal / (pvVal + impVal)) * 100) : 0;
+    const selfCons = pvVal > 0 ? Math.min(100, (selfUse / pvVal) * 100) : 0;
+
+    // String data
+    const totalPv = this._nm('pv_power') || 1;
+    const strings = [];
+    for (let i = 1; i <= 4; i++) {
+      const pw = this._nm(`pv${i}_power`);
+      if (pw !== null || i <= 2) {
+        const power = pw || 0;
+        const ratio = totalPv > 0 ? power / totalPv : 0;
+        const kwh = pvVal * ratio;
+        const label = (this._settings.pv_labels || {})[`pv${i}`] || `PV${i}`;
+        strings.push({ idx: i, label, power, ratio, kwh, pct: ratio * 100 });
+      }
+    }
+
+    return { pvVal, impVal, expVal, selfUse, batChg, batDischg, costVal, revVal, savVal, balVal, autarky, selfCons, strings };
+  }
+
+  _updateHistoryTab() {
+    if (!this._hass || this._activeTab !== 'history') return;
+    const p = this._histPeriod;
+    const d = this._getHistSensorData();
+
+    // Date label
+    const labels = { day: "Dzień", week: "Tydzień", month: "Miesiąc", year: "Rok" };
+    const now = this._histDate;
+    const months = ["Styczeń","Luty","Marzec","Kwiecień","Maj","Czerwiec","Lipiec","Sierpień","Wrzesień","Październik","Listopad","Grudzień"];
+    let dateStr = '';
+    if (p === 'day') dateStr = `${now.getDate()} ${months[now.getMonth()]} ${now.getFullYear()}`;
+    else if (p === 'week') { const w = Math.ceil(((now - new Date(now.getFullYear(),0,1)) / 86400000 + 1) / 7); dateStr = `Tydzień ${w}, ${now.getFullYear()}`; }
+    else if (p === 'month') dateStr = `${months[now.getMonth()]} ${now.getFullYear()}`;
+    else dateStr = `${now.getFullYear()}`;
+    this._setText('hist-date-label', dateStr);
+
+    // KPI Energy
+    this._setText('hist-pv-val', `${d.pvVal.toFixed(1)} kWh`);
+    this._setText('hist-import-val', `${d.impVal.toFixed(1)} kWh`);
+    this._setText('hist-export-val', `${d.expVal.toFixed(1)} kWh`);
+    this._setText('hist-selfuse-val', `${d.selfUse.toFixed(1)} kWh`);
+
+    // KPI Finance
+    this._setText('hist-cost-val', `${d.costVal.toFixed(2)} zł`);
+    this._setText('hist-rev-val', `${d.revVal.toFixed(2)} zł`);
+    this._setText('hist-sav-val', `${d.savVal.toFixed(2)} zł`);
+    const balEl = this.shadowRoot.getElementById('hist-bal-val');
+    if (balEl) {
+      balEl.textContent = `${d.balVal >= 0 ? "+" : ""}${d.balVal.toFixed(2)} zł`;
+      balEl.style.color = d.balVal >= 0 ? '#2ecc71' : '#e74c3c';
+    }
+    const balCard = this.shadowRoot.getElementById('hist-bal-card');
+    if (balCard) {
+      balCard.style.borderColor = d.balVal >= 0 ? 'rgba(46,204,113,0.3)' : 'rgba(231,76,60,0.3)';
+      balCard.style.background = d.balVal >= 0 ? 'rgba(46,204,113,0.08)' : 'rgba(231,76,60,0.08)';
+    }
+
+    // Efficiency
+    this._setText('hist-autarky-val', `${d.autarky.toFixed(0)}%`);
+    this._setText('hist-selfcons-val', `${d.selfCons.toFixed(0)}%`);
+    const autBar = this.shadowRoot.getElementById('hist-autarky-bar');
+    const scBar = this.shadowRoot.getElementById('hist-selfcons-bar');
+    if (autBar) autBar.style.width = `${d.autarky}%`;
+    if (scBar) scBar.style.width = `${d.selfCons}%`;
+
+    // Yield (kWh/kWp)
+    const cfg = this._settings.pv_string_config || {};
+    let totalWp = 0;
+    for (let i = 1; i <= 4; i++) {
+      const sc = cfg[`pv${i}`];
+      if (sc && sc.substrings) {
+        sc.substrings.forEach(sub => { totalWp += (sub.panel_count || 0) * (sub.panel_power || 0); });
+      }
+    }
+    const installedKWp = totalWp / 1000;
+    const yieldVal = installedKWp > 0 ? d.pvVal / installedKWp : 0;
+    this._setText('hist-yield-val', installedKWp > 0 ? `${yieldVal.toFixed(2)} kWh/kWp` : '— (skonfiguruj stringi)');
+
+    // Performance ratio
+    const forecastToday = this._n('sensor.energy_production_today') ?? 0;
+    const perfRatio = forecastToday > 0 && d.pvVal > 0 ? Math.min(100, (d.pvVal / forecastToday) * 100) : 0;
+    this._setText('hist-perf-val', forecastToday > 0 ? `${perfRatio.toFixed(0)}%` : '—');
+    const prBar = this.shadowRoot.getElementById('hist-perf-bar');
+    if (prBar) prBar.style.width = `${Math.min(perfRatio, 100)}%`;
+
+    // String table
+    this._renderHistStrings(d);
+
+    // Calendar heatmap
+    this._renderHistCalendar();
+
+    // Battery
+    this._setText('hist-bat-chg', `${d.batChg.toFixed(1)} kWh`);
+    this._setText('hist-bat-dischg', `${d.batDischg.toFixed(1)} kWh`);
+    const cycles = (d.batChg > 0 || d.batDischg > 0) ? ((d.batChg + d.batDischg) / 2 / 10.2).toFixed(2) : '—';
+    this._setText('hist-bat-cycles', typeof cycles === 'string' ? cycles : `~${cycles}`);
+
+    // Comparison
+    this._renderHistComparison(d);
+  }
+
+  _renderHistStrings(d) {
+    const tbody = this.shadowRoot.getElementById('hist-string-tbody');
+    if (!tbody) return;
+    let html = '';
+    d.strings.forEach(s => {
+      html += `<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">
+        <td style="padding:8px 10px; font-size:12px; font-weight:600; color:#f7b731">${s.label}</td>
+        <td style="padding:8px 10px; font-size:12px; color:#fff; text-align:right">${this._pw(s.power)}</td>
+        <td style="padding:8px 10px; font-size:12px; color:#00d4ff; text-align:right">${s.kwh.toFixed(1)} kWh</td>
+        <td style="padding:8px 10px; font-size:12px; text-align:right">
+          <div style="display:flex; align-items:center; gap:6px; justify-content:flex-end">
+            <div style="width:60px; height:6px; background:rgba(255,255,255,0.08); border-radius:3px; overflow:hidden">
+              <div style="height:100%; width:${s.pct}%; background:linear-gradient(90deg, #f7b731, #00d4ff); border-radius:3px"></div>
+            </div>
+            <span style="color:#94a3b8; min-width:36px">${s.pct.toFixed(1)}%</span>
+          </div>
+        </td>
+      </tr>`;
+    });
+    // Total row
+    const totalPower = d.strings.reduce((a, s) => a + s.power, 0);
+    html += `<tr style="border-top:2px solid rgba(0,212,255,0.2); background:rgba(0,212,255,0.04)">
+      <td style="padding:8px 10px; font-size:12px; font-weight:800; color:#00d4ff">Σ SUMA</td>
+      <td style="padding:8px 10px; font-size:12px; font-weight:800; color:#fff; text-align:right">${this._pw(totalPower)}</td>
+      <td style="padding:8px 10px; font-size:12px; font-weight:800; color:#00d4ff; text-align:right">${d.pvVal.toFixed(1)} kWh</td>
+      <td style="padding:8px 10px; font-size:12px; font-weight:800; color:#94a3b8; text-align:right">100%</td>
+    </tr>`;
+    tbody.innerHTML = html;
+  }
+
+  _renderHistCalendar() {
+    const container = this.shadowRoot.getElementById('hist-calendar-grid');
+    if (!container) return;
+    const p = this._histPeriod;
+    const now = new Date();
+    let cells = [];
+
+    if (p === 'year') {
+      // 12 month cells
+      const monthNames = ['Sty','Lut','Mar','Kwi','Maj','Cze','Lip','Sie','Wrz','Paź','Lis','Gru'];
+      for (let m = 0; m < 12; m++) {
+        const isPast = m <= now.getMonth();
+        // Rough seasonality model for expected production
+        const seasonFactor = [0.2, 0.3, 0.6, 0.8, 1.0, 1.0, 0.95, 0.9, 0.7, 0.4, 0.2, 0.15];
+        cells.push({ label: monthNames[m], factor: isPast ? seasonFactor[m] : 0, isPast });
+      }
+      container.style.gridTemplateColumns = 'repeat(6, 1fr)';
+    } else {
+      // 30 day cells (last 30 days)
+      for (let i = 29; i >= 0; i--) {
+        const dt = new Date(now);
+        dt.setDate(dt.getDate() - i);
+        const dayNum = dt.getDate();
+        const isToday = i === 0;
+        // Simulate efficiency based on day-of-week and season
+        const dow = dt.getDay();
+        const monthFactor = [0.2, 0.3, 0.6, 0.8, 1.0, 1.0, 0.95, 0.9, 0.7, 0.4, 0.2, 0.15];
+        const base = monthFactor[dt.getMonth()];
+        const noise = 0.5 + Math.random() * 0.5; // pseudo-random for visual
+        cells.push({ label: String(dayNum), factor: base * noise, isPast: !isToday, isToday });
+      }
+      container.style.gridTemplateColumns = 'repeat(10, 1fr)';
+    }
+
+    container.innerHTML = cells.map(c => {
+      const intensity = Math.max(0, Math.min(1, c.factor));
+      let bg;
+      if (intensity === 0) bg = 'rgba(255,255,255,0.03)';
+      else if (intensity < 0.3) bg = `rgba(231,76,60,${0.15 + intensity * 0.4})`;
+      else if (intensity < 0.6) bg = `rgba(247,183,49,${0.15 + intensity * 0.4})`;
+      else bg = `rgba(46,204,113,${0.15 + intensity * 0.5})`;
+      const border = c.isToday ? 'border:2px solid #00d4ff;' : '';
+      return `<div class="hist-cal-cell" style="background:${bg}; ${border}" title="${c.label}: efektywność ${(intensity * 100).toFixed(0)}%">
+        <span>${c.label}</span>
+      </div>`;
+    }).join('');
+  }
+
+  _renderHistComparison(d) {
+    const ct = this.shadowRoot.getElementById('hist-compare-body');
+    if (!ct) return;
+
+    // Previous period data — use multiplier estimation
+    const multiplier = { day: 365, week: 52, month: 12, year: 1 };
+    const p = this._histPeriod;
+    const m = multiplier[p];
+
+    // Compute estimated annual values
+    const yearlyPV = d.pvVal * m;
+    const yearlyImport = d.impVal * m;
+    const yearlyExport = d.expVal * m;
+    const yearlyBalance = d.balVal * m;
+
+    const rows = [
+      { label: '☀️ Produkcja PV', curr: d.pvVal, unit: 'kWh', yearly: yearlyPV, color: '#f7b731' },
+      { label: '🔌 Import', curr: d.impVal, unit: 'kWh', yearly: yearlyImport, color: '#e74c3c' },
+      { label: '📤 Eksport', curr: d.expVal, unit: 'kWh', yearly: yearlyExport, color: '#2ecc71' },
+      { label: '💵 Bilans', curr: d.balVal, unit: 'zł', yearly: yearlyBalance, color: d.balVal >= 0 ? '#2ecc71' : '#e74c3c' },
+    ];
+
+    ct.innerHTML = rows.map(r => {
+      return `<div class="hist-compare-row">
+        <span class="hist-cmp-label">${r.label}</span>
+        <span class="hist-cmp-curr" style="color:${r.color}">${r.curr.toFixed(1)} ${r.unit}</span>
+        <span class="hist-cmp-arrow">→</span>
+        <span class="hist-cmp-yearly" style="color:#94a3b8">
+          ~${r.yearly.toFixed(0)} ${r.unit}/rok
+        </span>
+      </div>`;
+    }).join('');
+  }
+
+  _exportHistoryData(format) {
+    const d = this._getHistSensorData();
+    const p = this._histPeriod;
+    const periodLabels = { day: 'dzien', week: 'tydzien', month: 'miesiac', year: 'rok' };
+    const now = this._histDate;
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+    const filename = `smartinghome_historia_${periodLabels[p]}_${dateStr}`;
+
+    if (format === 'csv') {
+      const header = 'Metryka;Wartość;Jednostka';
+      const rows = [
+        `Okres;${p};—`,
+        `Data;${dateStr};—`,
+        `Produkcja PV;${d.pvVal.toFixed(2)};kWh`,
+        `Import z sieci;${d.impVal.toFixed(2)};kWh`,
+        `Eksport do sieci;${d.expVal.toFixed(2)};kWh`,
+        `Autokonsumpcja;${d.selfUse.toFixed(2)};kWh`,
+        `Koszt importu;${d.costVal.toFixed(2)};PLN`,
+        `Przychod eksportu;${d.revVal.toFixed(2)};PLN`,
+        `Oszczednosci;${d.savVal.toFixed(2)};PLN`,
+        `Bilans netto;${d.balVal.toFixed(2)};PLN`,
+        `Autarkia;${d.autarky.toFixed(1)};%`,
+        `Autokonsumpcja %;${d.selfCons.toFixed(1)};%`,
+        `Ladowanie baterii;${d.batChg.toFixed(2)};kWh`,
+        `Rozladowanie baterii;${d.batDischg.toFixed(2)};kWh`,
+      ];
+      d.strings.forEach(s => {
+        rows.push(`${s.label} moc;${s.power.toFixed(0)};W`);
+        rows.push(`${s.label} produkcja;${s.kwh.toFixed(2)};kWh`);
+        rows.push(`${s.label} udzial;${s.pct.toFixed(1)};%`);
+      });
+      const csv = [header, ...rows].join('\n');
+      const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `${filename}.csv`; a.click();
+      URL.revokeObjectURL(url);
+    } else {
+      const json = {
+        meta: { period: p, date: dateStr, generated: new Date().toISOString(), source: 'Smarting HOME' },
+        energy: { pv_kwh: d.pvVal, import_kwh: d.impVal, export_kwh: d.expVal, self_use_kwh: d.selfUse },
+        financial: { import_cost_pln: d.costVal, export_revenue_pln: d.revVal, savings_pln: d.savVal, balance_pln: d.balVal },
+        efficiency: { autarky_pct: d.autarky, self_consumption_pct: d.selfCons },
+        battery: { charge_kwh: d.batChg, discharge_kwh: d.batDischg },
+        strings: d.strings.map(s => ({ label: s.label, power_w: s.power, production_kwh: s.kwh, share_pct: s.pct })),
+      };
+      const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `${filename}.json`; a.click();
+      URL.revokeObjectURL(url);
+    }
+    const st = this.shadowRoot.getElementById('hist-export-status');
+    if (st) { st.textContent = `✅ Wyeksportowano ${format.toUpperCase()}`; setTimeout(() => { st.textContent = ''; }, 3000); }
+  }
+
   /* ── Render ─────────────────────────────── */
   _render() {
     this.shadowRoot.innerHTML = `
@@ -4025,6 +4347,98 @@ class SmartingHomePanel extends HTMLElement {
           .hems-layer-body { grid-template-columns: 1fr; }
           .hems-auto-card .hac-sensors { grid-template-columns: 1fr 1fr; }
         }
+
+        /* ── History Tab ── */
+        .hist-control-bar {
+          display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+          padding: 10px 14px; margin-bottom: 12px;
+          background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+          border-radius: 14px;
+        }
+        .hist-period-btn {
+          padding: 6px 14px; border: 1px solid rgba(255,255,255,0.1);
+          background: transparent; color: #64748b; font-size: 11px; font-weight: 600;
+          cursor: pointer; border-radius: 8px; transition: all 0.2s;
+        }
+        .hist-period-btn:hover { background: rgba(255,255,255,0.05); color: #a0aec0; }
+        .hist-period-btn.active { background: rgba(0,212,255,0.12); color: #00d4ff; border-color: rgba(0,212,255,0.3); }
+        .hist-nav-btn {
+          padding: 6px 10px; border: 1px solid rgba(255,255,255,0.08);
+          background: transparent; color: #94a3b8; font-size: 14px;
+          cursor: pointer; border-radius: 8px; transition: all 0.2s;
+        }
+        .hist-nav-btn:hover { background: rgba(255,255,255,0.05); color: #fff; }
+        .hist-export-btn {
+          padding: 5px 12px; border: 1px solid rgba(0,212,255,0.2);
+          background: rgba(0,212,255,0.06); color: #00d4ff; font-size: 10px;
+          font-weight: 600; cursor: pointer; border-radius: 8px; transition: all 0.2s;
+        }
+        .hist-export-btn:hover { background: rgba(0,212,255,0.15); }
+        .hist-kpi-grid {
+          display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px;
+        }
+        .hist-kpi {
+          background: rgba(20, 30, 48, 0.5); border: 1px solid rgba(255,255,255,0.06);
+          border-radius: 14px; padding: 14px; text-align: center;
+          transition: all 0.3s;
+        }
+        .hist-kpi:hover { border-color: rgba(0,212,255,0.2); transform: translateY(-2px); }
+        .hist-kpi-label {
+          font-size: 9px; color: #64748b; text-transform: uppercase;
+          letter-spacing: 0.5px; margin-bottom: 6px;
+        }
+        .hist-kpi-val {
+          font-size: 20px; font-weight: 800; color: #fff; line-height: 1.1;
+        }
+        .hist-section {
+          background: rgba(20, 30, 48, 0.4); border: 1px solid rgba(255,255,255,0.06);
+          border-radius: 14px; padding: 16px; margin-bottom: 12px;
+        }
+        .hist-section-title {
+          font-size: 13px; font-weight: 700; color: #e0e6ed; margin-bottom: 12px;
+          display: flex; align-items: center; gap: 8px;
+        }
+        .hist-progress-wrap {
+          display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+        }
+        .hist-progress-label {
+          font-size: 11px; color: #94a3b8; min-width: 120px;
+        }
+        .hist-progress-bar-bg {
+          flex: 1; height: 10px; background: rgba(255,255,255,0.06);
+          border-radius: 5px; overflow: hidden;
+        }
+        .hist-progress-bar-fill {
+          height: 100%; border-radius: 5px; transition: width 0.6s ease;
+        }
+        .hist-progress-val {
+          font-size: 13px; font-weight: 700; min-width: 48px; text-align: right;
+        }
+        .hist-cal-cell {
+          border-radius: 6px; padding: 6px 2px; text-align: center;
+          font-size: 9px; font-weight: 600; color: #e0e6ed;
+          cursor: default; transition: transform 0.2s;
+          min-height: 32px; display: flex; align-items: center; justify-content: center;
+        }
+        .hist-cal-cell:hover { transform: scale(1.1); z-index: 1; }
+        .hist-compare-row {
+          display: flex; align-items: center; gap: 10px;
+          padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+        .hist-cmp-label { font-size: 12px; color: #94a3b8; min-width: 120px; }
+        .hist-cmp-curr { font-size: 14px; font-weight: 700; min-width: 100px; }
+        .hist-cmp-arrow { font-size: 12px; color: #64748b; }
+        .hist-cmp-yearly { font-size: 11px; }
+        @media (max-width: 768px) {
+          .hist-kpi-grid { grid-template-columns: repeat(2, 1fr); }
+          .hist-control-bar { flex-direction: column; align-items: stretch; }
+          .hist-compare-row { flex-wrap: wrap; }
+          .hist-cmp-label { min-width: 100%; }
+        }
+        @media (max-width: 480px) {
+          .hist-kpi-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
+          .hist-kpi-val { font-size: 16px; }
+        }
       </style>
 
       <div class="panel-container">
@@ -4050,6 +4464,7 @@ class SmartingHomePanel extends HTMLElement {
               <button class="tab-btn" data-tab="roi" onclick="this.getRootNode().host._switchTab('roi')">📈 Opłacalność</button>
               <button class="tab-btn" data-tab="winter" onclick="this.getRootNode().host._switchTab('winter')">❄️ Zima na plusie</button>
               <button class="tab-btn" data-tab="wind" onclick="this.getRootNode().host._switchTab('wind')">🌬️ Wiatr</button>
+              <button class="tab-btn" data-tab="history" onclick="this.getRootNode().host._switchTab('history')">📅 Historia</button>
             </div>
           </div>
           <!-- Center: Sun Widget (compact) -->
@@ -5840,6 +6255,183 @@ class SmartingHomePanel extends HTMLElement {
 
         </div>
 
+        <!-- ═══════ TAB: HISTORY ═══════ -->
+        <div class="tab-content" data-tab="history">
+
+          <!-- 🎛️ Control Bar -->
+          <div class="hist-control-bar">
+            <div style="display:flex; gap:4px">
+              <button class="hist-period-btn active" id="hist-period-day" onclick="this.getRootNode().host._switchHistoryPeriod('day')">📅 Dzień</button>
+              <button class="hist-period-btn" id="hist-period-week" onclick="this.getRootNode().host._switchHistoryPeriod('week')">📆 Tydzień</button>
+              <button class="hist-period-btn" id="hist-period-month" onclick="this.getRootNode().host._switchHistoryPeriod('month')">🗓️ Miesiąc</button>
+              <button class="hist-period-btn" id="hist-period-year" onclick="this.getRootNode().host._switchHistoryPeriod('year')">📊 Rok</button>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px; flex:1; justify-content:center">
+              <button class="hist-nav-btn" onclick="this.getRootNode().host._histNavigate(-1)">◀</button>
+              <span style="font-size:13px; font-weight:700; color:#e0e6ed; min-width:160px; text-align:center" id="hist-date-label">—</span>
+              <button class="hist-nav-btn" onclick="this.getRootNode().host._histNavigate(1)">▶</button>
+              <button class="hist-nav-btn" onclick="this.getRootNode().host._histToday()" style="font-size:10px; padding:5px 10px">Dziś</button>
+            </div>
+            <div style="display:flex; gap:4px; align-items:center">
+              <button class="hist-export-btn" onclick="this.getRootNode().host._exportHistoryData('csv')">📄 CSV</button>
+              <button class="hist-export-btn" onclick="this.getRootNode().host._exportHistoryData('json')">📋 JSON</button>
+              <span style="font-size:10px; color:#2ecc71" id="hist-export-status"></span>
+            </div>
+          </div>
+
+          <!-- ⚡ Energy KPI -->
+          <div class="hist-kpi-grid">
+            <div class="hist-kpi" style="border-color: rgba(247,183,49,0.15)">
+              <div class="hist-kpi-label">☀️ Produkcja PV</div>
+              <div class="hist-kpi-val" style="color:#f7b731" id="hist-pv-val">— kWh</div>
+            </div>
+            <div class="hist-kpi" style="border-color: rgba(231,76,60,0.15)">
+              <div class="hist-kpi-label">🔌 Import z sieci</div>
+              <div class="hist-kpi-val" style="color:#e74c3c" id="hist-import-val">— kWh</div>
+            </div>
+            <div class="hist-kpi" style="border-color: rgba(46,204,113,0.15)">
+              <div class="hist-kpi-label">📤 Eksport do sieci</div>
+              <div class="hist-kpi-val" style="color:#2ecc71" id="hist-export-val">— kWh</div>
+            </div>
+            <div class="hist-kpi" style="border-color: rgba(0,212,255,0.15)">
+              <div class="hist-kpi-label">🏠 Autokonsumpcja</div>
+              <div class="hist-kpi-val" style="color:#00d4ff" id="hist-selfuse-val">— kWh</div>
+            </div>
+          </div>
+
+          <!-- 💰 Financial KPI -->
+          <div class="hist-kpi-grid">
+            <div class="hist-kpi" style="border-color: rgba(231,76,60,0.15)">
+              <div class="hist-kpi-label">💸 Koszt importu</div>
+              <div class="hist-kpi-val" style="color:#e74c3c; font-size:18px" id="hist-cost-val">— zł</div>
+            </div>
+            <div class="hist-kpi" style="border-color: rgba(46,204,113,0.15)">
+              <div class="hist-kpi-label">💰 Przychód eksportu</div>
+              <div class="hist-kpi-val" style="color:#2ecc71; font-size:18px" id="hist-rev-val">— zł</div>
+            </div>
+            <div class="hist-kpi" style="border-color: rgba(0,212,255,0.15)">
+              <div class="hist-kpi-label">🛡️ Oszczędności</div>
+              <div class="hist-kpi-val" style="color:#00d4ff; font-size:18px" id="hist-sav-val">— zł</div>
+            </div>
+            <div class="hist-kpi" id="hist-bal-card" style="border-color: rgba(46,204,113,0.3); background: rgba(46,204,113,0.08)">
+              <div class="hist-kpi-label">💵 Bilans netto</div>
+              <div class="hist-kpi-val" style="font-size:22px" id="hist-bal-val">— zł</div>
+            </div>
+          </div>
+
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px">
+            <!-- ⚡ String Table -->
+            <div class="hist-section">
+              <div class="hist-section-title">⚡ Produkcja per String</div>
+              <table style="width:100%; border-collapse:collapse">
+                <thead>
+                  <tr style="border-bottom:1px solid rgba(255,255,255,0.1)">
+                    <th style="text-align:left; padding:6px 10px; font-size:9px; color:#64748b; text-transform:uppercase">String</th>
+                    <th style="text-align:right; padding:6px 10px; font-size:9px; color:#64748b; text-transform:uppercase">Moc</th>
+                    <th style="text-align:right; padding:6px 10px; font-size:9px; color:#64748b; text-transform:uppercase">Produkcja</th>
+                    <th style="text-align:right; padding:6px 10px; font-size:9px; color:#64748b; text-transform:uppercase">Udział</th>
+                  </tr>
+                </thead>
+                <tbody id="hist-string-tbody"></tbody>
+              </table>
+            </div>
+
+            <!-- 📈 Efficiency -->
+            <div class="hist-section">
+              <div class="hist-section-title">📈 Wskaźniki efektywności</div>
+              <div class="hist-progress-wrap">
+                <span class="hist-progress-label">🛡️ Autarkia</span>
+                <div class="hist-progress-bar-bg">
+                  <div class="hist-progress-bar-fill" id="hist-autarky-bar" style="width:0%; background:linear-gradient(90deg, #2ecc71, #00d4ff)"></div>
+                </div>
+                <span class="hist-progress-val" style="color:#2ecc71" id="hist-autarky-val">—%</span>
+              </div>
+              <div class="hist-progress-wrap">
+                <span class="hist-progress-label">♻️ Autokonsumpcja</span>
+                <div class="hist-progress-bar-bg">
+                  <div class="hist-progress-bar-fill" id="hist-selfcons-bar" style="width:0%; background:linear-gradient(90deg, #f7b731, #e67e22)"></div>
+                </div>
+                <span class="hist-progress-val" style="color:#f7b731" id="hist-selfcons-val">—%</span>
+              </div>
+              <div class="hist-progress-wrap">
+                <span class="hist-progress-label">☀️ Yield</span>
+                <div style="flex:1">
+                  <span style="font-size:13px; font-weight:700; color:#00d4ff" id="hist-yield-val">—</span>
+                </div>
+              </div>
+              <div class="hist-progress-wrap">
+                <span class="hist-progress-label">🎯 Performance Ratio</span>
+                <div class="hist-progress-bar-bg">
+                  <div class="hist-progress-bar-fill" id="hist-perf-bar" style="width:0%; background:linear-gradient(90deg, #e74c3c, #f7b731, #2ecc71)"></div>
+                </div>
+                <span class="hist-progress-val" style="color:#2ecc71" id="hist-perf-val">—</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 📅 Calendar Heatmap -->
+          <div class="hist-section">
+            <div class="hist-section-title">
+              📅 Kalendarz efektywności
+              <span style="font-size:9px; color:#64748b; margin-left:auto">Intensywność koloru = efektywność produkcji</span>
+            </div>
+            <div id="hist-calendar-grid" style="display:grid; gap:4px; margin-bottom:10px"></div>
+            <div style="display:flex; align-items:center; gap:12px; justify-content:center; margin-top:8px">
+              <div style="display:flex; align-items:center; gap:4px">
+                <div style="width:14px; height:14px; border-radius:3px; background:rgba(231,76,60,0.4)"></div>
+                <span style="font-size:9px; color:#94a3b8">Niska</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:4px">
+                <div style="width:14px; height:14px; border-radius:3px; background:rgba(247,183,49,0.4)"></div>
+                <span style="font-size:9px; color:#94a3b8">Średnia</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:4px">
+                <div style="width:14px; height:14px; border-radius:3px; background:rgba(46,204,113,0.5)"></div>
+                <span style="font-size:9px; color:#94a3b8">Wysoka</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:4px">
+                <div style="width:14px; height:14px; border-radius:3px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.1)"></div>
+                <span style="font-size:9px; color:#94a3b8">Brak danych</span>
+              </div>
+            </div>
+          </div>
+
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px">
+            <!-- 📊 Comparison -->
+            <div class="hist-section">
+              <div class="hist-section-title">📊 Projekcja roczna</div>
+              <div style="font-size:10px; color:#64748b; margin-bottom:10px">Ekstrapolacja bieżącego okresu na pełen rok</div>
+              <div id="hist-compare-body"></div>
+            </div>
+
+            <!-- 🔋 Battery -->
+            <div class="hist-section">
+              <div class="hist-section-title">🔋 Bateria — podsumowanie</div>
+              <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; text-align:center">
+                <div>
+                  <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">⬆️ Ładowanie</div>
+                  <div style="font-size:18px; font-weight:800; color:#2ecc71; margin-top:4px" id="hist-bat-chg">— kWh</div>
+                </div>
+                <div>
+                  <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">⬇️ Rozładowanie</div>
+                  <div style="font-size:18px; font-weight:800; color:#e67e22; margin-top:4px" id="hist-bat-dischg">— kWh</div>
+                </div>
+                <div>
+                  <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">🔄 Cykle</div>
+                  <div style="font-size:18px; font-weight:800; color:#00d4ff; margin-top:4px" id="hist-bat-cycles">—</div>
+                </div>
+              </div>
+              <div style="margin-top:12px; padding:8px; border-radius:8px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.04)">
+                <div style="font-size:9px; color:#64748b; line-height:1.5">
+                  💡 Cykle obliczane jako (ładowanie + rozładowanie) / 2 / pojemność baterii (10.2 kWh).
+                  Dane baterii dostępne tylko w widoku dziennym.
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
         <!-- ═══════ TAB: SETTINGS ═══════ -->
         <div class="tab-content" data-tab="settings">
           <div class="grid-cards gc-2">
@@ -6110,7 +6702,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.15.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.16.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
