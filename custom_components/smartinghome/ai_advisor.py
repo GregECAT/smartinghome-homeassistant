@@ -16,6 +16,7 @@ from .const import (
     AI_MAX_TOKENS,
     AI_TEMPERATURE,
     AI_RATE_LIMIT_CALLS,
+    AI_RATE_LIMIT_CONTROLLER,
     AI_RATE_LIMIT_WINDOW,
     G13_PRICES,
     G13Zone,
@@ -51,7 +52,8 @@ class AIAdvisor:
         self._anthropic_key = anthropic_api_key
         self._gemini_model = gemini_model or AI_GEMINI_MODEL
         self._anthropic_model = anthropic_model or AI_CLAUDE_MODEL
-        self._call_timestamps: list[float] = []
+        self._call_timestamps: list[float] = []  # advisory calls
+        self._controller_timestamps: list[float] = []  # controller/strategist calls
         self._gemini_client: Any = None
         self._anthropic_client: Any = None
 
@@ -175,7 +177,7 @@ class AIAdvisor:
             return False
 
     def _check_rate_limit(self) -> bool:
-        """Check if we're within rate limits."""
+        """Check if we're within rate limits (advisory calls)."""
         now = time.time()
         self._call_timestamps = [
             t for t in self._call_timestamps
@@ -183,11 +185,35 @@ class AIAdvisor:
         ]
         if len(self._call_timestamps) >= AI_RATE_LIMIT_CALLS:
             _LOGGER.warning(
-                "AI rate limit reached (%d/%d calls in window)",
+                "AI advisory rate limit reached (%d/%d calls in window)",
                 len(self._call_timestamps),
                 AI_RATE_LIMIT_CALLS,
             )
             return False
+        _LOGGER.debug(
+            "AI advisory rate budget: %d/%d used",
+            len(self._call_timestamps), AI_RATE_LIMIT_CALLS,
+        )
+        return True
+
+    def _check_controller_rate_limit(self) -> bool:
+        """Check if we're within rate limits (controller/strategist calls)."""
+        now = time.time()
+        self._controller_timestamps = [
+            t for t in self._controller_timestamps
+            if now - t < AI_RATE_LIMIT_WINDOW
+        ]
+        if len(self._controller_timestamps) >= AI_RATE_LIMIT_CONTROLLER:
+            _LOGGER.warning(
+                "AI controller rate limit reached (%d/%d calls in window)",
+                len(self._controller_timestamps),
+                AI_RATE_LIMIT_CONTROLLER,
+            )
+            return False
+        _LOGGER.debug(
+            "AI controller rate budget: %d/%d used",
+            len(self._controller_timestamps), AI_RATE_LIMIT_CONTROLLER,
+        )
         return True
 
     def _build_context(self, data: dict[str, Any]) -> str:
@@ -628,10 +654,10 @@ User question: {question}"""
         """
         import json as _json
 
-        if not self._check_rate_limit():
+        if not self._check_controller_rate_limit():
             return dict(self._CONTROLLER_NO_ACTION, reasoning="Rate limit reached")
 
-        self._call_timestamps.append(time.time())
+        self._controller_timestamps.append(time.time())
 
         # Resolve provider
         use_gemini = False

@@ -715,7 +715,8 @@ AI_CLAUDE_MODELS: Final = {
 }
 AI_MAX_TOKENS: Final = 8192
 AI_TEMPERATURE: Final = 0.3
-AI_RATE_LIMIT_CALLS: Final = 30  # per hour
+AI_RATE_LIMIT_CALLS: Final = 60  # advisory calls per hour (HEMS, reports, user queries)
+AI_RATE_LIMIT_CONTROLLER: Final = 30  # controller/strategist calls per hour
 AI_RATE_LIMIT_WINDOW: Final = 3600  # seconds
 
 # =============================================================================
