@@ -504,3 +504,24 @@ User question: {question}"""
             return await self.ask_anthropic(question, data)
         else:
             return "No AI provider configured."
+
+    async def ask_autopilot(
+        self,
+        prompt: str,
+        data: dict[str, Any],
+        provider: str = "auto",
+    ) -> str:
+        """Ask AI to analyze and optimize an autopilot strategy.
+
+        Uses a specialized prompt from autopilot_engine.build_autopilot_ai_prompt().
+        """
+        if provider == "anthropic" and self.anthropic_available:
+            return await self.ask_anthropic(prompt, data)
+        elif provider == "gemini" and self.gemini_available:
+            return await self.ask_gemini(prompt, data)
+        elif provider == "auto":
+            if self.gemini_available:
+                return await self.ask_gemini(prompt, data)
+            elif self.anthropic_available:
+                return await self.ask_anthropic(prompt, data)
+        return "No AI provider configured. Add Google Gemini or Anthropic Claude API key in settings."

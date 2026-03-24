@@ -122,6 +122,14 @@ async def async_setup_entry(
             "License validation failed on startup, using DEMO mode: %s", err
         )
 
+    # Register device for telemetry (FREE and PRO)
+    try:
+        if license_mode == LICENSE_MODE_FREE:
+            await api.register_free_device()
+            _LOGGER.info("FREE device telemetry registered ✅")
+    except Exception as err:
+        _LOGGER.debug("FREE registration skipped: %s", err)
+
     # Initialize data update coordinator
     update_interval = entry.data.get(
         CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL

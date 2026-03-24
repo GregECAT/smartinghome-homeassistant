@@ -11,6 +11,7 @@ from .const import (
     LICENSE_API_URL,
     LICENSE_VALIDATE_ENDPOINT,
     LICENSE_STATUS_ENDPOINT,
+    LICENSE_REGISTER_FREE_ENDPOINT,
     LicenseTier,
 )
 
@@ -197,3 +198,39 @@ class SmartingHomeAPI:
             raise ConnectionError(
                 f"Cannot reach license server: {err}"
             ) from err
+
+    async def register_free_device(self) -> bool:
+        """Register a FREE-mode device for telemetry.
+
+        This is a fire-and-forget call — errors are logged but don't block.
+        """
+        if not self._device_id:
+            _LOGGER.debug("Skipping FREE registration: no device_id")
+            return False
+
+        url = f"{self._base_url}{LICENSE_REGISTER_FREE_ENDPOINT}"
+        payload = {
+            "device_id": self._device_id,
+            "ha_version": self._ha_version,
+            "integration_version": self._integration_version,
+        }
+
+        try:
+            async with self._session.post(
+                url, json=payload, timeout=TIMEOUT
+            ) as response:
+                data = await response.json()
+                if response.status == 200 and data.get("ok"):
+                    _LOGGER.info(
+                        "FREE device registered: device_id=%s",
+                        self._device_id[:12],
+                    )
+                    return True
+                _LOGGER.warning(
+                    "FREE registration response: %s %s",
+                    response.status, data,
+                )
+                return False
+        except Exception as err:
+            _LOGGER.debug("FREE registration failed (non-critical): %s", err)
+            return False

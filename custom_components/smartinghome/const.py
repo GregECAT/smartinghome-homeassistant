@@ -375,6 +375,7 @@ DEFAULT_BATTERY_CHARGE_CURRENT_BLOCK: Final = "0"
 LICENSE_API_URL: Final = "https://mslvyiimjevhvujojfax.supabase.co/functions/v1/sh-license-api"
 LICENSE_VALIDATE_ENDPOINT: Final = "/validate"
 LICENSE_STATUS_ENDPOINT: Final = "/status"
+LICENSE_REGISTER_FREE_ENDPOINT: Final = "/register-free"
 LICENSE_CHECK_INTERVAL: Final = 86400  # 24 hours in seconds
 LICENSE_GRACE_PERIOD: Final = 259200  # 72 hours in seconds
 
@@ -528,6 +529,41 @@ class HEMSStrategy(StrEnum):
     AGGRESSIVE = "aggressive"
 
 
+class AutopilotStrategy(StrEnum):
+    """Autopilot energy management strategies."""
+
+    MAX_SELF_CONSUMPTION = "max_self_consumption"
+    MAX_PROFIT = "max_profit"
+    BATTERY_PROTECTION = "battery_protection"
+    ZERO_EXPORT = "zero_export"
+    WEATHER_ADAPTIVE = "weather_adaptive"
+    AI_FULL_AUTONOMY = "ai_full_autonomy"
+
+
+AUTOPILOT_STRATEGY_LABELS: Final = {
+    AutopilotStrategy.MAX_SELF_CONSUMPTION: "🟢 Max Autokonsumpcja",
+    AutopilotStrategy.MAX_PROFIT: "💰 Max Zysk (Arbitraż)",
+    AutopilotStrategy.BATTERY_PROTECTION: "🔋 Ochrona Baterii",
+    AutopilotStrategy.ZERO_EXPORT: "⚡ Zero Export",
+    AutopilotStrategy.WEATHER_ADAPTIVE: "🌧️ Pogodowy Adaptacyjny",
+    AutopilotStrategy.AI_FULL_AUTONOMY: "🧠 AI Pełna Autonomia",
+}
+
+AUTOPILOT_STRATEGY_DESCRIPTIONS: Final = {
+    AutopilotStrategy.MAX_SELF_CONSUMPTION: "Priorytet: zużycie własne PV, minimalne import/export. Bateria buforuje nadwyżki.",
+    AutopilotStrategy.MAX_PROFIT: "Kupuj tanio (off-peak/RCE niskie), sprzedawaj drogo (peak/RCE wysokie). Max arbitraż.",
+    AutopilotStrategy.BATTERY_PROTECTION: "Zachowawcze DOD, pełna bateria przed szczytem, ochrona żywotności.",
+    AutopilotStrategy.ZERO_EXPORT: "Zerowy eksport do sieci. Cała energia w domu + bateria.",
+    AutopilotStrategy.WEATHER_ADAPTIVE: "AI analizuje prognozę pogody i dynamicznie zmienia strategię godzina po godzinie.",
+    AutopilotStrategy.AI_FULL_AUTONOMY: "AI sam decyduje o strategii na każdą godzinę dnia. Pełna autonomia.",
+}
+
+# Autopilot default interval (minutes)
+AUTOPILOT_DEFAULT_INTERVAL: Final = 60
+AUTOPILOT_SETTINGS_KEY: Final = "autopilot_active_strategy"
+AUTOPILOT_PLAN_KEY: Final = "ai_autopilot_plan"
+
+
 class EMSMode(StrEnum):
     """GoodWe EMS modes."""
 
@@ -658,6 +694,7 @@ SERVICE_FORCE_DISCHARGE: Final = "force_discharge"
 SERVICE_SET_EXPORT_LIMIT: Final = "set_export_limit"
 SERVICE_ASK_AI: Final = "ask_ai_advisor"
 SERVICE_GENERATE_REPORT: Final = "generate_report"
+SERVICE_RUN_AUTOPILOT: Final = "run_autopilot"
 
 # =============================================================================
 # AI Advisor

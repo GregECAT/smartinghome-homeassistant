@@ -19,15 +19,20 @@ from .const import (
     SERVICE_SET_EXPORT_LIMIT,
     SERVICE_ASK_AI,
     SERVICE_GENERATE_REPORT,
+    SERVICE_RUN_AUTOPILOT,
     HEMSMode,
+    AutopilotStrategy,
     CONF_GEMINI_API_KEY,
     CONF_ANTHROPIC_API_KEY,
+    AUTOPILOT_PLAN_KEY,
+    AUTOPILOT_SETTINGS_KEY,
 )
 from .coordinator import SmartingHomeCoordinator
 from .energy_manager import EnergyManager
 from .ai_advisor import AIAdvisor
 from .license import LicenseManager
 from .cron_scheduler import AICronScheduler
+from .autopilot_engine import AutopilotEngine, build_autopilot_ai_prompt
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -90,6 +95,18 @@ TEST_API_KEY_SCHEMA = vol.Schema(
 SAVE_PANEL_SETTINGS_SCHEMA = vol.Schema(
     {
         vol.Required("settings"): cv.string,
+    }
+)
+
+RUN_AUTOPILOT_SCHEMA = vol.Schema(
+    {
+        vol.Optional("strategy", default="max_self_consumption"): vol.In(
+            [s.value for s in AutopilotStrategy]
+        ),
+        vol.Optional("provider", default="auto"): vol.In(
+            ["auto", "gemini", "anthropic"]
+        ),
+        vol.Optional("with_ai", default=True): cv.boolean,
     }
 )
 
@@ -394,6 +411,92 @@ async def async_setup_services(
         _update_settings_file(hass, incoming)
         _LOGGER.info("Panel settings saved: %s", list(incoming.keys()))
 
+    # ── Autopilot service ──
+    autopilot_engine = AutopilotEngine()
+
+    async def handle_run_autopilot(call: ServiceCall) -> None:
+        """Handle run_autopilot service — AI-powered strategy estimation."""
+        if not license_mgr.is_pro:
+            _LOGGER.warning("Autopilot requires PRO or ENTERPRISE license")
+            hass.bus.async_fire(
+                f"{DOMAIN}_autopilot_result",
+                {"error": "Autopilot wymaga licencji PRO lub ENTERPRISE."},
+            )
+            return
+
+        strategy_str = call.data.get("strategy", "max_self_consumption")
+        provider = call.data.get("provider", "auto")
+        with_ai = call.data.get("with_ai", True)
+
+        try:
+            strategy = AutopilotStrategy(strategy_str)
+        except ValueError:
+            strategy = AutopilotStrategy.MAX_SELF_CONSUMPTION
+
+        data = coordinator.data or {}
+        ai_data = {
+            "pv_power": data.get("sensor.pv_power"),
+            "grid_power": data.get("sensor.meter_active_power_total"),
+            "battery_soc": data.get("sensor.battery_state_of_charge"),
+            "battery_power": data.get("sensor.battery_power"),
+            "load": data.get("sensor.load"),
+            "pv_surplus": data.get("hems_pv_surplus_power"),
+            "g13_zone": data.get("g13_current_zone"),
+            "g13_price": data.get("g13_buy_price"),
+            "rce_price": data.get("sensor.rce_pse_cena"),
+            "rce_sell": data.get("rce_sell_price"),
+            "rce_trend": data.get("rce_price_trend"),
+            "forecast_today": data.get("pv_forecast_today_total"),
+            "forecast_remaining": data.get("pv_forecast_remaining_today_total"),
+            "forecast_tomorrow": data.get("pv_forecast_tomorrow_total"),
+        }
+
+        # Try to get weather data
+        try:
+            weather_entity = hass.states.get("weather.dom")
+            if weather_entity:
+                ai_data["weather_temp"] = weather_entity.attributes.get("temperature")
+                ai_data["weather_clouds"] = weather_entity.attributes.get("cloud_coverage")
+                ai_data["weather_condition"] = weather_entity.state
+        except Exception:
+            pass
+
+        # Run mathematical estimation
+        estimation = autopilot_engine.estimate_strategy(strategy, ai_data)
+
+        # Optionally enhance with AI analysis
+        ai_analysis = ""
+        if with_ai and ai_advisor.any_available:
+            try:
+                # Resolve provider from settings if auto
+                if provider == "auto":
+                    stored = _read_settings(hass)
+                    provider = stored.get("default_ai_provider", "gemini")
+
+                prompt = build_autopilot_ai_prompt(strategy, ai_data, estimation)
+                ai_analysis = await ai_advisor.ask_autopilot(prompt, ai_data, provider)
+            except Exception as err:
+                _LOGGER.error("Autopilot AI analysis failed: %s", err)
+                ai_analysis = f"AI analysis error: {err}"
+
+        # Store result
+        result = {
+            **estimation,
+            "ai_analysis": ai_analysis,
+            "provider": provider,
+        }
+        _update_settings_file(hass, {AUTOPILOT_PLAN_KEY: result})
+
+        # Fire event for live frontend update
+        hass.bus.async_fire(
+            f"{DOMAIN}_autopilot_result",
+            result,
+        )
+        _LOGGER.info(
+            "Autopilot estimation for '%s': net_savings=%.2f PLN, vs_baseline=%.2f PLN",
+            strategy_str, estimation.get("net_savings", 0), estimation.get("vs_no_management", 0),
+        )
+
     # Register all services
     hass.services.async_register(
         DOMAIN, SERVICE_SET_MODE, handle_set_mode, schema=SET_MODE_SCHEMA
@@ -430,8 +533,12 @@ async def async_setup_services(
         DOMAIN, SERVICE_SAVE_PANEL_SETTINGS, handle_save_panel_settings,
         schema=SAVE_PANEL_SETTINGS_SCHEMA,
     )
+    hass.services.async_register(
+        DOMAIN, SERVICE_RUN_AUTOPILOT, handle_run_autopilot,
+        schema=RUN_AUTOPILOT_SCHEMA,
+    )
 
-    _LOGGER.info("Registered %d Smarting HOME services", 10)
+    _LOGGER.info("Registered %d Smarting HOME services", 11)
 
     # Start AI Cron Scheduler
     cron = AICronScheduler(
@@ -456,5 +563,6 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_SAVE_SETTINGS,
         SERVICE_TEST_API_KEY,
         SERVICE_SAVE_PANEL_SETTINGS,
+        SERVICE_RUN_AUTOPILOT,
     ]:
         hass.services.async_remove(DOMAIN, service)
