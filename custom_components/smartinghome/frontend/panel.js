@@ -2971,27 +2971,28 @@ class SmartingHomePanel extends HTMLElement {
 
       const battBars = battGraphic.querySelectorAll('.batt-bar');
       battBars.forEach((bar, index) => {
-        // bars are ordered top to bottom: index 0 is 100%, index 9 is 10%
-        const barLevel = barsCount - index;
+        // column-reverse: index 0 = bottom (level 1), index 9 = top (level 10)
+        const barLevel = index + 1;
         bar.style.animation = 'none';
         bar.style.opacity = '1';
+        bar.style.boxShadow = 'none';
 
         if (barLevel <= activeBars) {
           bar.style.backgroundColor = color;
-          bar.style.color = color; // for box-shadow currentColor
+          bar.style.color = color;
           
           if (batt < -10) {
-            // Charging
-            bar.style.animation = `batt-pulse-up 1.5s infinite ${barLevel * 0.15}s`;
+            // Charging — pulse upwards (bottom bars first)
+            bar.style.animation = `batt-pulse-up 1.5s infinite ${(barsCount - barLevel) * 0.12}s`;
           } else if (batt > 10) {
-            // Discharging
-            bar.style.animation = `batt-pulse-down 1.5s infinite ${(barsCount - barLevel) * 0.15}s`;
+            // Discharging — pulse downwards (top bars first)
+            bar.style.animation = `batt-pulse-down 1.5s infinite ${barLevel * 0.12}s`;
           } else {
-            bar.style.boxShadow = `0 0 8px ${color}80`;
+            // Standby — static glow
+            bar.style.boxShadow = `0 0 6px ${color}60`;
           }
         } else {
-          bar.style.backgroundColor = 'rgba(255,255,255,0.05)';
-          bar.style.boxShadow = 'none';
+          bar.style.backgroundColor = 'rgba(255,255,255,0.06)';
           bar.style.color = 'transparent';
         }
       });
@@ -4416,46 +4417,46 @@ class SmartingHomePanel extends HTMLElement {
 
         /* --- BATTERY GRAPHIC --- */
         .battery-graphic {
-          width: 32px;
-          min-height: 120px;
-          border: 2px solid rgba(255,255,255,0.2);
-          border-radius: 6px;
-          padding: 4px;
+          width: 38px;
+          border: 2px solid rgba(255,255,255,0.25);
+          border-radius: 8px;
+          padding: 5px;
           display: flex;
-          flex-direction: column;
-          justify-content: flex-end;
+          flex-direction: column-reverse;
           gap: 3px;
           position: relative;
-          background: rgba(0,0,0,0.2);
+          background: rgba(0,0,0,0.25);
           flex-shrink: 0;
+          align-self: stretch;
+          margin-top: 6px;
         }
         .battery-graphic::before {
           content: '';
           position: absolute;
-          top: -6px;
+          top: -7px;
           left: 50%;
           transform: translateX(-50%);
-          width: 14px;
-          height: 4px;
-          background: rgba(255,255,255,0.2);
-          border-radius: 2px 2px 0 0;
+          width: 16px;
+          height: 5px;
+          background: rgba(255,255,255,0.25);
+          border-radius: 3px 3px 0 0;
         }
         .batt-bar {
-          flex: 1;
           width: 100%;
-          background: rgba(255,255,255,0.05);
+          height: 8px;
+          background: rgba(255,255,255,0.06);
           border-radius: 2px;
-          transition: background-color 0.5s ease;
+          transition: background-color 0.5s ease, box-shadow 0.3s ease;
         }
         @keyframes batt-pulse-up {
-          0%   { opacity: 0.3; transform: scale(0.95); }
-          50%  { opacity: 1; transform: scale(1); box-shadow: 0 0 10px currentColor; }
-          100% { opacity: 0.3; transform: scale(0.95); }
+          0%   { opacity: 0.35; }
+          50%  { opacity: 1; box-shadow: 0 0 8px currentColor; }
+          100% { opacity: 0.35; }
         }
         @keyframes batt-pulse-down {
-          0%   { opacity: 1; transform: scale(1); box-shadow: 0 0 10px currentColor; }
-          50%  { opacity: 0.3; transform: scale(0.95); }
-          100% { opacity: 1; transform: scale(1); box-shadow: 0 0 10px currentColor; }
+          0%   { opacity: 1; box-shadow: 0 0 8px currentColor; }
+          50%  { opacity: 0.35; }
+          100% { opacity: 1; box-shadow: 0 0 8px currentColor; }
         }
 
         /* Summary bar */
