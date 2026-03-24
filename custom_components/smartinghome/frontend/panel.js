@@ -1928,8 +1928,24 @@ class SmartingHomePanel extends HTMLElement {
       }
     };
 
-    // ═══ W1: G13 SCHEDULE ═══
+    // ═══ W0: GRID IMPORT GUARD ═══
+    const batPower = this._nm("battery_power") || 0;
     const isWorkday = !isWeekend;
+    const isExpensiveHour = isWorkday && (tInfo.zone === 'morning' || tInfo.zone === 'peak');
+    const gridImporting = gridPower > 100;
+    const batCharging = batPower > 100;
+    // Guard active: importing from grid + charging battery + expensive hour + RCE > 100
+    setStatus("hac-grid-guard-st", isExpensiveHour && gridImporting && batCharging && rceMwh > 100 ? "on" : (isExpensiveHour ? "wait" : "off"));
+    this._setText("hac-gg-grid", `${gridPower > 0 ? '+' : ''}${(gridPower/1000).toFixed(1)} kW`);
+    this._setText("hac-gg-bat", `${batPower > 0 ? 'Ładuje' : 'Rozładowuje'} ${Math.abs(batPower).toFixed(0)} W`);
+
+    // PV Surplus Smart Charge: export > 300W + expensive hour + SOC < 95
+    const gridExporting = gridPower < -300;
+    setStatus("hac-pv-surplus-st", isExpensiveHour && gridExporting && soc < 95 ? "on" : (isExpensiveHour && pvPower > 500 ? "wait" : "off"));
+    this._setText("hac-ps-grid", `${gridPower > 0 ? '+' : ''}${(gridPower/1000).toFixed(1)} kW`);
+    this._setText("hac-ps-soc", `${soc}%`);
+
+    // ═══ W1: G13 SCHEDULE ═══
     const peakStart = isSummer ? 19 : 16;
     const peakEnd = isSummer ? 22 : 21;
 
@@ -1995,6 +2011,9 @@ class SmartingHomePanel extends HTMLElement {
 
     setStatus("hac-soc-low-st", soc < 20 ? "on" : soc < 30 ? "wait" : "off");
     this._setText("hac-sl-soc", `${soc}%`);
+
+    setStatus("hac-soc-emergency-st", soc < 5 ? "on" : soc < 10 ? "wait" : "off");
+    this._setText("hac-se-soc", `${soc}%`);
 
     setStatus("hac-weak-fcst-st", fcstTmrw < 5 && hour >= 18 ? "on" : "off");
     this._setText("hac-wf-fcst", `${fcstTmrw.toFixed(1)} kWh`);
@@ -2096,6 +2115,7 @@ class SmartingHomePanel extends HTMLElement {
       return { total: cards.length, active: active.length };
     };
 
+    const w0 = countActive('hems-w0-body');
     const w1 = countActive('hems-w1-body');
     const w2 = countActive('hems-w2-body');
     const w3 = countActive('hems-w3-body');
@@ -2103,6 +2123,7 @@ class SmartingHomePanel extends HTMLElement {
     const w5 = countActive('hems-w5-body');
     const other = countActive('hems-other-body');
 
+    this._setText("hems-w0-count", `${w0.active}/${w0.total} aktywnych`);
     this._setText("hems-w1-count", `${w1.active}/${w1.total} aktywnych`);
     this._setText("hems-w2-count", `${w2.active}/${w2.total} aktywnych`);
     this._setText("hems-w3-count", `${w3.active}/${w3.total} aktywnych`);
@@ -2111,7 +2132,7 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("hems-other-count", `${other.active}/${other.total} aktywnych`);
 
     // Overall active count
-    const totalActive = w1.active + w2.active + w3.active + w4.active + w5.active + other.active;
+    const totalActive = w0.active + w1.active + w2.active + w3.active + w4.active + w5.active + other.active;
     const statusEl = this.shadowRoot.getElementById("hems-arb-status");
     if (statusEl) {
       statusEl.textContent = totalActive > 0 ? `● ${totalActive} AKTYWNYCH` : "○ STAN GOTOWOŚCI";
@@ -5989,6 +6010,38 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
+          <!-- ═══ W0: GRID IMPORT GUARD (NADRZĘDNA OCHRONA) ═══ -->
+          <div class="hems-layer" id="hems-layer-w0">
+            <div class="hems-layer-header" onclick="this.getRootNode().host._toggleHEMSSection('w0')">
+              <div class="hl-left">
+                <span class="hl-tag" style="background:rgba(231,76,60,0.2);color:#e74c3c">W0</span>
+                <span class="hl-name">Grid Import Guard</span>
+                <span style="font-size:10px;color:#64748b" id="hems-w0-count">2 automatyzacje</span>
+              </div>
+              <span class="hl-chevron">▼</span>
+            </div>
+            <div class="hems-layer-body" id="hems-w0-body">
+              <!-- Grid Import Guard -->
+              <div class="hems-auto-card" id="hac-grid-guard">
+                <div class="hac-top"><span class="hac-icon">🛡️</span><span class="hac-name">Grid Import Guard</span><span class="hac-status" id="hac-grid-guard-st">—</span></div>
+                <div class="hac-desc">STOP ładowania baterii z sieci w drogich godzinach. Wyjątek: RCE &lt; 100 PLN/MWh.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">Grid:</span><span class="hs-val" id="hac-gg-grid">—</span>
+                  <span class="hs-label">Bat.:</span><span class="hs-val" id="hac-gg-bat">—</span>
+                </div>
+              </div>
+              <!-- PV Surplus Smart Charge -->
+              <div class="hems-auto-card" id="hac-pv-surplus">
+                <div class="hac-top"><span class="hac-icon">☀️🔋</span><span class="hac-name">PV Surplus → ładuj baterię</span><span class="hac-status" id="hac-pv-surplus-st">—</span></div>
+                <div class="hac-desc">Nadwyżka PV (export &gt;300W) w drogich godz. → ładuj baterię. Guard czuwa nad importem.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">Grid:</span><span class="hs-val" id="hac-ps-grid">—</span>
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-ps-soc">—</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- ═══ W1: HARMONOGRAM G13 ═══ -->
           <div class="hems-layer" id="hems-layer-w1">
             <div class="hems-layer-header" onclick="this.getRootNode().host._toggleHEMSSection('w1')">
@@ -6129,8 +6182,8 @@ class SmartingHomePanel extends HTMLElement {
             <div class="hems-layer-body" id="hems-w3-body">
               <!-- SOC 11:00 -->
               <div class="hems-auto-card" id="hac-soc-11">
-                <div class="hac-top"><span class="hac-icon">⚠️</span><span class="hac-name">SOC check 11:00</span><span class="hac-status" id="hac-soc-11-st">—</span></div>
-                <div class="hac-desc">SOC &lt; 50% o 11:00 → ładuj baterię przed szczytem.</div>
+                <div class="hac-top"><span class="hac-icon">⚠️</span><span class="hac-name">SOC check 11:00 (PV-only)</span><span class="hac-status" id="hac-soc-11-st">—</span></div>
+                <div class="hac-desc">SOC &lt; 50% o 11:00 → ładuj z nadwyżki PV. NIE z sieci w szczycie!</div>
                 <div class="hac-sensors">
                   <span class="hs-label">SOC:</span><span class="hs-val" id="hac-s11-soc">—</span>
                   <span class="hs-label">Próg:</span><span class="hs-val">&lt;50%</span>
@@ -6138,20 +6191,29 @@ class SmartingHomePanel extends HTMLElement {
               </div>
               <!-- SOC 12:00 -->
               <div class="hems-auto-card" id="hac-soc-12">
-                <div class="hac-top"><span class="hac-icon">⚠️</span><span class="hac-name">SOC check 12:00</span><span class="hac-status" id="hac-soc-12-st">—</span></div>
-                <div class="hac-desc">SOC &lt; 70% o 12:00 → ostatnia szansa na baterię.</div>
+                <div class="hac-top"><span class="hac-icon">⚠️</span><span class="hac-name">SOC check 12:00 (ostatnia szansa)</span><span class="hac-status" id="hac-soc-12-st">—</span></div>
+                <div class="hac-desc">SOC &lt; 70% o 12:00. Nadwyżka PV → bateria. Brak → czekaj na 13:00 off-peak.</div>
                 <div class="hac-sensors">
                   <span class="hs-label">SOC:</span><span class="hs-val" id="hac-s12-soc">—</span>
                   <span class="hs-label">Próg:</span><span class="hs-val">&lt;70%</span>
                 </div>
               </div>
-              <!-- Ochrona SOC -->
+              <!-- Smart SOC Protection (tariff-aware) -->
               <div class="hems-auto-card" id="hac-soc-low">
-                <div class="hac-top"><span class="hac-icon">🔋</span><span class="hac-name">Ochrona SOC &lt; 20%</span><span class="hac-status" id="hac-soc-low-st">—</span></div>
-                <div class="hac-desc">Krytyczny poziom → wymuś ładowanie baterii.</div>
+                <div class="hac-top"><span class="hac-icon">🔋</span><span class="hac-name">Smart SOC Protection (tariff-aware)</span><span class="hac-status" id="hac-soc-low-st">—</span></div>
+                <div class="hac-desc">SOC &lt; 20%: drogie godz. → PV-only, tanie godz. → ładuj normalnie.</div>
                 <div class="hac-sensors">
                   <span class="hs-label">SOC:</span><span class="hs-val" id="hac-sl-soc">—</span>
                   <span class="hs-label">Próg:</span><span class="hs-val">&lt;20%</span>
+                </div>
+              </div>
+              <!-- Emergency SOC < 5% -->
+              <div class="hems-auto-card" id="hac-soc-emergency">
+                <div class="hac-top"><span class="hac-icon">🚨</span><span class="hac-name">EMERGENCY SOC &lt; 5%</span><span class="hac-status" id="hac-soc-emergency-st">—</span></div>
+                <div class="hac-desc">Ładuj awaryjnie NIEZALEŻNIE od taryfy do 15%! Bateria bliska shutdown.</div>
+                <div class="hac-sensors">
+                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-se-soc">—</span>
+                  <span class="hs-label">Próg:</span><span class="hs-val">&lt;5%</span>
                 </div>
               </div>
               <!-- Słaba prognoza -->
@@ -7398,7 +7460,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.19.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.19.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
