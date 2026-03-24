@@ -4900,7 +4900,7 @@ class SmartingHomePanel extends HTMLElement {
           padding: 14px; border-radius: 12px;
           background: rgba(124,58,237,0.05); border: 1px solid rgba(124,58,237,0.15);
           font-size: 12px; color: #cbd5e1; line-height: 1.6;
-          max-height: 400px; overflow-y: auto;
+          max-height: 800px; overflow-y: auto;
         }
         .ap-ai-analysis h2 { font-size: 14px; color: #fff; margin: 12px 0 6px; }
         .ap-ai-analysis h3 { font-size: 12px; color: #a78bfa; margin: 8px 0 4px; }
@@ -7754,6 +7754,11 @@ class SmartingHomePanel extends HTMLElement {
       const plan = s.ai_autopilot_plan;
       if (!plan || !plan.hourly_plan) return;
 
+      // Dedup guard — don't re-process the same estimation
+      const planKey = `${plan.strategy}_${plan.timestamp || ''}`;
+      if (this._lastProcessedPlanKey === planKey) return;
+      this._lastProcessedPlanKey = planKey;
+
       // Update status
       const statusEl = this.shadowRoot.getElementById('ap-status');
       if (statusEl) { statusEl.textContent = '● AKTYWNY'; statusEl.style.color = '#2ecc71'; }
@@ -7789,8 +7794,8 @@ class SmartingHomePanel extends HTMLElement {
         }
       }
 
-      // Activity log
-      this._updateAutopilotLog(plan);
+      // Estimation log entry no longer written to ap-activity-log
+      // (live decision log handles real-time actions from coordinator)
 
     } catch (e) { /* settings not ready yet */ }
   }
