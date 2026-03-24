@@ -163,7 +163,7 @@ class AutopilotEngine:
         max_charge_rate = bat_cap_kwh * 0.5  # 0.5C max charge (kW)
         max_discharge_rate = bat_cap_kwh * 0.5
 
-        # Build hourly plan
+        # Build hourly plan — start from current hour for remaining day
         plan: list[HourlyAction] = []
         running_soc = soc
         total_cost = 0.0
@@ -176,15 +176,22 @@ class AutopilotEngine:
         # Also compute "no management" baseline (simple: PV→load, rest→grid)
         baseline_cost = 0.0
 
-        for h in range(24):
+        # Generate ordered hour list: current_hour → 23, then 0 → current_hour-1 (next day)
+        hours = list(range(current_hour, 24)) + list(range(0, current_hour))
+
+        for h in hours:
             ha = HourlyAction(h)
             ha.soc_start = running_soc
 
-            # Estimate PV and load for this hour
-            ha.estimated_pv = pv_peak * _PV_PROFILE_FACTORS[h]
-            # Scale load profile by current load ratio
-            load_scale = load_now / 500 if load_now > 0 else 1.0
-            ha.estimated_load = _TYPICAL_LOAD_PROFILE[h] * load_scale
+            # Current hour → use actual readings; future hours → profile estimates
+            if h == current_hour:
+                ha.estimated_pv = pv_now
+                ha.estimated_load = load_now
+            else:
+                ha.estimated_pv = pv_peak * _PV_PROFILE_FACTORS[h]
+                # Scale load profile by current load ratio
+                load_scale = load_now / 500 if load_now > 0 else 1.0
+                ha.estimated_load = _TYPICAL_LOAD_PROFILE[h] * load_scale
 
             pv_w = ha.estimated_pv
             load_w = ha.estimated_load
