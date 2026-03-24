@@ -174,6 +174,10 @@ async def async_setup_services(
         anthropic_api_key=_anthropic_key_init,
     )
 
+    # Wire AI advisor to strategy controller for AI Full Autonomy mode
+    if strategy_controller is not None:
+        strategy_controller.set_ai_advisor(ai_advisor)
+
     async def handle_set_mode(call: ServiceCall) -> None:
         """Handle set_mode service."""
         mode = HEMSMode(call.data["mode"])

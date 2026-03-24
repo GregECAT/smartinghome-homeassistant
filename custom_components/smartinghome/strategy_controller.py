@@ -12,9 +12,12 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
+
+if TYPE_CHECKING:
+    from .ai_advisor import AIAdvisor
 
 from .const import (
     DOMAIN,
@@ -146,6 +149,18 @@ class StrategyController:
         # Automation manager: tracks which automations were disabled
         self._disabled_automations: set[str] = set()
         self._automation_scan_done = False
+
+        # AI Controller state
+        self._ai: AIAdvisor | None = None
+        self._ai_cached_commands: dict[str, Any] | None = None
+        self._ai_last_call: float = 0.0
+        self._ai_call_interval: int = 300  # default 5 min, AI can override via next_check_minutes
+        self._ai_dry_run: bool = False  # Set True to log-only without executing
+
+    def set_ai_advisor(self, ai_advisor: AIAdvisor) -> None:
+        """Inject AI advisor reference (called after services setup)."""
+        self._ai = ai_advisor
+        _LOGGER.info("AI Controller: advisor connected (dry_run=%s)", self._ai_dry_run)
 
     # ------------------------------------------------------------------
     # Public API
@@ -313,6 +328,11 @@ class StrategyController:
             )
             actions_taken.extend(s_actions)
 
+        # AI reasoning (for frontend display)
+        ai_reasoning = ""
+        if self._ai_cached_commands and strategy == AutopilotStrategy.AI_FULL_AUTONOMY:
+            ai_reasoning = self._ai_cached_commands.get("reasoning", "")
+
         return {
             "enabled": True,
             "strategy": strategy.value,
@@ -325,6 +345,7 @@ class StrategyController:
             "g13_zone": g13_zone.value,
             "g13_price": g13_price,
             "rce_price_mwh": rce_mwh,
+            "ai_reasoning": ai_reasoning,
             "timestamp": now.strftime("%H:%M:%S"),
         }
 
@@ -739,33 +760,162 @@ class StrategyController:
         g13_zone: G13Zone, g13_price: float, rce_mwh: float,
         hour: int, forecast_tomorrow: float, data: dict,
     ) -> list[str]:
-        """🧠 AI Full Autonomy: All layers active, most aggressive optimization."""
+        """🧠 AI Full Autonomy: AI-driven control via JSON toolcalling.
+
+        Every N minutes (default 5), queries AI for structured JSON commands.
+        Between AI calls, uses cached commands. Falls back to weather-adaptive
+        if AI is unavailable.
+        """
         actions: list[str] = []
+        now = time.time()
 
-        # Use weather-adaptive as base (it already combines strategies)
-        w_actions = await self._strategy_weather_adaptive(
-            soc, pv, load, surplus, g13_zone, g13_price,
-            rce_mwh, hour, forecast_tomorrow, data,
-        )
-        actions.extend(w_actions)
+        # Check if AI advisor is available
+        if self._ai is None:
+            # Fallback: use weather-adaptive strategy
+            w_actions = await self._strategy_weather_adaptive(
+                soc, pv, load, surplus, g13_zone, g13_price,
+                rce_mwh, hour, forecast_tomorrow, data,
+            )
+            actions.extend(w_actions)
+            return actions
 
-        # Additional AI layer: aggressive RCE arbitrage
-        if rce_mwh > RCE_PRICE_THRESHOLDS["very_expensive"] and soc > 30:
-            if await self._throttled_action("ai_rce_sell"):
-                await self._em.force_discharge()
-                self._charging_enabled = False
-                msg = f"🧠 AI: RCE bardzo wysoki ({rce_mwh:.0f} PLN/MWh) — agresywna sprzedaż"
-                actions.append(msg)
-                self._log_decision("ai_aggressive_sell", msg)
+        # Throttle: only call AI every N minutes
+        elapsed = now - self._ai_last_call
+        if elapsed >= self._ai_call_interval:
+            try:
+                from .autopilot_engine import build_ai_controller_prompt
 
-        # Smart DOD management based on forecast
-        if forecast_tomorrow > 0:
-            if forecast_tomorrow < 5:
-                await self._em._set_dod(70)
-            elif forecast_tomorrow > 15:
-                await self._em._set_dod(95)
+                prompt = build_ai_controller_prompt(data)
+                ai_result = await self._ai.ask_controller(prompt)
+
+                self._ai_last_call = now
+                self._ai_cached_commands = ai_result
+
+                # Update interval from AI response
+                next_min = ai_result.get("next_check_minutes", 5)
+                self._ai_call_interval = max(60, min(next_min * 60, 1800))  # 1-30 min
+
+                _LOGGER.info(
+                    "AI Controller: received %d commands (next check in %d min): %s",
+                    len(ai_result.get("commands", [])),
+                    next_min,
+                    ai_result.get("reasoning", "?"),
+                )
+            except Exception as err:
+                _LOGGER.error("AI Controller call failed: %s", err)
+                # Keep using cached commands if available
+
+        # Execute cached AI commands
+        if self._ai_cached_commands:
+            reasoning = self._ai_cached_commands.get("reasoning", "")
+            commands = self._ai_cached_commands.get("commands", [])
+
+            for cmd in commands:
+                tool = cmd.get("tool", "no_action")
+                params = cmd.get("params", {})
+
+                if tool == "no_action":
+                    reason = params.get("reason", "brak akcji")
+                    actions.append(f"🧠 AI CTRL: {reason}")
+                    continue
+
+                result = await self._execute_ai_command(tool, params)
+                if result:
+                    actions.append(result)
+
+            # Log reasoning as decision
+            if reasoning and elapsed >= self._ai_call_interval:
+                self._log_decision("ai_ctrl", f"🧠 {reasoning}")
+        else:
+            # No cached commands yet — fallback to weather-adaptive
+            w_actions = await self._strategy_weather_adaptive(
+                soc, pv, load, surplus, g13_zone, g13_price,
+                rce_mwh, hour, forecast_tomorrow, data,
+            )
+            actions.extend(w_actions)
 
         return actions
+
+    async def _execute_ai_command(self, tool: str, params: dict) -> str | None:
+        """Execute a single AI command. Returns action description or None."""
+        prefix = "🧠 AI CTRL" if not self._ai_dry_run else "🧠 AI DRY-RUN"
+
+        try:
+            if tool == "force_charge":
+                if not self._ai_dry_run:
+                    await self._em.force_charge()
+                    self._charging_enabled = True
+                msg = f"{prefix}: force_charge → ładowanie baterii"
+                self._log_decision("ai_cmd", msg)
+                return msg
+
+            elif tool == "force_discharge":
+                if not self._ai_dry_run:
+                    await self._em.force_discharge()
+                    self._charging_enabled = False
+                msg = f"{prefix}: force_discharge → rozładowanie baterii"
+                self._log_decision("ai_cmd", msg)
+                return msg
+
+            elif tool == "set_dod":
+                dod = int(params.get("dod", 80))
+                dod = max(0, min(dod, 100))  # clamp
+                if not self._ai_dry_run:
+                    await self._em._set_dod(dod)
+                msg = f"{prefix}: set_dod({dod}%) → głębokość rozładowania"
+                self._log_decision("ai_cmd", msg)
+                return msg
+
+            elif tool == "set_export_limit":
+                limit = int(params.get("limit", 0))
+                limit = max(0, min(limit, 10000))  # clamp
+                if not self._ai_dry_run:
+                    await self._em.set_export_limit(limit)
+                msg = f"{prefix}: set_export_limit({limit}W)"
+                self._log_decision("ai_cmd", msg)
+                return msg
+
+            elif tool == "switch_on":
+                entity = params.get("entity", "")
+                entity_id = self._resolve_entity(entity)
+                if entity_id:
+                    if not self._ai_dry_run:
+                        await self._em._switch_on(entity_id)
+                    msg = f"{prefix}: switch_on({entity}) → włączono"
+                    self._log_decision("ai_cmd", msg)
+                    return msg
+
+            elif tool == "switch_off":
+                entity = params.get("entity", "")
+                entity_id = self._resolve_entity(entity)
+                if entity_id:
+                    if not self._ai_dry_run:
+                        await self._em._switch_off(entity_id)
+                    msg = f"{prefix}: switch_off({entity}) → wyłączono"
+                    self._log_decision("ai_cmd", msg)
+                    return msg
+
+            else:
+                _LOGGER.warning("AI Controller: unknown tool '%s'", tool)
+
+        except Exception as err:
+            _LOGGER.error("AI Controller: failed to execute %s: %s", tool, err)
+            return f"{prefix}: ❌ {tool} failed: {err}"
+
+        return None
+
+    @staticmethod
+    def _resolve_entity(name: str) -> str | None:
+        """Map friendly AI entity name to HA entity_id."""
+        _MAP = {
+            "boiler": SWITCH_BOILER,
+            "bojler": SWITCH_BOILER,
+            "ac": SWITCH_AC,
+            "klimatyzacja": SWITCH_AC,
+            "socket2": SWITCH_SOCKET2,
+            "gniazdko": SWITCH_SOCKET2,
+        }
+        return _MAP.get(name.lower().strip())
 
     # ------------------------------------------------------------------
     #  Helpers

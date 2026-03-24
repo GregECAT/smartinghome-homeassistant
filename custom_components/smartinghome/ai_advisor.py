@@ -603,3 +603,162 @@ User question: {question}"""
             _LOGGER.error("Autopilot AI error [%s]: %s", type(err).__name__, err, exc_info=True)
             return f"Autopilot AI error: {type(err).__name__}: {err}"
 
+    # ------------------------------------------------------------------
+    #  AI Controller — JSON toolcalling for real-time inverter control
+    # ------------------------------------------------------------------
+
+    _CONTROLLER_MAX_TOKENS = 1024
+    _CONTROLLER_NO_ACTION = {
+        "reasoning": "AI unavailable — fallback to no_action",
+        "commands": [{"tool": "no_action", "params": {"reason": "AI response error"}}],
+        "next_check_minutes": 5,
+    }
+
+    async def ask_controller(
+        self,
+        prompt: str,
+        provider: str = "auto",
+    ) -> dict[str, Any]:
+        """Ask AI to return structured JSON commands for inverter control.
+
+        Returns a parsed dict with keys: reasoning, commands, next_check_minutes.
+        On ANY error, returns a safe no_action fallback.
+        """
+        import json as _json
+
+        if not self._check_rate_limit():
+            return dict(self._CONTROLLER_NO_ACTION, reasoning="Rate limit reached")
+
+        self._call_timestamps.append(time.time())
+
+        # Resolve provider
+        use_gemini = False
+        use_anthropic = False
+        if provider == "gemini" and self.gemini_available:
+            use_gemini = True
+        elif provider == "anthropic" and self.anthropic_available:
+            use_anthropic = True
+        elif provider == "auto":
+            if self.gemini_available:
+                use_gemini = True
+            elif self.anthropic_available:
+                use_anthropic = True
+
+        if not use_gemini and not use_anthropic:
+            return dict(self._CONTROLLER_NO_ACTION, reasoning="No AI provider configured")
+
+        raw_text = ""
+        try:
+            import aiohttp
+
+            if use_gemini:
+                url = (
+                    f"https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{self._gemini_model}:generateContent?key={self._gemini_key}"
+                )
+                payload = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "maxOutputTokens": self._CONTROLLER_MAX_TOKENS,
+                        "temperature": 0.2,  # Lower temp for deterministic control
+                        "responseMimeType": "application/json",
+                    },
+                }
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        url, json=payload,
+                        timeout=aiohttp.ClientTimeout(total=30),  # Shorter timeout for control loop
+                    ) as resp:
+                        if resp.status == 200:
+                            result = await resp.json()
+                            candidates = result.get("candidates", [])
+                            if candidates:
+                                parts = candidates[0].get("content", {}).get("parts", [])
+                                if parts:
+                                    raw_text = parts[0].get("text", "")
+                        else:
+                            err_text = await resp.text()
+                            _LOGGER.error("AI Controller Gemini HTTP %s: %s", resp.status, err_text)
+                            return dict(self._CONTROLLER_NO_ACTION, reasoning=f"Gemini HTTP {resp.status}")
+
+            else:  # use_anthropic
+                url = "https://api.anthropic.com/v1/messages"
+                headers = {
+                    "x-api-key": self._anthropic_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                }
+                payload = {
+                    "model": self._anthropic_model,
+                    "max_tokens": self._CONTROLLER_MAX_TOKENS,
+                    "temperature": 0.2,
+                    "messages": [{"role": "user", "content": prompt}],
+                }
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        url, json=payload, headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    ) as resp:
+                        if resp.status == 200:
+                            result = await resp.json()
+                            content = result.get("content", [])
+                            if content:
+                                raw_text = content[0].get("text", "")
+                        else:
+                            err_text = await resp.text()
+                            _LOGGER.error("AI Controller Anthropic HTTP %s: %s", resp.status, err_text)
+                            return dict(self._CONTROLLER_NO_ACTION, reasoning=f"Anthropic HTTP {resp.status}")
+
+        except Exception as err:
+            _LOGGER.error("AI Controller error [%s]: %s", type(err).__name__, err)
+            return dict(self._CONTROLLER_NO_ACTION, reasoning=f"Error: {err}")
+
+        # Parse and validate JSON response
+        if not raw_text.strip():
+            return dict(self._CONTROLLER_NO_ACTION, reasoning="Empty AI response")
+
+        try:
+            # Strip markdown code fences if present
+            text = raw_text.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+                if text.endswith("```"):
+                    text = text[:-3]
+                text = text.strip()
+
+            parsed = _json.loads(text)
+
+            # Validate structure
+            if not isinstance(parsed, dict):
+                raise ValueError("Response is not a JSON object")
+            if "commands" not in parsed:
+                raise ValueError("Missing 'commands' key")
+            if not isinstance(parsed["commands"], list):
+                raise ValueError("'commands' is not a list")
+
+            # Validate each command
+            valid_tools = {"force_charge", "force_discharge", "set_dod",
+                           "set_export_limit", "switch_on", "switch_off", "no_action"}
+            validated_commands = []
+            for cmd in parsed["commands"][:3]:  # Max 3 commands
+                tool = cmd.get("tool", "")
+                if tool not in valid_tools:
+                    _LOGGER.warning("AI Controller: unknown tool '%s', skipping", tool)
+                    continue
+                validated_commands.append({
+                    "tool": tool,
+                    "params": cmd.get("params", {}),
+                })
+
+            if not validated_commands:
+                validated_commands = [{"tool": "no_action", "params": {"reason": "No valid commands"}}]
+
+            return {
+                "reasoning": parsed.get("reasoning", "No reasoning provided"),
+                "commands": validated_commands,
+                "next_check_minutes": min(max(int(parsed.get("next_check_minutes", 5)), 1), 30),
+            }
+
+        except (ValueError, KeyError, _json.JSONDecodeError) as err:
+            _LOGGER.warning("AI Controller: invalid JSON response: %s | raw: %s", err, raw_text[:200])
+            return dict(self._CONTROLLER_NO_ACTION, reasoning=f"Invalid JSON: {err}")
