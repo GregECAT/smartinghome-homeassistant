@@ -797,35 +797,21 @@ Respond ONLY with valid JSON.
   PV forecast tomorrow: {current_data.get('forecast_tomorrow', 0)} kWh
 
 ═══ KEY RULES ═══
-1. ARBITRAGE IS KING: Buy at off_peak (0.63), self-consume at afternoon_peak (1.50) = 0.87 PLN/kWh margin
-2. If approaching afternoon_peak AND SOC < 90% → force_charge NOW (even from grid at 0.63)
-3. During afternoon_peak → force_discharge to avoid importing at 1.50
-4. Pre-peak (13:00-15:59): charge battery + heat water (boiler) using cheap electricity
-5. Night (22:00-06:00): charge battery from grid if tomorrow's PV forecast < 5 kWh
-6. If PV surplus > 2000W and SOC > 80% → switch_on boiler to use free energy
-7. If RCE > 500 PLN/MWh and SOC > 30% → force_discharge (sell at high price)
-8. NEVER discharge below 10% SOC (safety layer handles this externally)
-9. CHECK DEVICE STATUS above — if charging is ALREADY active, use "no_action" instead of "force_charge"!
-10. If a switch is ALREADY ON, do NOT send switch_on again — use "no_action"!
+1. ARBITRAGE: off_peak(0.63)→afternoon_peak(1.50)=0.87 margin. Charge cheap, discharge expensive.
+2. If approaching afternoon_peak AND SOC < 90% → force_charge NOW
+3. During afternoon_peak → force_discharge (avoid import at 1.50)
+4. Night 22-06: charge battery from grid if tomorrow PV < 5 kWh
+5. PV surplus > 2kW + SOC > 80% → switch_on boiler
+6. CHECK DEVICE STATUS — if already active, use "no_action"!
 
-═══ RESPONSE FORMAT ═══
-CRITICAL: Respond with ONLY valid JSON. No markdown, no explanations, no text before/after JSON.
-Keep "reasoning" to MAX 2 sentences in Polish. Be extremely concise.
-PREFER using "action" (named action ID) over raw "tool" calls when possible.
+═══ RESPONSE FORMAT (MUST be COMPACT JSON, max 200 chars reasoning) ═══
+CRITICAL: ONLY valid JSON. No markdown. Keep reasoning to MAX 10 WORDS in Polish.
 {{
-  "reasoning": "Krótkie uzasadnienie decyzji (max 2 zdania)",
-  "commands": [
-    {{"action": "action_id_from_catalog"}},
-    {{"tool": "tool_name", "params": {{}}}}
-  ],
+  "reasoning": "Szczyt, rozładowuję",
+  "commands": [{{"action": "evening_peak"}}],
   "next_check_minutes": 5
 }}
-
-Commands can use EITHER:
-  - {{"action": "action_id"}} → triggers the named action with its predefined commands
-  - {{"tool": "tool_name", "params": {{}}}} → raw tool call (fallback)
-If no action needed, use: {{"tool": "no_action", "params": {{"reason": "..."}}}}
-Maximum 3 commands per response. Order by priority (most important first)."""
+Use "action" with catalog ID. Max 2 commands. If nothing needed: {{"tool":"no_action","params":{{"reason":"ok"}}}}"""
 
     return prompt
 
