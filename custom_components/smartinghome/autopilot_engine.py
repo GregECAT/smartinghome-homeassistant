@@ -651,7 +651,7 @@ Use tables for comparisons. Be concise but comprehensive. Focus on actionable in
 AI_CONTROLLER_TOOLS = {
     "force_charge": "Force battery charging from grid+PV (call when battery needs charging)",
     "force_discharge": "Force battery discharge (sell/self-consume, call when selling makes sense)",
-    "set_dod": "Set max depth of discharge (params: dod: int 0-100). Higher = more capacity available",
+    "set_dod": "Set max depth of discharge (params: dod: int 0-95). Higher = more capacity available. Max is 95.",
     "set_export_limit": "Set grid export limit in watts (params: limit: int). 0 = no export",
     "switch_on": "Turn on managed load (params: entity: 'boiler'|'ac'|'socket2')",
     "switch_off": "Turn off managed load (params: entity: 'boiler'|'ac'|'socket2')",

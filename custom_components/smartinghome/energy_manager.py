@@ -399,6 +399,8 @@ class EnergyManager:
 
     async def _set_dod(self, dod: int) -> None:
         """Set depth of discharge on grid."""
+        # Safety clamp: GoodWe entity max is 95%
+        dod = max(0, min(dod, DEFAULT_DOD_ON_GRID))
         await self.hass.services.async_call(
             "number",
             "set_value",

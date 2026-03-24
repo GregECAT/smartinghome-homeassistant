@@ -859,7 +859,7 @@ class StrategyController:
 
             elif tool == "set_dod":
                 dod = int(params.get("dod", 80))
-                dod = max(0, min(dod, 100))  # clamp
+                dod = max(0, min(dod, 95))  # clamp to GoodWe max (95%)
                 if not self._ai_dry_run:
                     await self._em._set_dod(dod)
                 msg = f"{prefix}: set_dod({dod}%) → głębokość rozładowania"
