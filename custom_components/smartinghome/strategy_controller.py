@@ -574,6 +574,43 @@ class StrategyController:
                     actions.append(msg)
                     self._log_decision("mp_night_arb", msg)
 
+        # Pre-afternoon-peak smart charging (W5+)
+        # If we're in off-peak (13:00-14:59) approaching afternoon peak (15:00),
+        # PV is weak and battery low → grid-charge at 0.63 PLN/kWh to:
+        # (a) avoid buying at 1.50 during peak
+        # (b) sell if RCE spikes in afternoon
+        # (c) self-consumption savings during 7h peak window
+        if (
+            hour in (13, 14)
+            and g13_zone == G13Zone.OFF_PEAK
+            and soc < 70
+            and pv < load * 0.8  # PV can't cover load → no natural charge
+        ):
+            remaining_forecast = _safe_float(
+                data.get("pv_forecast_remaining_today_total")
+            )
+            rce_next = _safe_float(data.get("sensor.rce_pse_cena_nastepnej_godziny"))
+            # Charge if: PV forecast too low to fill naturally,
+            # OR RCE is rising (arbitrage opportunity)
+            should_charge = (
+                remaining_forecast < 3.0  # Less than 3 kWh left today from PV
+                or rce_next > rce_mwh * 1.2  # RCE rising 20%+ → sell later
+                or soc < 40  # Critical SOC before 7h peak window
+            )
+            if should_charge:
+                if await self._throttled_action("mp_prepeak_fill"):
+                    await self._em.force_charge()
+                    self._charging_enabled = True
+                    margin = G13_PRICES[G13Zone.AFTERNOON_PEAK] - G13_PRICES[G13Zone.OFF_PEAK]
+                    msg = (
+                        f"💰 MP: Pre-peak fill → ładuj baterię z sieci po {G13_PRICES[G13Zone.OFF_PEAK]:.2f} PLN "
+                        f"przed szczytem popołudniowym (1.50 PLN). "
+                        f"SOC={soc:.0f}%, PV={pv:.0f}W, forecast remaining={remaining_forecast:.1f}kWh, "
+                        f"marża arbitrażu: {margin:.2f} PLN/kWh"
+                    )
+                    actions.append(msg)
+                    self._log_decision("mp_prepeak", msg)
+
         return actions
 
     async def _strategy_battery_protection(

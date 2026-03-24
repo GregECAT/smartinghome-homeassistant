@@ -583,6 +583,16 @@ Current zone: {current_zone.value} ({current_price:.2f} PLN/kWh)
 - IMPORTANT: At current RCE, selling to grid earns {rce_sell:.4f} PLN/kWh vs buying at {current_price:.2f} PLN/kWh
 - Arbitrage potential: Buy at 0.63, sell self-consumption at 1.50 = {1.50 - 0.63:.2f} PLN/kWh margin
 
+═══ RCE PRICE FORECAST (next hours) ═══
+- Next hour (+1h): {current_data.get('rce_next_hour', 'N/A')} PLN/MWh (sell: {current_data.get('rce_sell_next_hour', 'N/A')} PLN/kWh)
+- +2 hours: {current_data.get('rce_2h', 'N/A')} PLN/MWh (sell: {current_data.get('rce_sell_2h', 'N/A')} PLN/kWh)
+- +3 hours: {current_data.get('rce_3h', 'N/A')} PLN/MWh (sell: {current_data.get('rce_sell_3h', 'N/A')} PLN/kWh)
+- Today's RCE avg: {current_data.get('rce_avg_today', 'N/A')} PLN/kWh
+- Today's RCE min: {current_data.get('rce_min_today', 'N/A')} PLN/kWh
+- Today's RCE max: {current_data.get('rce_max_today', 'N/A')} PLN/kWh
+- RCE Trend: {current_data.get('rce_trend', 'N/A')}
+- CRITICAL: If RCE is rising and afternoon peak (15:00-22:00) is approaching, grid-charge battery NOW at off-peak (0.63) to sell at high RCE + avoid buying at peak (1.50)!
+
 ═══ WEATHER & FORECAST ═══
 Current conditions:
 - Weather: {current_data.get('weather_condition', 'N/A')}, {current_data.get('weather_temp', 'N/A')}°C
