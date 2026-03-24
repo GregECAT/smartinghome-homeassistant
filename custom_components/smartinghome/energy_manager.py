@@ -101,18 +101,19 @@ class EnergyManager:
 
     async def force_charge(self) -> None:
         """Force battery charging — enables grid→battery charging."""
-        _LOGGER.info("Forcing battery charge (work_mode=Backup)")
+        _LOGGER.info("Forcing battery charge (work_mode=eco_charge)")
         await self._enable_charging()
-        # CRITICAL: Set work mode to Backup to enable grid→battery charging
-        # In General mode, inverter won't charge from grid (only PV→battery)
-        await self._set_work_mode("Backup")
+        # CRITICAL: Set work mode to eco_charge to enable grid→battery charging
+        # In general mode, inverter won't charge from grid (only PV→battery)
+        # eco_charge is confirmed working from user's night arbitrage automation
+        await self._set_work_mode("eco_charge")
         self._current_mode = HEMSMode.CHARGE
 
     async def force_discharge(self) -> None:
-        """Force battery discharge (block charging, restore General mode)."""
-        _LOGGER.info("Forcing battery discharge (work_mode=General)")
+        """Force battery discharge (block charging, restore general mode)."""
+        _LOGGER.info("Forcing battery discharge (work_mode=general)")
         await self._block_charging()
-        await self._set_work_mode("General")
+        await self._set_work_mode("general")
         self._current_mode = HEMSMode.SELL
 
     async def set_export_limit(self, limit: int) -> None:
