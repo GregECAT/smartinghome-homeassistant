@@ -18,7 +18,7 @@ from homeassistant.const import (
     UnitOfPower,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -378,7 +378,7 @@ class SmartingHomeSensorMapSensor(SensorEntity):
     """
 
     _attr_has_entity_name = True
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:map-legend"
 
     def __init__(self, entry: ConfigEntry) -> None:
