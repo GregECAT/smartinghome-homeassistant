@@ -181,6 +181,13 @@ class SmartingHomePanel extends HTMLElement {
             this._renderAILogs();
           }, "smartinghome_ai_cron_update");
         }
+        // Subscribe to live action state updates from backend
+        if (this._hass && !this._actionStateSub) {
+          this._actionStateSub = this._hass.connection.subscribeEvents((ev) => {
+            this._actionStates = ev.data || {};
+            this._updateActionBadgesFromState();
+          }, "smartinghome_action_states");
+        }
         // Re-apply PV labels and all data after settings loaded
         if (this._hass) this._updateAll();
         this._renderWeatherForecast();
@@ -7732,7 +7739,9 @@ class SmartingHomePanel extends HTMLElement {
 
   _renderActionCard(action, presetActions, catColor) {
     const isActive = action.always || presetActions.has(action.id);
-    const isLive = this._activeActions && this._activeActions.has(action.id);
+    // Use backend state (from _evaluate_actions) as primary source
+    const backendStatus = this._actionStates && this._actionStates[action.id];
+    const isLive = backendStatus === 'active' || (this._activeActions && this._activeActions.has(action.id));
     
     let statusLabel, statusBg, statusBorder, statusTextColor;
     if (isLive) {
@@ -7784,6 +7793,39 @@ class SmartingHomePanel extends HTMLElement {
     const visible = body.style.display !== 'none';
     body.style.display = visible ? 'none' : 'flex';
     if (arrow) arrow.textContent = visible ? '▶' : '▼';
+  }
+
+  _updateActionBadgesFromState() {
+    // Update badges in-place without full re-render
+    if (!this._actionStates) return;
+    for (const [actionId, status] of Object.entries(this._actionStates)) {
+      const card = this.shadowRoot.getElementById(`ap-action-${actionId}`);
+      if (!card) continue;
+      const badge = card.querySelector('[data-status-badge]');
+      if (!badge) continue;
+
+      if (status === 'active') {
+        badge.textContent = 'AKTYWNE';
+        badge.style.background = 'rgba(46,204,113,0.2)';
+        badge.style.borderColor = 'rgba(46,204,113,0.5)';
+        badge.style.color = '#2ecc71';
+        card.style.borderLeftColor = '#2ecc71';
+        card.style.background = 'rgba(46,204,113,0.06)';
+        card.style.opacity = '1';
+      } else if (status === 'waiting') {
+        badge.textContent = 'CZEKA';
+        badge.style.background = 'rgba(46,204,113,0.15)';
+        badge.style.borderColor = 'rgba(46,204,113,0.4)';
+        badge.style.color = '#2ecc71';
+        card.style.opacity = '1';
+      } else if (status === 'idle') {
+        badge.textContent = 'IDLE';
+        badge.style.background = 'rgba(71,85,105,0.2)';
+        badge.style.borderColor = 'rgba(71,85,105,0.3)';
+        badge.style.color = '#64748b';
+        card.style.opacity = '0.55';
+      }
+    }
   }
 
   async _triggerAction(actionId) {
