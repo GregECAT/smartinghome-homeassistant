@@ -41,6 +41,8 @@ from .const import (
     PV_SURPLUS_MIN_SOC_TIER2,
     PV_SURPLUS_MIN_SOC_TIER3,
     SOC_EMERGENCY,
+    SOC_CHECK_11_THRESHOLD,
+    SOC_CHECK_12_THRESHOLD,
     NIGHT_ARBITRAGE_MIN_FORECAST,
     DEFAULT_BATTERY_CAPACITY,
     SENSOR_GRID_VOLTAGE_L1,
@@ -373,8 +375,14 @@ class StrategyController:
             }
         return grouped
 
-    async def trigger_action(self, action_id: str) -> dict[str, Any]:
-        """Manually trigger a specific action (button press from UI).
+    async def trigger_action(
+        self, action_id: str, source: str = "manual",
+    ) -> dict[str, Any]:
+        """Trigger a specific action.
+
+        Args:
+            action_id: The action to trigger.
+            source: "manual" (UI click), "ai" (AI controller), "auto" (condition engine).
 
         Returns dict with result status and messages.
         """
@@ -382,10 +390,17 @@ class StrategyController:
         if not action:
             return {"success": False, "error": f"Unknown action: {action_id}"}
 
-        _LOGGER.info("Manual trigger: %s (%s)", action.name, action_id)
+        source_labels = {
+            "manual": "▶️ Ręczne wyzwolenie",
+            "ai": "🧠 AI wyzwolenie",
+            "auto": "⚙️ Auto wyzwolenie",
+        }
+        label = source_labels.get(source, f"🔧 {source}")
+
+        _LOGGER.info("%s trigger: %s (%s)", source, action.name, action_id)
         self._log_decision(
-            f"manual_trigger_{action_id}",
-            f"▶️ Ręczne wyzwolenie: {action.icon} {action.name}",
+            f"{source}_trigger_{action_id}",
+            f"{label}: {action.icon} {action.name}",
         )
 
         results = []
@@ -403,7 +418,7 @@ class StrategyController:
         import time
         action.last_triggered = time.time()
 
-        return {"success": True, "action": action_id, "results": results}
+        return {"success": True, "action": action_id, "results": results, "status": "ok"}
 
     async def _execute_command(self, tool: str, params: dict) -> str:
         """Execute a single command from an action's command list."""
@@ -617,6 +632,16 @@ class StrategyController:
         if self._ai_cached_commands and strategy == AutopilotStrategy.AI_FULL_AUTONOMY:
             ai_reasoning = self._ai_cached_commands.get("reasoning", "")
 
+        # ═══════════════════════════════════════════════════════
+        # EVALUATE ACTION CONDITIONS — update live statuses
+        # ═══════════════════════════════════════════════════════
+        self._evaluate_actions(
+            soc=soc, pv=pv, load=load, surplus=surplus,
+            g13_zone=g13_zone, g13_price=g13_price, rce_mwh=rce_mwh,
+            hour=hour, v_l1=v_l1,
+            forecast_tomorrow=forecast_tomorrow,
+        )
+
         return {
             "enabled": True,
             "strategy": strategy.value,
@@ -631,7 +656,157 @@ class StrategyController:
             "rce_price_mwh": rce_mwh,
             "ai_reasoning": ai_reasoning,
             "timestamp": now.strftime("%H:%M:%S"),
+            "action_states": self._get_action_states_for_ai(),
         }
+
+    # ------------------------------------------------------------------
+    #  Action Condition Evaluation Engine
+    # ------------------------------------------------------------------
+
+    def _evaluate_actions(
+        self,
+        soc: float, pv: float, load: float, surplus: float,
+        g13_zone: G13Zone, g13_price: float, rce_mwh: float,
+        hour: int, v_l1: float,
+        forecast_tomorrow: float = 0.0,
+    ) -> None:
+        """Evaluate conditions for all active actions and update statuses.
+
+        Called every tick. Sets action.status to:
+        - ACTIVE: conditions met right now
+        - WAITING: action enabled but conditions not met
+        - IDLE: action not in current preset
+        - DISABLED: manually disabled by user
+        """
+        import time as _time
+        from datetime import datetime
+
+        weekday = datetime.now().weekday()
+        is_weekend = weekday >= 5
+
+        # Condition map: action_id → bool (True = conditions met)
+        conditions: dict[str, bool] = {
+            # W0: Safety
+            "grid_import_guard": (
+                g13_zone != G13Zone.OFF_PEAK
+                and rce_mwh > 100
+            ),
+            "pv_surplus_charge": (
+                surplus > 300  # export > 300W
+                and g13_zone != G13Zone.OFF_PEAK
+            ),
+
+            # W1: G13 Schedule
+            "sell_07": (
+                g13_zone == G13Zone.MORNING_PEAK
+                and soc > 20
+                and not is_weekend
+            ),
+            "charge_13": (
+                g13_zone == G13Zone.OFF_PEAK
+                and 13 <= hour < 16
+                and soc < 90
+                and not is_weekend
+            ),
+            "evening_peak": (
+                g13_zone == G13Zone.AFTERNOON_PEAK
+                and soc > 15
+            ),
+            "weekend": is_weekend,
+
+            # W2: RCE Dynamic
+            "night_arbitrage": (
+                22 <= hour or hour < 7
+                and soc < 50
+                and forecast_tomorrow < NIGHT_ARBITRAGE_MIN_FORECAST
+            ),
+            "cheapest_window": False,  # Requires binary sensor, evaluated externally
+            "most_expensive_window": False,  # Requires binary sensor
+            "low_price_charge": (
+                rce_mwh < RCE_PRICE_THRESHOLDS["cheap"]
+                and soc < 85
+            ),
+            "high_price_sell": (
+                rce_mwh > RCE_PRICE_THRESHOLDS["expensive"]
+                and soc > 20
+            ),
+            "rce_peak_g13": (
+                rce_mwh > RCE_PRICE_THRESHOLDS.get("very_expensive", 500)
+                and g13_zone == G13Zone.AFTERNOON_PEAK
+                and soc > 20
+            ),
+            "negative_price": rce_mwh < 0,
+
+            # W3: SOC Safety
+            "soc_check_11": (hour == 11 and soc < SOC_CHECK_11_THRESHOLD),
+            "soc_check_12": (hour == 12 and soc < SOC_CHECK_12_THRESHOLD),
+            "smart_soc_protection": (soc < 20),
+            "soc_emergency": (soc < SOC_EMERGENCY),
+
+            # W4: Voltage
+            "voltage_boiler": (v_l1 > VOLTAGE_THRESHOLD_WARNING),
+            "voltage_klima": (v_l1 > VOLTAGE_THRESHOLD_HIGH),
+            "voltage_critical": (v_l1 > VOLTAGE_THRESHOLD_CRITICAL),
+
+            # W4: PV Surplus
+            "surplus_boiler": (surplus > PV_SURPLUS_TIER1 and soc > PV_SURPLUS_MIN_SOC_TIER1),
+            "surplus_klima": (surplus > PV_SURPLUS_TIER2 and soc > PV_SURPLUS_MIN_SOC_TIER2),
+            "surplus_gniazdko": (surplus > PV_SURPLUS_TIER3 and soc > PV_SURPLUS_MIN_SOC_TIER3),
+            "surplus_emergency_off": (soc < 50),
+
+            # W5: Weather
+            "morning_check_0530": (5 <= hour < 7 and soc < 80),
+            "ecowitt_check_1000": (hour == 10 and soc < 60),
+            "last_chance_1330": (hour == 13 and soc < 80),
+            "prepeak_summer_1800": (hour == 18 and soc < 70),
+            "sudden_clouds": (pv < 200 and soc < 70 and 8 <= hour <= 17),
+            "rain_priority": False,  # Requires rain sensor
+            "weak_forecast_dod": (forecast_tomorrow < 5.0),
+            "restore_dod": (pv > 500),
+        }
+
+        now_ts = _time.time()
+        changed = False
+
+        for action in self._all_actions:
+            if action.status == ActionStatus.DISABLED:
+                continue
+
+            is_in_preset = action.id in self._active_action_ids or action.always_active
+
+            if not is_in_preset:
+                if action.status != ActionStatus.IDLE:
+                    action.status = ActionStatus.IDLE
+                    changed = True
+                continue
+
+            # Check condition
+            cond_met = conditions.get(action.id, False)
+
+            # Recently triggered? Keep ACTIVE for 4 minutes
+            recently_triggered = (
+                action.last_triggered > 0
+                and (now_ts - action.last_triggered) < 240
+            )
+
+            if cond_met or recently_triggered:
+                if action.status != ActionStatus.ACTIVE:
+                    action.status = ActionStatus.ACTIVE
+                    changed = True
+            else:
+                if action.status != ActionStatus.WAITING:
+                    action.status = ActionStatus.WAITING
+                    changed = True
+
+        # Fire event for frontend (only when something changed)
+        if changed:
+            self.hass.bus.async_fire(
+                f"{DOMAIN}_action_states",
+                {
+                    a.id: a.status.value
+                    for a in self._all_actions
+                },
+            )
 
     # ------------------------------------------------------------------
     #  W0 — Grid Import Guard
@@ -1325,7 +1500,7 @@ class StrategyController:
                     return None
 
             try:
-                result = await self.trigger_action(action)
+                result = await self.trigger_action(action, source="ai")
                 msg = f"{prefix}: action({action}) → {result.get('status', 'ok')}"
                 self._log_decision("ai_action", msg)
                 return msg
