@@ -562,6 +562,8 @@ AUTOPILOT_STRATEGY_DESCRIPTIONS: Final = {
 AUTOPILOT_DEFAULT_INTERVAL: Final = 60
 AUTOPILOT_SETTINGS_KEY: Final = "autopilot_active_strategy"
 AUTOPILOT_PLAN_KEY: Final = "ai_autopilot_plan"
+AUTOPILOT_ACTIONS_STATE_KEY: Final = "autopilot_actions_state"
+AUTOPILOT_ACTIONS_OVERRIDES_KEY: Final = "autopilot_action_sensor_overrides"
 
 
 class EMSMode(StrEnum):

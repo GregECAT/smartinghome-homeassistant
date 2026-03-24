@@ -7071,11 +7071,17 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
-          <!-- ═══ STRATEGY SELECTOR ═══ -->
+          <!-- ═══ STRATEGY PRESET SELECTOR (compact) ═══ -->
           <div class="card" style="margin-bottom:14px">
-            <div class="card-title">📋 Wybierz strategię sterowania</div>
-            <div class="ap-strategies" id="ap-strategy-cards"></div>
+            <div class="card-title" style="display:flex; justify-content:space-between; align-items:center">
+              <span>📋 Preset strategii</span>
+              <span style="font-size:9px; color:#64748b">Wybierz preset → aktywuje zestaw akcji</span>
+            </div>
+            <div style="display:flex; flex-wrap:wrap; gap:6px" id="ap-strategy-presets"></div>
           </div>
+
+          <!-- ═══ ACTION SECTIONS (W0-W5) — rendered dynamically ═══ -->
+          <div id="ap-action-sections"></div>
 
           <!-- ═══ LIVE STRATEGY DASHBOARD ═══ -->
           <div class="card" style="margin-bottom:14px">
@@ -7534,7 +7540,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.21.8</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.22.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -7578,42 +7584,207 @@ class SmartingHomePanel extends HTMLElement {
 
   _updateAutopilot() {
     this._updateAutopilotVisibility();
-    this._renderStrategyCards();
+    this._renderStrategyPresets();
+    this._renderActionSections();
     this._updateAutopilotContext();
     this._loadAutopilotPlan();
     this._updateAutopilotProviderUI();
     this._updateLiveDecisionLog();
   }
 
-  _renderStrategyCards() {
-    const container = this.shadowRoot.getElementById('ap-strategy-cards');
+  /* ── Action definitions (mirrors backend autopilot_actions.py) ── */
+  _getActionDefs() {
+    if (this._actionDefsCache) return this._actionDefsCache;
+
+    const defs = {
+      categories: [
+        { id: 'w0_safety', label: '🛡️ W0: Safety Guard', color: '#e74c3c' },
+        { id: 'w1_g13', label: '⚡ W1: Harmonogram taryfowy', color: '#f7b731' },
+        { id: 'w2_rce', label: '💰 W2: RCE Dynamic Pricing', color: '#2ecc71' },
+        { id: 'w3_soc', label: '🔋 W3: SOC Safety', color: '#00d4ff' },
+        { id: 'w4_voltage', label: '⚡ W4: Napięcie', color: '#e74c3c' },
+        { id: 'w4_surplus', label: '☀️ W4: Nadwyżka PV', color: '#f7b731' },
+        { id: 'w5_weather', label: '🌧️ W5: Pogoda + Pre-peak', color: '#9b59b6' },
+      ],
+      actions: [
+        // W0
+        { id: 'grid_import_guard', cat: 'w0_safety', icon: '🛡️', name: 'Grid Import Guard', desc: 'STOP ładowania baterii z sieci w drogich godzinach. Wyjątek: RCE < 100 PLN/MWh.', always: true, slots: ['grid_power', 'battery_power'] },
+        { id: 'pv_surplus_charge', cat: 'w0_safety', icon: '☀️🔋', name: 'PV Surplus → ładuj baterię', desc: 'Nadwyżka PV (export >300W) w drogich godz. → ładuj baterię.', always: true, slots: ['grid_power', 'battery_soc'] },
+        // W1
+        { id: 'sell_07', cat: 'w1_g13', icon: '☀️', name: 'Sprzedaż (07:00)', desc: 'G13 szczyt poranny (0.91 zł). Sprzedawaj 7-13 Pn-Pt.', slots: ['rce_price', 'battery_soc'] },
+        { id: 'charge_13', cat: 'w1_g13', icon: '🔋', name: 'Ładowanie (13:00)', desc: 'Off-peak (0.63 zł). Ładuj baterię 13:00-szczyt Pn-Pt.', slots: ['rce_price', 'battery_soc'] },
+        { id: 'evening_peak', cat: 'w1_g13', icon: '💰', name: 'Szczyt wieczorny', desc: 'G13 szczyt (1.50 zł). Bateria zasila dom.', slots: ['g13_zone', 'battery_soc'] },
+        { id: 'weekend', cat: 'w1_g13', icon: '🏖️', name: 'Weekend', desc: 'Off-peak cały dzień → autokonsumpcja.', slots: ['rce_price'] },
+        // W2
+        { id: 'night_arbitrage', cat: 'w2_rce', icon: '🌙', name: 'Arbitraż nocny', desc: 'Nocne ładowanie z sieci (0.63 → 1.50 zł) gdy słaba prognoza PV.', slots: ['forecast_tomorrow', 'battery_soc'] },
+        { id: 'cheapest_window', cat: 'w2_rce', icon: '🟢', name: 'Najtańsze okno → ładuj', desc: 'Najtańsze okno PSE aktywne → ładuj baterię.', slots: ['rce_cheapest', 'battery_soc'] },
+        { id: 'most_expensive_window', cat: 'w2_rce', icon: '🔴', name: 'Najdroższe okno → alert', desc: 'Najdroższe okno aktywne → bateria zasila dom.', slots: ['rce_price', 'g13_zone'] },
+        { id: 'low_price_charge', cat: 'w2_rce', icon: '📉', name: 'Niska cena → ładuj', desc: 'RCE < 150 PLN/MWh → nie opłaca się sprzedawać.', slots: ['rce_price', 'rce_trend'] },
+        { id: 'high_price_sell', cat: 'w2_rce', icon: '📈', name: 'Cena wzrosła → sprzedaj', desc: 'RCE > 300 PLN/MWh → opłaca się sprzedawać.', slots: ['rce_price', 'rce_trend'] },
+        { id: 'rce_peak_g13', cat: 'w2_rce', icon: '💰💰', name: 'RCE Peak + G13 Szczyt', desc: 'RCE > 500 + G13 szczyt → max zysk!', slots: ['rce_price', 'battery_soc'] },
+        { id: 'negative_price', cat: 'w2_rce', icon: '🤑', name: 'Ujemna cena → DARMOWA!', desc: 'RCE ujemna → darmowa energia! Ładuj + bojler ON.', slots: ['rce_price', 'boiler'] },
+        // W3
+        { id: 'soc_check_11', cat: 'w3_soc', icon: '⚠️', name: 'SOC check 11:00', desc: 'SOC < 50% o 11:00 → ładuj PV. NIE z sieci w szczycie!', always: true, slots: ['battery_soc'] },
+        { id: 'soc_check_12', cat: 'w3_soc', icon: '⚠️', name: 'SOC check 12:00', desc: 'SOC < 70% o 12:00. PV → bateria. Brak → 13:00 off-peak.', always: true, slots: ['battery_soc'] },
+        { id: 'smart_soc_protection', cat: 'w3_soc', icon: '🔋', name: 'Smart SOC Protection', desc: 'SOC < 20%: drogie=PV-only, tanie=ładuj normalnie.', always: true, slots: ['battery_soc'] },
+        { id: 'soc_emergency', cat: 'w3_soc', icon: '🚨', name: 'EMERGENCY SOC < 5%', desc: 'Ładuj awaryjnie NIEZALEŻNIE od taryfy do 15%!', always: true, slots: ['battery_soc'] },
+        // W4 Voltage
+        { id: 'voltage_boiler', cat: 'w4_voltage', icon: '⚡', name: 'Napięcie → Bojler', desc: '>252V → Bojler ON.', always: true, slots: ['voltage_l1', 'boiler'] },
+        { id: 'voltage_klima', cat: 'w4_voltage', icon: '⚡⚡', name: 'Napięcie → Klima', desc: '>253V → Klima ON (bojler już działa).', always: true, slots: ['voltage_l1', 'ac'] },
+        { id: 'voltage_critical', cat: 'w4_voltage', icon: '🔴', name: 'Krytyczne napięcie', desc: '>254V → Ładuj baterię natychmiast!', always: true, slots: ['voltage_l1', 'battery_soc'] },
+        // W4 Surplus
+        { id: 'surplus_boiler', cat: 'w4_surplus', icon: '☀️', name: 'Nadwyżka → Bojler', desc: '>2kW nadwyżki + SOC >80% → Bojler ON.', always: true, slots: ['pv_surplus', 'battery_soc'] },
+        { id: 'surplus_klima', cat: 'w4_surplus', icon: '❄️', name: 'Nadwyżka → Klima', desc: '>3kW nadwyżki + SOC >85% → Klima ON.', always: true, slots: ['pv_surplus', 'battery_soc'] },
+        { id: 'surplus_gniazdko', cat: 'w4_surplus', icon: '🔌', name: 'Nadwyżka → Gniazdko 2', desc: '>4kW nadwyżki + SOC >90% → Gniazdko ON.', always: true, slots: ['pv_surplus', 'battery_soc'] },
+        { id: 'surplus_emergency_off', cat: 'w4_surplus', icon: '🚨', name: 'Awaryjne OFF', desc: 'SOC < 50% → wyłącz obciążenia.', always: true, slots: ['battery_soc'] },
+        // W5
+        { id: 'morning_check_0530', cat: 'w5_weather', icon: '🌧️⚡', name: '05:30 poranny check', desc: 'SOC <80% + PV <10kWh → ładuj z sieci do 07:00.', slots: ['forecast_today', 'battery_soc'] },
+        { id: 'ecowitt_check_1000', cat: 'w5_weather', icon: '🌥️', name: '10:00 weryfikacja Ecowitt', desc: 'SOC <60% + niska radiacja → priorytet PV→bateria.', slots: ['solar_radiation'] },
+        { id: 'last_chance_1330', cat: 'w5_weather', icon: '⚠️🔋', name: '13:30 ostatnia szansa', desc: 'SOC <80% + PV rem <5kWh → ładuj! Szczyt za 2.5h.', slots: ['forecast_remaining', 'battery_soc'] },
+        { id: 'prepeak_summer_1800', cat: 'w5_weather', icon: '☀️⚠️', name: '18:00 pre-peak lato', desc: 'SOC <70% + słaba radiacja → ładuj! Szczyt o 19:00.', slots: ['solar_radiation', 'battery_soc'] },
+        { id: 'sudden_clouds', cat: 'w5_weather', icon: '☁️', name: 'Nagłe zachmurzenie', desc: 'Radiacja <50 W/m² + SOC <70% → priorytet bateria.', slots: ['solar_radiation', 'pv_power'] },
+        { id: 'rain_priority', cat: 'w5_weather', icon: '🌧️', name: 'Deszcz → priorytet', desc: 'Opady >0.5mm/h + SOC <70% → PV → bateria.', slots: ['rain_rate', 'pv_power'] },
+        { id: 'weak_forecast_dod', cat: 'w5_weather', icon: '🌧️', name: 'Słaba prognoza → DOD', desc: 'Jutro < 5 kWh → zachowaj baterię (DOD → 70%).', slots: ['forecast_tomorrow', 'dod'] },
+        { id: 'restore_dod', cat: 'w5_weather', icon: '☀️', name: 'Przywróć DOD', desc: 'PV > 500W przez 10 min → DOD z powrotem na 95%.', always: true, slots: ['pv_power'] },
+      ],
+      // Strategy → action IDs mapping
+      presets: {
+        max_self_consumption: ['weekend'],
+        max_profit: ['sell_07', 'charge_13', 'evening_peak', 'weekend', 'night_arbitrage', 'cheapest_window', 'most_expensive_window', 'low_price_charge', 'high_price_sell', 'rce_peak_g13', 'negative_price', 'morning_check_0530', 'ecowitt_check_1000', 'last_chance_1330', 'prepeak_summer_1800', 'sudden_clouds', 'rain_priority', 'weak_forecast_dod'],
+        battery_protection: ['weekend', 'weak_forecast_dod'],
+        zero_export: ['weekend'],
+        weather_adaptive: ['sell_07', 'charge_13', 'evening_peak', 'weekend', 'night_arbitrage', 'low_price_charge', 'high_price_sell', 'morning_check_0530', 'ecowitt_check_1000', 'last_chance_1330', 'prepeak_summer_1800', 'sudden_clouds', 'rain_priority', 'weak_forecast_dod'],
+        ai_full_autonomy: ['sell_07', 'charge_13', 'evening_peak', 'weekend', 'night_arbitrage', 'cheapest_window', 'most_expensive_window', 'low_price_charge', 'high_price_sell', 'rce_peak_g13', 'negative_price', 'morning_check_0530', 'ecowitt_check_1000', 'last_chance_1330', 'prepeak_summer_1800', 'sudden_clouds', 'rain_priority', 'weak_forecast_dod'],
+      },
+    };
+    this._actionDefsCache = defs;
+    return defs;
+  }
+
+  /* ── Render compact strategy preset buttons ── */
+  _renderStrategyPresets() {
+    const container = this.shadowRoot.getElementById('ap-strategy-presets');
     if (!container) return;
 
     const strategies = [
-      { id: 'max_self_consumption', icon: '🟢', name: 'Max Autokonsumpcja', desc: 'Priorytet: zużycie własne PV, minimalne import/export. Bateria buforuje nadwyżki.' },
-      { id: 'max_profit', icon: '💰', name: 'Max Zysk (Arbitraż)', desc: 'Kupuj tanio (off-peak/RCE niskie), sprzedawaj drogo (peak/RCE wysokie). Max arbitraż.' },
-      { id: 'battery_protection', icon: '🔋', name: 'Ochrona Baterii', desc: 'Zachowawcze DOD, pełna bateria przed szczytem, ochrona żywotności.' },
-      { id: 'zero_export', icon: '⚡', name: 'Zero Export', desc: 'Zerowy eksport do sieci. Cała energia w domu + bateria.' },
-      { id: 'weather_adaptive', icon: '🌧️', name: 'Pogodowy Adaptacyjny', desc: 'AI analizuje prognozę pogody i dynamicznie zmienia strategię godzina po godzinie.' },
-      { id: 'ai_full_autonomy', icon: '🧠', name: 'AI Pełna Autonomia', desc: 'AI sam decyduje o strategii na każdą godzinę dnia. Pełna autonomia.' },
+      { id: 'max_self_consumption', icon: '🟢', name: 'Max Autokonsumpcja' },
+      { id: 'max_profit', icon: '💰', name: 'Max Zysk' },
+      { id: 'battery_protection', icon: '🔋', name: 'Ochrona Bat.' },
+      { id: 'zero_export', icon: '⚡', name: 'Zero Export' },
+      { id: 'weather_adaptive', icon: '🌧️', name: 'Pogodowy' },
+      { id: 'ai_full_autonomy', icon: '🧠', name: 'AI Pełna' },
     ];
 
     const active = this._autopilotActiveStrategy || null;
 
-    container.innerHTML = strategies.map(s => `
-      <div class="ap-strategy-card ${s.id === active ? 'ap-active' : ''}"
-           onclick="this.getRootNode().host._switchAutopilotStrategy('${s.id}')">
-        <div class="ap-sc-icon">${s.icon}</div>
-        <div class="ap-sc-name">${s.name}${s.id === active ? ' <span style="font-size:8px; background:#2ecc71; color:#0a1628; padding:1px 6px; border-radius:10px; animation:pulse 2s infinite; font-weight:800">ACTIVE</span>' : ''}</div>
-        <div class="ap-sc-desc">${s.desc}</div>
-        <div class="ap-sc-savings" id="ap-savings-${s.id}">—</div>
-      </div>
-    `).join('');
+    container.innerHTML = strategies.map(s => {
+      const isActive = s.id === active;
+      const bg = isActive ? 'rgba(46,204,113,0.15)' : 'rgba(255,255,255,0.04)';
+      const border = isActive ? '1px solid rgba(46,204,113,0.4)' : '1px solid rgba(255,255,255,0.08)';
+      const badge = isActive ? '<span style="font-size:7px; background:#2ecc71; color:#0a1628; padding:1px 5px; border-radius:8px; font-weight:800; margin-left:4px; animation:pulse 2s infinite">ACTIVE</span>' : '';
+      return `<button style="padding:6px 12px; border-radius:8px; background:${bg}; border:${border}; color:#f8fafc; font-size:11px; font-weight:600; cursor:pointer; transition:all 0.2s; display:flex; align-items:center; gap:4px; white-space:nowrap"
+        onclick="this.getRootNode().host._switchAutopilotStrategy('${s.id}')"
+        title="${s.name}">${s.icon} ${s.name}${badge}</button>`;
+    }).join('');
+  }
+
+  /* ── Render action sections (W0-W5) ── */
+  _renderActionSections() {
+    const container = this.shadowRoot.getElementById('ap-action-sections');
+    if (!container) return;
+
+    // Avoid re-rendering if already populated (except first time or strategy change)
+    const newKey = this._autopilotActiveStrategy || 'none';
+    if (this._lastRenderedActionsKey === newKey && container.children.length > 0) return;
+    this._lastRenderedActionsKey = newKey;
+
+    const defs = this._getActionDefs();
+    const active = this._autopilotActiveStrategy || null;
+    const presetActions = active ? new Set(defs.presets[active] || []) : new Set();
+
+    // Build HTML for each category
+    let html = '';
+    for (const cat of defs.categories) {
+      const catActions = defs.actions.filter(a => a.cat === cat.id);
+      if (catActions.length === 0) continue;
+
+      const activeInCat = catActions.filter(a => a.always || presetActions.has(a.id));
+      const countLabel = `${activeInCat.length}/${catActions.length} aktywnych`;
+
+      html += `
+        <div class="card" style="margin-bottom:10px">
+          <div style="display:flex; justify-content:space-between; align-items:center; cursor:pointer; padding-bottom:8px"
+               onclick="this.getRootNode().host._toggleApSection('${cat.id}')">
+            <div class="card-title" style="margin:0; padding:0">${cat.label}</div>
+            <div style="display:flex; align-items:center; gap:8px">
+              <span style="font-size:10px; color:#64748b">${countLabel}</span>
+              <span id="ap-cat-arrow-${cat.id}" style="font-size:10px; color:#64748b; transition:transform 0.2s">▼</span>
+            </div>
+          </div>
+          <div id="ap-cat-body-${cat.id}" style="display:flex; flex-direction:column; gap:6px">
+            ${catActions.map(a => this._renderActionCard(a, presetActions, cat.color)).join('')}
+          </div>
+        </div>`;
+    }
+
+    container.innerHTML = html;
+  }
+
+  _renderActionCard(action, presetActions, catColor) {
+    const isActive = action.always || presetActions.has(action.id);
+    const statusIcon = isActive ? '◐' : '○';
+    const statusLabel = isActive ? 'CZEKA' : 'IDLE';
+    const statusColor = isActive ? '#f7b731' : '#475569';
+    const opacity = isActive ? '1' : '0.5';
+    const borderColor = isActive ? catColor : 'rgba(255,255,255,0.06)';
+    const alwaysBadge = action.always ? '<span style="font-size:7px; background:rgba(231,76,60,0.2); color:#e74c3c; padding:1px 5px; border-radius:6px; font-weight:700; margin-left:4px">ALWAYS</span>' : '';
+
+    return `
+      <div class="hems-auto-card" id="ap-action-${action.id}" style="opacity:${opacity}; border-left:3px solid ${borderColor}; padding:8px 12px; border-radius:8px; background:rgba(255,255,255,0.02); display:flex; align-items:center; gap:10px; transition:all 0.3s">
+        <div style="font-size:20px; min-width:28px; text-align:center">${action.icon}</div>
+        <div style="flex:1; min-width:0">
+          <div style="display:flex; align-items:center; gap:6px; margin-bottom:2px">
+            <span style="font-size:12px; font-weight:700; color:#f8fafc">${action.name}</span>
+            ${alwaysBadge}
+            <span style="font-size:8px; color:${statusColor}; font-weight:700">${statusIcon} ${statusLabel}</span>
+          </div>
+          <div style="font-size:10px; color:#94a3b8; line-height:1.3">${action.desc}</div>
+        </div>
+        <button style="padding:4px 8px; border-radius:6px; background:rgba(46,204,113,0.1); border:1px solid rgba(46,204,113,0.2); color:#2ecc71; font-size:10px; font-weight:700; cursor:pointer; white-space:nowrap; transition:all 0.2s"
+          onclick="this.getRootNode().host._triggerAction('${action.id}')"
+          title="Ręczne wyzwolenie">▶️</button>
+      </div>`;
+  }
+
+  _toggleApSection(catId) {
+    const body = this.shadowRoot.getElementById(`ap-cat-body-${catId}`);
+    const arrow = this.shadowRoot.getElementById(`ap-cat-arrow-${catId}`);
+    if (!body) return;
+    const visible = body.style.display !== 'none';
+    body.style.display = visible ? 'none' : 'flex';
+    if (arrow) arrow.textContent = visible ? '▶' : '▼';
+  }
+
+  async _triggerAction(actionId) {
+    const btn = this.shadowRoot.querySelector(`#ap-action-${actionId} button`);
+    if (btn) { btn.innerHTML = '⏳'; btn.disabled = true; }
+
+    try {
+      await this._hass.callService('smartinghome', 'trigger_autopilot_action', {
+        action_id: actionId,
+      });
+      if (btn) { btn.innerHTML = '✅'; setTimeout(() => { btn.innerHTML = '▶️'; btn.disabled = false; }, 2000); }
+    } catch (err) {
+      console.error('[SH] Trigger action failed:', err);
+      if (btn) { btn.innerHTML = '❌'; setTimeout(() => { btn.innerHTML = '▶️'; btn.disabled = false; }, 2000); }
+    }
   }
 
   async _switchAutopilotStrategy(strategyId) {
     this._autopilotActiveStrategy = strategyId;
-    this._renderStrategyCards();
+    this._lastRenderedActionsKey = null;  // force re-render
+    this._renderStrategyPresets();
+    this._renderActionSections();
 
     // Update status badge
     const statusEl = this.shadowRoot.getElementById('ap-status');
@@ -7649,7 +7820,7 @@ class SmartingHomePanel extends HTMLElement {
       console.log('[SH] Autopilot deactivated');
 
       this._autopilotActiveStrategy = null;
-      this._renderStrategyCards();
+      this._lastRenderedActionsKey = null; this._renderStrategyPresets(); this._renderActionSections();
 
       if (statusEl) { statusEl.textContent = '● GOTOWY'; statusEl.style.color = '#64748b'; }
 
@@ -7925,7 +8096,7 @@ class SmartingHomePanel extends HTMLElement {
           const saved = s.autopilot_active_strategy;
           if (saved && saved !== this._autopilotActiveStrategy) {
             this._autopilotActiveStrategy = saved;
-            this._renderStrategyCards();
+            this._lastRenderedActionsKey = null; this._renderStrategyPresets(); this._renderActionSections();
           }
           const statusEl = this.shadowRoot.getElementById('ap-status');
           const deactBtn = this.shadowRoot.getElementById('ap-deactivate-btn');
@@ -7936,7 +8107,7 @@ class SmartingHomePanel extends HTMLElement {
           } else if (statusEl && !saved) {
             if (this._autopilotActiveStrategy) {
               this._autopilotActiveStrategy = null;
-              this._renderStrategyCards();
+              this._lastRenderedActionsKey = null; this._renderStrategyPresets(); this._renderActionSections();
             }
             statusEl.textContent = '● GOTOWY';
             statusEl.style.color = '#64748b';

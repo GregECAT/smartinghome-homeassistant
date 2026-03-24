@@ -659,9 +659,78 @@ AI_CONTROLLER_TOOLS = {
 }
 
 
+def build_action_catalog_text(
+    action_states: dict[str, Any] | None = None,
+) -> str:
+    """Build a comprehensive action catalog text for AI prompts.
+
+    Generates a structured reference of ALL available autopilot actions,
+    grouped by W-layer category, with descriptions, commands, and current
+    statuses to give the AI full awareness of the system's capabilities.
+
+    Args:
+        action_states: Optional dict of {action_id: status_str} from controller.
+                       If None, only static catalog is generated.
+    """
+    from .autopilot_actions import (
+        build_all_actions,
+        ActionCategory,
+        CATEGORY_LABELS,
+        CATEGORY_ORDER,
+    )
+
+    actions = build_all_actions()
+    states = action_states or {}
+
+    lines: list[str] = []
+    lines.append("═══ ACTION CATALOG (35 autopilot actions) ═══")
+    lines.append("You can trigger actions by name using: {\"action\": \"action_id\"}")
+    lines.append("Actions marked ALWAYS run regardless of strategy preset.")
+    lines.append("")
+
+    for cat in CATEGORY_ORDER:
+        cat_actions = [a for a in actions if a.category == cat]
+        if not cat_actions:
+            continue
+
+        label = CATEGORY_LABELS.get(cat, str(cat))
+        lines.append(f"── {label} ──")
+
+        for a in cat_actions:
+            # Status indicator
+            status = states.get(a.id, "idle")
+            status_icon = {"active": "●", "waiting": "◐", "idle": "○", "disabled": "✗"}.get(status, "○")
+
+            # Always badge
+            always = " [ALWAYS]" if a.always_active else ""
+
+            # Commands summary
+            cmds = ", ".join(
+                c["tool"] + (f"({c['params'].get('entity', '')})" if c.get("params", {}).get("entity") else "")
+                for c in a.commands
+            )
+
+            lines.append(
+                f"  {status_icon} {a.id}{always}: {a.description}"
+                f"\n      → cmds: [{cmds}]"
+            )
+
+        lines.append("")
+
+    # Active actions summary (concise)
+    if states:
+        active = [aid for aid, s in states.items() if s in ("active", "waiting")]
+        if active:
+            lines.append(f"═══ CURRENTLY ACTIVE/WAITING: {', '.join(active)} ═══")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def build_ai_controller_prompt(
     current_data: dict[str, Any],
     device_status_text: str = "",
+    action_states: dict[str, Any] | None = None,
 ) -> str:
     """Build a concise prompt for AI to return structured JSON commands.
 
@@ -669,6 +738,7 @@ def build_ai_controller_prompt(
     - Does NOT request analysis text or markdown
     - Requires ONLY valid JSON response
     - Lists available tools the AI can call
+    - Includes ACTION CATALOG with all 35 autopilot actions
     - Focuses on immediate action (this tick), not 24h plans
     - Includes DEVICE STATUS from InverterAgent (state awareness)
     """
@@ -703,6 +773,9 @@ def build_ai_controller_prompt(
         f'  - "{name}": {desc}' for name, desc in AI_CONTROLLER_TOOLS.items()
     )
 
+    # Action catalog
+    action_catalog = build_action_catalog_text(action_states)
+
     # Device status section (from InverterAgent)
     device_section = ""
     if device_status_text:
@@ -710,11 +783,14 @@ def build_ai_controller_prompt(
 
     prompt = f"""You are an autonomous energy controller for a home solar+battery system in Poland (G13 tariff).
 
-YOUR JOB: Decide what action to take RIGHT NOW based on current system state. Respond ONLY with valid JSON.
+YOUR JOB: Decide what action to take RIGHT NOW based on current system state.
+You have a LIBRARY of 35 named actions (see ACTION CATALOG below). PREFER triggering actions by ID over raw tool calls.
+Respond ONLY with valid JSON.
 
-═══ AVAILABLE TOOLS ═══
+═══ AVAILABLE TOOLS (low-level) ═══
 {tools_desc}
 
+{action_catalog}
 ═══ MANAGED ENTITIES ═══
   - "boiler": Water heater 3.8kW (switch.bojler_3800)
   - "ac": Air conditioning (switch.klimatyzacja_socket_1)
@@ -760,14 +836,19 @@ YOUR JOB: Decide what action to take RIGHT NOW based on current system state. Re
 ═══ RESPONSE FORMAT ═══
 CRITICAL: Respond with ONLY valid JSON. No markdown, no explanations, no text before/after JSON.
 Keep "reasoning" to MAX 2 sentences in Polish. Be extremely concise.
+PREFER using "action" (named action ID) over raw "tool" calls when possible.
 {{
   "reasoning": "Krótkie uzasadnienie decyzji (max 2 zdania)",
   "commands": [
+    {{"action": "action_id_from_catalog"}},
     {{"tool": "tool_name", "params": {{}}}}
   ],
   "next_check_minutes": 5
 }}
 
+Commands can use EITHER:
+  - {{"action": "action_id"}} → triggers the named action with its predefined commands
+  - {{"tool": "tool_name", "params": {{}}}} → raw tool call (fallback)
 If no action needed, use: {{"tool": "no_action", "params": {{"reason": "..."}}}}
 Maximum 3 commands per response. Order by priority (most important first)."""
 
@@ -783,6 +864,7 @@ def build_ai_strategist_prompt(
     current_data: dict[str, Any],
     estimation: dict[str, Any],
     device_status_text: str = "",
+    action_states: dict[str, Any] | None = None,
 ) -> str:
     """Build prompt for AI Strategist — deep 24h strategic plan.
 
@@ -834,6 +916,9 @@ def build_ai_strategist_prompt(
         f'  - "{name}": {desc}' for name, desc in AI_CONTROLLER_TOOLS.items()
     )
 
+    # Action catalog
+    action_catalog = build_action_catalog_text(action_states)
+
     # Device status section
     device_section = ""
     if device_status_text:
@@ -841,7 +926,8 @@ def build_ai_strategist_prompt(
 
     prompt = f"""You are an expert energy strategist AI for a home solar+battery system in Poland (G13 tariff).
 
-YOUR JOB: Create a STRATEGIC 24H PLAN with specific commands for each time block.
+YOUR JOB: Create a STRATEGIC 24H PLAN specifying which ACTIONS to activate in each time block.
+You have a LIBRARY of 35 named actions (see ACTION CATALOG below). PREFER referencing actions by ID.
 This plan will be executed automatically by the InverterAgent. Respond ONLY with valid JSON.
 
 ═══ SYSTEM ═══
@@ -849,8 +935,10 @@ This plan will be executed automatically by the InverterAgent. Respond ONLY with
   Inverter: hybrid 3-phase
   Managed Loads: boiler (3.8kW), ac, socket2
 {device_section}
-═══ AVAILABLE TOOLS ═══
+═══ AVAILABLE TOOLS (low-level) ═══
 {tools_desc}
+
+{action_catalog}
 
 ═══ CURRENT STATE ({now.strftime('%Y-%m-%d')} {day_names[weekday]} {now.strftime('%H:%M')}) ═══
   PV: {current_data.get('pv_power', 0)} W | Load: {current_data.get('load', 0)} W
@@ -891,6 +979,7 @@ Net savings: {estimation.get('net_savings', 0):.2f} PLN
 
 ═══ RESPONSE FORMAT ═══
 CRITICAL: Respond with ONLY valid JSON. No markdown, no text before/after.
+PREFER using "actions" (list of action IDs from the catalog) over raw "commands".
 
 {{
   "analysis": "Krótka analiza obecnej sytuacji (max 3 zdania, po polsku)",
@@ -901,9 +990,10 @@ CRITICAL: Respond with ONLY valid JSON. No markdown, no text before/after.
       "zone": "off_peak|morning_peak|afternoon_peak",
       "price": 0.63,
       "strategy": "aggressive_charge|discharge_self_consume|night_charge|pv_optimize|no_action",
+      "actions": ["action_id_1", "action_id_2"],
       "commands": [
-        {{"tool": "force_charge", "params": {{}}}},
-        {{"tool": "switch_on", "params": {{"entity": "boiler"}}}}
+        {{"action": "action_id_from_catalog"}},
+        {{"tool": "force_charge", "params": {{}}}}
       ],
       "reasoning": "Uzasadnienie dla tego bloku (1 zdanie)"
     }}
@@ -922,6 +1012,7 @@ RULES FOR time_blocks:
 - Max 8 blocks (group similar periods)
 - Max 4 commands per block
 - Order blocks chronologically
-- "commands" uses same tools as ═══ AVAILABLE TOOLS ═══ above"""
+- "actions": list of action IDs from ACTION CATALOG that should be active in this block
+- "commands": can use EITHER {{"action": "id"}} or {{"tool": "name", "params": {{}}}}"""
 
     return prompt
