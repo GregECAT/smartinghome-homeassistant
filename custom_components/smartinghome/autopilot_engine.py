@@ -497,6 +497,15 @@ TOTALS:
 - Net savings: {estimation.get('net_savings', 0)} PLN
 - vs No Management: {estimation.get('vs_no_management', 0)} PLN
 
+ACTIVE HEMS AUTOMATIONS (6 layers):
+- W0: Grid Import Guard — STOP ładowania baterii z sieci w drogich godzinach G13.
+  Wyjątek: RCE < 100 PLN/MWh (arbitraż opłacalny). PV Surplus Smart Charge aktywny.
+- W1: Harmonogram taryfowy — 07:00 sprzedaż/arbitraż, 13:00 ładowanie off-peak, szczyt wieczorny, weekend off-peak, arbitraż nocny.
+- W2: RCE dynamiczna — okna najtańsze/najdroższe (binary_sensor PSE), progi cenowe (150/300/500 PLN/MWh), ujemna cena → bojler+bateria.
+- W3: SOC bezpieczeństwo — tariff-aware: drogie godz. PV-only charge, tanie godz. normalne ładowanie. Emergency SOC <5%.
+- W4: Kaskady napięcia (252/253/254V) + nadwyżki PV (2/3/4kW → bojler/klima/gniazdko).
+- W5: Smart Pre-Peak — Ecowitt WH90 pogoda + Forecast.Solar. 6 punktów kontrolnych (05:30-18:00) + reaktywne (zachmurzenie/deszcz).
+
 RESPOND IN POLISH. Format as structured markdown with:
 ## 📊 Analiza strategii
 ## 🕐 Zoptymalizowany plan godzinowy
