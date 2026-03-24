@@ -100,15 +100,19 @@ class EnergyManager:
             pass  # No automatic actions
 
     async def force_charge(self) -> None:
-        """Force battery charging."""
-        _LOGGER.info("Forcing battery charge")
+        """Force battery charging — enables grid→battery charging."""
+        _LOGGER.info("Forcing battery charge (work_mode=Backup)")
         await self._enable_charging()
+        # CRITICAL: Set work mode to Backup to enable grid→battery charging
+        # In General mode, inverter won't charge from grid (only PV→battery)
+        await self._set_work_mode("Backup")
         self._current_mode = HEMSMode.CHARGE
 
     async def force_discharge(self) -> None:
-        """Force battery discharge (block charging)."""
-        _LOGGER.info("Forcing battery discharge")
+        """Force battery discharge (block charging, restore General mode)."""
+        _LOGGER.info("Forcing battery discharge (work_mode=General)")
         await self._block_charging()
+        await self._set_work_mode("General")
         self._current_mode = HEMSMode.SELL
 
     async def set_export_limit(self, limit: int) -> None:
