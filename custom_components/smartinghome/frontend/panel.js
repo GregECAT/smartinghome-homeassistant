@@ -7071,6 +7071,55 @@ class SmartingHomePanel extends HTMLElement {
             <div class="ap-strategies" id="ap-strategy-cards"></div>
           </div>
 
+          <!-- ═══ LIVE STRATEGY DASHBOARD ═══ -->
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-title">⚡ Live — Strategia w akcji</div>
+
+            <!-- Current tick status bar -->
+            <div id="ap-live-status" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(100px, 1fr)); gap:6px; margin-bottom:12px">
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:8px; color:#64748b; text-transform:uppercase">Strategia</div>
+                <div id="ap-live-strategy" style="font-size:11px; font-weight:600; color:#f8fafc">—</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:8px; color:#64748b; text-transform:uppercase">Strefa G13</div>
+                <div id="ap-live-zone" style="font-size:11px; font-weight:600; color:#f8fafc">—</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:8px; color:#64748b; text-transform:uppercase">SOC</div>
+                <div id="ap-live-soc" style="font-size:11px; font-weight:600; color:#2ecc71">—</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:8px; color:#64748b; text-transform:uppercase">PV</div>
+                <div id="ap-live-pv" style="font-size:11px; font-weight:600; color:#f7b731">—</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:8px; color:#64748b; text-transform:uppercase">Zużycie</div>
+                <div id="ap-live-load" style="font-size:11px; font-weight:600; color:#e74c3c">—</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
+                <div style="font-size:8px; color:#64748b; text-transform:uppercase">Nadwyżka</div>
+                <div id="ap-live-surplus" style="font-size:11px; font-weight:600; color:#2ecc71">—</div>
+              </div>
+            </div>
+
+            <!-- Current actions from this tick -->
+            <div style="margin-bottom:10px">
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px">🔄 Aktywne akcje (ostatni tick)</div>
+              <div id="ap-live-actions" style="font-size:11px; color:#94a3b8; min-height:28px; padding:6px 8px; background:rgba(255,255,255,0.02); border-radius:6px; border-left:3px solid #334155">
+                <span style="color:#64748b">Oczekiwanie na dane...</span>
+              </div>
+            </div>
+
+            <!-- Decision log feed -->
+            <div>
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px">📋 Historia decyzji</div>
+              <div id="ap-activity-log" style="font-size:11px; color:#94a3b8; max-height:250px; overflow-y:auto">
+                <div style="color:#64748b; text-align:center; padding:12px">Brak aktywności</div>
+              </div>
+            </div>
+          </div>
+
           <!-- ═══ AI PROVIDER SELECTOR ═══ -->
           <div class="card" style="margin-bottom:14px">
             <div class="card-title">🤖 Dostawca AI dla Autopilota</div>
@@ -7183,54 +7232,7 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
-          <!-- ═══ LIVE STRATEGY DASHBOARD ═══ -->
-          <div class="card" style="margin-bottom:14px">
-            <div class="card-title">⚡ Live — Strategia w akcji</div>
 
-            <!-- Current tick status bar -->
-            <div id="ap-live-status" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(100px, 1fr)); gap:6px; margin-bottom:12px">
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
-                <div style="font-size:8px; color:#64748b; text-transform:uppercase">Strategia</div>
-                <div id="ap-live-strategy" style="font-size:11px; font-weight:600; color:#f8fafc">—</div>
-              </div>
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
-                <div style="font-size:8px; color:#64748b; text-transform:uppercase">Strefa G13</div>
-                <div id="ap-live-zone" style="font-size:11px; font-weight:600; color:#f8fafc">—</div>
-              </div>
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
-                <div style="font-size:8px; color:#64748b; text-transform:uppercase">SOC</div>
-                <div id="ap-live-soc" style="font-size:11px; font-weight:600; color:#2ecc71">—</div>
-              </div>
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
-                <div style="font-size:8px; color:#64748b; text-transform:uppercase">PV</div>
-                <div id="ap-live-pv" style="font-size:11px; font-weight:600; color:#f7b731">—</div>
-              </div>
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
-                <div style="font-size:8px; color:#64748b; text-transform:uppercase">Zużycie</div>
-                <div id="ap-live-load" style="font-size:11px; font-weight:600; color:#e74c3c">—</div>
-              </div>
-              <div style="background:rgba(255,255,255,0.04); border-radius:6px; padding:8px 10px; text-align:center">
-                <div style="font-size:8px; color:#64748b; text-transform:uppercase">Nadwyżka</div>
-                <div id="ap-live-surplus" style="font-size:11px; font-weight:600; color:#2ecc71">—</div>
-              </div>
-            </div>
-
-            <!-- Current actions from this tick -->
-            <div style="margin-bottom:10px">
-              <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px">🔄 Aktywne akcje (ostatni tick)</div>
-              <div id="ap-live-actions" style="font-size:11px; color:#94a3b8; min-height:28px; padding:6px 8px; background:rgba(255,255,255,0.02); border-radius:6px; border-left:3px solid #334155">
-                <span style="color:#64748b">Oczekiwanie na dane...</span>
-              </div>
-            </div>
-
-            <!-- Decision log feed -->
-            <div>
-              <div style="font-size:9px; color:#64748b; text-transform:uppercase; margin-bottom:4px; letter-spacing:0.5px">📋 Historia decyzji</div>
-              <div id="ap-activity-log" style="font-size:11px; color:#94a3b8; max-height:250px; overflow-y:auto">
-                <div style="color:#64748b; text-align:center; padding:12px">Brak aktywności</div>
-              </div>
-            </div>
-          </div>
 
         </div>
 
