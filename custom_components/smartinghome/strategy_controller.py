@@ -798,15 +798,14 @@ class StrategyController:
                     action.status = ActionStatus.WAITING
                     changed = True
 
-        # Fire event for frontend (only when something changed)
-        if changed:
-            self.hass.bus.async_fire(
-                f"{DOMAIN}_action_states",
-                {
-                    a.id: a.status.value
-                    for a in self._all_actions
-                },
-            )
+        # Fire event for frontend (every tick — lightweight payload)
+        self.hass.bus.async_fire(
+            f"{DOMAIN}_action_states",
+            {
+                a.id: a.status.value
+                for a in self._all_actions
+            },
+        )
 
     # ------------------------------------------------------------------
     #  W0 — Grid Import Guard
