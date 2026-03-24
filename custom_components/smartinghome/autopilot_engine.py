@@ -447,6 +447,58 @@ class AutopilotEngine:
         return ha
 
 
+def _render_ecowitt(data: dict[str, Any]) -> str:
+    """Render Ecowitt local station data for AI prompt (if available)."""
+    ecowitt = data.get("ecowitt")
+    if not ecowitt:
+        return ""
+
+    lines = ["\nLocal Weather Station (Ecowitt WH90):"]
+    field_labels = {
+        "solar_radiation": ("Solar Radiation", "W/m²"),
+        "solar_lux": ("Solar Lux", "lx"),
+        "uv_index": ("UV Index", ""),
+        "temperature": ("Temperature", "°C"),
+        "humidity": ("Humidity", "%"),
+        "wind_speed": ("Wind Speed", "km/h"),
+        "wind_gust": ("Wind Gust", "km/h"),
+        "wind_direction": ("Wind Direction", "°"),
+        "rain_rate": ("Rain Rate", "mm/h"),
+        "daily_rain": ("Daily Rain", "mm"),
+        "pressure": ("Pressure", "hPa"),
+        "feels_like": ("Feels Like", "°C"),
+    }
+    for key, (label, unit) in field_labels.items():
+        val = ecowitt.get(key)
+        if val is not None:
+            lines.append(f"- {label}: {val} {unit}".rstrip())
+
+    return chr(10).join(lines) + chr(10)
+
+
+def _render_forecast(data: dict[str, Any]) -> str:
+    """Render multi-day weather forecast for AI prompt (if available)."""
+    forecast = data.get("weather_forecast")
+    if not forecast:
+        return ""
+
+    lines = ["Multi-day forecast:"]
+    for day in forecast:
+        date = day.get("date", "?")[:10]
+        cond = day.get("condition", "?")
+        hi = day.get("temp_high", "?")
+        lo = day.get("temp_low", "?")
+        precip = day.get("precipitation", 0)
+        prob = day.get("precipitation_probability", "?")
+        clouds = day.get("cloud_coverage", "?")
+        lines.append(
+            f"  {date}: {cond}, {lo}–{hi}°C, "
+            f"clouds {clouds}%, precip {precip}mm ({prob}%)"
+        )
+
+    return chr(10).join(lines) + chr(10)
+
+
 def build_autopilot_ai_prompt(
     strategy: AutopilotStrategy,
     current_data: dict[str, Any],
@@ -525,10 +577,15 @@ Current zone: {current_zone.value} ({current_price:.2f} PLN/kWh)
 - Arbitrage potential: Buy at 0.63, sell self-consumption at 1.50 = {1.50 - 0.63:.2f} PLN/kWh margin
 
 ═══ WEATHER & FORECAST ═══
-- Weather: {current_data.get('weather_condition', 'N/A')}, {current_data.get('weather_temp', 'N/A')}°C, clouds: {current_data.get('weather_clouds', 'N/A')}%
-- PV Forecast Today: {current_data.get('forecast_today', 0)} kWh
-- PV Forecast Remaining Today: {current_data.get('forecast_remaining', 0)} kWh
-- PV Forecast Tomorrow: {current_data.get('forecast_tomorrow', 0)} kWh
+Current conditions:
+- Weather: {current_data.get('weather_condition', 'N/A')}, {current_data.get('weather_temp', 'N/A')}°C
+- Clouds: {current_data.get('weather_clouds', 'N/A')}%, Humidity: {current_data.get('weather_humidity', 'N/A')}%
+- Wind: {current_data.get('weather_wind_speed', 'N/A')} km/h, Pressure: {current_data.get('weather_pressure', 'N/A')} hPa
+PV Forecast:
+- Today total: {current_data.get('forecast_today', 0)} kWh
+- Remaining today: {current_data.get('forecast_remaining', 0)} kWh
+- Tomorrow: {current_data.get('forecast_tomorrow', 0)} kWh
+{_render_ecowitt(current_data)}{_render_forecast(current_data)}
 
 ═══ CURRENT ESTIMATION (MATHEMATICAL MODEL) ═══
 {chr(10).join(plan_lines)}
