@@ -607,7 +607,7 @@ User question: {question}"""
     #  AI Controller — JSON toolcalling for real-time inverter control
     # ------------------------------------------------------------------
 
-    _CONTROLLER_MAX_TOKENS = 4096
+    _CONTROLLER_MAX_TOKENS = 512
     _CONTROLLER_NO_ACTION = {
         "reasoning": "AI unavailable — fallback to no_action",
         "commands": [{"tool": "no_action", "params": {"reason": "AI response error"}}],
@@ -667,7 +667,7 @@ User question: {question}"""
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
                         url, json=payload,
-                        timeout=aiohttp.ClientTimeout(total=30),  # Shorter timeout for control loop
+                        timeout=aiohttp.ClientTimeout(total=45),  # Shorter timeout for control loop
                     ) as resp:
                         if resp.status == 200:
                             result = await resp.json()
@@ -697,7 +697,7 @@ User question: {question}"""
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
                         url, json=payload, headers=headers,
-                        timeout=aiohttp.ClientTimeout(total=30),
+                        timeout=aiohttp.ClientTimeout(total=45),
                     ) as resp:
                         if resp.status == 200:
                             result = await resp.json()
@@ -726,7 +726,15 @@ User question: {question}"""
                     text = text[:-3]
                 text = text.strip()
 
-            parsed = _json.loads(text)
+            parsed = None
+            try:
+                parsed = _json.loads(text)
+            except _json.JSONDecodeError:
+                # Attempt JSON repair for truncated responses
+                parsed = self._repair_truncated_json(text)
+
+            if parsed is None:
+                raise ValueError("Could not parse JSON")
 
             # Validate structure
             if not isinstance(parsed, dict):
@@ -763,9 +771,42 @@ User question: {question}"""
             return {
                 "reasoning": parsed.get("reasoning", "No reasoning provided"),
                 "commands": validated_commands,
-                "next_check_minutes": min(max(int(parsed.get("next_check_minutes", 5)), 1), 30),
+                "next_check_minutes": min(max(int(parsed.get("next_check_minutes", 5)), 2), 30),
             }
 
         except (ValueError, KeyError, _json.JSONDecodeError) as err:
             _LOGGER.warning("AI Controller: invalid JSON response: %s | raw: %s", err, raw_text[:200])
             return dict(self._CONTROLLER_NO_ACTION, reasoning=f"Invalid JSON: {err}")
+
+    @staticmethod
+    def _repair_truncated_json(text: str) -> dict | None:
+        """Attempt to repair truncated JSON from AI response.
+
+        Works by progressively adding closing brackets/braces.
+        """
+        import json as _json
+        import re
+
+        # Try to find action IDs even in truncated text
+        action_match = re.search(r'"action"\s*:\s*"([\w_]+)"', text)
+        if action_match:
+            action_id = action_match.group(1)
+            _LOGGER.info("AI Controller: repaired truncated JSON, extracted action: %s", action_id)
+            return {
+                "reasoning": "(repaired from truncated response)",
+                "commands": [{"action": action_id}],
+                "next_check_minutes": 5,
+            }
+
+        # Try to find tool name
+        tool_match = re.search(r'"tool"\s*:\s*"([\w_]+)"', text)
+        if tool_match:
+            tool_name = tool_match.group(1)
+            _LOGGER.info("AI Controller: repaired truncated JSON, extracted tool: %s", tool_name)
+            return {
+                "reasoning": "(repaired from truncated response)",
+                "commands": [{"tool": tool_name, "params": {}}],
+                "next_check_minutes": 5,
+            }
+
+        return None
