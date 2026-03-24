@@ -7527,7 +7527,7 @@ class SmartingHomePanel extends HTMLElement {
       { id: 'ai_full_autonomy', icon: '🧠', name: 'AI Pełna Autonomia', desc: 'AI sam decyduje o strategii na każdą godzinę dnia. Pełna autonomia.' },
     ];
 
-    const active = this._autopilotActiveStrategy || 'max_self_consumption';
+    const active = this._autopilotActiveStrategy || null;
 
     container.innerHTML = strategies.map(s => `
       <div class="ap-strategy-card ${s.id === active ? 'ap-active' : ''}"
@@ -7825,9 +7825,20 @@ class SmartingHomePanel extends HTMLElement {
             this._autopilotActiveStrategy = saved;
             this._renderStrategyCards();
           }
+          // Show/hide deactivate button based on saved strategy
+          const deactBtn = this.shadowRoot.getElementById('ap-deactivate-btn');
           if (statusEl && saved) {
             statusEl.textContent = '● AKTYWNY';
             statusEl.style.color = '#2ecc71';
+            if (deactBtn) deactBtn.style.display = 'inline-block';
+          } else if (statusEl && !saved) {
+            if (this._autopilotActiveStrategy) {
+              this._autopilotActiveStrategy = null;
+              this._renderStrategyCards();
+            }
+            statusEl.textContent = '● GOTOWY';
+            statusEl.style.color = '#64748b';
+            if (deactBtn) deactBtn.style.display = 'none';
           }
         })
         .catch(() => {});

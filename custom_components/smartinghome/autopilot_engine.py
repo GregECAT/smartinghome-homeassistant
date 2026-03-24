@@ -455,64 +455,114 @@ def build_autopilot_ai_prompt(
     """Build a specialized prompt for AI autopilot analysis."""
     now = datetime.now()
     day_names = ['Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota', 'Niedziela']
+    month = now.month
+    weekday = now.weekday()
+
+    # Build current G13 zone info
+    current_zone = _get_g13_zone(now.hour, month, weekday)
+    current_price = _get_g13_price(current_zone)
+
+    # Build G13 schedule for today
+    schedule = G13_WINTER_SCHEDULE if month in WINTER_MONTHS else G13_SUMMER_SCHEDULE
+    g13_lines = []
+    for (start, end), zone in schedule.items():
+        price = G13_PRICES.get(zone, 0.63)
+        g13_lines.append(f"  {start:02d}:00-{end:02d}:00 → {zone.value} ({price:.2f} PLN/kWh)")
 
     # Build hourly plan summary
     plan_lines = []
     for h in estimation.get("hourly_plan", []):
+        zone = _get_g13_zone(h['hour'], month, weekday)
         plan_lines.append(
             f"  {h['hour']:02d}:00 — {h['action'].upper():10s} | "
             f"PV:{h['pv']:5.0f}W | Load:{h['load']:5.0f}W | "
             f"Bat:{h['battery']:+6.0f}W | Grid:{h['grid']:+6.0f}W | "
-            f"SOC:{h['soc_start']:.0f}→{h['soc_end']:.0f}%"
+            f"SOC:{h['soc_start']:.0f}→{h['soc_end']:.0f}% | "
+            f"G13:{zone.value}"
         )
 
-    prompt = f"""You are an expert energy management AI for a home solar+battery system in Poland.
+    # RCE sell price calculation
+    rce_mwh = float(current_data.get('rce_price', 250))
+    rce_sell = current_data.get('rce_sell', (rce_mwh / 1000) * RCE_PROSUMER_COEFFICIENT)
+
+    # Battery capacity
+    bat_cap = current_data.get('battery_capacity', DEFAULT_BATTERY_CAPACITY)
+    bat_cap_kwh = float(bat_cap) / 1000
+
+    prompt = f"""You are an expert energy management AI for a home solar+battery system in Poland with G13 multi-zone tariff.
 
 TASK: Analyze the following 24-hour energy plan for strategy "{AUTOPILOT_STRATEGY_LABELS.get(strategy, strategy.value)}" and provide:
-1. A refined hourly action plan in JSON format
-2. Key optimization opportunities
-3. Risk assessment
-4. Expected savings vs no management
+1. Critical analysis of the current plan — what's wrong and why
+2. A refined hourly action plan in JSON format
+3. Estimated savings comparison (current plan vs optimized vs no management)
+4. Risk assessment
+5. Specific recommendations for HEMS automation layers (W0-W5)
 
-CURRENT STATE ({now.strftime('%Y-%m-%d')} {day_names[now.weekday()]} {now.strftime('%H:%M')}):
+═══ SYSTEM CONFIGURATION ═══
+- Battery Capacity: {bat_cap_kwh:.1f} kWh
+- Max Charge Rate: {bat_cap_kwh * 0.5:.1f} kW (0.5C)
+- Max Discharge Rate: {bat_cap_kwh * 0.5:.1f} kW (0.5C)
+- Inverter: GoodWe (hybrid, 3-phase)
+- Managed Loads: Boiler 3.8kW, AC, Smart Socket
+
+═══ CURRENT STATE ({now.strftime('%Y-%m-%d')} {day_names[weekday]} {now.strftime('%H:%M')}) ═══
 - PV Power: {current_data.get('pv_power', 0)} W
 - Load: {current_data.get('load', 0)} W
 - Battery SOC: {current_data.get('battery_soc', 0)}%
-- Grid Power: {current_data.get('grid_power', 0)} W
-- RCE Price: {current_data.get('rce_price', 250)} PLN/MWh
-- G13 Zone: {current_data.get('g13_zone', 'unknown')}
-- Weather: {current_data.get('weather_condition', 'N/A')}, {current_data.get('weather_temp', 'N/A')}°C, chmury: {current_data.get('weather_clouds', 'N/A')}%
+- Grid Power: {current_data.get('grid_power', 0)} W (positive=import)
+- PV Surplus: {current_data.get('pv_surplus', 0)} W
+- Grid Voltage: L1={current_data.get('voltage_l1', 'N/A')}V
+
+═══ TARIFF G13 — TODAY'S SCHEDULE ═══
+{'weekend (all off-peak 0.63 PLN/kWh)' if weekday >= 5 else chr(10).join(g13_lines)}
+Current zone: {current_zone.value} ({current_price:.2f} PLN/kWh)
+
+═══ PRICING ═══
+- G13 Buy Prices: Off-Peak=0.63, Morning Peak=0.91, Afternoon Peak=1.50 PLN/kWh
+- RCE Price: {rce_mwh:.1f} PLN/MWh ({rce_mwh/1000:.4f} PLN/kWh)
+- RCE Sell Price: {rce_sell:.4f} PLN/kWh (prosumer coefficient applied)
+- IMPORTANT: At current RCE, selling to grid earns {rce_sell:.4f} PLN/kWh vs buying at {current_price:.2f} PLN/kWh
+- Arbitrage potential: Buy at 0.63, sell self-consumption at 1.50 = {1.50 - 0.63:.2f} PLN/kWh margin
+
+═══ WEATHER & FORECAST ═══
+- Weather: {current_data.get('weather_condition', 'N/A')}, {current_data.get('weather_temp', 'N/A')}°C, clouds: {current_data.get('weather_clouds', 'N/A')}%
 - PV Forecast Today: {current_data.get('forecast_today', 0)} kWh
+- PV Forecast Remaining Today: {current_data.get('forecast_remaining', 0)} kWh
 - PV Forecast Tomorrow: {current_data.get('forecast_tomorrow', 0)} kWh
 
-CURRENT ESTIMATION:
+═══ CURRENT ESTIMATION (MATHEMATICAL MODEL) ═══
 {chr(10).join(plan_lines)}
 
 TOTALS:
-- Import: {estimation.get('total_import_kwh', 0)} kWh
-- Export: {estimation.get('total_export_kwh', 0)} kWh
+- Import: {estimation.get('total_import_kwh', 0)} kWh (cost: {estimation.get('total_cost', 0):.2f} PLN)
+- Export: {estimation.get('total_export_kwh', 0)} kWh (revenue: {estimation.get('total_revenue', 0):.2f} PLN)
 - Self-consumption: {estimation.get('total_self_consumption_kwh', 0)} kWh
-- Cost: {estimation.get('total_cost', 0)} PLN
-- Revenue: {estimation.get('total_revenue', 0)} PLN
-- Net savings: {estimation.get('net_savings', 0)} PLN
-- vs No Management: {estimation.get('vs_no_management', 0)} PLN
+- Net savings: {estimation.get('net_savings', 0):.2f} PLN
+- vs No Management: {estimation.get('vs_no_management', 0):.2f} PLN
 
-ACTIVE HEMS AUTOMATIONS (6 layers):
-- W0: Grid Import Guard — STOP ładowania baterii z sieci w drogich godzinach G13.
-  Wyjątek: RCE < 100 PLN/MWh (arbitraż opłacalny). PV Surplus Smart Charge aktywny.
-- W1: Harmonogram taryfowy — 07:00 sprzedaż/arbitraż, 13:00 ładowanie off-peak, szczyt wieczorny, weekend off-peak, arbitraż nocny.
-- W2: RCE dynamiczna — okna najtańsze/najdroższe (binary_sensor PSE), progi cenowe (150/300/500 PLN/MWh), ujemna cena → bojler+bateria.
-- W3: SOC bezpieczeństwo — tariff-aware: drogie godz. PV-only charge, tanie godz. normalne ładowanie. Emergency SOC <5%.
-- W4: Kaskady napięcia (252/253/254V) + nadwyżki PV (2/3/4kW → bojler/klima/gniazdko).
-- W5: Smart Pre-Peak — Ecowitt WH90 pogoda + Forecast.Solar. 6 punktów kontrolnych (05:30-18:00) + reaktywne (zachmurzenie/deszcz).
+═══ ACTIVE HEMS AUTOMATION LAYERS ═══
+- W0: Grid Import Guard — STOP battery grid-charging in expensive G13 zones.
+  Exception: RCE < 100 PLN/MWh (arbitrage). PV charging always allowed.
+- W1: G13 Schedule — 07:00 sell mode, 13:00 charge mode (off-peak), night arbitrage 23:00.
+- W2: RCE Dynamic — cheapest/most expensive windows, thresholds 150/300/500 PLN/MWh.
+- W3: SOC Safety — tariff-aware: expensive hours PV-only, cheap hours normal. Emergency SOC <5%.
+- W4: Voltage Cascade (252/253/254V) + PV Surplus Cascade (2/3/4kW → boiler/AC/socket).
+- W5: Smart Pre-Peak — weather forecast-driven pre-charging before peaks.
+
+KEY CONSTRAINTS:
+1. When RCE sell price is very low ({rce_sell:.4f} PLN/kWh), exporting is worthless. Focus on self-consumption.
+2. G13 arbitrage (grid-charge at 0.63, discharge at 1.50) yields {1.50 - 0.63:.2f} PLN/kWh — THIS IS THE PRIMARY PROFIT LEVER.
+3. Battery has {bat_cap_kwh:.1f} kWh capacity × {1.50 - 0.63:.2f} PLN/kWh = ~{bat_cap_kwh * (1.50 - 0.63):.2f} PLN per full arbitrage cycle.
+4. Night charge (23:00-07:00) at 0.63 → discharge 07:00-13:00/15:00-22:00 at 0.91/1.50 is the core strategy.
 
 RESPOND IN POLISH. Format as structured markdown with:
 ## 📊 Analiza strategii
-## 🕐 Zoptymalizowany plan godzinowy
+## 🕐 Zoptymalizowany plan godzinowy (JSON)
 ## 💰 Estymacja oszczędności
 ## ⚠️ Ryzyka i zalecenia
 ## 🎯 Rekomendacja
 
-Use tables for the hourly plan. Be concise but comprehensive."""
+Use tables for comparisons. Be concise but comprehensive. Focus on actionable insights."""
 
     return prompt
+

@@ -461,6 +461,9 @@ async def async_setup_services(
             "forecast_today": data.get("pv_forecast_today_total"),
             "forecast_remaining": data.get("pv_forecast_remaining_today_total"),
             "forecast_tomorrow": data.get("pv_forecast_tomorrow_total"),
+            "voltage_l1": data.get("sensor.grid_voltage_l1"),
+            "battery_capacity": data.get("sensor.battery_capacity",
+                                         data.get("battery_capacity_wh", 10000)),
         }
 
         # Try to get weather data
