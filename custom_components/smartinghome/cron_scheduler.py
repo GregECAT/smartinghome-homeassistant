@@ -26,19 +26,23 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_HEMS_INTERVAL = 30
 DEFAULT_REPORT_INTERVAL = 360  # 6 hours
 DEFAULT_ANOMALY_INTERVAL = 60
+DEFAULT_AUTOPILOT_INTERVAL = 10  # 10 minutes
 
 # Settings keys
 CRON_HEMS_INTERVAL = "cron_hems_interval"
 CRON_REPORT_INTERVAL = "cron_report_interval"
 CRON_ANOMALY_INTERVAL = "cron_anomaly_interval"
+CRON_AUTOPILOT_INTERVAL = "cron_autopilot_interval"
 CRON_HEMS_ENABLED = "cron_hems_enabled"
 CRON_REPORT_ENABLED = "cron_report_enabled"
 CRON_ANOMALY_ENABLED = "cron_anomaly_enabled"
+CRON_AUTOPILOT_ENABLED = "cron_autopilot_enabled"
 
 # Result keys in settings.json
 AI_HEMS_ADVICE = "ai_hems_advice"
 AI_DAILY_REPORT = "ai_daily_report"
 AI_ANOMALY_REPORT = "ai_anomaly_report"
+AI_AUTOPILOT_LOG = "ai_autopilot_log"
 
 
 class AICronScheduler:
@@ -49,11 +53,13 @@ class AICronScheduler:
         hass: HomeAssistant,
         ai_advisor: AIAdvisor,
         get_coordinator_data: Any,
+        strategy_controller: Any = None,
     ) -> None:
         """Initialize the scheduler."""
         self.hass = hass
         self._ai = ai_advisor
         self._get_data = get_coordinator_data
+        self._strategy_controller = strategy_controller
         self._tasks: list[asyncio.Task] = []
         self._running = False
 
@@ -230,6 +236,13 @@ class AICronScheduler:
                 asyncio.create_task(self._run_loop("anomaly", interval))
             )
 
+        # Autopilot Controller Log
+        if settings.get(CRON_AUTOPILOT_ENABLED, True):
+            interval = int(settings.get(CRON_AUTOPILOT_INTERVAL, DEFAULT_AUTOPILOT_INTERVAL))
+            self._tasks.append(
+                asyncio.create_task(self._run_loop("autopilot", interval))
+            )
+
         _LOGGER.info(
             "AI Cron started: %d jobs active", len(self._tasks)
         )
@@ -246,6 +259,101 @@ class AICronScheduler:
         """Restart all cron jobs (after settings change)."""
         await self.async_stop()
         await self.async_start()
+
+    # ── AI Controller Integration ──────────────────────────────
+    def _get_controller_summary(self) -> str:
+        """Build summary of recent AI controller actions for HEMS advisory."""
+        ctrl = self._strategy_controller
+        if not ctrl or not hasattr(ctrl, '_ai_cached_commands'):
+            return ""
+        cached = ctrl._ai_cached_commands
+        if not cached:
+            return ""
+
+        lines = ["\n\n---\n\n## 🧠 Wykonane akcje AI Controller\n"]
+
+        reasoning = cached.get("reasoning", "")
+        if reasoning:
+            lines.append(f"**Rozumowanie:** {reasoning}\n")
+
+        commands = cached.get("commands", [])
+        if commands:
+            lines.append("**Komendy:**")
+            for cmd in commands:
+                tool = cmd.get("tool", "?")
+                params = cmd.get("params", {})
+                if tool == "no_action":
+                    lines.append(f"- ✅ `no_action` — {params.get('reason', 'brak potrzeby')}")
+                elif tool == "force_charge":
+                    lines.append("- 🔋 `force_charge` — ładowanie baterii z sieci")
+                elif tool == "force_discharge":
+                    lines.append("- ⚡ `force_discharge` — rozładowanie baterii")
+                elif tool == "set_dod":
+                    lines.append(f"- 🔧 `set_dod` → {params.get('dod', '?')}%")
+                elif tool == "set_export_limit":
+                    lines.append(f"- 📤 `set_export_limit` → {params.get('limit', '?')}W")
+                elif tool in ("switch_on", "switch_off"):
+                    entity = params.get('entity', '?')
+                    icon = "🟢" if tool == "switch_on" else "🔴"
+                    lines.append(f"- {icon} `{tool}` → {entity}")
+                else:
+                    lines.append(f"- 🔹 `{tool}` → {params}")
+            lines.append("")
+
+        next_min = cached.get("next_check_minutes", 5)
+        lines.append(f"*Następna analiza za: {next_min} min*")
+
+        # Decision log (last 5)
+        if ctrl and hasattr(ctrl, 'decision_log') and ctrl.decision_log:
+            recent = ctrl.decision_log[-5:]
+            lines.append("\n**Ostatnie decyzje:**")
+            for entry in recent:
+                t = entry.get("time", "?")
+                msg = entry.get("message", entry.get("action", "?"))
+                lines.append(f"- `{t}` — {msg}")
+
+        return "\n".join(lines)
+
+    def _generate_autopilot_log(self) -> str:
+        """Generate a status log for the Autopilot cron entry."""
+        ctrl = self._strategy_controller
+        if not ctrl:
+            return "Autopilot: brak strategy_controller"
+
+        strategy = getattr(ctrl, 'active_strategy', None)
+        enabled = getattr(ctrl, 'enabled', False)
+        cached = getattr(ctrl, '_ai_cached_commands', None)
+        dry_run = getattr(ctrl, '_ai_dry_run', False)
+
+        lines = []
+        lines.append(f"**Strategia:** {strategy.value if strategy else '—'}")
+        lines.append(f"**Aktywny:** {'✅ Tak' if enabled else '❌ Nie'}")
+        lines.append(f"**Dry-run:** {'⚠️ Tak (symulacja)' if dry_run else '🟢 Nie (wykonywanie)'}")
+
+        if cached:
+            reasoning = cached.get("reasoning", "—")
+            lines.append(f"\n**Rozumowanie AI:** {reasoning}")
+
+            commands = cached.get("commands", [])
+            if commands:
+                cmd_names = [c.get("tool", "?") for c in commands]
+                lines.append(f"**Ostatnie komendy:** {', '.join(cmd_names)}")
+
+            next_min = cached.get("next_check_minutes", 5)
+            lines.append(f"**Następna analiza:** za {next_min} min")
+        else:
+            lines.append("\n*Brak zapisanych komend AI (oczekiwanie na pierwszy tick)*")
+
+        # Last 5 decisions
+        log = getattr(ctrl, 'decision_log', [])
+        if log:
+            lines.append("\n**Historia (ostatnie 5):**")
+            for entry in log[-5:]:
+                t = entry.get("time", "?")
+                msg = entry.get("message", entry.get("action", "?"))
+                lines.append(f"- `{t}` {msg}")
+
+        return "\n".join(lines)
 
     async def _run_loop(self, job_type: str, interval_min: int) -> None:
         """Run a cron job loop with the given interval."""
@@ -291,6 +399,10 @@ class AICronScheduler:
 
                 if job_type == "hems":
                     result = await self._ai.get_optimization_advice(data)
+                    # Append controller actions summary
+                    ctrl_summary = self._get_controller_summary()
+                    if ctrl_summary:
+                        result += ctrl_summary
                     result_key = AI_HEMS_ADVICE
                 elif job_type == "report":
                     result = await self._ai.generate_daily_report(data)
@@ -298,6 +410,9 @@ class AICronScheduler:
                 elif job_type == "anomaly":
                     result = await self._ai.detect_anomalies(data)
                     result_key = AI_ANOMALY_REPORT
+                elif job_type == "autopilot":
+                    result = self._generate_autopilot_log()
+                    result_key = AI_AUTOPILOT_LOG
                 else:
                     result = ""
                     result_key = ""
