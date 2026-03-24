@@ -3402,22 +3402,40 @@ class SmartingHomePanel extends HTMLElement {
       const btn = this.shadowRoot.getElementById(`hist-period-${k}`);
       if (btn) btn.classList.toggle("active", k === p);
     });
+    // Show nav only for 'day' (other periods use live utility meters)
+    const navCt = this.shadowRoot.getElementById('hist-nav-container');
+    if (navCt) navCt.style.display = p === 'day' ? 'flex' : 'none';
+    const navLabel = this.shadowRoot.getElementById('hist-date-label');
+    if (p !== 'day' && navLabel) {
+      const months = ["Styczeń","Luty","Marzec","Kwiecień","Maj","Czerwiec","Lipiec","Sierpień","Wrzesień","Październik","Listopad","Grudzień"];
+      const now = new Date();
+      if (p === 'week') { const w = Math.ceil(((now - new Date(now.getFullYear(),0,1)) / 86400000 + 1) / 7); navLabel.textContent = `Bieżący tydzień (${w})`; }
+      else if (p === 'month') navLabel.textContent = `${months[now.getMonth()]} ${now.getFullYear()}`;
+      else navLabel.textContent = `${now.getFullYear()}`;
+    }
+    this._histDate = new Date();
     this._updateHistoryTab();
   }
 
   _histNavigate(dir) {
+    if (this._histPeriod !== 'day') return;
     const d = this._histDate;
-    const p = this._histPeriod;
-    if (p === 'day') d.setDate(d.getDate() + dir);
-    else if (p === 'week') d.setDate(d.getDate() + dir * 7);
-    else if (p === 'month') d.setMonth(d.getMonth() + dir);
-    else if (p === 'year') d.setFullYear(d.getFullYear() + dir);
+    d.setDate(d.getDate() + dir);
+    // Don't go into the future
+    const now = new Date(); now.setHours(23,59,59,999);
+    if (d > now) { d.setTime(now.getTime()); d.setHours(0,0,0,0); }
     this._updateHistoryTab();
   }
 
   _histToday() {
     this._histDate = new Date();
     this._updateHistoryTab();
+  }
+
+  _isHistToday() {
+    const d = this._histDate;
+    const n = new Date();
+    return d.getDate() === n.getDate() && d.getMonth() === n.getMonth() && d.getFullYear() === n.getFullYear();
   }
 
   _getHistSensorData() {
@@ -3464,21 +3482,39 @@ class SmartingHomePanel extends HTMLElement {
     return { pvVal, impVal, expVal, selfUse, batChg, batDischg, costVal, revVal, savVal, balVal, autarky, selfCons, strings };
   }
 
-  _updateHistoryTab() {
+  async _updateHistoryTab() {
     if (!this._hass || this._activeTab !== 'history') return;
     const p = this._histPeriod;
-    const d = this._getHistSensorData();
+    const isToday = this._isHistToday();
+
+    // For daily view on past dates → fetch from HA Recorder
+    let d;
+    if (p === 'day' && !isToday) {
+      d = await this._fetchHistDayData(this._histDate);
+    } else {
+      d = this._getHistSensorData();
+    }
 
     // Date label
-    const labels = { day: "Dzień", week: "Tydzień", month: "Miesiąc", year: "Rok" };
     const now = this._histDate;
     const months = ["Styczeń","Luty","Marzec","Kwiecień","Maj","Czerwiec","Lipiec","Sierpień","Wrzesień","Październik","Listopad","Grudzień"];
     let dateStr = '';
-    if (p === 'day') dateStr = `${now.getDate()} ${months[now.getMonth()]} ${now.getFullYear()}`;
-    else if (p === 'week') { const w = Math.ceil(((now - new Date(now.getFullYear(),0,1)) / 86400000 + 1) / 7); dateStr = `Tydzień ${w}, ${now.getFullYear()}`; }
-    else if (p === 'month') dateStr = `${months[now.getMonth()]} ${now.getFullYear()}`;
-    else dateStr = `${now.getFullYear()}`;
+    if (p === 'day') {
+      dateStr = `${now.getDate()} ${months[now.getMonth()]} ${now.getFullYear()}`;
+      if (!isToday) dateStr += ' (historia)';
+    } else if (p === 'week') {
+      const w = Math.ceil(((now - new Date(now.getFullYear(),0,1)) / 86400000 + 1) / 7);
+      dateStr = `Bieżący tydzień (${w})`;
+    } else if (p === 'month') {
+      dateStr = `${months[now.getMonth()]} ${now.getFullYear()}`;
+    } else {
+      dateStr = `${now.getFullYear()}`;
+    }
     this._setText('hist-date-label', dateStr);
+
+    // Show/hide nav
+    const navCt = this.shadowRoot.getElementById('hist-nav-container');
+    if (navCt) navCt.style.display = p === 'day' ? 'flex' : 'none';
 
     // KPI Energy
     this._setText('hist-pv-val', `${d.pvVal.toFixed(1)} kWh`);
@@ -3545,6 +3581,69 @@ class SmartingHomePanel extends HTMLElement {
     this._renderHistComparison(d);
   }
 
+  async _fetchHistDayData(date) {
+    // Fetch historical data for a specific day from HA Recorder
+    const start = new Date(date); start.setHours(0,0,0,0);
+    const end = new Date(date); end.setHours(23,59,59,999);
+    const defaultData = { pvVal:0, impVal:0, expVal:0, selfUse:0, batChg:0, batDischg:0, costVal:0, revVal:0, savVal:0, balVal:0, autarky:0, selfCons:0, strings:[] };
+
+    try {
+      const stats = await this._hass.callWS({
+        type: 'recorder/statistics_during_period',
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
+        statistic_ids: [
+          'sensor.today_s_pv_generation',
+          'sensor.grid_export_daily',
+          'sensor.grid_import_daily',
+          'sensor.today_battery_charge',
+          'sensor.today_battery_discharge',
+        ],
+        period: 'day',
+        types: ['change'],
+      });
+
+      // Extract values from statistics response
+      const getChange = (id) => {
+        const arr = stats[id];
+        if (!arr || arr.length === 0) return 0;
+        return arr.reduce((sum, s) => sum + (s.change || 0), 0);
+      };
+
+      const pvVal = getChange('sensor.today_s_pv_generation');
+      const impVal = getChange('sensor.grid_export_daily'); // GoodWe swap
+      const expVal = getChange('sensor.grid_import_daily'); // GoodWe swap
+      const selfUse = Math.max(0, pvVal - expVal);
+      const batChg = getChange('sensor.today_battery_charge');
+      const batDischg = getChange('sensor.today_battery_discharge');
+
+      // Estimate costs using current tariff rates
+      const g13Rates = { import: 0.6271, export: 0.3573 }; // PLN/kWh fallback
+      const costVal = impVal * g13Rates.import;
+      const revVal = expVal * g13Rates.export;
+      const savVal = selfUse * g13Rates.import;
+      const balVal = revVal + savVal - costVal;
+
+      const autarky = (pvVal + impVal) > 0 ? Math.min(100, (pvVal / (pvVal + impVal)) * 100) : 0;
+      const selfCons = pvVal > 0 ? Math.min(100, (selfUse / pvVal) * 100) : 0;
+
+      // String ratios not available for past days, use even split
+      const strings = [];
+      const totalPv = this._nm('pv_power') || 1;
+      for (let i = 1; i <= 2; i++) {
+        const pw = this._nm(`pv${i}_power`) || 0;
+        const ratio = totalPv > 0 ? pw / totalPv : 0.5;
+        const label = (this._settings.pv_labels || {})[`pv${i}`] || `PV${i}`;
+        strings.push({ idx: i, label, power: pw, ratio, kwh: pvVal * ratio, pct: ratio * 100 });
+      }
+
+      return { pvVal, impVal, expVal, selfUse, batChg, batDischg, costVal, revVal, savVal, balVal, autarky, selfCons, strings };
+    } catch (e) {
+      console.warn('Smarting HOME: Recorder query failed, falling back to live data', e);
+      return this._getHistSensorData();
+    }
+  }
+
   _renderHistStrings(d) {
     const tbody = this.shadowRoot.getElementById('hist-string-tbody');
     if (!tbody) return;
@@ -3575,36 +3674,85 @@ class SmartingHomePanel extends HTMLElement {
     tbody.innerHTML = html;
   }
 
-  _renderHistCalendar() {
+  async _renderHistCalendar() {
     const container = this.shadowRoot.getElementById('hist-calendar-grid');
-    if (!container) return;
+    if (!container || !this._hass) return;
     const p = this._histPeriod;
     const now = new Date();
     let cells = [];
 
-    if (p === 'year') {
-      // 12 month cells
-      const monthNames = ['Sty','Lut','Mar','Kwi','Maj','Cze','Lip','Sie','Wrz','Paź','Lis','Gru'];
-      for (let m = 0; m < 12; m++) {
-        const isPast = m <= now.getMonth();
-        // Rough seasonality model for expected production
-        const seasonFactor = [0.2, 0.3, 0.6, 0.8, 1.0, 1.0, 0.95, 0.9, 0.7, 0.4, 0.2, 0.15];
-        cells.push({ label: monthNames[m], factor: isPast ? seasonFactor[m] : 0, isPast });
+    try {
+      if (p === 'year') {
+        // Query monthly stats for the current year
+        const yearStart = new Date(now.getFullYear(), 0, 1);
+        const stats = await this._hass.callWS({
+          type: 'recorder/statistics_during_period',
+          start_time: yearStart.toISOString(),
+          end_time: now.toISOString(),
+          statistic_ids: ['sensor.today_s_pv_generation'],
+          period: 'month',
+          types: ['change'],
+        });
+
+        const arr = stats['sensor.today_s_pv_generation'] || [];
+        const monthlyKWh = new Array(12).fill(0);
+        arr.forEach(s => {
+          const d = new Date(s.start);
+          monthlyKWh[d.getMonth()] = s.change || 0;
+        });
+        const maxKWh = Math.max(...monthlyKWh, 1);
+
+        const monthNames = ['Sty','Lut','Mar','Kwi','Maj','Cze','Lip','Sie','Wrz','Paź','Lis','Gru'];
+        for (let m = 0; m < 12; m++) {
+          const isPast = m <= now.getMonth();
+          const factor = isPast ? monthlyKWh[m] / maxKWh : 0;
+          const kwh = monthlyKWh[m];
+          cells.push({ label: monthNames[m], factor, isPast, kwh });
+        }
+        container.style.gridTemplateColumns = 'repeat(6, 1fr)';
+      } else {
+        // Query daily stats for last 30 days
+        const start = new Date(now);
+        start.setDate(start.getDate() - 29);
+        start.setHours(0,0,0,0);
+
+        const stats = await this._hass.callWS({
+          type: 'recorder/statistics_during_period',
+          start_time: start.toISOString(),
+          end_time: now.toISOString(),
+          statistic_ids: ['sensor.today_s_pv_generation'],
+          period: 'day',
+          types: ['change'],
+        });
+
+        const arr = stats['sensor.today_s_pv_generation'] || [];
+        const dailyMap = {};
+        arr.forEach(s => {
+          const d = new Date(s.start);
+          const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+          dailyMap[key] = s.change || 0;
+        });
+        const allVals = Object.values(dailyMap);
+        const maxKWh = Math.max(...allVals, 1);
+
+        for (let i = 29; i >= 0; i--) {
+          const dt = new Date(now);
+          dt.setDate(dt.getDate() - i);
+          const key = `${dt.getFullYear()}-${dt.getMonth()}-${dt.getDate()}`;
+          const kwh = dailyMap[key] || 0;
+          const factor = kwh / maxKWh;
+          const isToday = i === 0;
+          const isSelected = p === 'day' && dt.getDate() === this._histDate.getDate() && dt.getMonth() === this._histDate.getMonth();
+          cells.push({ label: String(dt.getDate()), factor, isPast: !isToday, isToday, isSelected, kwh });
+        }
+        container.style.gridTemplateColumns = 'repeat(10, 1fr)';
       }
-      container.style.gridTemplateColumns = 'repeat(6, 1fr)';
-    } else {
-      // 30 day cells (last 30 days)
+    } catch(e) {
+      console.warn('Smarting HOME: Calendar stats query failed', e);
+      // Fallback: show empty grid
       for (let i = 29; i >= 0; i--) {
-        const dt = new Date(now);
-        dt.setDate(dt.getDate() - i);
-        const dayNum = dt.getDate();
-        const isToday = i === 0;
-        // Simulate efficiency based on day-of-week and season
-        const dow = dt.getDay();
-        const monthFactor = [0.2, 0.3, 0.6, 0.8, 1.0, 1.0, 0.95, 0.9, 0.7, 0.4, 0.2, 0.15];
-        const base = monthFactor[dt.getMonth()];
-        const noise = 0.5 + Math.random() * 0.5; // pseudo-random for visual
-        cells.push({ label: String(dayNum), factor: base * noise, isPast: !isToday, isToday });
+        const dt = new Date(now); dt.setDate(dt.getDate() - i);
+        cells.push({ label: String(dt.getDate()), factor: 0, isPast: true, isToday: i === 0, kwh: 0 });
       }
       container.style.gridTemplateColumns = 'repeat(10, 1fr)';
     }
@@ -3616,11 +3764,30 @@ class SmartingHomePanel extends HTMLElement {
       else if (intensity < 0.3) bg = `rgba(231,76,60,${0.15 + intensity * 0.4})`;
       else if (intensity < 0.6) bg = `rgba(247,183,49,${0.15 + intensity * 0.4})`;
       else bg = `rgba(46,204,113,${0.15 + intensity * 0.5})`;
-      const border = c.isToday ? 'border:2px solid #00d4ff;' : '';
-      return `<div class="hist-cal-cell" style="background:${bg}; ${border}" title="${c.label}: efektywność ${(intensity * 100).toFixed(0)}%">
+      const border = c.isToday ? 'border:2px solid #00d4ff;' : c.isSelected ? 'border:2px solid #f7b731;' : '';
+      const kwhTip = c.kwh !== undefined ? ` | ${c.kwh.toFixed(1)} kWh` : '';
+      return `<div class="hist-cal-cell" style="background:${bg}; ${border}; cursor:pointer" title="${c.label}: ${(intensity * 100).toFixed(0)}%${kwhTip}" onclick="this.getRootNode().host._histCalendarClick('${c.label}')">
         <span>${c.label}</span>
       </div>`;
     }).join('');
+  }
+
+  _histCalendarClick(label) {
+    // Allow clicking a calendar day to navigate to it (daily view only)
+    if (this._histPeriod !== 'day') return;
+    const dayNum = parseInt(label, 10);
+    if (isNaN(dayNum)) return;
+    // Find the date within last 30 days matching this day number
+    const now = new Date();
+    for (let i = 0; i < 30; i++) {
+      const dt = new Date(now);
+      dt.setDate(dt.getDate() - i);
+      if (dt.getDate() === dayNum) {
+        this._histDate = dt;
+        this._updateHistoryTab();
+        return;
+      }
+    }
   }
 
   _renderHistComparison(d) {
@@ -6266,7 +6433,7 @@ class SmartingHomePanel extends HTMLElement {
               <button class="hist-period-btn" id="hist-period-month" onclick="this.getRootNode().host._switchHistoryPeriod('month')">🗓️ Miesiąc</button>
               <button class="hist-period-btn" id="hist-period-year" onclick="this.getRootNode().host._switchHistoryPeriod('year')">📊 Rok</button>
             </div>
-            <div style="display:flex; align-items:center; gap:6px; flex:1; justify-content:center">
+            <div id="hist-nav-container" style="display:flex; align-items:center; gap:6px; flex:1; justify-content:center">
               <button class="hist-nav-btn" onclick="this.getRootNode().host._histNavigate(-1)">◀</button>
               <span style="font-size:13px; font-weight:700; color:#e0e6ed; min-width:160px; text-align:center" id="hist-date-label">—</span>
               <button class="hist-nav-btn" onclick="this.getRootNode().host._histNavigate(1)">▶</button>
@@ -6702,7 +6869,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.16.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.16.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
