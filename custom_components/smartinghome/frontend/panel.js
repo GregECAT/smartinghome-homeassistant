@@ -73,6 +73,7 @@ class SmartingHomePanel extends HTMLElement {
     if (tab === 'wind') { this._initWindTab(); this._loadWindData(); this._fetchWindHistoricalStats(); }
     if (tab === 'hems') { this._updateHEMSArbitrage(); }
     if (tab === 'history') { this._updateHistoryTab(); }
+    if (tab === 'autopilot') { this._updateAutopilot(); }
   }
 
   /* ── Sensor mapping ─────────────────────── */
@@ -2518,7 +2519,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); }
 
   /* ── Moon phase calculation ─────────────────── */
   _getMoonPhase(date) {
@@ -4680,6 +4681,127 @@ class SmartingHomePanel extends HTMLElement {
           .hems-auto-card .hac-sensors { grid-template-columns: 1fr 1fr; }
         }
 
+        /* ═══  AUTOPILOT TAB STYLES  ═══ */
+        .ap-header-strip {
+          display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px;
+          padding: 14px 18px; margin-bottom: 16px;
+          background: linear-gradient(135deg, rgba(124,58,237,0.12), rgba(0,212,255,0.08));
+          border: 1px solid rgba(124,58,237,0.25);
+          border-radius: 16px;
+        }
+        .ap-header-strip .ap-h-title {
+          font-size: 14px; font-weight: 800; color: #fff;
+          background: linear-gradient(90deg, #7c3aed, #00d4ff);
+          -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .ap-badges { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+        .ap-badge {
+          padding: 3px 10px; border-radius: 20px; font-size: 9px; font-weight: 700;
+          text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .ap-badge.active { background: rgba(46,204,113,0.15); color: #2ecc71; }
+        .ap-badge.provider { background: rgba(0,212,255,0.12); color: #00d4ff; }
+        .ap-badge.tier { background: rgba(247,183,49,0.12); color: #f7b731; }
+
+        .ap-strategies {
+          display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+          gap: 10px; margin-bottom: 16px;
+        }
+        .ap-strategy-card {
+          position: relative; padding: 14px 16px; border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.06);
+          background: rgba(255,255,255,0.03); cursor: pointer;
+          transition: all 0.3s ease;
+        }
+        .ap-strategy-card:hover {
+          background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.12);
+          transform: translateY(-2px);
+        }
+        .ap-strategy-card.ap-active {
+          border-color: rgba(124,58,237,0.5);
+          background: linear-gradient(135deg, rgba(124,58,237,0.08), rgba(0,212,255,0.05));
+          animation: apPulse 3s ease-in-out infinite;
+        }
+        .ap-strategy-card.ap-active::before {
+          content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+          background: linear-gradient(90deg, #7c3aed, #00d4ff);
+          border-radius: 14px 14px 0 0;
+        }
+        @keyframes apPulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(124,58,237,0.15); }
+          50% { box-shadow: 0 0 16px 3px rgba(124,58,237,0.1); }
+        }
+        .ap-sc-icon { font-size: 20px; margin-bottom: 6px; }
+        .ap-sc-name { font-size: 12px; font-weight: 700; color: #fff; margin-bottom: 4px; }
+        .ap-sc-desc { font-size: 9px; color: #94a3b8; line-height: 1.4; }
+        .ap-sc-savings {
+          margin-top: 8px; padding: 6px 10px; border-radius: 8px;
+          background: rgba(46,204,113,0.08); font-size: 11px; font-weight: 700;
+          color: #2ecc71; text-align: center;
+        }
+
+        .ap-timeline {
+          display: flex; gap: 1px; height: 60px; border-radius: 10px;
+          overflow: hidden; margin: 10px 0;
+          background: rgba(255,255,255,0.03);
+        }
+        .ap-th {
+          flex: 1; display: flex; flex-direction: column; align-items: center;
+          justify-content: flex-end; position: relative; min-width: 0;
+          transition: all 0.2s;
+        }
+        .ap-th:hover { background: rgba(255,255,255,0.05); }
+        .ap-th-bar {
+          width: 100%; border-radius: 3px 3px 0 0;
+          transition: height 0.5s ease;
+        }
+        .ap-th-label {
+          font-size: 7px; color: #64748b; padding: 2px 0;
+        }
+        .ap-th.charge .ap-th-bar { background: linear-gradient(180deg, #2ecc71, #27ae60); }
+        .ap-th.discharge .ap-th-bar { background: linear-gradient(180deg, #e74c3c, #c0392b); }
+        .ap-th.sell .ap-th-bar { background: linear-gradient(180deg, #f7b731, #e67e22); }
+        .ap-th.hold .ap-th-bar { background: linear-gradient(180deg, #64748b, #475569); }
+        .ap-th.current { background: rgba(0,212,255,0.1); }
+        .ap-th.current .ap-th-label { color: #00d4ff; font-weight: 700; }
+
+        .ap-estimation {
+          display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+          gap: 8px; margin: 12px 0;
+        }
+        .ap-est-card {
+          padding: 12px; border-radius: 12px; text-align: center;
+          border: 1px solid rgba(255,255,255,0.04);
+        }
+        .ap-est-label { font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 0.8px; }
+        .ap-est-val { font-size: 20px; font-weight: 800; margin-top: 4px; }
+
+        .ap-ai-analysis {
+          padding: 14px; border-radius: 12px;
+          background: rgba(124,58,237,0.05); border: 1px solid rgba(124,58,237,0.15);
+          font-size: 12px; color: #cbd5e1; line-height: 1.6;
+          max-height: 400px; overflow-y: auto;
+        }
+        .ap-ai-analysis h2 { font-size: 14px; color: #fff; margin: 12px 0 6px; }
+        .ap-ai-analysis h3 { font-size: 12px; color: #a78bfa; margin: 8px 0 4px; }
+        .ap-ai-analysis strong { color: #fff; }
+        .ap-ai-analysis table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 8px 0; }
+        .ap-ai-analysis th, .ap-ai-analysis td {
+          padding: 4px 8px; border: 1px solid rgba(255,255,255,0.08); text-align: left;
+        }
+        .ap-ai-analysis th { background: rgba(255,255,255,0.04); color: #94a3b8; }
+
+        @media (max-width: 768px) {
+          .ap-strategies { grid-template-columns: repeat(2, 1fr); }
+          .ap-header-strip { grid-template-columns: 1fr; }
+          .ap-estimation { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 480px) {
+          .ap-strategies { grid-template-columns: 1fr; }
+          .ap-estimation { grid-template-columns: 1fr 1fr; }
+          .ap-timeline { height: 45px; }
+        }
+
         /* ── History Tab ── */
         .hist-control-bar {
           display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -4797,6 +4919,7 @@ class SmartingHomePanel extends HTMLElement {
               <button class="tab-btn" data-tab="winter" onclick="this.getRootNode().host._switchTab('winter')">❄️ Zima na plusie</button>
               <button class="tab-btn" data-tab="wind" onclick="this.getRootNode().host._switchTab('wind')">🌬️ Wiatr</button>
               <button class="tab-btn" data-tab="history" onclick="this.getRootNode().host._switchTab('history')">📅 Historia</button>
+              <button class="tab-btn" data-tab="autopilot" onclick="this.getRootNode().host._switchTab('autopilot')" id="tab-btn-autopilot" style="display:none">🧠 Autopilot</button>
             </div>
           </div>
           <!-- Center: Sun Widget (compact) -->
@@ -6765,6 +6888,147 @@ class SmartingHomePanel extends HTMLElement {
 
         </div>
 
+        <!-- ═══════ TAB: AUTOPILOT ═══════ -->
+        <div class="tab-content" data-tab="autopilot">
+
+          <!-- ═══ HEADER STRIP ═══ -->
+          <div class="ap-header-strip">
+            <div class="ap-h-title">🧠 HEMS Autopilot — AI Energy Automation</div>
+            <div class="ap-badges">
+              <span class="ap-badge active" id="ap-status">● GOTOWY</span>
+              <span class="ap-badge provider" id="ap-provider-badge">—</span>
+              <span class="ap-badge tier" id="ap-tier-badge">PRO</span>
+            </div>
+          </div>
+
+          <!-- ═══ STRATEGY SELECTOR ═══ -->
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-title">📋 Wybierz strategię sterowania</div>
+            <div class="ap-strategies" id="ap-strategy-cards"></div>
+          </div>
+
+          <!-- ═══ AI PROVIDER SELECTOR ═══ -->
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-title">🤖 Dostawca AI dla Autopilota</div>
+            <div style="display:grid; grid-template-columns:1fr 1fr auto; gap:10px; align-items:end">
+              <div>
+                <div style="font-size:10px; color:#64748b; margin-bottom:4px">Dostawca</div>
+                <select id="ap-provider-select" style="width:100%; padding:8px 12px; border-radius:10px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); color:#fff; font-size:12px" onchange="this.getRootNode().host._onAutopilotProviderChange()">
+                  <option value="gemini">Google Gemini</option>
+                  <option value="anthropic">Anthropic Claude</option>
+                </select>
+              </div>
+              <div>
+                <div style="font-size:10px; color:#64748b; margin-bottom:4px">Model</div>
+                <select id="ap-model-select" style="width:100%; padding:8px 12px; border-radius:10px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); color:#fff; font-size:12px">
+                  <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                  <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                  <option value="gemini-3-flash-preview">Gemini 3 Flash (Preview)</option>
+                </select>
+              </div>
+              <button class="action-btn" onclick="this.getRootNode().host._runAutopilotEstimation()" style="padding:8px 18px; font-size:12px; height:38px; background:linear-gradient(135deg, #7c3aed, #00d4ff); border:none; font-weight:700">
+                🚀 Uruchom estymację
+              </button>
+            </div>
+          </div>
+
+          <!-- ═══ CONTEXT: WEATHER + TARIFF ═══ -->
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-title">🌤️ Kontekst: Pogoda + Taryfa</div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px" id="ap-context-grid">
+              <div style="padding:8px; border-radius:10px; background:rgba(247,183,49,0.08); text-align:center">
+                <div style="font-size:9px; color:#64748b">☀️ Prognoza PV</div>
+                <div style="font-size:16px; font-weight:700; color:#f7b731" id="ap-ctx-pv">— kWh</div>
+              </div>
+              <div style="padding:8px; border-radius:10px; background:rgba(0,212,255,0.08); text-align:center">
+                <div style="font-size:9px; color:#64748b">🔋 SOC</div>
+                <div style="font-size:16px; font-weight:700; color:#00d4ff" id="ap-ctx-soc">—%</div>
+              </div>
+              <div style="padding:8px; border-radius:10px; background:rgba(46,204,113,0.08); text-align:center">
+                <div style="font-size:9px; color:#64748b">💰 RCE</div>
+                <div style="font-size:16px; font-weight:700; color:#2ecc71" id="ap-ctx-rce">— zł</div>
+              </div>
+              <div style="padding:8px; border-radius:10px; background:rgba(231,76,60,0.08); text-align:center">
+                <div style="font-size:9px; color:#64748b">⏰ Strefa G13</div>
+                <div style="font-size:16px; font-weight:700; color:#e74c3c" id="ap-ctx-g13">—</div>
+              </div>
+              <div style="padding:8px; border-radius:10px; background:rgba(149,165,166,0.08); text-align:center">
+                <div style="font-size:9px; color:#64748b">🌡️ Temp.</div>
+                <div style="font-size:16px; font-weight:700; color:#95a5a6" id="ap-ctx-temp">—°C</div>
+              </div>
+              <div style="padding:8px; border-radius:10px; background:rgba(149,165,166,0.08); text-align:center">
+                <div style="font-size:9px; color:#64748b">☁️ Chmury</div>
+                <div style="font-size:16px; font-weight:700; color:#95a5a6" id="ap-ctx-clouds">—%</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ═══ 24H TIMELINE ═══ -->
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-title">🕐 Plan 24h — Timeline</div>
+            <div class="ap-timeline" id="ap-timeline">
+              <div style="width:100%; display:flex; align-items:center; justify-content:center; color:#64748b; font-size:11px">Kliknij "Uruchom estymację" aby wygenerować plan</div>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-top:6px; font-size:8px; color:#475569">
+              <span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>23:00</span>
+            </div>
+            <div style="display:flex; gap:12px; margin-top:8px; font-size:9px">
+              <span style="color:#2ecc71">■ Ładuj</span>
+              <span style="color:#e74c3c">■ Rozładuj</span>
+              <span style="color:#f7b731">■ Sprzedaj</span>
+              <span style="color:#64748b">■ Trzymaj</span>
+            </div>
+          </div>
+
+          <!-- ═══ ESTIMATION RESULTS ═══ -->
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-title">💰 Estymacja wyników</div>
+            <div class="ap-estimation" id="ap-estimation">
+              <div class="ap-est-card" style="background:rgba(46,204,113,0.06)">
+                <div class="ap-est-label">💵 Oszczędności netto</div>
+                <div class="ap-est-val" style="color:#2ecc71" id="ap-est-net">— zł</div>
+              </div>
+              <div class="ap-est-card" style="background:rgba(0,212,255,0.06)">
+                <div class="ap-est-label">🏠 Autokonsumpcja</div>
+                <div class="ap-est-val" style="color:#00d4ff" id="ap-est-selfcons">— kWh</div>
+              </div>
+              <div class="ap-est-card" style="background:rgba(231,76,60,0.06)">
+                <div class="ap-est-label">↓ Import</div>
+                <div class="ap-est-val" style="color:#e74c3c" id="ap-est-import">— kWh</div>
+              </div>
+              <div class="ap-est-card" style="background:rgba(46,204,113,0.06)">
+                <div class="ap-est-label">↑ Eksport</div>
+                <div class="ap-est-val" style="color:#2ecc71" id="ap-est-export">— kWh</div>
+              </div>
+              <div class="ap-est-card" style="background:rgba(231,76,60,0.06)">
+                <div class="ap-est-label">💸 Koszt importu</div>
+                <div class="ap-est-val" style="color:#e74c3c" id="ap-est-cost">— zł</div>
+              </div>
+              <div class="ap-est-card" style="background:rgba(124,58,237,0.06)">
+                <div class="ap-est-label">📊 vs Brak zarządzania</div>
+                <div class="ap-est-val" style="color:#7c3aed" id="ap-est-vs">— zł</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ═══ AI ANALYSIS ═══ -->
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-title">🧠 Analiza AI</div>
+            <div class="ap-ai-analysis" id="ap-ai-analysis">
+              <div style="color:#64748b; text-align:center; padding:20px">Uruchom estymację, aby AI przeanalizowało strategię i zaproponowało optymalizacje.</div>
+            </div>
+          </div>
+
+          <!-- ═══ ACTIVITY LOG ═══ -->
+          <div class="card">
+            <div class="card-title">📋 Log decyzji Autopilota</div>
+            <div id="ap-activity-log" style="font-size:11px; color:#94a3b8">
+              <div style="color:#64748b; text-align:center; padding:12px">Brak aktywności</div>
+            </div>
+          </div>
+
+        </div>
+
         <!-- ═══════ TAB: SETTINGS ═══════ -->
         <div class="tab-content" data-tab="settings">
           <div class="grid-cards gc-2">
@@ -7035,7 +7299,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.17.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.18.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -7056,6 +7320,296 @@ class SmartingHomePanel extends HTMLElement {
 
     if (this._hass) this._updateAll();
     this._interval = setInterval(() => { if (this._hass) this._updateAll(); }, 5000);
+  }
+
+  /* ═══════════════════════════════════════════════════
+     AUTOPILOT TAB — JavaScript Methods
+     ═══════════════════════════════════════════════════ */
+
+  _updateAutopilotVisibility() {
+    const btn = this.shadowRoot.getElementById('tab-btn-autopilot');
+    if (!btn) return;
+    const tier = this._tier();
+    btn.style.display = (tier === 'PRO' || tier === 'ENTERPRISE') ? '' : 'none';
+    // Update tier badge
+    const tierBadge = this.shadowRoot.getElementById('ap-tier-badge');
+    if (tierBadge) tierBadge.textContent = tier || 'FREE';
+  }
+
+  _updateAutopilot() {
+    this._updateAutopilotVisibility();
+    this._renderStrategyCards();
+    this._updateAutopilotContext();
+    this._loadAutopilotPlan();
+    this._updateAutopilotProviderUI();
+  }
+
+  _renderStrategyCards() {
+    const container = this.shadowRoot.getElementById('ap-strategy-cards');
+    if (!container) return;
+
+    const strategies = [
+      { id: 'max_self_consumption', icon: '🟢', name: 'Max Autokonsumpcja', desc: 'Priorytet: zużycie własne PV, minimalne import/export. Bateria buforuje nadwyżki.' },
+      { id: 'max_profit', icon: '💰', name: 'Max Zysk (Arbitraż)', desc: 'Kupuj tanio (off-peak/RCE niskie), sprzedawaj drogo (peak/RCE wysokie). Max arbitraż.' },
+      { id: 'battery_protection', icon: '🔋', name: 'Ochrona Baterii', desc: 'Zachowawcze DOD, pełna bateria przed szczytem, ochrona żywotności.' },
+      { id: 'zero_export', icon: '⚡', name: 'Zero Export', desc: 'Zerowy eksport do sieci. Cała energia w domu + bateria.' },
+      { id: 'weather_adaptive', icon: '🌧️', name: 'Pogodowy Adaptacyjny', desc: 'AI analizuje prognozę pogody i dynamicznie zmienia strategię godzina po godzinie.' },
+      { id: 'ai_full_autonomy', icon: '🧠', name: 'AI Pełna Autonomia', desc: 'AI sam decyduje o strategii na każdą godzinę dnia. Pełna autonomia.' },
+    ];
+
+    const active = this._autopilotActiveStrategy || 'max_self_consumption';
+
+    container.innerHTML = strategies.map(s => `
+      <div class="ap-strategy-card ${s.id === active ? 'ap-active' : ''}"
+           onclick="this.getRootNode().host._switchAutopilotStrategy('${s.id}')">
+        <div class="ap-sc-icon">${s.icon}</div>
+        <div class="ap-sc-name">${s.name}</div>
+        <div class="ap-sc-desc">${s.desc}</div>
+        <div class="ap-sc-savings" id="ap-savings-${s.id}">—</div>
+      </div>
+    `).join('');
+  }
+
+  _switchAutopilotStrategy(strategyId) {
+    this._autopilotActiveStrategy = strategyId;
+    this._renderStrategyCards();
+    // Clear previous results when strategy changes
+    const timeline = this.shadowRoot.getElementById('ap-timeline');
+    if (timeline) timeline.innerHTML = '<div style="width:100%; display:flex; align-items:center; justify-content:center; color:#64748b; font-size:11px">Kliknij "Uruchom estymację" aby wygenerować plan</div>';
+  }
+
+  _updateAutopilotContext() {
+    const d = this._hass ? this._hass.states : {};
+    const g = (id) => { const s = d[id]; return s && s.state !== 'unavailable' && s.state !== 'unknown' ? s.state : null; };
+
+    const smap = this._sensorMap || {};
+    const pvForecast = g('sensor.energy_production_today') || g('sensor.energy_production_today_2');
+    const soc = g(smap.battery_soc || 'sensor.battery_state_of_charge');
+    const rce = g('sensor.rce_pse_cena');
+
+    const setEl = (id, val) => { const el = this.shadowRoot.getElementById(id); if (el) el.textContent = val; };
+
+    setEl('ap-ctx-pv', pvForecast ? `${parseFloat(pvForecast).toFixed(1)} kWh` : '— kWh');
+    setEl('ap-ctx-soc', soc ? `${parseFloat(soc).toFixed(0)}%` : '—%');
+    setEl('ap-ctx-rce', rce ? `${parseFloat(rce).toFixed(0)} zł/MWh` : '— zł');
+
+    // G13 zone
+    const now = new Date();
+    const h = now.getHours(), m = now.getMonth() + 1, wd = now.getDay();
+    let zone = 'off_peak';
+    if (wd >= 1 && wd <= 5) {
+      if (h >= 7 && h < 13) zone = 'morning_peak';
+      else if (m >= 4 && m <= 9) { if (h >= 19 && h < 22) zone = 'afternoon_peak'; }
+      else { if (h >= 16 && h < 21) zone = 'afternoon_peak'; }
+    }
+    const zoneLabels = { off_peak: '💚 Off-Peak', morning_peak: '🟡 Poranny', afternoon_peak: '🔴 Popołud.' };
+    setEl('ap-ctx-g13', zoneLabels[zone] || zone);
+
+    // Weather
+    const weather = d['weather.dom'];
+    if (weather) {
+      setEl('ap-ctx-temp', `${weather.attributes.temperature || '—'}°C`);
+      setEl('ap-ctx-clouds', `${weather.attributes.cloud_coverage || '—'}%`);
+    }
+  }
+
+  _updateAutopilotProviderUI() {
+    const providerSelect = this.shadowRoot.getElementById('ap-provider-select');
+    const modelSelect = this.shadowRoot.getElementById('ap-model-select');
+    if (!providerSelect || !modelSelect) return;
+
+    // Load saved provider preference
+    try {
+      const settingsUrl = '/local/smartinghome/settings.json';
+      fetch(settingsUrl + '?t=' + Date.now()).then(r => r.json()).then(s => {
+        const savedProvider = s.default_ai_provider || 'gemini';
+        providerSelect.value = savedProvider;
+        this._updateAutopilotModelOptions(savedProvider);
+
+        const savedModel = savedProvider === 'gemini' ? s.gemini_model : s.anthropic_model;
+        if (savedModel) modelSelect.value = savedModel;
+
+        // Update provider badge
+        const badge = this.shadowRoot.getElementById('ap-provider-badge');
+        if (badge) badge.textContent = savedProvider === 'gemini' ? 'Gemini' : 'Claude';
+      }).catch(() => {});
+    } catch (e) {}
+  }
+
+  _onAutopilotProviderChange() {
+    const providerSelect = this.shadowRoot.getElementById('ap-provider-select');
+    if (!providerSelect) return;
+    this._updateAutopilotModelOptions(providerSelect.value);
+    const badge = this.shadowRoot.getElementById('ap-provider-badge');
+    if (badge) badge.textContent = providerSelect.value === 'gemini' ? 'Gemini' : 'Claude';
+  }
+
+  _updateAutopilotModelOptions(provider) {
+    const modelSelect = this.shadowRoot.getElementById('ap-model-select');
+    if (!modelSelect) return;
+
+    const models = {
+      gemini: [
+        { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (szybki)' },
+        { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro (zaawansowany)' },
+        { value: 'gemini-3-flash-preview', label: 'Gemini 3 Flash (Preview)' },
+      ],
+      anthropic: [
+        { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (szybki)' },
+        { value: 'claude-opus-4-6', label: 'Claude Opus 4.6 (najpotężniejszy)' },
+        { value: 'claude-3-5-haiku', label: 'Claude Haiku 3.5 (najtańszy)' },
+      ],
+    };
+
+    const options = models[provider] || models.gemini;
+    modelSelect.innerHTML = options.map(m => `<option value="${m.value}">${m.label}</option>`).join('');
+  }
+
+  async _runAutopilotEstimation() {
+    const strategy = this._autopilotActiveStrategy || 'max_self_consumption';
+    const providerSelect = this.shadowRoot.getElementById('ap-provider-select');
+    const provider = providerSelect ? providerSelect.value : 'auto';
+
+    // Update status
+    const statusEl = this.shadowRoot.getElementById('ap-status');
+    if (statusEl) { statusEl.textContent = '⏳ ANALIZUJĘ...'; statusEl.style.color = '#f7b731'; }
+
+    try {
+      await this._hass.callService('smartinghome', 'run_autopilot', {
+        strategy: strategy,
+        provider: provider,
+        with_ai: true,
+      });
+
+      // Wait for result event via polling settings.json
+      setTimeout(() => this._loadAutopilotPlan(), 2000);
+      setTimeout(() => this._loadAutopilotPlan(), 8000);
+      setTimeout(() => this._loadAutopilotPlan(), 15000);
+      setTimeout(() => this._loadAutopilotPlan(), 30000);
+
+    } catch (err) {
+      console.error('Autopilot estimation failed:', err);
+      if (statusEl) { statusEl.textContent = '❌ BŁĄD'; statusEl.style.color = '#e74c3c'; }
+    }
+  }
+
+  async _loadAutopilotPlan() {
+    try {
+      const r = await fetch('/local/smartinghome/settings.json?t=' + Date.now());
+      const s = await r.json();
+      const plan = s.ai_autopilot_plan;
+      if (!plan || !plan.hourly_plan) return;
+
+      // Update status
+      const statusEl = this.shadowRoot.getElementById('ap-status');
+      if (statusEl) { statusEl.textContent = '● AKTYWNY'; statusEl.style.color = '#2ecc71'; }
+
+      // Update strategy savings across cards
+      if (plan.strategy) {
+        const savingsEl = this.shadowRoot.getElementById(`ap-savings-${plan.strategy}`);
+        if (savingsEl) {
+          const net = plan.net_savings || 0;
+          savingsEl.textContent = net >= 0 ? `+${net.toFixed(2)} zł` : `${net.toFixed(2)} zł`;
+          savingsEl.style.color = net >= 0 ? '#2ecc71' : '#e74c3c';
+        }
+      }
+
+      // Render 24h timeline
+      this._renderAutopilotTimeline(plan.hourly_plan);
+
+      // Update estimation values
+      const setEl = (id, val) => { const el = this.shadowRoot.getElementById(id); if (el) el.textContent = val; };
+      setEl('ap-est-net', `${(plan.net_savings || 0).toFixed(2)} zł`);
+      setEl('ap-est-selfcons', `${(plan.total_self_consumption_kwh || 0).toFixed(1)} kWh`);
+      setEl('ap-est-import', `${(plan.total_import_kwh || 0).toFixed(1)} kWh`);
+      setEl('ap-est-export', `${(plan.total_export_kwh || 0).toFixed(1)} kWh`);
+      setEl('ap-est-cost', `${(plan.total_cost || 0).toFixed(2)} zł`);
+      const vs = plan.vs_no_management || 0;
+      setEl('ap-est-vs', `${vs >= 0 ? '+' : ''}${vs.toFixed(2)} zł`);
+
+      // AI Analysis
+      if (plan.ai_analysis) {
+        const analysisEl = this.shadowRoot.getElementById('ap-ai-analysis');
+        if (analysisEl) {
+          analysisEl.innerHTML = this._markdownToHtml(plan.ai_analysis);
+        }
+      }
+
+      // Activity log
+      this._updateAutopilotLog(plan);
+
+    } catch (e) { /* settings not ready yet */ }
+  }
+
+  _renderAutopilotTimeline(hourlyPlan) {
+    const container = this.shadowRoot.getElementById('ap-timeline');
+    if (!container || !hourlyPlan) return;
+
+    const currentHour = new Date().getHours();
+
+    // Find max absolute battery delta for scaling bars
+    const maxDelta = Math.max(1, ...hourlyPlan.map(h => Math.abs(h.battery || 0)));
+
+    container.innerHTML = hourlyPlan.map(h => {
+      const action = h.action || 'hold';
+      const barHeight = Math.max(5, Math.abs(h.battery || 0) / maxDelta * 50);
+      const isCurrent = h.hour === currentHour;
+      const tooltip = `${h.hour}:00 | ${action.toUpperCase()} | SOC: ${h.soc_start}→${h.soc_end}% | PV: ${h.pv}W | Load: ${h.load}W`;
+
+      return `<div class="ap-th ${action} ${isCurrent ? 'current' : ''}" title="${tooltip}">
+        <div class="ap-th-bar" style="height:${barHeight}px"></div>
+        <div class="ap-th-label">${h.hour}</div>
+      </div>`;
+    }).join('');
+  }
+
+  _updateAutopilotLog(plan) {
+    const logEl = this.shadowRoot.getElementById('ap-activity-log');
+    if (!logEl) return;
+
+    const timestamp = plan.timestamp || new Date().toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+    const provider = plan.provider || '—';
+    const strategy = plan.label || plan.strategy || '—';
+    const net = (plan.net_savings || 0).toFixed(2);
+
+    // Prepend new entry
+    const entry = `<div style="display:flex; justify-content:space-between; padding:6px 8px; border-bottom:1px solid rgba(255,255,255,0.04)">
+      <span><strong>${timestamp}</strong> ${strategy}</span>
+      <span style="color:${parseFloat(net) >= 0 ? '#2ecc71' : '#e74c3c'}">${net} zł</span>
+      <span style="color:#64748b; font-size:9px">${provider}</span>
+    </div>`;
+
+    const existing = logEl.innerHTML;
+    if (existing.includes('Brak aktywności')) {
+      logEl.innerHTML = entry;
+    } else {
+      logEl.innerHTML = entry + existing;
+    }
+    // Keep max 10 entries
+    const entries = logEl.querySelectorAll(':scope > div');
+    if (entries.length > 10) {
+      for (let i = 10; i < entries.length; i++) entries[i].remove();
+    }
+  }
+
+  _markdownToHtml(md) {
+    if (!md) return '';
+    return md
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+      .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+      .replace(/^# (.+)$/gm, '<h2>$1</h2>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.06);padding:1px 4px;border-radius:3px;font-size:10px">$1</code>')
+      .replace(/\n\n/g, '<br><br>')
+      .replace(/\n/g, '<br>')
+      .replace(/\|(.+)\|/g, (match) => {
+        const cells = match.split('|').filter(c => c.trim());
+        if (cells.every(c => c.trim().match(/^[-:]+$/))) return '';
+        const tag = cells.every(c => c.trim().match(/^[-:]+$/)) ? 'th' : 'td';
+        return '<tr>' + cells.map(c => `<${tag}>${c.trim()}</${tag}>`).join('') + '</tr>';
+      });
   }
 }
 
