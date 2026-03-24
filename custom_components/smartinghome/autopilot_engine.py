@@ -773,3 +773,155 @@ Maximum 3 commands per response. Order by priority (most important first)."""
 
     return prompt
 
+
+# ═══════════════════════════════════════════════════════════════
+# AI STRATEGIST PROMPT — 24h strategic plan with time_blocks
+# ═══════════════════════════════════════════════════════════════
+
+
+def build_ai_strategist_prompt(
+    current_data: dict[str, Any],
+    estimation: dict[str, Any],
+    device_status_text: str = "",
+) -> str:
+    """Build prompt for AI Strategist — deep 24h strategic plan.
+
+    Unlike build_ai_controller_prompt (quick JSON for immediate action),
+    this prompt requests a FULL 24H PLAN with time_blocks, each containing
+    specific commands per tariff zone.
+
+    The Strategist runs on cron (every 15-60 min) and produces a plan
+    that the Executor follows tick by tick without needing AI API calls.
+    """
+    now = datetime.now()
+    day_names = ['Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota', 'Niedziela']
+    month = now.month
+    weekday = now.weekday()
+    hour = now.hour
+
+    # G13 zone
+    current_zone = _get_g13_zone(hour, month, weekday)
+    current_price = _get_g13_price(current_zone)
+
+    # Build G13 schedule for today
+    schedule = G13_WINTER_SCHEDULE if month in WINTER_MONTHS else G13_SUMMER_SCHEDULE
+    g13_lines = []
+    for (start, end), zone in schedule.items():
+        price = G13_PRICES.get(zone, 0.63)
+        marker = " ← TERAZ" if _get_g13_zone(hour, month, weekday) == zone else ""
+        g13_lines.append(f"  {start:02d}:00-{end:02d}:00 → {zone.value} ({price:.2f} PLN/kWh){marker}")
+
+    # RCE data
+    rce_mwh = float(current_data.get('rce_price') or 250)
+    rce_sell = float(current_data.get('rce_sell') or (rce_mwh / 1000) * RCE_PROSUMER_COEFFICIENT)
+
+    # Battery
+    bat_cap = current_data.get('battery_capacity') or DEFAULT_BATTERY_CAPACITY
+    bat_cap_kwh = float(bat_cap) / 1000
+
+    # Hourly plan from mathematical model
+    plan_lines = []
+    for h in estimation.get("hourly_plan", []):
+        zone = _get_g13_zone(h['hour'], month, weekday)
+        plan_lines.append(
+            f"  {h['hour']:02d}:00 | PV:{h['pv']:5.0f}W | Load:{h['load']:5.0f}W | "
+            f"Bat:{h['battery']:+6.0f}W | Grid:{h['grid']:+6.0f}W | "
+            f"SOC:{h['soc_start']:.0f}→{h['soc_end']:.0f}% | {zone.value}"
+        )
+
+    # Tools description
+    tools_desc = "\n".join(
+        f'  - "{name}": {desc}' for name, desc in AI_CONTROLLER_TOOLS.items()
+    )
+
+    # Device status section
+    device_section = ""
+    if device_status_text:
+        device_section = f"\n{device_status_text}\n"
+
+    prompt = f"""You are an expert energy strategist AI for a home solar+battery system in Poland (G13 tariff).
+
+YOUR JOB: Create a STRATEGIC 24H PLAN with specific commands for each time block.
+This plan will be executed automatically by the InverterAgent. Respond ONLY with valid JSON.
+
+═══ SYSTEM ═══
+  Battery: {bat_cap_kwh:.1f} kWh, Max charge/discharge: {bat_cap_kwh * 0.5:.1f} kW
+  Inverter: hybrid 3-phase
+  Managed Loads: boiler (3.8kW), ac, socket2
+{device_section}
+═══ AVAILABLE TOOLS ═══
+{tools_desc}
+
+═══ CURRENT STATE ({now.strftime('%Y-%m-%d')} {day_names[weekday]} {now.strftime('%H:%M')}) ═══
+  PV: {current_data.get('pv_power', 0)} W | Load: {current_data.get('load', 0)} W
+  Battery SOC: {current_data.get('battery_soc', 0)}% | Power: {current_data.get('battery_power', 0)} W
+  Grid: {current_data.get('grid_power', 0)} W (+=import) | Surplus: {current_data.get('pv_surplus', 0)} W
+
+═══ TARIFF G13 — SCHEDULE ═══
+{'Weekend (all off-peak 0.63 PLN/kWh)' if weekday >= 5 else chr(10).join(g13_lines)}
+  Prices: off_peak=0.63, morning_peak=0.91, afternoon_peak=1.50 PLN/kWh
+  Arbitrage potential: charge@0.63 → discharge@1.50 = 0.87 PLN/kWh × {bat_cap_kwh:.1f} kWh = {bat_cap_kwh * 0.87:.2f} PLN/cycle
+
+═══ RCE PRICES ═══
+  Current: {rce_mwh:.1f} PLN/MWh (sell: {rce_sell:.4f} PLN/kWh)
+  +1h: {current_data.get('rce_next_hour', 'N/A')} | +2h: {current_data.get('rce_2h', 'N/A')} | +3h: {current_data.get('rce_3h', 'N/A')} PLN/MWh
+  Today avg: {current_data.get('rce_avg_today', 'N/A')} | min: {current_data.get('rce_min_today', 'N/A')} | max: {current_data.get('rce_max_today', 'N/A')} PLN/MWh
+
+═══ WEATHER ═══
+  {current_data.get('weather_condition', 'N/A')}, {current_data.get('weather_temp', 'N/A')}°C, clouds {current_data.get('weather_clouds', 'N/A')}%
+  PV remaining today: {current_data.get('forecast_remaining', 0)} kWh | Tomorrow: {current_data.get('forecast_tomorrow', 0)} kWh
+
+═══ MATHEMATICAL MODEL (current estimation) ═══
+{chr(10).join(plan_lines) if plan_lines else '  No hourly plan available'}
+
+TOTALS: Import {estimation.get('total_import_kwh', 0)} kWh ({estimation.get('total_cost', 0):.2f} PLN) | \
+Export {estimation.get('total_export_kwh', 0)} kWh ({estimation.get('total_revenue', 0):.2f} PLN) | \
+Net savings: {estimation.get('net_savings', 0):.2f} PLN
+
+═══ STRATEGIC RULES ═══
+1. ARBITRAGE IS KING: charge battery at off_peak (0.63) → discharge at afternoon_peak (1.50) = 0.87 PLN/kWh
+2. Before EVERY peak: battery MUST be at 95-100% SOC. Plan charging accordingly.
+3. Night charge (21:00-07:00 off_peak at 0.63) is CRITICAL for morning peak coverage.
+4. During peaks: ZERO grid import. Battery + PV must cover all load.
+5. Managed loads (boiler, AC) should run ONLY during off-peak or PV surplus > 2kW.
+6. If RCE sell > current G13 buy AND battery is full → consider export.
+7. NEVER discharge below 10% SOC.
+8. Consider weather: cloudy tomorrow → charge more tonight.
+9. CHECK DEVICE STATUS — don't send commands the system is already executing.
+
+═══ RESPONSE FORMAT ═══
+CRITICAL: Respond with ONLY valid JSON. No markdown, no text before/after.
+
+{{
+  "analysis": "Krótka analiza obecnej sytuacji (max 3 zdania, po polsku)",
+  "time_blocks": [
+    {{
+      "start": "HH:MM",
+      "end": "HH:MM",
+      "zone": "off_peak|morning_peak|afternoon_peak",
+      "price": 0.63,
+      "strategy": "aggressive_charge|discharge_self_consume|night_charge|pv_optimize|no_action",
+      "commands": [
+        {{"tool": "force_charge", "params": {{}}}},
+        {{"tool": "switch_on", "params": {{"entity": "boiler"}}}}
+      ],
+      "reasoning": "Uzasadnienie dla tego bloku (1 zdanie)"
+    }}
+  ],
+  "savings_estimate": {{
+    "optimized_cost_pln": 7.56,
+    "net_savings_pln": 8.74,
+    "vs_current_plan_pln": 6.27
+  }},
+  "next_analysis_minutes": 30
+}}
+
+RULES FOR time_blocks:
+- Start from NOW ({now.strftime('%H:%M')}) and cover next 24h
+- Each block aligns with G13 tariff zone transitions
+- Max 8 blocks (group similar periods)
+- Max 4 commands per block
+- Order blocks chronologically
+- "commands" uses same tools as ═══ AVAILABLE TOOLS ═══ above"""
+
+    return prompt
