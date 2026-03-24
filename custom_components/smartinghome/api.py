@@ -51,10 +51,16 @@ class SmartingHomeAPI:
         self,
         session: aiohttp.ClientSession,
         license_key: str,
+        device_id: str = "",
+        ha_version: str = "",
+        integration_version: str = "1.14.0",
     ) -> None:
         """Initialize the API client."""
         self._session = session
         self._license_key = license_key
+        self._device_id = device_id
+        self._ha_version = ha_version
+        self._integration_version = integration_version
         self._base_url = LICENSE_API_URL
 
     async def validate_license(self) -> LicenseInfo:
@@ -68,12 +74,13 @@ class SmartingHomeAPI:
         headers = {
             "Content-Type": "application/json",
             "X-License-Key": self._license_key,
-            "User-Agent": "SmartingHOME-HA/1.2.0",
+            "User-Agent": f"SmartingHOME-HA/{self._integration_version}",
         }
         payload = {
             "license_key": self._license_key,
             "product": "smartinghome-ha",
-            "version": "1.2.0",
+            "version": self._integration_version,
+            "device_id": self._device_id or None,
         }
 
         try:
@@ -145,7 +152,7 @@ class SmartingHomeAPI:
         url = f"{self._base_url}{LICENSE_STATUS_ENDPOINT}"
         headers = {
             "X-License-Key": self._license_key,
-            "User-Agent": "SmartingHOME-HA/1.2.0",
+            "User-Agent": f"SmartingHOME-HA/{self._integration_version}",
         }
 
         try:

@@ -41,14 +41,22 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: SmartingHomeConfigEntry
 ) -> bool:
     """Set up Smarting HOME from a config entry."""
-    _LOGGER.info("Setting up Smarting HOME Energy Management v1.3.1")
+    _LOGGER.info("Setting up Smarting HOME Energy Management v1.14.0")
 
     hass.data.setdefault(DOMAIN, {})
 
-    # Initialize API client
+    # Initialize API client with device identity
     session = async_get_clientsession(hass)
     license_key = entry.data.get(CONF_LICENSE_KEY, "")
-    api = SmartingHomeAPI(session, license_key)
+    device_id = str(hass.data.get("core.uuid", entry.entry_id))
+    ha_version = hass.config.version or "unknown"
+    api = SmartingHomeAPI(
+        session,
+        license_key,
+        device_id=device_id,
+        ha_version=ha_version,
+        integration_version="1.14.0",
+    )
 
     # Initialize license manager
     license_mode = entry.data.get(CONF_LICENSE_MODE, LICENSE_MODE_FREE)
