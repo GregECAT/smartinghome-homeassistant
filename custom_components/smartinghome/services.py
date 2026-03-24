@@ -466,13 +466,63 @@ async def async_setup_services(
                                          data.get("battery_capacity_wh", 10000)),
         }
 
-        # Try to get weather data
+        # Try to get weather data (AccuWeather / weather.dom)
         try:
             weather_entity = hass.states.get("weather.dom")
+            if not weather_entity:
+                # Fallback priority
+                for wid in ("weather.home", "weather.accuweather", "weather.forecast_home"):
+                    weather_entity = hass.states.get(wid)
+                    if weather_entity:
+                        break
+
             if weather_entity:
                 ai_data["weather_temp"] = weather_entity.attributes.get("temperature")
                 ai_data["weather_clouds"] = weather_entity.attributes.get("cloud_coverage")
                 ai_data["weather_condition"] = weather_entity.state
+                ai_data["weather_humidity"] = weather_entity.attributes.get("humidity")
+                ai_data["weather_pressure"] = weather_entity.attributes.get("pressure")
+                ai_data["weather_wind_speed"] = weather_entity.attributes.get("wind_speed")
+                ai_data["weather_wind_bearing"] = weather_entity.attributes.get("wind_bearing")
+
+                # Get multi-day forecast (AccuWeather provides this)
+                forecast = weather_entity.attributes.get("forecast", [])
+                if forecast:
+                    ai_data["weather_forecast"] = [
+                        {
+                            "date": f.get("datetime", ""),
+                            "condition": f.get("condition", ""),
+                            "temp_high": f.get("temperature", ""),
+                            "temp_low": f.get("templow", ""),
+                            "precipitation": f.get("precipitation", 0),
+                            "precipitation_probability": f.get("precipitation_probability", ""),
+                            "wind_speed": f.get("wind_speed", ""),
+                            "cloud_coverage": f.get("cloud_coverage", ""),
+                        }
+                        for f in forecast[:5]  # Next 5 days
+                    ]
+        except Exception:
+            pass
+
+        # Add Ecowitt local weather station data (if available)
+        try:
+            if data.get("ecowitt_enabled"):
+                ecowitt = {
+                    "solar_radiation": data.get("ecowitt_solar_radiation"),
+                    "solar_lux": data.get("ecowitt_solar_lux"),
+                    "uv_index": data.get("ecowitt_uv_index"),
+                    "temperature": data.get("ecowitt_temp"),
+                    "humidity": data.get("ecowitt_humidity"),
+                    "wind_speed": data.get("ecowitt_wind_speed"),
+                    "wind_gust": data.get("ecowitt_wind_gust"),
+                    "wind_direction": data.get("ecowitt_wind_direction"),
+                    "rain_rate": data.get("ecowitt_rain_rate"),
+                    "daily_rain": data.get("ecowitt_daily_rain"),
+                    "pressure": data.get("ecowitt_pressure"),
+                    "feels_like": data.get("ecowitt_feels_like"),
+                }
+                # Only include non-None values
+                ai_data["ecowitt"] = {k: v for k, v in ecowitt.items() if v is not None}
         except Exception:
             pass
 
