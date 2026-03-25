@@ -23,7 +23,13 @@ class SmartingHomePanel extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     this._ensureSubscriptions();
-    if (this.shadowRoot.querySelector(".panel-container")) this._updateAll();
+    if (!this.shadowRoot.querySelector(".panel-container")) {
+      // DOM lost (HA navigated away and back) — re-render
+      this._render();
+      this._loadSettings();
+    } else {
+      this._updateAll();
+    }
   }
   set panel(p) { this._panel = p; }
   set narrow(n) { this._narrow = n; }
@@ -48,6 +54,14 @@ class SmartingHomePanel extends HTMLElement {
     // Reconnect subscriptions when tab becomes visible again
     this._visHandler = () => {
       if (!document.hidden && this._hass) {
+        // Re-render if DOM was lost while tab was hidden
+        if (!this.shadowRoot.querySelector('.panel-container')) {
+          this._render();
+          this._loadSettings();
+        }
+        // Restart polling interval (browsers kill setInterval in background tabs)
+        if (this._interval) clearInterval(this._interval);
+        this._interval = setInterval(() => { if (this._hass) this._updateAll(); }, 5000);
         this._ensureSubscriptions();
         this._updateAll();
       }
@@ -67,6 +81,7 @@ class SmartingHomePanel extends HTMLElement {
   }
   disconnectedCallback() {
     if (this._interval) clearInterval(this._interval);
+    if (this._watchdog) clearInterval(this._watchdog);
     if (this._ro) this._ro.disconnect();
     if (this._visHandler) document.removeEventListener('visibilitychange', this._visHandler);
     if (this._fsHandler) {
@@ -8642,7 +8657,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.28.6</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.28.7</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -8662,7 +8677,25 @@ class SmartingHomePanel extends HTMLElement {
     `;
 
     if (this._hass) this._updateAll();
+    // Clear any previous interval before starting a new one
+    if (this._interval) clearInterval(this._interval);
     this._interval = setInterval(() => { if (this._hass) this._updateAll(); }, 5000);
+    // Connection watchdog — detect stale hass connection every 30s
+    if (this._watchdog) clearInterval(this._watchdog);
+    this._watchdog = setInterval(() => {
+      if (!this._hass?.connection) return;
+      try {
+        this._hass.connection.ping().catch(() => {
+          console.warn('[SH] Connection stale, recovering...');
+          if (this._interval) clearInterval(this._interval);
+          this._render();
+          this._loadSettings();
+          this._interval = setInterval(() => { if (this._hass) this._updateAll(); }, 5000);
+        });
+      } catch(e) {
+        console.warn('[SH] Watchdog ping error:', e);
+      }
+    }, 30000);
   }
 
   /* ═══════════════════════════════════════════════════
