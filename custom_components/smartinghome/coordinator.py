@@ -77,6 +77,15 @@ from .const import (
     DEFAULT_BATTERY_MIN_SOC,
     CONF_ECOWITT_ENABLED,
     CONF_SENSOR_MAP,
+    DYNAMIC_PRICE_THRESHOLDS,
+    SENSOR_ENTSOE_PRICE_NOW,
+    SENSOR_ENTSOE_ALLIN_NOW,
+    SENSOR_ENTSOE_ALLIN_NEXT,
+    SENSOR_ENTSOE_ALLIN_MIN,
+    SENSOR_ENTSOE_ALLIN_MAX,
+    SENSOR_ENTSOE_AVG_TODAY,
+    SENSOR_ENTSOE_RANK,
+    SENSOR_ENTSOE_PERCENTILE,
 )
 from .license import LicenseManager
 
@@ -104,6 +113,11 @@ SOURCE_SENSORS: list[str] = [
     SENSOR_FORECAST_TODAY_1, SENSOR_FORECAST_TODAY_2,
     SENSOR_FORECAST_REMAINING_1, SENSOR_FORECAST_REMAINING_2,
     SENSOR_FORECAST_TOMORROW_1, SENSOR_FORECAST_TOMORROW_2,
+    # ENTSO-E dynamic pricing sensors
+    SENSOR_ENTSOE_PRICE_NOW, SENSOR_ENTSOE_ALLIN_NOW,
+    SENSOR_ENTSOE_ALLIN_NEXT, SENSOR_ENTSOE_ALLIN_MIN,
+    SENSOR_ENTSOE_ALLIN_MAX, SENSOR_ENTSOE_AVG_TODAY,
+    SENSOR_ENTSOE_RANK, SENSOR_ENTSOE_PERCENTILE,
 ]
 
 
@@ -289,13 +303,16 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         active = sum(1 for load_val in loads if load_val > 100)
         data["hems_active_loads"] = f"{active}/3"
 
-        # —— G13 Tariff zone ——
-        g13_data = self._compute_g13(now)
-        data.update(g13_data)
+        # —— Tariff zone ——
+        if self._tariff == TariffType.DYNAMIC:
+            tariff_data = self._compute_dynamic_tariff(raw)
+        else:
+            tariff_data = self._compute_g13(now)
+        data.update(tariff_data)
 
         # —— RCE calculations ——
         if self._rce_enabled:
-            rce_data = self._compute_rce(raw, g13_data)
+            rce_data = self._compute_rce(raw, tariff_data)
             data.update(rce_data)
 
         # —— Forecast totals ——
@@ -390,6 +407,68 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             data["g13_buy_price"] = G13_PRICES[zone]
             data["g13_is_afternoon_peak"] = zone == G13Zone.AFTERNOON_PEAK
             data["g13_is_off_peak"] = zone == G13Zone.OFF_PEAK
+
+        return data
+
+    def _compute_dynamic_tariff(
+        self, raw: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Compute dynamic (ENTSO-E) tariff data."""
+        data: dict[str, Any] = {}
+
+        # Current all-in price
+        allin_now = _safe_float(raw.get(SENSOR_ENTSOE_ALLIN_NOW))
+        allin_next = _safe_float(raw.get(SENSOR_ENTSOE_ALLIN_NEXT))
+        allin_min = _safe_float(raw.get(SENSOR_ENTSOE_ALLIN_MIN))
+        allin_max = _safe_float(raw.get(SENSOR_ENTSOE_ALLIN_MAX))
+        avg_today = _safe_float(raw.get(SENSOR_ENTSOE_AVG_TODAY))
+        rank = _safe_float(raw.get(SENSOR_ENTSOE_RANK))
+        percentile = _safe_float(raw.get(SENSOR_ENTSOE_PERCENTILE))
+        market_price = _safe_float(raw.get(SENSOR_ENTSOE_PRICE_NOW))
+
+        # Determine dynamic zone based on percentile
+        thresholds = DYNAMIC_PRICE_THRESHOLDS
+        if allin_now <= thresholds["very_cheap"]:
+            dynamic_zone = "very_cheap"
+        elif allin_now <= thresholds["cheap"]:
+            dynamic_zone = "cheap"
+        elif allin_now <= thresholds["normal"]:
+            dynamic_zone = "normal"
+        elif allin_now <= thresholds["expensive"]:
+            dynamic_zone = "expensive"
+        else:
+            dynamic_zone = "very_expensive"
+
+        data["dynamic_buy_price"] = round(allin_now, 4)
+        data["dynamic_next_price"] = round(allin_next, 4)
+        data["dynamic_min_today"] = round(allin_min, 4)
+        data["dynamic_max_today"] = round(allin_max, 4)
+        data["dynamic_avg_today"] = round(avg_today, 4)
+        data["dynamic_market_price"] = round(market_price, 4)
+        data["dynamic_rank"] = int(rank)
+        data["dynamic_percentile"] = round(percentile, 1)
+        data["dynamic_zone"] = dynamic_zone
+
+        # Map to G13-compatible keys for backward compat with strategy controller
+        zone_to_g13 = {
+            "very_cheap": G13Zone.OFF_PEAK,
+            "cheap": G13Zone.OFF_PEAK,
+            "normal": G13Zone.MORNING_PEAK,
+            "expensive": G13Zone.AFTERNOON_PEAK,
+            "very_expensive": G13Zone.AFTERNOON_PEAK,
+        }
+        data["g13_current_zone"] = zone_to_g13.get(dynamic_zone, G13Zone.OFF_PEAK)
+        data["g13_buy_price"] = round(allin_now, 4)
+        data["g13_is_afternoon_peak"] = dynamic_zone in ("expensive", "very_expensive")
+        data["g13_is_off_peak"] = dynamic_zone in ("very_cheap", "cheap")
+
+        # Read prices_today attribute for frontend 24h chart
+        entsoe_state = self.hass.states.get(SENSOR_ENTSOE_PRICE_NOW)
+        if entsoe_state and entsoe_state.attributes:
+            prices_today = entsoe_state.attributes.get("prices_today", [])
+            data["dynamic_prices_today"] = prices_today
+        else:
+            data["dynamic_prices_today"] = []
 
         return data
 
