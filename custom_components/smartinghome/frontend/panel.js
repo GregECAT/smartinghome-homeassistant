@@ -3554,6 +3554,14 @@ class SmartingHomePanel extends HTMLElement {
       const pvToHomeRaw = Math.max(0, pvTodayForHome - expTodayForHome);
       const loadTodayCap = !isNaN(loadTodayNum) && loadTodayNum > 0 ? loadTodayNum : Infinity;
       const pvToHome = Math.min(pvToHomeRaw, loadTodayCap);
+
+      // PV-based fallback: if accumulators missed daytime (e.g. restart after sunset)
+      // PV self-consumption is the physical minimum for day consumption
+      if (dayKwh === 0 && pvToHome > 0 && !isNaN(loadTodayNum) && loadTodayNum > 0) {
+        dayKwh = Math.min(loadTodayNum, pvToHome);
+        nightKwh = Math.max(0, loadTodayNum - dayKwh);
+      }
+
       const loadTotalForPct = !isNaN(loadTodayNum) && loadTodayNum > 0 ? loadTodayNum : (dayKwh + nightKwh);
       const pvToHomePct = loadTotalForPct > 0 ? Math.min(100, (pvToHome / loadTotalForPct) * 100) : 0;
 
@@ -4396,7 +4404,7 @@ class SmartingHomePanel extends HTMLElement {
     // ROW 1b: Day/Night breakdown in Energy tab
     {
       const totalAccumWs = this._energyDayWs + this._energyNightWs;
-      const enLoadToday = this._nm("load_today") || 0;
+      const enLoadToday = this._nm("load_today") || parseFloat(this._hass?.states?.["sensor.today_load"]?.state) || 0;
       let enDayKwh = 0, enNightKwh = 0;
       if (totalAccumWs > 0 && enLoadToday > 0) {
         const dayRatio = this._energyDayWs / totalAccumWs;
@@ -4406,6 +4414,13 @@ class SmartingHomePanel extends HTMLElement {
         enDayKwh = this._energyDayWs / 3600000;
         enNightKwh = this._energyNightWs / 3600000;
       }
+
+      // PV-based fallback: if accumulators missed daytime, use PV self-consumption
+      if (enDayKwh === 0 && enHomeFromPv > 0 && enLoadToday > 0) {
+        enDayKwh = Math.min(enLoadToday, enHomeFromPv);
+        enNightKwh = Math.max(0, enLoadToday - enDayKwh);
+      }
+
       const enTotalLoad = enDayKwh + enNightKwh;
       const enDayPct = enTotalLoad > 0 ? (enDayKwh / enTotalLoad) * 100 : 50;
       const enPvHomePct = enTotalLoad > 0 ? Math.min(100, (enHomeFromPv / enTotalLoad) * 100) : 0;
@@ -8627,7 +8642,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.28.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.28.4</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
