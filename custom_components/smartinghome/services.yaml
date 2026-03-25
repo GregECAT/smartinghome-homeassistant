@@ -158,3 +158,16 @@ save_panel_settings:
       required: true
       selector:
         text:
+
+sync_ecowitt_state:
+  name: Sync Ecowitt State
+  description: >-
+    Sync the Ecowitt integration enabled/disabled state to the HA config entry
+    so the coordinator reads the correct state after restart.
+  fields:
+    enabled:
+      name: Enabled
+      description: "Whether the Ecowitt integration is enabled"
+      required: true
+      selector:
+        boolean:
