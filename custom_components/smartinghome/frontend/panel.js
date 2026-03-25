@@ -1799,32 +1799,30 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Wind Power Tab ─────────────────────── */
-  _windTurbinePresets = {
-    small:  { label: '🌬️ Mała (1 kW)',   power_kw: 1, rotor_diameter: 1.8, cut_in: 2.5, rated_speed: 11, investment: 8000,  price_kwh: 0.87 },
-    medium: { label: '💨 Średnia (3 kW)', power_kw: 3, rotor_diameter: 3.2, cut_in: 3.0, rated_speed: 12, investment: 25000, price_kwh: 0.87 },
-    large:  { label: '🌪️ Duża (5 kW)',   power_kw: 5, rotor_diameter: 5.0, cut_in: 2.5, rated_speed: 13, investment: 45000, price_kwh: 0.87 },
-  };
-  _windTurbineDefaults = { power_kw: 3, rotor_diameter: 3.2, cut_in: 3.0, rated_speed: 12, investment: 25000, price_kwh: 0.87 };
-  _windActivePreset = 'medium'; // tracks which preset is active
+  _windTurbineDefaults = { power_kw: 3, rotor_diameter: 3.2, cut_in: 3, rated_speed: 12, investment: 25000, price_kwh: 0.87 };
 
   _initWindTab() {
     if (this._windInitialized) return;
     this._windInitialized = true;
-    // _loadWindData will handle restoring; set defaults only if nothing saved
-    if (!this._settings.wind_turbine) {
-      this._applyWindPreset('medium', true); // silent=true, no save on first init
-    }
+    const t = this._windTurbineDefaults;
+    const fields = [
+      ['wind-turbine-power', t.power_kw],
+      ['wind-turbine-diameter', t.rotor_diameter],
+      ['wind-turbine-cutin', t.cut_in],
+      ['wind-turbine-rated', t.rated_speed],
+      ['wind-turbine-investment', t.investment],
+      ['wind-turbine-price', t.price_kwh],
+    ];
+    fields.forEach(([id, val]) => {
+      const el = this.shadowRoot.getElementById(id);
+      if (el && !el.value) el.value = val;
+    });
   }
 
   _loadWindData() {
     this._windLoading = true;
+    if (!this._settings.wind_turbine) { this._windLoading = false; return; }
     const wt = this._settings.wind_turbine;
-    if (!wt) {
-      // No saved data → apply medium preset as default
-      this._applyWindPreset('medium', true);
-      this._windLoading = false;
-      return;
-    }
     const fields = [
       ['wind-turbine-power', wt.power_kw],
       ['wind-turbine-diameter', wt.rotor_diameter],
@@ -1837,9 +1835,6 @@ class SmartingHomePanel extends HTMLElement {
       const el = this.shadowRoot.getElementById(id);
       if (el && val !== undefined) el.value = val;
     });
-    // Restore active preset indicator
-    this._windActivePreset = this._settings.wind_turbine_preset || 'custom';
-    this._updateWindPresetButtons();
     this._recalcWindProfitability();
     this._windLoading = false;
   }
@@ -1854,56 +1849,9 @@ class SmartingHomePanel extends HTMLElement {
       investment: g('wind-turbine-investment'),
       price_kwh: g('wind-turbine-price'),
     };
-    this._savePanelSettings({ wind_turbine: wt, wind_turbine_preset: this._windActivePreset });
+    this._savePanelSettings({ wind_turbine: wt });
     const st = this.shadowRoot.getElementById('wind-save-status');
     if (st) { st.textContent = '✅ Zapisano konfigurację turbiny!'; setTimeout(() => { st.textContent = ''; }, 4000); }
-  }
-
-  _applyWindPreset(key, silent = false) {
-    const preset = this._windTurbinePresets[key];
-    if (!preset) return;
-    this._windActivePreset = key;
-    const fields = [
-      ['wind-turbine-power', preset.power_kw],
-      ['wind-turbine-diameter', preset.rotor_diameter],
-      ['wind-turbine-cutin', preset.cut_in],
-      ['wind-turbine-rated', preset.rated_speed],
-      ['wind-turbine-investment', preset.investment],
-      ['wind-turbine-price', preset.price_kwh],
-    ];
-    fields.forEach(([id, val]) => {
-      const el = this.shadowRoot.getElementById(id);
-      if (el) el.value = val;
-    });
-    this._updateWindPresetButtons();
-    this._recalcWindProfitability();
-    if (!silent) {
-      this._saveWindData();
-      const st = this.shadowRoot.getElementById('wind-save-status');
-      if (st) { st.textContent = `✅ Wczytano wariant: ${preset.label}`; setTimeout(() => { st.textContent = ''; }, 4000); }
-    }
-  }
-
-  _onWindFieldManualChange() {
-    this._windActivePreset = 'custom';
-    this._updateWindPresetButtons();
-    this._recalcWindProfitability();
-  }
-
-  _updateWindPresetButtons() {
-    ['small', 'medium', 'large'].forEach(k => {
-      const btn = this.shadowRoot.getElementById(`wind-preset-${k}`);
-      if (btn) {
-        const isActive = this._windActivePreset === k;
-        btn.style.background = isActive ? 'rgba(0,212,255,0.2)' : 'rgba(255,255,255,0.05)';
-        btn.style.borderColor = isActive ? '#00d4ff' : 'rgba(255,255,255,0.12)';
-        btn.style.color = isActive ? '#00d4ff' : '#94a3b8';
-      }
-    });
-    const customBadge = this.shadowRoot.getElementById('wind-preset-custom-badge');
-    if (customBadge) {
-      customBadge.style.display = this._windActivePreset === 'custom' ? 'inline' : 'none';
-    }
   }
 
   _getBeaufort(speed) {
@@ -2896,10 +2844,9 @@ class SmartingHomePanel extends HTMLElement {
   _winterScenarios() {
     // Dynamic tariff prices from ENTSO-E sensors
     const avgPrice = parseFloat(this._haState('sensor.entso_e_srednia_dzisiaj')) || 0.50;
-    const minPrice = Math.max(0.05, avgPrice * 0.3);   // cheapest hours ~30% of avg
-    const maxPrice = avgPrice * 2.0;                     // peak hours ~200% of avg
+    const minPrice = Math.max(0.05, avgPrice * 0.3);
+    const maxPrice = avgPrice * 2.0;
 
-    // 3 tariff scenarios — identical energy flows, only prices differ
     return {
       none:    { label: '🔴 G11 — Stała cena',
                  importPrice: 1.10, exportPrice: 0.20,
@@ -7917,63 +7864,42 @@ class SmartingHomePanel extends HTMLElement {
           <div class="card" style="margin-bottom:12px">
             <div class="card-title">⚙️ Konfiguracja turbiny wiatrowej</div>
             <div style="font-size:10px; color:#94a3b8; margin-bottom:12px">Wprowadź parametry planowanej lub istniejącej turbiny przydomowej.</div>
-
-            <!-- Preset selector -->
-            <div style="margin-bottom:14px">
-              <div style="font-size:10px; color:#64748b; text-transform:uppercase; margin-bottom:6px; letter-spacing:0.5px">🔧 Wczytaj wariant turbiny</div>
-              <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
-                <button id="wind-preset-small" onclick="this.getRootNode().host._applyWindPreset('small')"
-                  style="padding:8px 14px; border-radius:10px; border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.05); color:#94a3b8; font-size:11px; font-weight:700; cursor:pointer; transition:all 0.2s">
-                  🌬️ Mała (1 kW)
-                </button>
-                <button id="wind-preset-medium" onclick="this.getRootNode().host._applyWindPreset('medium')"
-                  style="padding:8px 14px; border-radius:10px; border:1px solid rgba(0,212,255,1); background:rgba(0,212,255,0.2); color:#00d4ff; font-size:11px; font-weight:700; cursor:pointer; transition:all 0.2s">
-                  💨 Średnia (3 kW)
-                </button>
-                <button id="wind-preset-large" onclick="this.getRootNode().host._applyWindPreset('large')"
-                  style="padding:8px 14px; border-radius:10px; border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.05); color:#94a3b8; font-size:11px; font-weight:700; cursor:pointer; transition:all 0.2s">
-                  🌪️ Duża (5 kW)
-                </button>
-                <span id="wind-preset-custom-badge" style="display:none; font-size:10px; color:#f39c12; font-weight:600; padding:4px 10px; background:rgba(243,156,18,0.1); border:1px solid rgba(243,156,18,0.3); border-radius:8px">✏️ Własna konfiguracja</span>
-              </div>
-            </div>
-
             <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px">
               <div class="settings-field">
                 <label style="font-size:10px; color:#64748b; text-transform:uppercase">Moc nominalna (kW)</label>
                 <input type="number" id="wind-turbine-power" step="0.1" min="0.1" max="50" placeholder="3"
                   style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
-                  onchange="this.getRootNode().host._onWindFieldManualChange()" />
+                  onchange="this.getRootNode().host._recalcWindProfitability()" />
               </div>
               <div class="settings-field">
                 <label style="font-size:10px; color:#64748b; text-transform:uppercase">Średnica rotora (m)</label>
                 <input type="number" id="wind-turbine-diameter" step="0.1" min="0.5" max="20" placeholder="3.2"
                   style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
-                  onchange="this.getRootNode().host._onWindFieldManualChange()" />
+                  onchange="this.getRootNode().host._recalcWindProfitability()" />
               </div>
               <div class="settings-field">
                 <label style="font-size:10px; color:#64748b; text-transform:uppercase">Prędkość startu (m/s)</label>
                 <input type="number" id="wind-turbine-cutin" step="0.1" min="0.5" max="10" placeholder="3"
                   style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
-                  onchange="this.getRootNode().host._onWindFieldManualChange()" />
+                  onchange="this.getRootNode().host._recalcWindProfitability()" />
               </div>
               <div class="settings-field">
                 <label style="font-size:10px; color:#64748b; text-transform:uppercase">Prędkość nominalna (m/s)</label>
                 <input type="number" id="wind-turbine-rated" step="0.1" min="3" max="25" placeholder="12"
                   style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
-                  onchange="this.getRootNode().host._onWindFieldManualChange()" />
+                  onchange="this.getRootNode().host._recalcWindProfitability()" />
               </div>
               <div class="settings-field">
                 <label style="font-size:10px; color:#64748b; text-transform:uppercase">Koszt inwestycji (zł)</label>
                 <input type="number" id="wind-turbine-investment" step="100" min="0" placeholder="25000"
                   style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
-                  onchange="this.getRootNode().host._onWindFieldManualChange()" />
+                  onchange="this.getRootNode().host._recalcWindProfitability()" />
               </div>
               <div class="settings-field">
                 <label style="font-size:10px; color:#64748b; text-transform:uppercase">Cena prądu (zł/kWh)</label>
                 <input type="number" id="wind-turbine-price" step="0.01" min="0" placeholder="0.87"
                   style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
-                  onchange="this.getRootNode().host._onWindFieldManualChange()" />
+                  onchange="this.getRootNode().host._recalcWindProfitability()" />
               </div>
             </div>
             <div style="margin-top:10px; display:flex; gap:8px; align-items:center">
@@ -8708,7 +8634,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.28.9</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.29.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
