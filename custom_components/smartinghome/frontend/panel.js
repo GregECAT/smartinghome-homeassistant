@@ -821,16 +821,6 @@ class SmartingHomePanel extends HTMLElement {
         const importCost = scImport * s.importPrice;
         const exportRev = scExport * s.exportPrice;
         const selfSavings = scSelfUse * s.importPrice;
-<<<<<<< HEAD
-        const yearlySav = exportRev + selfSavings - importCost;
-        const payback = invest > 0 && yearlySav > 0 ? invest / yearlySav : null;
-        const profit25 = invest > 0 ? yearlySav * 25 - invest : yearlySav * 25;
-        return { key: k, label: s.label, desc: s.desc, importCost, exportRev, selfSavings, yearlySav, payback, profit25, importPrice: s.importPrice, exportPrice: s.exportPrice, scSelfUse, scExport, scImport, scSelfConsPct };
-      });
-
-      // Calculate savings vs worst scenario
-      const worstNet = results[0].yearlySav;
-=======
 
         // yearlyBenefit = total annual value from PV (savings from self-consumption + export revenue)
         // This is the correct basis for ROI/payback: how much you save vs having NO PV at all
@@ -8637,7 +8627,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.28.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.28.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
