@@ -827,11 +827,11 @@ class SmartingHomePanel extends HTMLElement {
     if (ct && yearlyPV > 0) {
       const results = keys.map((k, i) => {
         const s = scenarios[k];
-        // Simulate different energy proportions per scenario
-        const scSelfUse = yearlyPV * (s.selfConsumptionRate || 0.70);
-        const scExport = Math.max(0, yearlyPV - scSelfUse);
-        const scImport = Math.max(0, totalConsumption - scSelfUse);
-        const scSelfConsPct = Math.round((s.selfConsumptionRate || 0.70) * 100);
+        // Identical energy flows for all tariff variants — only prices differ
+        const scSelfUse = yearlySelfUse;
+        const scExport = yearlyExport;
+        const scImport = yearlyImport;
+        const scSelfConsPct = yearlyPV > 0 ? Math.round((yearlySelfUse / yearlyPV) * 100) : 0;
 
         const importCost = scImport * s.importPrice;
         const exportRev = scExport * s.exportPrice;
@@ -866,7 +866,7 @@ class SmartingHomePanel extends HTMLElement {
             <div style="color:#64748b">Eksport:</div><div style="color:#2ecc71; font-weight:600">${r.exportPrice.toFixed(2)} zł/kWh</div>
           </div>
           <div style="background:rgba(255,255,255,0.03); border-radius:8px; padding:8px; margin-bottom:10px">
-            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">📊 Symulacja przepływów energii</div>
+            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">📊 Przepływy energii (identyczne)</div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:3px; font-size:10px">
               <div style="color:#94a3b8">🏠 Autokonsumpcja:</div><div style="color:#00d4ff; font-weight:600">${Math.round(r.scSelfUse)} kWh <span style="color:#64748b; font-weight:400">(${r.scSelfConsPct}%)</span></div>
               <div style="color:#94a3b8">↓ Import z sieci:</div><div style="color:#e74c3c; font-weight:600">${Math.round(r.scImport)} kWh</div>
@@ -885,7 +885,7 @@ class SmartingHomePanel extends HTMLElement {
             <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Korzyść roczna z PV</div>
             <div style="font-size:24px; font-weight:900; color:${r.yearlyBenefit >= 0 ? "#2ecc71" : "#e74c3c"}">${r.yearlyBenefit >= 0 ? "+" : ""}${r.yearlyBenefit.toFixed(0)} zł</div>
             <div style="font-size:9px; color:#94a3b8; margin-top:1px">oszczędność + przychód vs brak PV</div>
-            ${i > 0 ? `<div style="font-size:10px; color:#2ecc71; margin-top:4px">+${diffVsNone.toFixed(0)} zł vs brak zarządzania</div>` : `<div style="font-size:10px; color:#e74c3c; margin-top:4px">brak automatyzacji</div>`}
+            ${i > 0 ? `<div style="font-size:10px; color:#2ecc71; margin-top:4px">+${diffVsNone.toFixed(0)} zł vs G11</div>` : `<div style="font-size:10px; color:#e74c3c; margin-top:4px">taryfa stała</div>`}
           </div>
           ${invest > 0 ? `
           <div style="margin-top:10px">
@@ -908,9 +908,9 @@ class SmartingHomePanel extends HTMLElement {
       const hemsSavings = results[2].yearlyBenefit - results[0].yearlyBenefit;
       if (hemsSavings > 0) {
         ct.innerHTML += `<div style="grid-column:1/-1; margin-top:12px; padding:12px; background:rgba(46,204,113,0.08); border:1px solid rgba(46,204,113,0.2); border-radius:10px; text-align:center">
-          <div style="font-size:11px; color:#94a3b8">💰 Oszczędność dzięki automatyzacji HEMS</div>
+          <div style="font-size:11px; color:#94a3b8">💰 Różnica cenowa: Dynamiczna RCE vs G11</div>
           <div style="font-size:28px; font-weight:900; color:#2ecc71; margin-top:4px">+${hemsSavings.toFixed(0)} zł/rok</div>
-          <div style="font-size:10px; color:#64748b; margin-top:2px">Różnica między brakiem zarządzania a optymalnym HEMS</div>
+          <div style="font-size:10px; color:#64748b; margin-top:2px">Oszczędność dzięki taryfie dynamicznej z zarządzaniem HEMS vs stała cena G11</div>
         </div>`;
       }
     } else if (ct && yearlyPV === 0) {
@@ -1799,30 +1799,32 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Wind Power Tab ─────────────────────── */
-  _windTurbineDefaults = { power_kw: 3, rotor_diameter: 3.2, cut_in: 3, rated_speed: 12, investment: 25000, price_kwh: 0.87 };
+  _windTurbinePresets = {
+    small:  { label: '🌬️ Mała (1 kW)',   power_kw: 1, rotor_diameter: 1.8, cut_in: 2.5, rated_speed: 11, investment: 8000,  price_kwh: 0.87 },
+    medium: { label: '💨 Średnia (3 kW)', power_kw: 3, rotor_diameter: 3.2, cut_in: 3.0, rated_speed: 12, investment: 25000, price_kwh: 0.87 },
+    large:  { label: '🌪️ Duża (5 kW)',   power_kw: 5, rotor_diameter: 5.0, cut_in: 2.5, rated_speed: 13, investment: 45000, price_kwh: 0.87 },
+  };
+  _windTurbineDefaults = this._windTurbinePresets.medium;
+  _windActivePreset = 'medium'; // tracks which preset is active
 
   _initWindTab() {
     if (this._windInitialized) return;
     this._windInitialized = true;
-    const t = this._windTurbineDefaults;
-    const fields = [
-      ['wind-turbine-power', t.power_kw],
-      ['wind-turbine-diameter', t.rotor_diameter],
-      ['wind-turbine-cutin', t.cut_in],
-      ['wind-turbine-rated', t.rated_speed],
-      ['wind-turbine-investment', t.investment],
-      ['wind-turbine-price', t.price_kwh],
-    ];
-    fields.forEach(([id, val]) => {
-      const el = this.shadowRoot.getElementById(id);
-      if (el && !el.value) el.value = val;
-    });
+    // _loadWindData will handle restoring; set defaults only if nothing saved
+    if (!this._settings.wind_turbine) {
+      this._applyWindPreset('medium', true); // silent=true, no save on first init
+    }
   }
 
   _loadWindData() {
     this._windLoading = true;
-    if (!this._settings.wind_turbine) { this._windLoading = false; return; }
     const wt = this._settings.wind_turbine;
+    if (!wt) {
+      // No saved data → apply medium preset as default
+      this._applyWindPreset('medium', true);
+      this._windLoading = false;
+      return;
+    }
     const fields = [
       ['wind-turbine-power', wt.power_kw],
       ['wind-turbine-diameter', wt.rotor_diameter],
@@ -1835,6 +1837,9 @@ class SmartingHomePanel extends HTMLElement {
       const el = this.shadowRoot.getElementById(id);
       if (el && val !== undefined) el.value = val;
     });
+    // Restore active preset indicator
+    this._windActivePreset = this._settings.wind_turbine_preset || 'custom';
+    this._updateWindPresetButtons();
     this._recalcWindProfitability();
     this._windLoading = false;
   }
@@ -1849,9 +1854,56 @@ class SmartingHomePanel extends HTMLElement {
       investment: g('wind-turbine-investment'),
       price_kwh: g('wind-turbine-price'),
     };
-    this._savePanelSettings({ wind_turbine: wt });
+    this._savePanelSettings({ wind_turbine: wt, wind_turbine_preset: this._windActivePreset });
     const st = this.shadowRoot.getElementById('wind-save-status');
     if (st) { st.textContent = '✅ Zapisano konfigurację turbiny!'; setTimeout(() => { st.textContent = ''; }, 4000); }
+  }
+
+  _applyWindPreset(key, silent = false) {
+    const preset = this._windTurbinePresets[key];
+    if (!preset) return;
+    this._windActivePreset = key;
+    const fields = [
+      ['wind-turbine-power', preset.power_kw],
+      ['wind-turbine-diameter', preset.rotor_diameter],
+      ['wind-turbine-cutin', preset.cut_in],
+      ['wind-turbine-rated', preset.rated_speed],
+      ['wind-turbine-investment', preset.investment],
+      ['wind-turbine-price', preset.price_kwh],
+    ];
+    fields.forEach(([id, val]) => {
+      const el = this.shadowRoot.getElementById(id);
+      if (el) el.value = val;
+    });
+    this._updateWindPresetButtons();
+    this._recalcWindProfitability();
+    if (!silent) {
+      this._saveWindData();
+      const st = this.shadowRoot.getElementById('wind-save-status');
+      if (st) { st.textContent = `✅ Wczytano wariant: ${preset.label}`; setTimeout(() => { st.textContent = ''; }, 4000); }
+    }
+  }
+
+  _onWindFieldManualChange() {
+    this._windActivePreset = 'custom';
+    this._updateWindPresetButtons();
+    this._recalcWindProfitability();
+  }
+
+  _updateWindPresetButtons() {
+    ['small', 'medium', 'large'].forEach(k => {
+      const btn = this.shadowRoot.getElementById(`wind-preset-${k}`);
+      if (btn) {
+        const isActive = this._windActivePreset === k;
+        btn.style.background = isActive ? 'rgba(0,212,255,0.2)' : 'rgba(255,255,255,0.05)';
+        btn.style.borderColor = isActive ? '#00d4ff' : 'rgba(255,255,255,0.12)';
+        btn.style.color = isActive ? '#00d4ff' : '#94a3b8';
+      }
+    });
+    const customBadge = this.shadowRoot.getElementById('wind-preset-custom-badge');
+    if (customBadge) {
+      customBadge.style.display = this._windActivePreset === 'custom' ? 'inline' : 'none';
+    }
   }
 
   _getBeaufort(speed) {
@@ -2840,46 +2892,24 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
   // ── Winter Tab (Zima na plusie) ──
-  // Financial scenario definitions — dynamic per tariff
+  // Tariff-based scenario definitions — same energy flows, different prices
   _winterScenarios() {
-    const tariff = this._settings.tariff_plan || 'G13';
+    // Dynamic tariff prices from ENTSO-E sensors
+    const avgPrice = parseFloat(this._haState('sensor.entso_e_srednia_dzisiaj')) || 0.50;
+    const minPrice = Math.max(0.05, avgPrice * 0.3);   // cheapest hours ~30% of avg
+    const maxPrice = avgPrice * 2.0;                     // peak hours ~200% of avg
 
-    if (tariff === 'Dynamic') {
-      // Dynamic tariff — prices from ENTSO-E sensors
-      const avgPrice = parseFloat(this._haState('sensor.entso_e_srednia_dzisiaj')) || 0.50;
-      const minPrice = Math.max(0.05, avgPrice * 0.3);   // cheapest hours ~30% of avg
-      const maxPrice = avgPrice * 2.0;                     // peak hours ~200% of avg
-      return {
-        none:    { label: '🔴 Bez zarządzania',  importPrice: avgPrice, exportPrice: minPrice, desc: `Import po średniej ENTSO-E (${avgPrice.toFixed(2)} zł), eksport po najniższej cenie`, selfConsumptionRate: 0.55 },
-        basic:   { label: '🟡 Podstawowe',        importPrice: avgPrice * 0.7, exportPrice: avgPrice * 0.8, desc: 'Ładowanie w tanich godzinach, sprzedaż po średniej RCE', selfConsumptionRate: 0.70 },
-        optimal: { label: '🟢 HEMS Optymalne',     importPrice: minPrice, exportPrice: maxPrice, desc: 'Import w najtańszych godzinach, sprzedaż w najdroższych — pełny arbitraż cenowy', selfConsumptionRate: 0.85 }
-      };
-    }
-
-    if (tariff === 'G11') {
-      // G11 — flat rate, no time-of-use optimization possible for import
-      return {
-        none:    { label: '🔴 Bez zarządzania',  importPrice: 0.87, exportPrice: 0.20, desc: 'Stała cena G11, eksport po najniższej RCE', selfConsumptionRate: 0.55 },
-        basic:   { label: '🟡 Podstawowe',        importPrice: 0.87, exportPrice: 0.35, desc: 'Maksymalizacja autokonsumpcji, eksport po średniej RCE', selfConsumptionRate: 0.70 },
-        optimal: { label: '🟢 HEMS Optymalne',     importPrice: 0.87, exportPrice: 0.55, desc: 'Max autokonsumpcja + sprzedaż nadwyżek po lepszej RCE', selfConsumptionRate: 0.85 }
-      };
-    }
-
-    if (tariff === 'G12' || tariff === 'G12w') {
-      // G12/G12w — two zones: off-peak 0.55, peak 1.10
-      const label = tariff === 'G12w' ? 'G12w (weekend off-peak)' : 'G12';
-      return {
-        none:    { label: '🔴 Bez zarządzania',  importPrice: 0.82, exportPrice: 0.20, desc: `Import po średniej ${label}, eksport po najniższej RCE`, selfConsumptionRate: 0.55 },
-        basic:   { label: '🟡 Podstawowe',        importPrice: 0.55, exportPrice: 0.40, desc: `Ładowanie off-peak ${label} (0.55 zł), sprzedaż po średniej RCE`, selfConsumptionRate: 0.70 },
-        optimal: { label: '🟢 HEMS Optymalne',     importPrice: 0.55, exportPrice: 0.90, desc: `Off-peak import (0.55 zł), sprzedaż w szczycie ${label} po RCE×1.23`, selfConsumptionRate: 0.85 }
-      };
-    }
-
-    // G13 — three zones: off-peak 0.63, morning 0.91, peak 1.50
+    // 3 tariff scenarios — identical energy flows, only prices differ
     return {
-      none:    { label: '🔴 Bez zarządzania',  importPrice: 0.87, exportPrice: 0.20, desc: 'Import po średniej G13, eksport po najniższej RCE', selfConsumptionRate: 0.55 },
-      basic:   { label: '🟡 Podstawowe',        importPrice: 0.63, exportPrice: 0.35, desc: 'Nocne ładowanie off-peak G13 (0.63 zł), sprzedaż po średniej RCE', selfConsumptionRate: 0.70 },
-      optimal: { label: '🟢 HEMS Optymalne',     importPrice: 0.63, exportPrice: 1.08, desc: 'Off-peak import G13, sprzedaż w szczycie po RCE×1.23', selfConsumptionRate: 0.85 }
+      none:    { label: '🔴 G11 — Stała cena',
+                 importPrice: 1.10, exportPrice: 0.20,
+                 desc: 'Taryfa G11: stała cena 1.10 zł/kWh (z opłatami dystrybucji), eksport po RCE min (0.20 zł)' },
+      basic:   { label: '🟡 G13 — Strefowa',
+                 importPrice: 0.87, exportPrice: 0.35,
+                 desc: 'Taryfa G13: off-peak 0.63, poranna 0.91, szczyt 1.50 zł (średnia 0.87), eksport po średniej RCE' },
+      optimal: { label: '🟢 Dynamiczna — RCE/ENTSO-E',
+                 importPrice: minPrice, exportPrice: maxPrice,
+                 desc: `Cena dynamiczna RCE: import w najtańszych godzinach (${minPrice.toFixed(2)} zł), sprzedaż w najdroższych (${maxPrice.toFixed(2)} zł) — pełny arbitraż cenowy HEMS` }
     };
   }
 
@@ -3040,14 +3070,14 @@ class SmartingHomePanel extends HTMLElement {
         '<div style="margin-top:8px;padding:8px;border-radius:8px;background:rgba(255,255,255,0.04)">' +
         '<div style="font-size:9px;color:#64748b">BILANS ROCZNY</div>' +
         '<div style="font-size:22px;font-weight:900;color:' + (r.net >= 0 ? '#2ecc71' : '#e74c3c') + '">' + (r.net >= 0 ? '+' : '') + r.net.toFixed(0) + ' zł</div>' +
-        (i > 0 ? '<div style="font-size:10px;color:#2ecc71;margin-top:2px">+' + diff.toFixed(0) + ' zł vs brak zarządzania</div>' : '<div style="font-size:10px;color:#e74c3c;margin-top:2px">brak automatyzacji</div>') +
+        (i > 0 ? '<div style="font-size:10px;color:#2ecc71;margin-top:2px">+' + diff.toFixed(0) + ' zł vs G11</div>' : '<div style="font-size:10px;color:#e74c3c;margin-top:2px">taryfa stała</div>') +
         '</div></div>';
     }).join('');
     ct.innerHTML = '<div style="display:flex;gap:10px;flex-wrap:wrap">' + html + '</div>' +
       (savings > 0 ? '<div style="margin-top:12px;padding:12px;background:rgba(46,204,113,0.08);border:1px solid rgba(46,204,113,0.2);border-radius:10px;text-align:center">' +
-      '<div style="font-size:11px;color:#94a3b8">💰 Oszczędność dzięki automatyzacji HEMS</div>' +
+      '<div style="font-size:11px;color:#94a3b8">💰 Różnica cenowa: Dynamiczna RCE vs G11</div>' +
       '<div style="font-size:28px;font-weight:900;color:#2ecc71;margin-top:4px">+' + savings.toFixed(0) + ' zł/rok</div>' +
-      '<div style="font-size:10px;color:#64748b;margin-top:2px">Różnica między brakiem zarządzania a optymalnym HEMS</div></div>' : '');
+      '<div style="font-size:10px;color:#64748b;margin-top:2px">Oszczędność dzięki taryfie dynamicznej vs stała cena G11</div></div>' : '');
   }
 
   _renderWinterChart(data) {
@@ -7606,8 +7636,8 @@ class SmartingHomePanel extends HTMLElement {
 
           <!-- ROW 3b: ROI — 3 Scenario Comparison -->
           <div class="card" style="margin-bottom:12px">
-            <div class="card-title">🏗️ Zwrot inwestycji (ROI) — Porównanie scenariuszy</div>
-            <div style="font-size:10px; color:#94a3b8; margin-bottom:10px">Jak strategia zarządzania energią wpływa na Twój zwrot z inwestycji i zyski w perspektywie 25 lat.</div>
+            <div class="card-title">🏗️ Zwrot inwestycji (ROI) — Porównanie taryf</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:10px">Jak wybór taryfy wpływa na Twój zwrot z inwestycji i zyski w perspektywie 25 lat. Identyczne zużycie i przepływy energii — różnica wynika z cen.</div>
             <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px; padding:10px; background:rgba(255,255,255,0.03); border-radius:8px; border:1px solid rgba(255,255,255,0.06)">
               <span style="font-size:11px; color:#94a3b8; white-space:nowrap">💰 Koszt instalacji</span>
               <input id="roi-invest-input" type="number" value="" placeholder="np. 45000" style="width:100px; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); border-radius:6px; color:#fff; padding:6px 10px; font-size:13px; text-align:right" onchange="this.getRootNode().host._saveRoiInvestment(this.value)">
@@ -7727,9 +7757,9 @@ class SmartingHomePanel extends HTMLElement {
                 <select id="wnt-scenario"
                   style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:12px"
                   onchange="this.getRootNode().host._recalcWinter()">
-                  <option value="none">🔴 Bez zarządzania — import średnio, eksport tanio</option>
-                  <option value="basic">🟡 Podstawowe — nocne ładowanie, średnia sprzedaż</option>
-                  <option value="optimal" selected>🟢 HEMS Optymalne — off-peak + sprzedaż w szczycie</option>
+                  <option value="none">🔴 G11 — Stała cena (1.10 zł/kWh)</option>
+                  <option value="basic">🟡 G13 — Strefowa (średnio 0.87 zł/kWh)</option>
+                  <option value="optimal" selected>🟢 Dynamiczna RCE — arbitraż cenowy HEMS</option>
                 </select>
               </div>
             </div>
@@ -7887,42 +7917,63 @@ class SmartingHomePanel extends HTMLElement {
           <div class="card" style="margin-bottom:12px">
             <div class="card-title">⚙️ Konfiguracja turbiny wiatrowej</div>
             <div style="font-size:10px; color:#94a3b8; margin-bottom:12px">Wprowadź parametry planowanej lub istniejącej turbiny przydomowej.</div>
+
+            <!-- Preset selector -->
+            <div style="margin-bottom:14px">
+              <div style="font-size:10px; color:#64748b; text-transform:uppercase; margin-bottom:6px; letter-spacing:0.5px">🔧 Wczytaj wariant turbiny</div>
+              <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+                <button id="wind-preset-small" onclick="this.getRootNode().host._applyWindPreset('small')"
+                  style="padding:8px 14px; border-radius:10px; border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.05); color:#94a3b8; font-size:11px; font-weight:700; cursor:pointer; transition:all 0.2s">
+                  🌬️ Mała (1 kW)
+                </button>
+                <button id="wind-preset-medium" onclick="this.getRootNode().host._applyWindPreset('medium')"
+                  style="padding:8px 14px; border-radius:10px; border:1px solid rgba(0,212,255,1); background:rgba(0,212,255,0.2); color:#00d4ff; font-size:11px; font-weight:700; cursor:pointer; transition:all 0.2s">
+                  💨 Średnia (3 kW)
+                </button>
+                <button id="wind-preset-large" onclick="this.getRootNode().host._applyWindPreset('large')"
+                  style="padding:8px 14px; border-radius:10px; border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.05); color:#94a3b8; font-size:11px; font-weight:700; cursor:pointer; transition:all 0.2s">
+                  🌪️ Duża (5 kW)
+                </button>
+                <span id="wind-preset-custom-badge" style="display:none; font-size:10px; color:#f39c12; font-weight:600; padding:4px 10px; background:rgba(243,156,18,0.1); border:1px solid rgba(243,156,18,0.3); border-radius:8px">✏️ Własna konfiguracja</span>
+              </div>
+            </div>
+
             <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px">
               <div class="settings-field">
                 <label style="font-size:10px; color:#64748b; text-transform:uppercase">Moc nominalna (kW)</label>
                 <input type="number" id="wind-turbine-power" step="0.1" min="0.1" max="50" placeholder="3"
                   style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
-                  onchange="this.getRootNode().host._recalcWindProfitability()" />
+                  onchange="this.getRootNode().host._onWindFieldManualChange()" />
               </div>
               <div class="settings-field">
                 <label style="font-size:10px; color:#64748b; text-transform:uppercase">Średnica rotora (m)</label>
                 <input type="number" id="wind-turbine-diameter" step="0.1" min="0.5" max="20" placeholder="3.2"
                   style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
-                  onchange="this.getRootNode().host._recalcWindProfitability()" />
+                  onchange="this.getRootNode().host._onWindFieldManualChange()" />
               </div>
               <div class="settings-field">
                 <label style="font-size:10px; color:#64748b; text-transform:uppercase">Prędkość startu (m/s)</label>
                 <input type="number" id="wind-turbine-cutin" step="0.1" min="0.5" max="10" placeholder="3"
                   style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
-                  onchange="this.getRootNode().host._recalcWindProfitability()" />
+                  onchange="this.getRootNode().host._onWindFieldManualChange()" />
               </div>
               <div class="settings-field">
                 <label style="font-size:10px; color:#64748b; text-transform:uppercase">Prędkość nominalna (m/s)</label>
                 <input type="number" id="wind-turbine-rated" step="0.1" min="3" max="25" placeholder="12"
                   style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
-                  onchange="this.getRootNode().host._recalcWindProfitability()" />
+                  onchange="this.getRootNode().host._onWindFieldManualChange()" />
               </div>
               <div class="settings-field">
                 <label style="font-size:10px; color:#64748b; text-transform:uppercase">Koszt inwestycji (zł)</label>
                 <input type="number" id="wind-turbine-investment" step="100" min="0" placeholder="25000"
                   style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
-                  onchange="this.getRootNode().host._recalcWindProfitability()" />
+                  onchange="this.getRootNode().host._onWindFieldManualChange()" />
               </div>
               <div class="settings-field">
                 <label style="font-size:10px; color:#64748b; text-transform:uppercase">Cena prądu (zł/kWh)</label>
                 <input type="number" id="wind-turbine-price" step="0.01" min="0" placeholder="0.87"
                   style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
-                  onchange="this.getRootNode().host._recalcWindProfitability()" />
+                  onchange="this.getRootNode().host._onWindFieldManualChange()" />
               </div>
             </div>
             <div style="margin-top:10px; display:flex; gap:8px; align-items:center">
@@ -8657,7 +8708,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.28.7</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.28.8</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
