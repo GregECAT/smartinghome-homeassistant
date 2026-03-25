@@ -1410,6 +1410,11 @@ class SmartingHomePanel extends HTMLElement {
     }
 
     this._settings.sub_meters = meters;
+    // Auto-enable and persist immediately
+    this._settings.sub_meters_enabled = true;
+    const chk = this.shadowRoot.getElementById('chk-submeters-enabled');
+    if (chk) chk.checked = true;
+    this._savePanelSettings({ sub_meters_enabled: true, sub_meters: meters });
     this._closeModal();
     this._renderSubMetersSettings();
     this._updateSubMeters();
@@ -5410,16 +5415,25 @@ class SmartingHomePanel extends HTMLElement {
           display: flex; align-items: center; gap: 8px;
         }
         .submeter-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+          display: flex;
           gap: 10px;
+          overflow-x: auto;
+          padding-bottom: 6px;
+          scroll-snap-type: x mandatory;
+          -webkit-overflow-scrolling: touch;
         }
+        .submeter-grid::-webkit-scrollbar { height: 4px; }
+        .submeter-grid::-webkit-scrollbar-track { background: rgba(255,255,255,0.03); border-radius: 2px; }
+        .submeter-grid::-webkit-scrollbar-thumb { background: rgba(0,212,255,0.2); border-radius: 2px; }
         .submeter-card {
           background: rgba(255,255,255,0.03);
           border: 1px solid rgba(255,255,255,0.06);
           border-radius: 14px; padding: 14px 12px;
           text-align: center; transition: all 0.3s ease;
           position: relative;
+          min-width: 140px; max-width: 180px;
+          flex-shrink: 0;
+          scroll-snap-align: start;
         }
         .submeter-card:hover {
           border-color: rgba(0,212,255,0.2);
@@ -5482,10 +5496,10 @@ class SmartingHomePanel extends HTMLElement {
         }
         .sm-suggest-item:hover { background: rgba(0,212,255,0.1); color: #fff; }
         @media (max-width: 768px) {
-          .submeter-grid { grid-template-columns: repeat(2, 1fr); }
+          .submeter-card { min-width: 120px; }
         }
         @media (max-width: 480px) {
-          .submeter-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
+          .submeter-card { min-width: 110px; }
           .submeter-power { font-size: 16px; }
         }
       </style>
@@ -8049,7 +8063,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.24.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.24.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
