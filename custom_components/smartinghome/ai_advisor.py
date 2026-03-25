@@ -10,9 +10,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     AI_GEMINI_MODEL,
-    AI_GEMINI_MODELS,
     AI_CLAUDE_MODEL,
-    AI_CLAUDE_MODELS,
     AI_MAX_TOKENS,
     AI_TEMPERATURE,
     AI_RATE_LIMIT_CALLS,
@@ -322,7 +320,7 @@ class AIAdvisor:
             "",
             "## HEMS Efficiency Score",
             f"- Current Score: {data.get('hems_score', 'N/A')} / 100",
-            f"- Score breakdown: autarky(30%), self-consumption(25%), battery(15%), tariff(15%), PV yield(15%)",
+            "- Score breakdown: autarky(30%), self-consumption(25%), battery(15%), tariff(15%), PV yield(15%)",
         ])
         return "\n".join(lines)
 
@@ -772,7 +770,8 @@ User question: {question}"""
                 text2 = raw_text.strip()
                 if text2.startswith("```"):
                     text2 = text2.split("\n", 1)[1] if "\n" in text2 else text2[3:]
-                    if text2.endswith("```"): text2 = text2[:-3]
+                    if text2.endswith("```"):
+                        text2 = text2[:-3]
                     text2 = text2.strip()
                 parsed2 = _json2.loads(text2)
                 if isinstance(parsed2, dict):
@@ -855,7 +854,6 @@ User question: {question}"""
 
         Works by progressively adding closing brackets/braces.
         """
-        import json as _json
         import re
 
         # Try to find action IDs even in truncated text

@@ -7,7 +7,6 @@ settings.json and fired as HA bus events for live panel updates.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -170,9 +169,12 @@ class AICronScheduler:
             grid_power = abs(float(raw.get("sensor.meter_active_power_total") or 0))
             tariff = 100
             if grid_power > 100 and not is_off_peak:
-                if 7 <= hour < 13: tariff = 40
-                elif 15 <= hour < 22: tariff = 20
-                elif 13 <= hour <= 15: tariff = 90
+                if 7 <= hour < 13:
+                    tariff = 40
+                elif 15 <= hour < 22:
+                    tariff = 20
+                elif 13 <= hour <= 15:
+                    tariff = 90
 
             # PV yield
             forecast = float(raw.get("pv_forecast_today_total") or 0)

@@ -35,6 +35,11 @@ from .license import LicenseManager
 from .cron_scheduler import AICronScheduler
 from .autopilot_engine import AutopilotEngine, build_autopilot_ai_prompt, DEFAULT_BATTERY_CAPACITY
 from .strategy_controller import StrategyController
+from .settings_io import (
+    read_sync as _read_settings_io,
+    write_async as _update_settings_file_io,
+    get_path as _get_settings_path_io,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,8 +52,6 @@ SERVICE_DEACTIVATE_AUTOPILOT = "deactivate_autopilot"
 SERVICE_TRIGGER_AUTOPILOT_ACTION = "trigger_autopilot_action"
 SERVICE_TOGGLE_AUTOPILOT_ACTION = "toggle_autopilot_action"
 SERVICE_SYNC_ECOWITT_STATE = "sync_ecowitt_state"
-
-from .settings_io import read_sync as _read_settings_io, write_sync as _write_settings_io, write_async as _update_settings_file_io, get_path as _get_settings_path_io
 
 SET_MODE_SCHEMA = vol.Schema(
     {

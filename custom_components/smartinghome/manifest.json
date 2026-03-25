@@ -10,5 +10,6 @@
   "requirements": [
     "aiohttp>=3.9.0"
   ],
-  "version": "1.28.4"
+  "after_dependencies": ["lovelace"],
+  "version": "1.28.5"
 }

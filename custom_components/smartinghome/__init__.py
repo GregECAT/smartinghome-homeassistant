@@ -28,7 +28,7 @@ from .license import LicenseManager
 from .services import async_setup_services, async_unload_services
 from .strategy_controller import StrategyController
 from .energy_manager import EnergyManager
-from .const import AutopilotStrategy, CONF_DEVICE_ID, DEFAULT_GOODWE_DEVICE_ID
+from .const import AutopilotStrategy as AutopilotStrategy, CONF_DEVICE_ID, DEFAULT_GOODWE_DEVICE_ID
 
 _LOGGER = logging.getLogger(__name__)
 

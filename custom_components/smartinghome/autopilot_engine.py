@@ -846,7 +846,7 @@ def build_ai_strategist_prompt(
 
     # G13 zone
     current_zone = _get_g13_zone(hour, month, weekday)
-    current_price = _get_g13_price(current_zone)
+    _get_g13_price(current_zone)  # side-effect: validates zone
 
     # Build G13 schedule for today
     schedule = G13_WINTER_SCHEDULE if month in WINTER_MONTHS else G13_SUMMER_SCHEDULE
