@@ -796,6 +796,7 @@ class SmartingHomePanel extends HTMLElement {
         const importCost = scImport * s.importPrice;
         const exportRev = scExport * s.exportPrice;
         const selfSavings = scSelfUse * s.importPrice;
+<<<<<<< HEAD
         const yearlySav = exportRev + selfSavings - importCost;
         const payback = invest > 0 && yearlySav > 0 ? invest / yearlySav : null;
         const profit25 = invest > 0 ? yearlySav * 25 - invest : yearlySav * 25;
@@ -804,12 +805,33 @@ class SmartingHomePanel extends HTMLElement {
 
       // Calculate savings vs worst scenario
       const worstNet = results[0].yearlySav;
+=======
+
+        // yearlyBenefit = total annual value from PV (savings from self-consumption + export revenue)
+        // This is the correct basis for ROI/payback: how much you save vs having NO PV at all
+        const yearlyBenefit = selfSavings + exportRev;
+
+        // yearlyBilans = net cash flow (export revenue minus import cost) — what hits your bank account
+        const yearlyBilans = exportRev - importCost;
+
+        const payback = invest > 0 && yearlyBenefit > 0 ? invest / yearlyBenefit : null;
+        const profit25 = invest > 0 ? yearlyBenefit * 25 - invest : yearlyBenefit * 25;
+        return { key: k, label: s.label, desc: s.desc, importCost, exportRev, selfSavings, yearlyBenefit, yearlyBilans, payback, profit25, importPrice: s.importPrice, exportPrice: s.exportPrice, scSelfUse, scExport, scImport, scSelfConsPct };
+      });
+
+      // Calculate savings vs worst scenario
+      const worstBenefit = results[0].yearlyBenefit;
+>>>>>>> b3dd655 (release: v1.28.1 — ROI scenario simulation + dynamic tariff + formula fix)
 
       ct.innerHTML = results.map((r, i) => {
         const paybackStr = r.payback ? `~${r.payback.toFixed(1)} lat` : (invest > 0 ? "∞ (strata)" : "— (podaj koszt)");
         const paybackPct = r.payback ? Math.min(100, (25 / r.payback) * (100 / 25)) : 0;
         const paybackColor = r.payback ? (r.payback <= 8 ? "#2ecc71" : r.payback <= 15 ? "#f7b731" : "#e74c3c") : "#e74c3c";
+<<<<<<< HEAD
         const diffVsNone = i > 0 ? r.yearlySav - worstNet : 0;
+=======
+        const diffVsNone = i > 0 ? r.yearlyBenefit - worstBenefit : 0;
+>>>>>>> b3dd655 (release: v1.28.1 — ROI scenario simulation + dynamic tariff + formula fix)
         return `<div style="background:${bgs[i]}; border:1px solid ${borders[i]}; border-radius:14px; padding:16px; position:relative; overflow:hidden">
           ${badges[i] ? `<div style="position:absolute; top:8px; right:8px; font-size:8px; color:${colors[i]}; font-weight:700; letter-spacing:0.5px">${badges[i]}</div>` : ""}
           <div style="font-size:13px; font-weight:700; color:${colors[i]}; margin-bottom:4px">${r.label}</div>
@@ -819,7 +841,11 @@ class SmartingHomePanel extends HTMLElement {
             <div style="color:#64748b">Eksport:</div><div style="color:#2ecc71; font-weight:600">${r.exportPrice.toFixed(2)} zł/kWh</div>
           </div>
           <div style="background:rgba(255,255,255,0.03); border-radius:8px; padding:8px; margin-bottom:10px">
+<<<<<<< HEAD
             <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px">📊 Symulacja przepływów energii</div>
+=======
+            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">📊 Symulacja przepływów energii</div>
+>>>>>>> b3dd655 (release: v1.28.1 — ROI scenario simulation + dynamic tariff + formula fix)
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:3px; font-size:10px">
               <div style="color:#94a3b8">🏠 Autokonsumpcja:</div><div style="color:#00d4ff; font-weight:600">${Math.round(r.scSelfUse)} kWh <span style="color:#64748b; font-weight:400">(${r.scSelfConsPct}%)</span></div>
               <div style="color:#94a3b8">↓ Import z sieci:</div><div style="color:#e74c3c; font-weight:600">${Math.round(r.scImport)} kWh</div>
@@ -835,9 +861,16 @@ class SmartingHomePanel extends HTMLElement {
             <div style="font-size:16px; font-weight:700; color:#e74c3c">-${r.importCost.toFixed(0)} zł</div>
           </div>
           <div style="margin-top:10px; padding:10px; border-radius:10px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.06)">
+<<<<<<< HEAD
             <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Bilans roczny netto</div>
             <div style="font-size:24px; font-weight:900; color:${r.yearlySav >= 0 ? "#2ecc71" : "#e74c3c"}">${r.yearlySav >= 0 ? "+" : ""}${r.yearlySav.toFixed(0)} zł</div>
             ${i > 0 ? `<div style="font-size:10px; color:#2ecc71; margin-top:2px">+${diffVsNone.toFixed(0)} zł vs brak zarządzania</div>` : `<div style="font-size:10px; color:#e74c3c; margin-top:2px">brak automatyzacji</div>`}
+=======
+            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Korzyść roczna z PV</div>
+            <div style="font-size:24px; font-weight:900; color:${r.yearlyBenefit >= 0 ? "#2ecc71" : "#e74c3c"}">${r.yearlyBenefit >= 0 ? "+" : ""}${r.yearlyBenefit.toFixed(0)} zł</div>
+            <div style="font-size:9px; color:#94a3b8; margin-top:1px">oszczędność + przychód vs brak PV</div>
+            ${i > 0 ? `<div style="font-size:10px; color:#2ecc71; margin-top:4px">+${diffVsNone.toFixed(0)} zł vs brak zarządzania</div>` : `<div style="font-size:10px; color:#e74c3c; margin-top:4px">brak automatyzacji</div>`}
+>>>>>>> b3dd655 (release: v1.28.1 — ROI scenario simulation + dynamic tariff + formula fix)
           </div>
           ${invest > 0 ? `
           <div style="margin-top:10px">
@@ -857,7 +890,11 @@ class SmartingHomePanel extends HTMLElement {
       }).join("");
 
       // Show total HEMS savings summary below cards
+<<<<<<< HEAD
       const hemsSavings = results[2].yearlySav - results[0].yearlySav;
+=======
+      const hemsSavings = results[2].yearlyBenefit - results[0].yearlyBenefit;
+>>>>>>> b3dd655 (release: v1.28.1 — ROI scenario simulation + dynamic tariff + formula fix)
       if (hemsSavings > 0) {
         ct.innerHTML += `<div style="grid-column:1/-1; margin-top:12px; padding:12px; background:rgba(46,204,113,0.08); border:1px solid rgba(46,204,113,0.2); border-radius:10px; text-align:center">
           <div style="font-size:11px; color:#94a3b8">💰 Oszczędność dzięki automatyzacji HEMS</div>
@@ -866,7 +903,7 @@ class SmartingHomePanel extends HTMLElement {
         </div>`;
       }
     } else if (ct && yearlyPV === 0) {
-      ct.innerHTML = '<div style="text-align:center; padding:20px; color:#64748b; font-size:11px">Brak danych PV — zmień okres na \"Miesiąc\" lub \"Rok\" aby zobaczyć porównanie.</div>';
+      ct.innerHTML = '<div style="text-align:center; padding:20px; color:#64748b; font-size:11px">Brak danych PV — zmień okres na "Miesiąc" lub "Rok" aby zobaczyć porównanie.</div>';
     }
 
     // Summary table — all periods
