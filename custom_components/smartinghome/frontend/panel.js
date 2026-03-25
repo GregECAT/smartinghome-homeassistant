@@ -16,6 +16,7 @@ class SmartingHomePanel extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    this._ensureSubscriptions();
     if (this.shadowRoot.querySelector(".panel-container")) this._updateAll();
   }
   set panel(p) { this._panel = p; }
@@ -30,17 +31,36 @@ class SmartingHomePanel extends HTMLElement {
       this._ro.observe(wrap);
       setTimeout(() => this._updateSvgPaths(), 50);
     }
+    this._fsHandler = () => {
+      this._isFullscreen = !!(document.fullscreenElement||document.webkitFullscreenElement||document.mozFullScreenElement||document.msFullscreenElement);
+      const btn = this.shadowRoot.querySelector(".fullscreen-btn");
+      if (btn) btn.textContent = this._isFullscreen ? "⊡ Zamknij" : "⊞ Pełny ekran";
+    };
     ["fullscreenchange","webkitfullscreenchange","mozfullscreenchange","MSFullscreenChange"].forEach(ev => {
-      document.addEventListener(ev, () => {
-        this._isFullscreen = !!(document.fullscreenElement||document.webkitFullscreenElement||document.mozFullScreenElement||document.msFullscreenElement);
-        const btn = this.shadowRoot.querySelector(".fullscreen-btn");
-        if (btn) btn.textContent = this._isFullscreen ? "⊡ Zamknij" : "⊞ Pełny ekran";
-      });
+      document.addEventListener(ev, this._fsHandler);
     });
+    // Reconnect subscriptions when tab becomes visible again
+    this._visHandler = () => {
+      if (!document.hidden && this._hass) {
+        this._ensureSubscriptions();
+        this._updateAll();
+      }
+    };
+    document.addEventListener('visibilitychange', this._visHandler);
   }
   disconnectedCallback() {
     if (this._interval) clearInterval(this._interval);
     if (this._ro) this._ro.disconnect();
+    if (this._visHandler) document.removeEventListener('visibilitychange', this._visHandler);
+    if (this._fsHandler) {
+      ["fullscreenchange","webkitfullscreenchange","mozfullscreenchange","MSFullscreenChange"].forEach(ev => {
+        document.removeEventListener(ev, this._fsHandler);
+      });
+    }
+    // Unsubscribe all event subscriptions
+    if (this._cronSub) { try { this._cronSub(); } catch(e) {} this._cronSub = null; }
+    if (this._actionStateSub) { try { this._actionStateSub(); } catch(e) {} this._actionStateSub = null; }
+    if (this._testSub) { try { this._testSub(); } catch(e) {} this._testSub = null; }
   }
 
   _toggleFullscreen() {
@@ -171,23 +191,6 @@ class SmartingHomePanel extends HTMLElement {
         this._updateHEMSFromAI();
         // Render AI logs
         this._renderAILogs();
-        // Subscribe to live AI cron updates
-        if (this._hass && !this._cronSub) {
-          this._cronSub = this._hass.connection.subscribeEvents((ev) => {
-            const d = ev.data;
-            if (d.result_key) this._settings[d.result_key] = { text: d.text, timestamp: d.timestamp, provider: d.provider };
-            this._updateHEMSFromAI();
-            this._updateCronStatus();
-            this._renderAILogs();
-          }, "smartinghome_ai_cron_update");
-        }
-        // Subscribe to live action state updates from backend
-        if (this._hass && !this._actionStateSub) {
-          this._actionStateSub = this._hass.connection.subscribeEvents((ev) => {
-            this._actionStates = ev.data || {};
-            this._updateActionBadgesFromState();
-          }, "smartinghome_action_states");
-        }
         // Re-apply PV labels and all data after settings loaded
         if (this._hass) this._updateAll();
         this._renderWeatherForecast();
@@ -195,15 +198,14 @@ class SmartingHomePanel extends HTMLElement {
         const ecoChk = this.shadowRoot.getElementById('chk-ecowitt-enabled');
         if (ecoChk && this._settings.ecowitt_enabled !== undefined) ecoChk.checked = this._settings.ecowitt_enabled;
         if (this._settings.ecowitt_enabled) this._detectEcowittSensors();
+        // Restore sub-meters settings
+        const smChk = this.shadowRoot.getElementById('chk-submeters-enabled');
+        if (smChk && this._settings.sub_meters_enabled !== undefined) smChk.checked = this._settings.sub_meters_enabled;
+        this._renderSubMetersSettings();
       }
     } catch(e) { /* file not yet created */ }
-    // Subscribe to action states even if settings didn't load
-    if (this._hass && !this._actionStateSub) {
-      this._actionStateSub = this._hass.connection.subscribeEvents((ev) => {
-        this._actionStates = ev.data || {};
-        this._updateActionBadgesFromState();
-      }, "smartinghome_action_states");
-    }
+    // Ensure subscriptions are active (centrally managed)
+    this._ensureSubscriptions();
   }
 
   _savePanelSettings(updates) {
@@ -1263,6 +1265,242 @@ class SmartingHomePanel extends HTMLElement {
     this._updateEcowittCard();
     const st = this.shadowRoot.getElementById('v-ecowitt-save-status');
     if (st) { st.textContent = enabled ? '✅ Ecowitt włączony!' : '❌ Ecowitt wyłączony'; setTimeout(() => { st.textContent = ''; }, 4000); }
+  }
+
+  /* ── Sub-Meters Management ─────────────── */
+
+  _saveSubMetersSettings() {
+    const chk = this.shadowRoot.getElementById('chk-submeters-enabled');
+    if (!chk) return;
+    const enabled = chk.checked;
+    this._settings.sub_meters_enabled = enabled;
+    const meters = this._settings.sub_meters || [];
+    this._savePanelSettings({ sub_meters_enabled: enabled, sub_meters: meters });
+    this._updateSubMeters();
+    const st = this.shadowRoot.getElementById('v-submeters-save-status');
+    if (st) {
+      st.textContent = '✅ Podliczniki zapisane!';
+      setTimeout(() => { st.textContent = ''; }, 4000);
+    }
+  }
+
+  _addSubMeter() {
+    const meters = this._settings.sub_meters || [];
+    if (meters.length >= 8) {
+      this._showModal('<div class="sh-modal-title">⚠️ Limit</div><div style="color:#94a3b8; font-size:12px; margin:10px 0">Maksymalnie 8 podliczników.</div><div class="sh-modal-actions"><button class="sh-modal-btn primary" onclick="this.getRootNode().host._closeModal()">OK</button></div>');
+      return;
+    }
+    this._showSubMeterModal(null);
+  }
+
+  _editSubMeter(id) {
+    const meters = this._settings.sub_meters || [];
+    const meter = meters.find(m => m.id === id);
+    if (!meter) return;
+    this._showSubMeterModal(meter);
+  }
+
+  _removeSubMeter(id) {
+    const meters = this._settings.sub_meters || [];
+    this._settings.sub_meters = meters.filter(m => m.id !== id);
+    this._renderSubMetersSettings();
+    this._updateSubMeters();
+  }
+
+  _showSubMeterModal(existing) {
+    const isEdit = !!existing;
+    const name = existing ? existing.name.replace(/"/g, '&quot;') : '';
+    const icon = existing ? existing.icon : '⚡';
+    const entityId = existing ? (existing.entity_id || '') : '';
+    const energyEntityId = existing ? (existing.energy_entity_id || '') : '';
+    const editId = existing ? existing.id : '';
+
+    const html = `
+      <div class="sh-modal-title">${isEdit ? '✏️ Edytuj' : '＋ Dodaj'} podlicznik</div>
+      <div class="sh-modal-label">Ikona (emoji)</div>
+      <input class="sh-modal-input" type="text" id="sh-sm-icon" value="${icon}" maxlength="4" style="width:60px; text-align:center; font-size:22px" />
+      <div class="sh-modal-label" style="margin-top:10px">Nazwa punktu poboru</div>
+      <input class="sh-modal-input" type="text" id="sh-sm-name" value="${name}" placeholder="np. Kuchnia, Klimatyzacja..." />
+      <div class="sh-modal-label" style="margin-top:10px">Encja mocy (W) — sensor</div>
+      <input class="sh-modal-input" type="text" id="sh-sm-entity" value="${entityId}" placeholder="sensor.kitchen_power" oninput="this.getRootNode().host._onSmEntityInput(this, 'sh-sm-entity-suggest', 'power')" autocomplete="off" />
+      <div id="sh-sm-entity-suggest" class="sm-suggest-list" style="display:none"></div>
+      <div class="sh-modal-label" style="margin-top:10px">Encja energii (kWh) — opcjonalnie</div>
+      <input class="sh-modal-input" type="text" id="sh-sm-energy-entity" value="${energyEntityId}" placeholder="sensor.kitchen_energy_daily" oninput="this.getRootNode().host._onSmEntityInput(this, 'sh-sm-energy-suggest', 'energy')" autocomplete="off" />
+      <div id="sh-sm-energy-suggest" class="sm-suggest-list" style="display:none"></div>
+      <input type="hidden" id="sh-sm-edit-id" value="${editId}" />
+      <div class="sh-modal-actions" style="margin-top:14px">
+        <button class="sh-modal-btn" onclick="this.getRootNode().host._closeModal()">Anuluj</button>
+        <button class="sh-modal-btn primary" onclick="this.getRootNode().host._saveSubMeterFromModal()">💾 Zapisz</button>
+      </div>
+    `;
+    this._showModal(html);
+  }
+
+  _onSmEntityInput(inputEl, suggestId, type) {
+    const suggestEl = this.shadowRoot.getElementById(suggestId);
+    if (!suggestEl || !this._hass?.states) return;
+    const val = inputEl.value.toLowerCase().trim();
+    if (val.length < 2) { suggestEl.style.display = 'none'; return; }
+
+    const allEntities = Object.keys(this._hass.states).filter(e => e.startsWith('sensor.'));
+    let filtered;
+    if (type === 'power') {
+      filtered = allEntities.filter(e => {
+        const lc = e.toLowerCase();
+        return lc.includes(val) || lc.includes('power') || lc.includes('watt') || lc.includes('load') || lc.includes('moc');
+      });
+    } else {
+      filtered = allEntities.filter(e => {
+        const lc = e.toLowerCase();
+        return lc.includes(val) || lc.includes('energy') || lc.includes('kwh') || lc.includes('consumption') || lc.includes('zuzycie');
+      });
+    }
+    // Prioritize entities matching the user's input
+    filtered = filtered.filter(e => e.toLowerCase().includes(val)).slice(0, 12);
+
+    if (filtered.length === 0) { suggestEl.style.display = 'none'; return; }
+    suggestEl.style.display = 'block';
+    suggestEl.innerHTML = filtered.map(e => {
+      const state = this._hass.states[e];
+      const unit = state?.attributes?.unit_of_measurement || '';
+      const friendly = state?.attributes?.friendly_name || e;
+      return `<div class="sm-suggest-item" onclick="this.getRootNode().host._selectSmEntity('${inputEl.id}', '${e}', '${suggestId}')">${friendly} <span style="color:#64748b">(${state?.state || '—'} ${unit})</span></div>`;
+    }).join('');
+  }
+
+  _selectSmEntity(inputId, entityId, suggestId) {
+    const inp = this.shadowRoot.getElementById(inputId);
+    const sug = this.shadowRoot.getElementById(suggestId);
+    if (inp) inp.value = entityId;
+    if (sug) sug.style.display = 'none';
+  }
+
+  _saveSubMeterFromModal() {
+    const nameEl = this.shadowRoot.getElementById('sh-sm-name');
+    const iconEl = this.shadowRoot.getElementById('sh-sm-icon');
+    const entityEl = this.shadowRoot.getElementById('sh-sm-entity');
+    const energyEl = this.shadowRoot.getElementById('sh-sm-energy-entity');
+    const editIdEl = this.shadowRoot.getElementById('sh-sm-edit-id');
+    if (!nameEl || !entityEl) return;
+
+    const name = nameEl.value.trim();
+    const icon = iconEl ? iconEl.value.trim() || '⚡' : '⚡';
+    const entityId = entityEl.value.trim();
+    const energyEntityId = energyEl ? energyEl.value.trim() : '';
+    const editId = editIdEl ? editIdEl.value : '';
+
+    if (!name || !entityId) {
+      nameEl.style.borderColor = !name ? '#e74c3c' : '';
+      entityEl.style.borderColor = !entityId ? '#e74c3c' : '';
+      return;
+    }
+
+    const meters = this._settings.sub_meters || [];
+
+    if (editId) {
+      // Edit existing
+      const idx = meters.findIndex(m => m.id === editId);
+      if (idx >= 0) {
+        meters[idx] = { ...meters[idx], name, icon, entity_id: entityId, energy_entity_id: energyEntityId };
+      }
+    } else {
+      // Add new
+      const newId = 'sm_' + Date.now();
+      meters.push({ id: newId, name, icon, entity_id: entityId, energy_entity_id: energyEntityId });
+    }
+
+    this._settings.sub_meters = meters;
+    this._closeModal();
+    this._renderSubMetersSettings();
+    this._updateSubMeters();
+  }
+
+  _renderSubMetersSettings() {
+    const container = this.shadowRoot.getElementById('submeters-settings-list');
+    if (!container) return;
+    const meters = this._settings.sub_meters || [];
+
+    if (meters.length === 0) {
+      container.innerHTML = '<div style="text-align:center; color:#64748b; font-size:11px; padding:16px">Brak podliczników. Kliknij „＋ Dodaj podlicznik" poniżej.</div>';
+      return;
+    }
+
+    container.innerHTML = meters.map(m => `
+      <div class="sm-list-item">
+        <div class="sm-list-icon">${m.icon || '⚡'}</div>
+        <div class="sm-list-info">
+          <div class="sm-list-name">${m.name}</div>
+          <div class="sm-list-entity">${m.entity_id}${m.energy_entity_id ? ' · ' + m.energy_entity_id : ''}</div>
+        </div>
+        <div class="sm-list-actions">
+          <button class="sm-list-btn" onclick="this.getRootNode().host._editSubMeter('${m.id}')" title="Edytuj">✏️</button>
+          <button class="sm-list-btn danger" onclick="this.getRootNode().host._removeSubMeter('${m.id}')" title="Usuń">🗑️</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  _updateSubMeters() {
+    const section = this.shadowRoot.getElementById('submeters-section');
+    const grid = this.shadowRoot.getElementById('submeters-grid');
+    if (!section || !grid) return;
+
+    const enabled = this._settings.sub_meters_enabled;
+    const meters = this._settings.sub_meters || [];
+
+    if (!enabled || meters.length === 0) {
+      section.style.display = 'none';
+      return;
+    }
+    section.style.display = '';
+
+    // Get total home load for proportion bars
+    const totalLoadStr = this._hass?.states?.['sensor.load']?.state;
+    const totalLoad = parseFloat(totalLoadStr) || 0;
+
+    grid.innerHTML = meters.map(m => {
+      const powerState = this._hass?.states?.[m.entity_id];
+      const powerVal = powerState ? parseFloat(powerState.state) : NaN;
+      const powerStr = isNaN(powerVal) ? '—' : Math.round(powerVal).toLocaleString('pl-PL');
+      const unit = powerState?.attributes?.unit_of_measurement || 'W';
+
+      let energyHtml = '';
+      if (m.energy_entity_id) {
+        const energyState = this._hass?.states?.[m.energy_entity_id];
+        const energyVal = energyState ? parseFloat(energyState.state) : NaN;
+        const energyUnit = energyState?.attributes?.unit_of_measurement || 'kWh';
+        const energyStr = isNaN(energyVal) ? '—' : energyVal.toFixed(1);
+        energyHtml = `<div class="submeter-energy">📊 ${energyStr} ${energyUnit}</div>`;
+      }
+
+      // Proportion bar
+      let pct = 0;
+      if (!isNaN(powerVal) && totalLoad > 0) {
+        pct = Math.min(100, Math.round((Math.abs(powerVal) / totalLoad) * 100));
+      }
+
+      // Color based on power level
+      let powerColor = '#fff';
+      if (!isNaN(powerVal)) {
+        if (powerVal > 2000) powerColor = '#e74c3c';
+        else if (powerVal > 500) powerColor = '#f7b731';
+        else if (powerVal > 0) powerColor = '#2ecc71';
+        else powerColor = '#64748b';
+      }
+
+      return `
+        <div class="submeter-card">
+          <div class="submeter-icon">${m.icon || '⚡'}</div>
+          <div class="submeter-name">${m.name}</div>
+          <div class="submeter-power" style="color:${powerColor}">${powerStr} <span style="font-size:11px; font-weight:600">${unit}</span></div>
+          ${energyHtml}
+          <div class="submeter-bar-bg">
+            <div class="submeter-bar-fill" style="width:${pct}%"></div>
+          </div>
+          <div style="font-size:8px; color:#475569; margin-top:3px">${pct}% zużycia domu</div>
+        </div>
+      `;
+    }).join('');
   }
 
   _detectEcowittSensors() {
@@ -2656,8 +2894,56 @@ class SmartingHomePanel extends HTMLElement {
     return Math.abs(w) >= 1000 ? `${(w/1000).toFixed(1)} kW` : `${Math.round(w)} W`;
   }
 
+  /* ── Subscription management (reconnection-safe) ── */
+  _ensureSubscriptions() {
+    if (!this._hass?.connection) return;
+    const conn = this._hass.connection;
+    // Detect connection change → clear stale subscriptions
+    if (this._lastConnection && this._lastConnection !== conn) {
+      console.log('[SH] Connection changed, resubscribing...');
+      if (this._cronSub) { try { this._cronSub(); } catch(e) {} this._cronSub = null; }
+      if (this._actionStateSub) { try { this._actionStateSub(); } catch(e) {} this._actionStateSub = null; }
+      if (this._testSub) { try { this._testSub(); } catch(e) {} this._testSub = null; }
+    }
+    this._lastConnection = conn;
+    // Subscribe to AI cron updates
+    if (!this._cronSub) {
+      try {
+        this._cronSub = conn.subscribeEvents((ev) => {
+          const d = ev.data;
+          if (d.result_key) this._settings[d.result_key] = { text: d.text, timestamp: d.timestamp, provider: d.provider };
+          this._updateHEMSFromAI();
+          this._updateCronStatus();
+          this._renderAILogs();
+        }, "smartinghome_ai_cron_update");
+        // subscribeEvents returns a Promise<unsubscribe> — unwrap it
+        if (this._cronSub && typeof this._cronSub.then === 'function') {
+          this._cronSub.then(unsub => { this._cronSub = unsub; }).catch(err => {
+            console.warn('[SH] Failed to subscribe to cron updates:', err);
+            this._cronSub = null;
+          });
+        }
+      } catch(e) { console.warn('[SH] subscribeEvents cron error:', e); this._cronSub = null; }
+    }
+    // Subscribe to action state updates
+    if (!this._actionStateSub) {
+      try {
+        this._actionStateSub = conn.subscribeEvents((ev) => {
+          this._actionStates = ev.data || {};
+          this._updateActionBadgesFromState();
+        }, "smartinghome_action_states");
+        if (this._actionStateSub && typeof this._actionStateSub.then === 'function') {
+          this._actionStateSub.then(unsub => { this._actionStateSub = unsub; }).catch(err => {
+            console.warn('[SH] Failed to subscribe to action states:', err);
+            this._actionStateSub = null;
+          });
+        }
+      } catch(e) { console.warn('[SH] subscribeEvents action error:', e); this._actionStateSub = null; }
+    }
+  }
+
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateSubMeters(); }
 
   /* ── Moon phase calculation ─────────────────── */
   _getMoonPhase(date) {
@@ -5108,6 +5394,100 @@ class SmartingHomePanel extends HTMLElement {
           .hist-kpi-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
           .hist-kpi-val { font-size: 16px; }
         }
+
+        /* ── Sub-Meters ── */
+        .submeter-section {
+          margin-top: 12px; padding: 16px; border-radius: 16px;
+          background: rgba(20, 30, 48, 0.4);
+          border: 1px solid rgba(255,255,255,0.06);
+        }
+        .submeter-header {
+          display: flex; align-items: center; justify-content: space-between;
+          margin-bottom: 12px;
+        }
+        .submeter-header-title {
+          font-size: 13px; font-weight: 700; color: #e0e6ed;
+          display: flex; align-items: center; gap: 8px;
+        }
+        .submeter-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+          gap: 10px;
+        }
+        .submeter-card {
+          background: rgba(255,255,255,0.03);
+          border: 1px solid rgba(255,255,255,0.06);
+          border-radius: 14px; padding: 14px 12px;
+          text-align: center; transition: all 0.3s ease;
+          position: relative;
+        }
+        .submeter-card:hover {
+          border-color: rgba(0,212,255,0.2);
+          background: rgba(255,255,255,0.05);
+          transform: translateY(-2px);
+        }
+        .submeter-icon { font-size: 22px; margin-bottom: 4px; }
+        .submeter-name {
+          font-size: 10px; color: #94a3b8; text-transform: uppercase;
+          letter-spacing: 0.5px; margin-bottom: 6px;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .submeter-power {
+          font-size: 20px; font-weight: 800; color: #fff;
+          line-height: 1.2; margin-bottom: 4px;
+        }
+        .submeter-energy {
+          font-size: 11px; color: #64748b; font-weight: 600;
+        }
+        .submeter-bar-bg {
+          margin-top: 8px; height: 4px; border-radius: 2px;
+          background: rgba(255,255,255,0.06); overflow: hidden;
+        }
+        .submeter-bar-fill {
+          height: 100%; border-radius: 2px;
+          background: linear-gradient(90deg, #00d4ff, #2ecc71);
+          transition: width 0.6s ease;
+        }
+        .submeter-empty {
+          text-align: center; padding: 20px; color: #64748b; font-size: 11px;
+        }
+        /* Sub-meters settings */
+        .sm-list-item {
+          display: flex; align-items: center; gap: 10px;
+          padding: 10px 12px; background: rgba(255,255,255,0.03);
+          border: 1px solid rgba(255,255,255,0.06);
+          border-radius: 10px; margin-bottom: 6px;
+          transition: all 0.2s;
+        }
+        .sm-list-item:hover { border-color: rgba(0,212,255,0.15); }
+        .sm-list-icon { font-size: 20px; flex-shrink: 0; }
+        .sm-list-info { flex: 1; min-width: 0; }
+        .sm-list-name { font-size: 12px; font-weight: 700; color: #fff; }
+        .sm-list-entity { font-size: 10px; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .sm-list-actions { display: flex; gap: 4px; flex-shrink: 0; }
+        .sm-list-btn {
+          padding: 4px 8px; border: 1px solid rgba(255,255,255,0.08);
+          background: transparent; color: #94a3b8; font-size: 11px;
+          cursor: pointer; border-radius: 6px; transition: all 0.2s;
+        }
+        .sm-list-btn:hover { background: rgba(255,255,255,0.06); color: #fff; }
+        .sm-list-btn.danger:hover { background: rgba(231,76,60,0.15); color: #e74c3c; }
+        .sm-suggest-list {
+          max-height: 150px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.1);
+          border-radius: 8px; background: rgba(15,23,42,0.95); margin-top: 4px;
+        }
+        .sm-suggest-item {
+          padding: 6px 10px; font-size: 11px; color: #cbd5e1; cursor: pointer;
+          border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+        .sm-suggest-item:hover { background: rgba(0,212,255,0.1); color: #fff; }
+        @media (max-width: 768px) {
+          .submeter-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 480px) {
+          .submeter-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
+          .submeter-power { font-size: 16px; }
+        }
       </style>
 
       <div class="panel-container">
@@ -5425,6 +5805,17 @@ class SmartingHomePanel extends HTMLElement {
           <div class="card" style="margin-top:10px">
             <div class="card-title">💡 Rekomendacja HEMS</div>
             <div class="recommendation" id="v-hems-rec">Ładowanie danych...</div>
+          </div>
+
+          <!-- 📊 Podliczniki energii -->
+          <div class="submeter-section" id="submeters-section" style="display:none">
+            <div class="submeter-header">
+              <div class="submeter-header-title">📊 Podliczniki energii</div>
+              <button style="padding:4px 10px; border:1px solid rgba(255,255,255,0.08); background:transparent; color:#94a3b8; font-size:10px; cursor:pointer; border-radius:6px; transition:all 0.2s" onclick="this.getRootNode().host._switchTab('settings')" title="Konfiguruj podliczniki">⚙️ Konfiguruj</button>
+            </div>
+            <div class="submeter-grid" id="submeters-grid">
+              <div class="submeter-empty">Dodaj podliczniki w ⚙️ Ustawieniach</div>
+            </div>
           </div>
         </div>
 
@@ -7589,6 +7980,25 @@ class SmartingHomePanel extends HTMLElement {
               </div>
             </div>
 
+            <!-- 📊 Sub-Meters Configuration -->
+            <div class="card" style="grid-column: 1 / -1">
+              <div class="card-title">📊 Podliczniki energii — monitorowanie zużycia</div>
+              <div style="font-size:11px; color:#94a3b8; margin-bottom:10px">Dodaj podliczniki lub urządzenia monitorujące zużycie energii. Wyświetlą się na zakładce Przegląd jako kolumny z aktualną mocą i zużyciem.</div>
+              <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; background:rgba(0,212,255,0.04); border-radius:8px; border:1px solid rgba(0,212,255,0.1); margin-bottom:12px">
+                <input type="checkbox" id="chk-submeters-enabled" style="accent-color:#00d4ff; width:18px; height:18px" />
+                <div style="flex:1">
+                  <div style="font-size:13px; font-weight:700; color:#fff">📊 Pokaż podliczniki na Przeglądzie</div>
+                  <div style="font-size:10px; color:#64748b">Wyświetlaj kolumnowe karty zużycia pod diagramem przepływów</div>
+                </div>
+              </div>
+              <div id="submeters-settings-list"></div>
+              <div style="display:flex; gap:8px; margin-top:10px">
+                <button style="padding:8px 16px; border:1px dashed rgba(0,212,255,0.3); background:rgba(0,212,255,0.04); color:#00d4ff; font-size:12px; font-weight:600; cursor:pointer; border-radius:8px; transition:all 0.2s; flex:1" onclick="this.getRootNode().host._addSubMeter()">＋ Dodaj podlicznik</button>
+              </div>
+              <button class="save-btn" style="margin-top:12px" onclick="this.getRootNode().host._saveSubMetersSettings()">💾 Zapisz podliczniki</button>
+              <div id="v-submeters-save-status" style="font-size:11px; color:#2ecc71; margin-top:6px"></div>
+            </div>
+
             <!-- 🔑 License Status -->
             <div class="card" style="grid-column: 1 / -1" id="settings-license-box">
               <!-- FREE: Upgrade Prompt -->
@@ -7639,7 +8049,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.23.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.24.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -7833,10 +8243,16 @@ class SmartingHomePanel extends HTMLElement {
     const isActive = action.always || presetActions.has(action.id);
     // Use backend state (from _evaluate_actions) as primary source
     const backendStatus = this._actionStates && this._actionStates[action.id];
-    const isLive = backendStatus === 'active' || (this._activeActions && this._activeActions.has(action.id));
+    const isDisabled = backendStatus === 'disabled';
+    const isLive = !isDisabled && (backendStatus === 'active' || (this._activeActions && this._activeActions.has(action.id)));
     
     let statusLabel, statusBg, statusBorder, statusTextColor;
-    if (isLive) {
+    if (isDisabled) {
+      statusLabel = 'WYŁĄCZ.';
+      statusBg = 'rgba(231,76,60,0.15)';
+      statusBorder = 'rgba(231,76,60,0.3)';
+      statusTextColor = '#e74c3c';
+    } else if (isLive) {
       statusLabel = 'AKTYWNE';
       statusBg = 'rgba(46,204,113,0.2)';
       statusBorder = 'rgba(46,204,113,0.5)';
@@ -7853,9 +8269,9 @@ class SmartingHomePanel extends HTMLElement {
       statusTextColor = '#64748b';
     }
 
-    const borderColor = isLive ? '#2ecc71' : (isActive ? catColor : 'rgba(255,255,255,0.06)');
-    const bgColor = isLive ? 'rgba(46,204,113,0.06)' : (isActive ? 'rgba(255,255,255,0.035)' : 'rgba(255,255,255,0.015)');
-    const opacity = (isActive || isLive) ? '1' : '0.55';
+    const borderColor = isDisabled ? 'rgba(231,76,60,0.3)' : (isLive ? '#2ecc71' : (isActive ? catColor : 'rgba(255,255,255,0.06)'));
+    const bgColor = isDisabled ? 'rgba(231,76,60,0.04)' : (isLive ? 'rgba(46,204,113,0.06)' : (isActive ? 'rgba(255,255,255,0.035)' : 'rgba(255,255,255,0.015)'));
+    const opacity = isDisabled ? '0.5' : ((isActive || isLive) ? '1' : '0.55');
     const alwaysBadge = action.always
       ? `<span style="font-size:7px; background:rgba(231,76,60,0.2); color:#e74c3c; padding:1px 4px; border-radius:4px; font-weight:700; margin-left:auto">ALWAYS</span>`
       : '';
@@ -7917,6 +8333,14 @@ class SmartingHomePanel extends HTMLElement {
         badge.style.borderColor = 'rgba(71,85,105,0.3)';
         badge.style.color = '#64748b';
         card.style.opacity = '0.55';
+      } else if (status === 'disabled') {
+        badge.textContent = 'WYŁĄCZ.';
+        badge.style.background = 'rgba(231,76,60,0.15)';
+        badge.style.borderColor = 'rgba(231,76,60,0.3)';
+        badge.style.color = '#e74c3c';
+        card.style.borderLeftColor = 'rgba(231,76,60,0.3)';
+        card.style.background = 'rgba(231,76,60,0.04)';
+        card.style.opacity = '0.5';
       }
     }
   }
@@ -7924,32 +8348,67 @@ class SmartingHomePanel extends HTMLElement {
   async _triggerAction(actionId) {
     const tile = this.shadowRoot.getElementById(`ap-action-${actionId}`);
     const origBg = tile ? tile.style.background : '';
+
+    // Toggle: if action is currently active → deactivate it via backend
+    const badge = tile ? tile.querySelector('[data-status-badge]') : null;
+    const isActive = (badge && badge.textContent === 'AKTYWNE')
+      || (this._activeActions && this._activeActions.has(actionId));
+
+    if (isActive) {
+      // ── DEACTIVATE ──
+      if (tile) tile.style.background = 'rgba(231,76,60,0.15)';
+      try {
+        await this._hass.callService('smartinghome', 'toggle_autopilot_action', {
+          action_id: actionId,
+          enabled: false,
+        });
+        if (tile) {
+          tile.style.opacity = '0.55';
+          tile.style.borderLeftColor = 'rgba(255,255,255,0.06)';
+          tile.style.background = 'rgba(255,255,255,0.015)';
+        }
+        if (badge) {
+          badge.textContent = 'WYŁĄCZ.';
+          badge.style.background = 'rgba(231,76,60,0.15)';
+          badge.style.borderColor = 'rgba(231,76,60,0.3)';
+          badge.style.color = '#e74c3c';
+        }
+        if (this._activeActions) this._activeActions.delete(actionId);
+        console.log('[SH] Action deactivated:', actionId);
+        this._updateLiveDecisionLog();
+      } catch (err) {
+        console.error('[SH] Deactivate action failed:', err);
+        if (tile) { tile.style.background = origBg; }
+      }
+      return;
+    }
+
+    // ── ACTIVATE ──
     if (tile) tile.style.background = 'rgba(46,204,113,0.15)';
 
     try {
+      await this._hass.callService('smartinghome', 'toggle_autopilot_action', {
+        action_id: actionId,
+        enabled: true,
+      });
       await this._hass.callService('smartinghome', 'trigger_autopilot_action', {
         action_id: actionId,
       });
       if (tile) {
-        // Flash green
         tile.style.background = 'rgba(46,204,113,0.25)';
         tile.style.opacity = '1';
         tile.style.borderLeftColor = '#2ecc71';
-        // Update status badge to AKTYWNE
-        const badge = tile.querySelector('[data-status-badge]');
-        if (badge) {
-          badge.textContent = 'AKTYWNE';
-          badge.style.background = 'rgba(46,204,113,0.2)';
-          badge.style.borderColor = 'rgba(46,204,113,0.5)';
-          badge.style.color = '#2ecc71';
-        }
-        // Track active action for live dashboard
-        if (!this._activeActions) this._activeActions = new Set();
-        this._activeActions.add(actionId);
-        setTimeout(() => { tile.style.background = origBg; }, 2000);
-        // Refresh live dashboard
-        this._updateLiveDecisionLog();
       }
+      if (badge) {
+        badge.textContent = 'AKTYWNE';
+        badge.style.background = 'rgba(46,204,113,0.2)';
+        badge.style.borderColor = 'rgba(46,204,113,0.5)';
+        badge.style.color = '#2ecc71';
+      }
+      if (!this._activeActions) this._activeActions = new Set();
+      this._activeActions.add(actionId);
+      setTimeout(() => { tile.style.background = origBg; }, 2000);
+      this._updateLiveDecisionLog();
     } catch (err) {
       console.error('[SH] Trigger action failed:', err);
       if (tile) { tile.style.background = 'rgba(231,76,60,0.2)'; setTimeout(() => { tile.style.background = origBg; }, 1500); }
@@ -7957,6 +8416,10 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   async _switchAutopilotStrategy(strategyId) {
+    // Toggle: if clicking already-active strategy → deactivate
+    if (this._autopilotActiveStrategy === strategyId) {
+      return this._deactivateAutopilot();
+    }
     this._autopilotActiveStrategy = strategyId;
     this._lastRenderedActionsKey = null;  // force re-render
     this._renderStrategyPresets();
@@ -8298,7 +8761,22 @@ class SmartingHomePanel extends HTMLElement {
               if (el) el.textContent = val;
             };
 
-            setText('ap-live-strategy', live.strategy_label || live.strategy || '—');
+            // Frontend fallback labels for strategy keys
+            const strategyLabels = {
+              max_self_consumption: '🟢 Max Autokonsumpcja',
+              max_profit: '💰 Max Zysk',
+              battery_protection: '🔋 Ochrona Baterii',
+              zero_export: '⚡ Zero Export',
+              weather_adaptive: '🌧️ Pogodowy',
+              ai_full_autonomy: '🧠 AI Pełna',
+            };
+
+            if (live.enabled === false) {
+              setText('ap-live-strategy', '— tryb auto');
+            } else {
+              const label = live.strategy_label || strategyLabels[live.strategy] || live.strategy || '—';
+              setText('ap-live-strategy', label);
+            }
 
             // G13 zone with color
             const zoneEl = this.shadowRoot.getElementById('ap-live-zone');
