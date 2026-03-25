@@ -24,6 +24,7 @@ from .const import (
     AutopilotStrategy,
     CONF_GEMINI_API_KEY,
     CONF_ANTHROPIC_API_KEY,
+    CONF_ECOWITT_ENABLED,
     AUTOPILOT_PLAN_KEY,
     AUTOPILOT_SETTINGS_KEY,
 )
@@ -45,6 +46,7 @@ SERVICE_SET_AUTOPILOT_STRATEGY = "set_autopilot_strategy"
 SERVICE_DEACTIVATE_AUTOPILOT = "deactivate_autopilot"
 SERVICE_TRIGGER_AUTOPILOT_ACTION = "trigger_autopilot_action"
 SERVICE_TOGGLE_AUTOPILOT_ACTION = "toggle_autopilot_action"
+SERVICE_SYNC_ECOWITT_STATE = "sync_ecowitt_state"
 
 SETTINGS_FILE = "settings.json"
 
@@ -132,6 +134,12 @@ TRIGGER_ACTION_SCHEMA = vol.Schema(
 TOGGLE_ACTION_SCHEMA = vol.Schema(
     {
         vol.Required("action_id"): cv.string,
+        vol.Required("enabled"): cv.boolean,
+    }
+)
+
+SYNC_ECOWITT_STATE_SCHEMA = vol.Schema(
+    {
         vol.Required("enabled"): cv.boolean,
     }
 )
@@ -689,6 +697,18 @@ async def async_setup_services(
             )
         _LOGGER.info("Action toggled: %s → %s", action_id, "ON" if enabled else "OFF")
 
+    async def handle_sync_ecowitt_state(call: ServiceCall) -> None:
+        """Sync Ecowitt enabled state to config_entry.data."""
+        enabled = call.data["enabled"]
+        current = entry.data
+        new_data = {**current, CONF_ECOWITT_ENABLED: enabled, "_keys_only_update": True}
+        hass.config_entries.async_update_entry(entry, data=new_data)
+        # Also update coordinator's cached flag immediately
+        coordinator_ref = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("coordinator")
+        if coordinator_ref:
+            coordinator_ref._ecowitt_enabled = enabled
+        _LOGGER.info("Ecowitt state synced to config entry: %s", enabled)
+
     # Register all services
     hass.services.async_register(
         DOMAIN, SERVICE_SET_MODE, handle_set_mode, schema=SET_MODE_SCHEMA
@@ -744,8 +764,12 @@ async def async_setup_services(
         DOMAIN, SERVICE_TOGGLE_AUTOPILOT_ACTION, handle_toggle_autopilot_action,
         schema=TOGGLE_ACTION_SCHEMA,
     )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SYNC_ECOWITT_STATE, handle_sync_ecowitt_state,
+        schema=SYNC_ECOWITT_STATE_SCHEMA,
+    )
 
-    _LOGGER.info("Registered %d Smarting HOME services", 15)
+    _LOGGER.info("Registered %d Smarting HOME services", 16)
 
     # Start AI Cron Scheduler
     cron = AICronScheduler(
@@ -776,5 +800,6 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_DEACTIVATE_AUTOPILOT,
         SERVICE_TRIGGER_AUTOPILOT_ACTION,
         SERVICE_TOGGLE_AUTOPILOT_ACTION,
+        SERVICE_SYNC_ECOWITT_STATE,
     ]:
         hass.services.async_remove(DOMAIN, service)

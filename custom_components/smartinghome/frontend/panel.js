@@ -12,6 +12,10 @@ class SmartingHomePanel extends HTMLElement {
     this._activeTab = "overview";
     this._isFullscreen = false;
     this._settings = {};
+    // Day/Night energy accumulator (session-based)
+    this._energyDayWs = 0;    // watt-seconds accumulated during day
+    this._energyNightWs = 0;  // watt-seconds accumulated during night
+    this._lastAccumTs = null;  // timestamp of last accumulation
   }
 
   set hass(hass) {
@@ -155,11 +159,13 @@ class SmartingHomePanel extends HTMLElement {
     return "FREE";
   }
 
-  async _loadSettings() {
+  async _loadSettings(retryCount = 0) {
+    const MAX_RETRIES = 5;
     try {
       const r = await fetch('/local/smartinghome/settings.json?t=' + Date.now());
       if (r.ok) {
         this._settings = await r.json();
+        this._settingsLoaded = true;
         this._updateKeyStatus();
         // Restore model selections
         const gSel = this.shadowRoot.getElementById('sel-gemini-model');
@@ -204,8 +210,22 @@ class SmartingHomePanel extends HTMLElement {
         const smCardChk = this.shadowRoot.getElementById('chk-submeters-in-card');
         if (smCardChk && this._settings.sub_meters_in_card !== undefined) smCardChk.checked = this._settings.sub_meters_in_card;
         this._renderSubMetersSettings();
+      } else if (retryCount < MAX_RETRIES) {
+        // Server returned error (e.g. not ready after restart) — retry
+        const delay = 1000 * Math.pow(2, retryCount); // 1s, 2s, 4s, 8s, 16s
+        console.warn(`[SH] settings.json fetch failed (HTTP ${r.status}), retry ${retryCount + 1}/${MAX_RETRIES} in ${delay}ms`);
+        setTimeout(() => this._loadSettings(retryCount + 1), delay);
+        return; // skip subscriptions setup until settings load
       }
-    } catch(e) { /* file not yet created */ }
+    } catch(e) {
+      // Network error or file not yet created — retry with backoff
+      if (retryCount < MAX_RETRIES) {
+        const delay = 1000 * Math.pow(2, retryCount);
+        console.warn(`[SH] settings.json fetch error, retry ${retryCount + 1}/${MAX_RETRIES} in ${delay}ms`, e.message || e);
+        setTimeout(() => this._loadSettings(retryCount + 1), delay);
+        return;
+      }
+    }
     // Ensure subscriptions are active (centrally managed)
     this._ensureSubscriptions();
   }
@@ -1354,6 +1374,10 @@ class SmartingHomePanel extends HTMLElement {
     const enabled = chk.checked;
     this._settings.ecowitt_enabled = enabled;
     this._savePanelSettings({ ecowitt_enabled: enabled });
+    // Also sync to HA config entry so coordinator picks it up after restart
+    if (this._hass) {
+      this._hass.callService("smartinghome", "sync_ecowitt_state", { enabled });
+    }
     // Update ecowitt detection status
     this._detectEcowittSensors();
     // Refresh card visibility
@@ -1714,7 +1738,8 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   _loadWindData() {
-    if (!this._settings.wind_turbine) return;
+    this._windLoading = true;
+    if (!this._settings.wind_turbine) { this._windLoading = false; return; }
     const wt = this._settings.wind_turbine;
     const fields = [
       ['wind-turbine-power', wt.power_kw],
@@ -1729,6 +1754,7 @@ class SmartingHomePanel extends HTMLElement {
       if (el && val !== undefined) el.value = val;
     });
     this._recalcWindProfitability();
+    this._windLoading = false;
   }
 
   _saveWindData() {
@@ -2037,6 +2063,11 @@ class SmartingHomePanel extends HTMLElement {
 
     // Monthly bar chart
     this._renderWindMonthlyChart();
+    // Auto-save wind data with debounce (1.5s) — skip during initial load
+    if (!this._windLoading) {
+      if (this._windSaveTimeout) clearTimeout(this._windSaveTimeout);
+      this._windSaveTimeout = setTimeout(() => this._saveWindData(), 1500);
+    }
   }
 
   _renderWindMonthlyChart() {
@@ -2760,7 +2791,9 @@ class SmartingHomePanel extends HTMLElement {
     if (s.winter_pv_kwp) { const k = this.shadowRoot.getElementById('wnt-pv-kwp'); if (k) k.value = s.winter_pv_kwp; }
     if (s.winter_region) { const r = this.shadowRoot.getElementById('wnt-region'); if (r) r.value = s.winter_region; }
     if (s.winter_scenario) { const sc = this.shadowRoot.getElementById('wnt-scenario'); if (sc) sc.value = s.winter_scenario; }
+    this._winterLoading = true;
     this._recalcWinter();
+    this._winterLoading = false;
   }
 
   _recalcWinter() {
@@ -2847,6 +2880,11 @@ class SmartingHomePanel extends HTMLElement {
     this._renderWinterChart(monthData);
     this._renderWinterFocus(monthData);
     this._renderScenarioComparison(monthData);
+    // Auto-save winter data with debounce (1.5s) — skip during initial load
+    if (!this._winterLoading) {
+      if (this._winterSaveTimeout) clearTimeout(this._winterSaveTimeout);
+      this._winterSaveTimeout = setTimeout(() => this._saveWinterData(), 1500);
+    }
   }
 
   _renderScenarioComparison(data) {
@@ -2956,12 +2994,14 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   _loadWinterData() {
+    this._winterLoading = true;
     const s = this._settings;
     if (s.winter_consumption) { const ii = this.shadowRoot.querySelectorAll('.wnt-cons-input'); ii.forEach((inp, i) => { if (s.winter_consumption[i]) inp.value = s.winter_consumption[i]; }); }
     if (s.winter_pv_kwp) { const k = this.shadowRoot.getElementById('wnt-pv-kwp'); if (k) k.value = s.winter_pv_kwp; }
     if (s.winter_region) { const r = this.shadowRoot.getElementById('wnt-region'); if (r) r.value = s.winter_region; }
     if (s.winter_scenario) { const sc = this.shadowRoot.getElementById('wnt-scenario'); if (sc) sc.value = s.winter_scenario; }
     this._recalcWinter();
+    this._winterLoading = false;
   }
 
   async _uploadInverterImage(file) {
@@ -3348,6 +3388,49 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-load-l1", `L1: ${this._fm("power_l1", 0)} W`);
     this._setText("v-load-l2", `L2: ${this._fm("power_l2", 0)} W`);
     this._setText("v-load-l3", `L3: ${this._fm("power_l3", 0)} W`);
+
+    // ── Day/Night energy accumulation ──
+    {
+      const sunState = this._hass?.states?.["sun.sun"];
+      const isDay = sunState?.state === "above_horizon";
+      const nowTs = Date.now();
+      if (this._lastAccumTs && load > 0) {
+        let dtSec = (nowTs - this._lastAccumTs) / 1000;
+        if (dtSec > 0 && dtSec < 60) { // cap at 60s to avoid spikes after sleep
+          const wattSec = load * dtSec;
+          if (isDay) this._energyDayWs += wattSec;
+          else this._energyNightWs += wattSec;
+        }
+      }
+      this._lastAccumTs = nowTs;
+
+      // Compute calibrated day/night kWh from load_today
+      const loadTodayNum = typeof loadTodayVal === 'number' ? loadTodayVal : parseFloat(loadTodayVal);
+      const totalAccumWs = this._energyDayWs + this._energyNightWs;
+      let dayKwh = 0, nightKwh = 0;
+      if (totalAccumWs > 0 && !isNaN(loadTodayNum) && loadTodayNum > 0) {
+        const dayRatio = this._energyDayWs / totalAccumWs;
+        dayKwh = loadTodayNum * dayRatio;
+        nightKwh = loadTodayNum * (1 - dayRatio);
+      } else if (totalAccumWs > 0) {
+        dayKwh = this._energyDayWs / 3600000;
+        nightKwh = this._energyNightWs / 3600000;
+      }
+
+      // PV to home
+      const pvTodayForHome = this._nm("pv_today") || parseFloat(this._fm("pv_today")) || 0;
+      const expTodayForHome = this._nm("grid_export_today") || 0;
+      const pvToHome = Math.max(0, pvTodayForHome - expTodayForHome);
+      const loadTotalForPct = !isNaN(loadTodayNum) && loadTodayNum > 0 ? loadTodayNum : (dayKwh + nightKwh);
+      const pvToHomePct = loadTotalForPct > 0 ? Math.min(100, (pvToHome / loadTotalForPct) * 100) : 0;
+
+      // Update Overview 🏠 Zużycie breakdown
+      this._setText("v-load-day", dayKwh > 0 ? `${dayKwh.toFixed(1)}` : "—");
+      this._setText("v-load-night", nightKwh > 0 ? `${nightKwh.toFixed(1)}` : "—");
+      this._setText("v-load-from-pv", pvToHome > 0 ? `${pvToHome.toFixed(1)} kWh` : "— kWh");
+      this._setText("v-load-from-pv-pct", pvToHome > 0 ? `(${pvToHomePct.toFixed(0)}%)` : "");
+    }
+
     // Dynamic Home node coloring: green if self-sufficient, orange if grid needed
     const homeNode = this.shadowRoot.getElementById("home-node");
     const homeBig = this.shadowRoot.getElementById("v-load");
@@ -4127,6 +4210,37 @@ class SmartingHomePanel extends HTMLElement {
     if (enNetGridEl) {
       enNetGridEl.textContent = `${enNetGrid > 0 ? '+' : ''}${enNetGrid.toFixed(1)} kWh`;
       enNetGridEl.style.color = enNetGrid >= 0 ? "#2ecc71" : "#e74c3c";
+    }
+
+    // ROW 1b: Day/Night breakdown in Energy tab
+    {
+      const totalAccumWs = this._energyDayWs + this._energyNightWs;
+      const enLoadToday = this._nm("load_today") || 0;
+      let enDayKwh = 0, enNightKwh = 0;
+      if (totalAccumWs > 0 && enLoadToday > 0) {
+        const dayRatio = this._energyDayWs / totalAccumWs;
+        enDayKwh = enLoadToday * dayRatio;
+        enNightKwh = enLoadToday * (1 - dayRatio);
+      } else if (totalAccumWs > 0) {
+        enDayKwh = this._energyDayWs / 3600000;
+        enNightKwh = this._energyNightWs / 3600000;
+      }
+      const enTotalLoad = enDayKwh + enNightKwh;
+      const enDayPct = enTotalLoad > 0 ? (enDayKwh / enTotalLoad) * 100 : 50;
+      const enPvHomePct = enTotalLoad > 0 ? Math.min(100, (enHomeFromPv / enTotalLoad) * 100) : 0;
+
+      this._setText("v-en-load-day", enDayKwh > 0 ? enDayKwh.toFixed(1) : "—");
+      this._setText("v-en-load-night", enNightKwh > 0 ? enNightKwh.toFixed(1) : "—");
+      this._setText("v-en-load-from-pv", enHomeFromPv > 0 ? enHomeFromPv.toFixed(1) : "—");
+      this._setText("v-en-day-pct", enDayKwh > 0 ? `${enDayPct.toFixed(0)}%` : "—%");
+      this._setText("v-en-pv-home-pct", enHomeFromPv > 0 ? `${enPvHomePct.toFixed(0)}%` : "—%");
+
+      const dayBar = this.shadowRoot.getElementById("v-en-daybar");
+      const nightBar = this.shadowRoot.getElementById("v-en-nightbar");
+      if (dayBar) dayBar.style.width = `${enDayPct}%`;
+      if (nightBar) nightBar.style.width = `${100 - enDayPct}%`;
+      const pvHomeBar = this.shadowRoot.getElementById("v-en-pv-home-bar");
+      if (pvHomeBar) pvHomeBar.style.width = `${enPvHomePct}%`;
     }
     // Forecast accuracy: actual / forecast * 100
     const fTodayVal = this._n("sensor.smartinghome_pv_forecast_today_total");
@@ -5844,6 +5958,26 @@ class SmartingHomePanel extends HTMLElement {
                       <div class="node-detail" style="margin-top:8px">
                         <div id="v-load-l1">L1: — W</div><div id="v-load-l2">L2: — W</div><div id="v-load-l3">L3: — W</div>
                       </div>
+                      <!-- Day/Night breakdown -->
+                      <div id="v-load-breakdown" style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.06)">
+                        <div style="display:flex; gap:6px; margin-bottom:4px">
+                          <div style="flex:1; background:rgba(247,183,49,0.1); border-radius:8px; padding:5px 4px; text-align:center">
+                            <div style="font-size:7px; color:#f7b731; text-transform:uppercase; letter-spacing:0.5px">☀️ Dzień</div>
+                            <div style="font-size:14px; font-weight:800; color:#f7b731" id="v-load-day">—</div>
+                            <div style="font-size:8px; color:#94a3b8">kWh</div>
+                          </div>
+                          <div style="flex:1; background:rgba(139,157,195,0.1); border-radius:8px; padding:5px 4px; text-align:center">
+                            <div style="font-size:7px; color:#8b9dc3; text-transform:uppercase; letter-spacing:0.5px">🌙 Noc</div>
+                            <div style="font-size:14px; font-weight:800; color:#8b9dc3" id="v-load-night">—</div>
+                            <div style="font-size:8px; color:#94a3b8">kWh</div>
+                          </div>
+                        </div>
+                        <div style="display:flex; align-items:center; gap:4px; margin-top:2px">
+                          <span style="font-size:8px; color:#f7b731">⚡ Z PV na dom:</span>
+                          <span style="font-size:12px; font-weight:800; color:#2ecc71" id="v-load-from-pv">— kWh</span>
+                          <span style="font-size:9px; color:#64748b" id="v-load-from-pv-pct"></span>
+                        </div>
+                      </div>
                       <!-- Sub-meters in Zużycie card -->
                       <div id="submeters-in-card" style="display:none; margin-top:6px; border-top:1px solid rgba(255,255,255,0.06); padding-top:6px"></div>
                     </div>
@@ -6030,6 +6164,45 @@ class SmartingHomePanel extends HTMLElement {
               <div style="font-size:9px; color:#00d4ff; text-transform:uppercase; letter-spacing:1px">📊 Saldo netto</div>
               <div style="font-size:28px; font-weight:800; margin:4px 0" id="v-en-net-today">—</div>
               <div style="font-size:10px; color:#94a3b8">kWh</div>
+            </div>
+          </div>
+
+          <!-- ROW 1b: Day/Night Consumption Breakdown -->
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-title">🏠 Zużycie — podział dzień / noc</div>
+            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:12px">
+              <div style="background:rgba(247,183,49,0.08); border-radius:12px; padding:14px 8px; text-align:center">
+                <div style="font-size:9px; color:#f7b731; text-transform:uppercase; letter-spacing:1px">☀️ Dzień (PV)</div>
+                <div style="font-size:26px; font-weight:800; color:#f7b731; margin:4px 0" id="v-en-load-day">—</div>
+                <div style="font-size:10px; color:#94a3b8">kWh</div>
+              </div>
+              <div style="background:rgba(139,157,195,0.08); border-radius:12px; padding:14px 8px; text-align:center">
+                <div style="font-size:9px; color:#8b9dc3; text-transform:uppercase; letter-spacing:1px">🌙 Noc</div>
+                <div style="font-size:26px; font-weight:800; color:#8b9dc3; margin:4px 0" id="v-en-load-night">—</div>
+                <div style="font-size:10px; color:#94a3b8">kWh</div>
+              </div>
+              <div style="background:rgba(46,204,113,0.08); border-radius:12px; padding:14px 8px; text-align:center">
+                <div style="font-size:9px; color:#2ecc71; text-transform:uppercase; letter-spacing:1px">⚡ Z PV na dom</div>
+                <div style="font-size:26px; font-weight:800; color:#2ecc71; margin:4px 0" id="v-en-load-from-pv">—</div>
+                <div style="font-size:10px; color:#94a3b8">kWh</div>
+              </div>
+            </div>
+            <!-- Stacked bar: day/night ratio -->
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px">
+              <span style="font-size:10px; color:#94a3b8; min-width:80px">Dzień vs Noc</span>
+              <div style="flex:1; height:14px; border-radius:7px; overflow:hidden; background:rgba(255,255,255,0.06); display:flex">
+                <div id="v-en-daybar" style="height:100%; background:linear-gradient(90deg,#f7b731,#f39c12); transition:width 0.6s ease; width:50%"></div>
+                <div id="v-en-nightbar" style="height:100%; background:linear-gradient(90deg,#64748b,#8b9dc3); transition:width 0.6s ease; width:50%"></div>
+              </div>
+              <span style="font-size:10px; color:#f7b731; font-weight:700; min-width:35px" id="v-en-day-pct">—%</span>
+            </div>
+            <!-- PV self-consumption bar -->
+            <div style="display:flex; align-items:center; gap:8px">
+              <span style="font-size:10px; color:#94a3b8; min-width:80px">PV → Dom</span>
+              <div style="flex:1; height:14px; border-radius:7px; overflow:hidden; background:rgba(255,255,255,0.06)">
+                <div id="v-en-pv-home-bar" style="height:100%; background:linear-gradient(90deg,#2ecc71,#f7b731); transition:width 0.6s ease; width:0%"></div>
+              </div>
+              <span style="font-size:10px; color:#2ecc71; font-weight:700; min-width:35px" id="v-en-pv-home-pct">—%</span>
             </div>
           </div>
 
@@ -8251,7 +8424,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.26.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.27.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
