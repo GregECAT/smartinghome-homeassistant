@@ -201,6 +201,8 @@ class SmartingHomePanel extends HTMLElement {
         // Restore sub-meters settings
         const smChk = this.shadowRoot.getElementById('chk-submeters-enabled');
         if (smChk && this._settings.sub_meters_enabled !== undefined) smChk.checked = this._settings.sub_meters_enabled;
+        const smCardChk = this.shadowRoot.getElementById('chk-submeters-in-card');
+        if (smCardChk && this._settings.sub_meters_in_card !== undefined) smCardChk.checked = this._settings.sub_meters_in_card;
         this._renderSubMetersSettings();
       }
     } catch(e) { /* file not yet created */ }
@@ -1274,8 +1276,11 @@ class SmartingHomePanel extends HTMLElement {
     if (!chk) return;
     const enabled = chk.checked;
     this._settings.sub_meters_enabled = enabled;
+    const inCard = this.shadowRoot.getElementById('chk-submeters-in-card');
+    const inCardEnabled = inCard ? inCard.checked : false;
+    this._settings.sub_meters_in_card = inCardEnabled;
     const meters = this._settings.sub_meters || [];
-    this._savePanelSettings({ sub_meters_enabled: enabled, sub_meters: meters });
+    this._savePanelSettings({ sub_meters_enabled: enabled, sub_meters_in_card: inCardEnabled, sub_meters: meters });
     this._updateSubMeters();
     const st = this.shadowRoot.getElementById('v-submeters-save-status');
     if (st) {
@@ -1307,6 +1312,7 @@ class SmartingHomePanel extends HTMLElement {
     this._savePanelSettings({ sub_meters: this._settings.sub_meters });
     this._renderSubMetersSettings();
     this._updateSubMeters();
+    this._updateSubMetersInCard();
     console.log('[SmartingHOME] Sub-meter removed:', id);
   }
 
@@ -1421,7 +1427,22 @@ class SmartingHomePanel extends HTMLElement {
     this._closeModal();
     this._renderSubMetersSettings();
     this._updateSubMeters();
+    this._updateSubMetersInCard();
     console.log('[SmartingHOME] Sub-meter saved from modal:', { name: meters[meters.length-1]?.name, count: meters.length });
+  }
+
+  _moveSubMeter(id, direction) {
+    const meters = this._settings.sub_meters || [];
+    const idx = meters.findIndex(m => m.id === id);
+    if (idx < 0) return;
+    const newIdx = idx + direction;
+    if (newIdx < 0 || newIdx >= meters.length) return;
+    [meters[idx], meters[newIdx]] = [meters[newIdx], meters[idx]];
+    this._settings.sub_meters = meters;
+    this._savePanelSettings({ sub_meters: meters });
+    this._renderSubMetersSettings();
+    this._updateSubMeters();
+    this._updateSubMetersInCard();
   }
 
   _renderSubMetersSettings() {
@@ -1434,7 +1455,7 @@ class SmartingHomePanel extends HTMLElement {
       return;
     }
 
-    container.innerHTML = meters.map(m => `
+    container.innerHTML = meters.map((m, i) => `
       <div class="sm-list-item">
         <div class="sm-list-icon">${m.icon || '⚡'}</div>
         <div class="sm-list-info">
@@ -1442,6 +1463,8 @@ class SmartingHomePanel extends HTMLElement {
           <div class="sm-list-entity">${m.entity_id}${m.energy_entity_id ? ' · ' + m.energy_entity_id : ''}</div>
         </div>
         <div class="sm-list-actions">
+          <button class="sm-list-btn" onclick="this.getRootNode().host._moveSubMeter('${m.id}', -1)" title="W górę" ${i === 0 ? 'disabled style="opacity:0.3"' : ''}>▲</button>
+          <button class="sm-list-btn" onclick="this.getRootNode().host._moveSubMeter('${m.id}', 1)" title="W dół" ${i === meters.length - 1 ? 'disabled style="opacity:0.3"' : ''}>▼</button>
           <button class="sm-list-btn" onclick="this.getRootNode().host._editSubMeter('${m.id}')" title="Edytuj">✏️</button>
           <button class="sm-list-btn danger" onclick="this.getRootNode().host._removeSubMeter('${m.id}')" title="Usuń">🗑️</button>
         </div>
@@ -1514,6 +1537,43 @@ class SmartingHomePanel extends HTMLElement {
           <div style="font-size:8px; color:#475569; margin-top:3px">${pct}% zużycia domu</div>
         </div>
       `;
+    }).join('');
+  }
+
+  _updateSubMetersInCard() {
+    const container = this.shadowRoot.getElementById('submeters-in-card');
+    if (!container) return;
+
+    let enabled = this._settings.sub_meters_in_card;
+    if (enabled === undefined) {
+      const chk = this.shadowRoot.getElementById('chk-submeters-in-card');
+      enabled = chk ? chk.checked : false;
+    }
+    const meters = this._settings.sub_meters || [];
+
+    if (!enabled || meters.length === 0) {
+      container.style.display = 'none';
+      return;
+    }
+    container.style.display = '';
+
+    container.innerHTML = meters.map(m => {
+      const powerState = this._hass?.states?.[m.entity_id];
+      const powerVal = powerState ? parseFloat(powerState.state) : NaN;
+      const powerStr = isNaN(powerVal) ? '—' : Math.round(powerVal).toLocaleString('pl-PL');
+      const unit = powerState?.attributes?.unit_of_measurement || 'W';
+
+      let color = '#94a3b8';
+      if (!isNaN(powerVal)) {
+        if (powerVal > 2000) color = '#e74c3c';
+        else if (powerVal > 500) color = '#f7b731';
+        else if (powerVal > 0) color = '#2ecc71';
+      }
+
+      return `<div style="display:flex; align-items:center; justify-content:space-between; padding:3px 0; font-size:11px">
+        <span style="color:#94a3b8">${m.icon || '⚡'} ${m.name}</span>
+        <span style="color:${color}; font-weight:700">${powerStr} ${unit}</span>
+      </div>`;
     }).join('');
   }
 
@@ -2957,7 +3017,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateSubMeters(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); }
 
   /* ── Moon phase calculation ─────────────────── */
   _getMoonPhase(date) {
@@ -5682,6 +5742,8 @@ class SmartingHomePanel extends HTMLElement {
                       <div class="node-detail" style="margin-top:8px">
                         <div id="v-load-l1">L1: — W</div><div id="v-load-l2">L2: — W</div><div id="v-load-l3">L3: — W</div>
                       </div>
+                      <!-- Sub-meters in Zużycie card -->
+                      <div id="submeters-in-card" style="display:none; margin-top:6px; border-top:1px solid rgba(255,255,255,0.06); padding-top:6px"></div>
                     </div>
                     <div style="flex-shrink:0; max-width:120px">
                       <img id="v-home-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/grafika-domu.png" alt="Dom" style="width:100%; max-height:100px; object-fit:contain; opacity:0.85; border-radius:8px" />
@@ -8007,11 +8069,18 @@ class SmartingHomePanel extends HTMLElement {
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">📊 Podliczniki energii — monitorowanie zużycia</div>
               <div style="font-size:11px; color:#94a3b8; margin-bottom:10px">Dodaj podliczniki lub urządzenia monitorujące zużycie energii. Wyświetlą się na zakładce Przegląd jako kolumny z aktualną mocą i zużyciem.</div>
-              <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; background:rgba(0,212,255,0.04); border-radius:8px; border:1px solid rgba(0,212,255,0.1); margin-bottom:12px">
+              <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; background:rgba(0,212,255,0.04); border-radius:8px; border:1px solid rgba(0,212,255,0.1); margin-bottom:6px">
                 <input type="checkbox" id="chk-submeters-enabled" style="accent-color:#00d4ff; width:18px; height:18px" />
                 <div style="flex:1">
                   <div style="font-size:13px; font-weight:700; color:#fff">📊 Pokaż podliczniki na Przeglądzie</div>
                   <div style="font-size:10px; color:#64748b">Wyświetlaj kolumnowe karty zużycia pod diagramem przepływów</div>
+                </div>
+              </div>
+              <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; background:rgba(46,204,113,0.04); border-radius:8px; border:1px solid rgba(46,204,113,0.1); margin-bottom:12px">
+                <input type="checkbox" id="chk-submeters-in-card" style="accent-color:#2ecc71; width:18px; height:18px" />
+                <div style="flex:1">
+                  <div style="font-size:13px; font-weight:700; color:#fff">🏠 Pokaż w karcie Zużycie</div>
+                  <div style="font-size:10px; color:#64748b">Wyświetlaj podliczniki wewnątrz kontenera 🏠 Zużycie na diagramie</div>
                 </div>
               </div>
               <div id="submeters-settings-list"></div>
@@ -8072,7 +8141,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.24.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.25.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
