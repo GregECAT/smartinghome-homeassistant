@@ -1279,9 +1279,10 @@ class SmartingHomePanel extends HTMLElement {
     this._updateSubMeters();
     const st = this.shadowRoot.getElementById('v-submeters-save-status');
     if (st) {
-      st.textContent = '✅ Podliczniki zapisane!';
+      st.textContent = '✅ Podliczniki zapisane! (' + meters.length + ' szt.)';
       setTimeout(() => { st.textContent = ''; }, 4000);
     }
+    console.log('[SmartingHOME] Sub-meters saved:', { enabled, count: meters.length });
   }
 
   _addSubMeter() {
@@ -1303,8 +1304,10 @@ class SmartingHomePanel extends HTMLElement {
   _removeSubMeter(id) {
     const meters = this._settings.sub_meters || [];
     this._settings.sub_meters = meters.filter(m => m.id !== id);
+    this._savePanelSettings({ sub_meters: this._settings.sub_meters });
     this._renderSubMetersSettings();
     this._updateSubMeters();
+    console.log('[SmartingHOME] Sub-meter removed:', id);
   }
 
   _showSubMeterModal(existing) {
@@ -1418,6 +1421,7 @@ class SmartingHomePanel extends HTMLElement {
     this._closeModal();
     this._renderSubMetersSettings();
     this._updateSubMeters();
+    console.log('[SmartingHOME] Sub-meter saved from modal:', { name: meters[meters.length-1]?.name, count: meters.length });
   }
 
   _renderSubMetersSettings() {
@@ -1450,7 +1454,12 @@ class SmartingHomePanel extends HTMLElement {
     const grid = this.shadowRoot.getElementById('submeters-grid');
     if (!section || !grid) return;
 
-    const enabled = this._settings.sub_meters_enabled;
+    // Check enabled: from settings OR from DOM checkbox as fallback
+    let enabled = this._settings.sub_meters_enabled;
+    if (enabled === undefined) {
+      const chk = this.shadowRoot.getElementById('chk-submeters-enabled');
+      enabled = chk ? chk.checked : false;
+    }
     const meters = this._settings.sub_meters || [];
 
     if (!enabled || meters.length === 0) {
@@ -8063,7 +8072,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.24.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.24.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
