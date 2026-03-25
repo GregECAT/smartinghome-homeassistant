@@ -323,7 +323,7 @@ class AIAdvisor:
             "## HEMS Efficiency Score",
             f"- Current Score: {data.get('hems_score', 'N/A')} / 100",
             f"- Score breakdown: autarky(30%), self-consumption(25%), battery(15%), tariff(15%), PV yield(15%)",
-        ]
+        ])
         return "\n".join(lines)
 
     async def ask_gemini(
