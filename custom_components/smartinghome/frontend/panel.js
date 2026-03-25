@@ -12,10 +12,12 @@ class SmartingHomePanel extends HTMLElement {
     this._activeTab = "overview";
     this._isFullscreen = false;
     this._settings = {};
-    // Day/Night energy accumulator (session-based)
+    // Day/Night energy accumulator (session-based, persisted to settings)
     this._energyDayWs = 0;    // watt-seconds accumulated during day
     this._energyNightWs = 0;  // watt-seconds accumulated during night
     this._lastAccumTs = null;  // timestamp of last accumulation
+    this._lastAccumSaveTs = 0; // last time accum was saved to settings
+    this._accumDate = null;    // date string (YYYY-MM-DD) for reset detection
   }
 
   set hass(hass) {
@@ -3394,6 +3396,23 @@ class SmartingHomePanel extends HTMLElement {
       const sunState = this._hass?.states?.["sun.sun"];
       const isDay = sunState?.state === "above_horizon";
       const nowTs = Date.now();
+      const todayStr = new Date().toISOString().slice(0, 10);
+
+      // Restore persisted accumulators on first run
+      if (!this._accumDate && this._settings._accum_date === todayStr) {
+        this._energyDayWs = this._settings._accum_day_ws || 0;
+        this._energyNightWs = this._settings._accum_night_ws || 0;
+        this._accumDate = todayStr;
+      }
+      // Midnight reset: if date changed, reset accumulators
+      if (this._accumDate && this._accumDate !== todayStr) {
+        this._energyDayWs = 0;
+        this._energyNightWs = 0;
+        this._accumDate = todayStr;
+        this._savePanelSettings({ _accum_day_ws: 0, _accum_night_ws: 0, _accum_date: todayStr });
+      }
+      if (!this._accumDate) this._accumDate = todayStr;
+
       if (this._lastAccumTs && load > 0) {
         let dtSec = (nowTs - this._lastAccumTs) / 1000;
         if (dtSec > 0 && dtSec < 60) { // cap at 60s to avoid spikes after sleep
@@ -3403,6 +3422,16 @@ class SmartingHomePanel extends HTMLElement {
         }
       }
       this._lastAccumTs = nowTs;
+
+      // Persist accumulators every 5 minutes
+      if (nowTs - this._lastAccumSaveTs > 300000) {
+        this._lastAccumSaveTs = nowTs;
+        this._savePanelSettings({
+          _accum_day_ws: Math.round(this._energyDayWs),
+          _accum_night_ws: Math.round(this._energyNightWs),
+          _accum_date: todayStr
+        });
+      }
 
       // Compute calibrated day/night kWh from load_today
       const loadTodayNum = typeof loadTodayVal === 'number' ? loadTodayVal : parseFloat(loadTodayVal);
@@ -3417,10 +3446,12 @@ class SmartingHomePanel extends HTMLElement {
         nightKwh = this._energyNightWs / 3600000;
       }
 
-      // PV to home
+      // PV to home — capped at load_today (can't consume more PV than total load)
       const pvTodayForHome = this._nm("pv_today") || parseFloat(this._fm("pv_today")) || 0;
       const expTodayForHome = this._nm("grid_export_today") || 0;
-      const pvToHome = Math.max(0, pvTodayForHome - expTodayForHome);
+      const pvToHomeRaw = Math.max(0, pvTodayForHome - expTodayForHome);
+      const loadTodayCap = !isNaN(loadTodayNum) && loadTodayNum > 0 ? loadTodayNum : Infinity;
+      const pvToHome = Math.min(pvToHomeRaw, loadTodayCap);
       const loadTotalForPct = !isNaN(loadTodayNum) && loadTodayNum > 0 ? loadTodayNum : (dayKwh + nightKwh);
       const pvToHomePct = loadTotalForPct > 0 ? Math.min(100, (pvToHome / loadTotalForPct) * 100) : 0;
 
@@ -4195,7 +4226,9 @@ class SmartingHomePanel extends HTMLElement {
     const enPvToday = pvToday ?? 0;
     const enImpToday = gridImpToday;
     const enExpToday = gridExpToday;
-    const enHomeFromPv = Math.max(0, enPvToday - enExpToday);
+    const enHomeFromPvRaw = Math.max(0, enPvToday - enExpToday);
+    const enLoadToday2 = this._nm("load_today") || 0;
+    const enHomeFromPv = enLoadToday2 > 0 ? Math.min(enHomeFromPvRaw, enLoadToday2) : enHomeFromPvRaw;
     const autarky = (enPvToday + enImpToday) > 0 ? Math.min(100, (enPvToday / (enPvToday + enImpToday)) * 100) : 0;
     const selfCons = enPvToday > 0 ? Math.min(100, (enHomeFromPv / enPvToday) * 100) : 0;
     const enNetGrid = enExpToday - enImpToday;
@@ -5950,41 +5983,45 @@ class SmartingHomePanel extends HTMLElement {
               <!-- 🏠 ZUZYCIE (top right) -->
               <div class="home-area">
                 <div class="node" id="home-node" style="border-color: rgba(46,204,113,0.2); transition: border-color 0.5s, box-shadow 0.5s">
-                  <div style="display:flex; align-items:flex-start; gap:12px">
-                    <div style="flex:1">
+                  <div style="display:flex; align-items:flex-start; gap:10px">
+                    <div style="flex:1; min-width:0">
                       <div class="node-title">🏠 Zużycie</div>
                       <div class="node-big" id="v-load">— W</div>
                       <div style="font-size:11px; color:#2ecc71; margin-top:3px; font-weight:600" id="v-load-today"></div>
-                      <div class="node-detail" style="margin-top:8px">
-                        <div id="v-load-l1">L1: — W</div><div id="v-load-l2">L2: — W</div><div id="v-load-l3">L3: — W</div>
-                      </div>
-                      <!-- Day/Night breakdown -->
-                      <div id="v-load-breakdown" style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.06)">
-                        <div style="display:flex; gap:6px; margin-bottom:4px">
-                          <div style="flex:1; background:rgba(247,183,49,0.1); border-radius:8px; padding:5px 4px; text-align:center">
-                            <div style="font-size:7px; color:#f7b731; text-transform:uppercase; letter-spacing:0.5px">☀️ Dzień</div>
-                            <div style="font-size:14px; font-weight:800; color:#f7b731" id="v-load-day">—</div>
-                            <div style="font-size:8px; color:#94a3b8">kWh</div>
-                          </div>
-                          <div style="flex:1; background:rgba(139,157,195,0.1); border-radius:8px; padding:5px 4px; text-align:center">
-                            <div style="font-size:7px; color:#8b9dc3; text-transform:uppercase; letter-spacing:0.5px">🌙 Noc</div>
-                            <div style="font-size:14px; font-weight:800; color:#8b9dc3" id="v-load-night">—</div>
-                            <div style="font-size:8px; color:#94a3b8">kWh</div>
-                          </div>
-                        </div>
-                        <div style="display:flex; align-items:center; gap:4px; margin-top:2px">
-                          <span style="font-size:8px; color:#f7b731">⚡ Z PV na dom:</span>
-                          <span style="font-size:12px; font-weight:800; color:#2ecc71" id="v-load-from-pv">— kWh</span>
-                          <span style="font-size:9px; color:#64748b" id="v-load-from-pv-pct"></span>
-                        </div>
-                      </div>
-                      <!-- Sub-meters in Zużycie card -->
-                      <div id="submeters-in-card" style="display:none; margin-top:6px; border-top:1px solid rgba(255,255,255,0.06); padding-top:6px"></div>
                     </div>
-                    <div style="flex-shrink:0; max-width:120px">
-                      <img id="v-home-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/grafika-domu.png" alt="Dom" style="width:100%; max-height:100px; object-fit:contain; opacity:0.85; border-radius:8px" />
+                    <div style="flex-shrink:0; text-align:right">
+                      <img id="v-home-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/grafika-domu.png" alt="Dom" style="width:90px; max-height:70px; object-fit:contain; opacity:0.85; border-radius:8px" />
+                      <div class="node-detail" style="margin-top:4px; text-align:right; font-size:10px">
+                        <span id="v-load-l1">L1: — W</span>
+                        <span style="color:rgba(255,255,255,0.15)"> · </span>
+                        <span id="v-load-l2">L2: — W</span>
+                        <span style="color:rgba(255,255,255,0.15)"> · </span>
+                        <span id="v-load-l3">L3: — W</span>
+                      </div>
                     </div>
                   </div>
+                  <!-- Day/Night breakdown -->
+                  <div id="v-load-breakdown" style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.06)">
+                    <div style="display:flex; gap:6px; margin-bottom:4px">
+                      <div style="flex:1; background:rgba(247,183,49,0.1); border-radius:8px; padding:5px 4px; text-align:center">
+                        <div style="font-size:7px; color:#f7b731; text-transform:uppercase; letter-spacing:0.5px">☀️ Dzień</div>
+                        <div style="font-size:14px; font-weight:800; color:#f7b731" id="v-load-day">—</div>
+                        <div style="font-size:8px; color:#94a3b8">kWh</div>
+                      </div>
+                      <div style="flex:1; background:rgba(139,157,195,0.1); border-radius:8px; padding:5px 4px; text-align:center">
+                        <div style="font-size:7px; color:#8b9dc3; text-transform:uppercase; letter-spacing:0.5px">🌙 Noc</div>
+                        <div style="font-size:14px; font-weight:800; color:#8b9dc3" id="v-load-night">—</div>
+                        <div style="font-size:8px; color:#94a3b8">kWh</div>
+                      </div>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:4px; margin-top:2px">
+                      <span style="font-size:8px; color:#f7b731">⚡ Z PV na dom:</span>
+                      <span style="font-size:12px; font-weight:800; color:#2ecc71" id="v-load-from-pv">— kWh</span>
+                      <span style="font-size:9px; color:#64748b" id="v-load-from-pv-pct"></span>
+                    </div>
+                  </div>
+                  <!-- Sub-meters in Zużycie card -->
+                  <div id="submeters-in-card" style="display:none; margin-top:6px; border-top:1px solid rgba(255,255,255,0.06); padding-top:6px"></div>
                 </div>
               </div>
 
@@ -8424,7 +8461,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.27.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.27.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
