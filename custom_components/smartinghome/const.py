@@ -436,6 +436,7 @@ class TariffType(StrEnum):
     G12 = "g12"
     G12W = "g12w"
     G13 = "g13"
+    DYNAMIC = "dynamic"
 
 
 class G13Zone(StrEnum):
@@ -484,6 +485,15 @@ RCE_PRICE_THRESHOLDS: Final = {
     "normal": 250,       # PLN/MWh
     "expensive": 300,    # PLN/MWh — sell
     "very_expensive": 500,  # PLN/MWh — max sell
+}
+
+# Dynamic tariff (ENTSO-E) price thresholds — PLN/kWh all-in
+DYNAMIC_PRICE_THRESHOLDS: Final = {
+    "very_cheap": 0.10,     # PLN/kWh — ładuj agresywnie
+    "cheap": 0.30,          # PLN/kWh — ładuj baterię
+    "normal": 0.60,         # PLN/kWh — autokonsumpcja
+    "expensive": 0.90,      # PLN/kWh — sprzedawaj
+    "very_expensive": 1.20, # PLN/kWh — max eksport
 }
 
 
@@ -658,6 +668,16 @@ SENSOR_RCE_3H: Final = "sensor.rce_pse_cena_za_3_godziny"
 SENSOR_RCE_AVG_TODAY: Final = "sensor.rce_pse_srednia_cena_dzisiaj"
 SENSOR_RCE_MIN_TODAY: Final = "sensor.rce_pse_minimalna_cena_dzisiaj"
 SENSOR_RCE_MAX_TODAY: Final = "sensor.rce_pse_maksymalna_cena_dzisiaj"
+
+# ENTSO-E Dynamic Pricing sensors
+SENSOR_ENTSOE_PRICE_NOW: Final = "sensor.entso_e_aktualna_cena_energii"
+SENSOR_ENTSOE_ALLIN_NOW: Final = "sensor.entso_e_koszt_all_in_teraz"
+SENSOR_ENTSOE_ALLIN_NEXT: Final = "sensor.entso_e_koszt_all_in_nastepna_h"
+SENSOR_ENTSOE_ALLIN_MIN: Final = "sensor.entso_e_koszt_all_in_min_dzisiaj"
+SENSOR_ENTSOE_ALLIN_MAX: Final = "sensor.entso_e_koszt_all_in_max_dzisiaj"
+SENSOR_ENTSOE_AVG_TODAY: Final = "sensor.entso_e_srednia_dzisiaj"
+SENSOR_ENTSOE_RANK: Final = "sensor.entso_e_ranking_biezacej_godziny"
+SENSOR_ENTSOE_PERCENTILE: Final = "sensor.entso_e_percentyl_biezacej_godziny"
 
 # Forecast.Solar sensors
 SENSOR_FORECAST_POWER_1: Final = "sensor.power_production_now"

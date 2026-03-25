@@ -268,6 +268,7 @@ class SmartingHomeConfigFlow(
                             TariffType.G12: "G12 — Two-zone",
                             TariffType.G12W: "G12w — Two-zone + weekends",
                             TariffType.G13: "G13 — Three-zone (recommended)",
+                            TariffType.DYNAMIC: "Dynamiczna — cena godzinowa ENTSO-E (Tauron)",
                         }
                     ),
                     vol.Optional(
@@ -535,6 +536,7 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
                             TariffType.G12: "G12 — Two-zone",
                             TariffType.G12W: "G12w — Two-zone + weekends",
                             TariffType.G13: "G13 — Three-zone",
+                            TariffType.DYNAMIC: "Dynamiczna — cena godzinowa ENTSO-E (Tauron)",
                         }
                     ),
                     vol.Optional(
@@ -759,6 +761,7 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
                     TariffType.G12: "G12 — Two-zone",
                     TariffType.G12W: "G12w — Two-zone + weekends",
                     TariffType.G13: "G13 — Three-zone",
+                    TariffType.DYNAMIC: "Dynamiczna — cena godzinowa ENTSO-E (Tauron)",
                 }
             ),
             vol.Optional(

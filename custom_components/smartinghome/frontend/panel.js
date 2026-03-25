@@ -855,6 +855,7 @@ class SmartingHomePanel extends HTMLElement {
 
     // Zone logic per tariff
     const getZone = (h) => {
+      if (tariff === "Dynamic") return "dynamic";
       if (tariff === "G11") return "flat";
       if (tariff === "G12") {
         if ((h >= 13 && h < 15) || h >= 22 || h < 6) return "off";
@@ -880,40 +881,104 @@ class SmartingHomePanel extends HTMLElement {
       }
     };
 
-    const colors = { off: "#2ecc71", morning: "#e67e22", peak: "#e74c3c", flat: "#3b82f6" };
-    const labels = { off: "OFF-PEAK", morning: "PRZEDPOŁUDNIOWA", peak: "SZCZYT", flat: "STAŁA" };
+    const colors = { off: "#2ecc71", morning: "#e67e22", peak: "#e74c3c", flat: "#3b82f6", dynamic: "#a855f7" };
+    const labels = { off: "OFF-PEAK", morning: "PRZEDPOŁUDNIOWA", peak: "SZCZYT", flat: "STAŁA", dynamic: "DYNAMICZNA" };
 
     // Update title
     const titleEl = this.shadowRoot.getElementById("tariff-card-title");
-    if (titleEl) titleEl.textContent = `⏰ Taryfa ${tariff}`;
+    if (titleEl) titleEl.textContent = tariff === "Dynamic" ? "⚡ Taryfa Dynamiczna" : `⏰ Taryfa ${tariff}`;
 
     // Update timeline section label
     const tlLabel = this.shadowRoot.getElementById("g13-timeline-label");
     if (tlLabel) {
       const dayType = this.shadowRoot.getElementById("g13-day-type");
       const dayTypeHtml = dayType ? dayType.outerHTML : '';
-      tlLabel.innerHTML = `Harmonogram ${tariff} ${dayTypeHtml}`;
+      if (tariff === "Dynamic") {
+        tlLabel.innerHTML = `Ceny godzinowe ENTSO-E ${dayTypeHtml}`;
+      } else {
+        tlLabel.innerHTML = `Harmonogram ${tariff} ${dayTypeHtml}`;
+      }
     }
 
     // Render 24 segments
     const timeline = this.shadowRoot.getElementById("g13-timeline");
     if (timeline) {
       timeline.innerHTML = "";
-      for (let h = 0; h < 24; h++) {
-        const z = getZone(h);
-        const seg = document.createElement("div");
-        seg.style.cssText = `flex:1; background:${colors[z]}; position:relative; transition:opacity 0.3s`;
-        seg.title = `${String(h).padStart(2,'0')}:00 — ${labels[z]}`;
-        if (h === hour) { seg.style.opacity = "1"; seg.style.boxShadow = "inset 0 0 0 1px #fff"; }
-        else { seg.style.opacity = "0.7"; }
-        if (h % 3 === 0) {
-          const lbl = document.createElement("span");
-          lbl.style.cssText = "position:absolute;left:1px;top:2px;font-size:6px;font-weight:700;color:#000;line-height:1";
-          lbl.textContent = String(h).padStart(2,'0');
-          if (z === "peak") lbl.style.color = "#fff";
-          seg.appendChild(lbl);
+
+      if (tariff === "Dynamic") {
+        // Dynamic: try to read prices_today from HA sensor attributes
+        const entsoeEntity = "sensor.entso_e_aktualna_cena_energii";
+        let pricesToday = [];
+        try {
+          const stateObj = this._hass && this._hass.states && this._hass.states[entsoeEntity];
+          if (stateObj && stateObj.attributes && stateObj.attributes.prices_today) {
+            pricesToday = stateObj.attributes.prices_today;
+          }
+        } catch(e) {}
+
+        if (pricesToday.length >= 24) {
+          const prices = pricesToday.map(p => typeof p === 'object' ? (p.price || p.value || 0) : (parseFloat(p) || 0));
+          const minP = Math.min(...prices);
+          const maxP = Math.max(...prices);
+          const range = maxP - minP || 1;
+
+          for (let h = 0; h < 24; h++) {
+            const p = prices[h] || 0;
+            const ratio = (p - minP) / range; // 0=cheapest, 1=most expensive
+            // Color gradient: green -> yellow -> orange -> red
+            let color;
+            if (ratio < 0.25) color = "#00e676";
+            else if (ratio < 0.50) color = "#66bb6a";
+            else if (ratio < 0.75) color = "#f7b731";
+            else if (ratio < 0.90) color = "#e67e22";
+            else color = "#e74c3c";
+
+            const seg = document.createElement("div");
+            seg.style.cssText = `flex:1; background:${color}; position:relative; transition:opacity 0.3s`;
+            seg.title = `${String(h).padStart(2,'0')}:00 — ${p.toFixed(2)} zł/kWh`;
+            if (h === hour) { seg.style.opacity = "1"; seg.style.boxShadow = "inset 0 0 0 1px #fff"; }
+            else { seg.style.opacity = "0.7"; }
+            if (h % 3 === 0) {
+              const lbl = document.createElement("span");
+              lbl.style.cssText = "position:absolute;left:1px;top:2px;font-size:6px;font-weight:700;color:#000;line-height:1";
+              lbl.textContent = String(h).padStart(2,'0');
+              seg.appendChild(lbl);
+            }
+            timeline.appendChild(seg);
+          }
+        } else {
+          // Fallback: show current price as single block
+          const allin = parseFloat(this._haState("sensor.entso_e_koszt_all_in_teraz")) || 0;
+          for (let h = 0; h < 24; h++) {
+            const seg = document.createElement("div");
+            seg.style.cssText = `flex:1; background:#a855f7; position:relative; transition:opacity 0.3s; opacity:0.3`;
+            seg.title = `${String(h).padStart(2,'0')}:00 — brak danych`;
+            if (h === hour) {
+              seg.style.opacity = "1";
+              seg.style.boxShadow = "inset 0 0 0 1px #fff";
+              seg.title = `${String(h).padStart(2,'0')}:00 — ${allin.toFixed(2)} zł/kWh (teraz)`;
+            }
+            timeline.appendChild(seg);
+          }
         }
-        timeline.appendChild(seg);
+      } else {
+        // Standard fixed-zone tariffs
+        for (let h = 0; h < 24; h++) {
+          const z = getZone(h);
+          const seg = document.createElement("div");
+          seg.style.cssText = `flex:1; background:${colors[z]}; position:relative; transition:opacity 0.3s`;
+          seg.title = `${String(h).padStart(2,'0')}:00 — ${labels[z]}`;
+          if (h === hour) { seg.style.opacity = "1"; seg.style.boxShadow = "inset 0 0 0 1px #fff"; }
+          else { seg.style.opacity = "0.7"; }
+          if (h % 3 === 0) {
+            const lbl = document.createElement("span");
+            lbl.style.cssText = "position:absolute;left:1px;top:2px;font-size:6px;font-weight:700;color:#000;line-height:1";
+            lbl.textContent = String(h).padStart(2,'0');
+            if (z === "peak") lbl.style.color = "#fff";
+            seg.appendChild(lbl);
+          }
+          timeline.appendChild(seg);
+        }
       }
     }
 
@@ -925,12 +990,25 @@ class SmartingHomePanel extends HTMLElement {
     }
 
     // Current zone badge
-    const currentZone = getZone(hour);
+    const currentZone = tariff === "Dynamic" ? "dynamic" : getZone(hour);
     const badge = this.shadowRoot.getElementById("v-g13-zone-badge");
     if (badge) {
-      badge.textContent = labels[currentZone];
-      badge.style.background = colors[currentZone];
-      badge.style.color = (currentZone === "peak") ? "#fff" : "#000";
+      if (tariff === "Dynamic") {
+        const allin = parseFloat(this._haState("sensor.entso_e_koszt_all_in_teraz")) || 0;
+        let dynLabel, dynColor;
+        if (allin <= 0.10) { dynLabel = "B. TANIO"; dynColor = "#00e676"; }
+        else if (allin <= 0.30) { dynLabel = "TANIO"; dynColor = "#2ecc71"; }
+        else if (allin <= 0.60) { dynLabel = "NORMALNIE"; dynColor = "#f7b731"; }
+        else if (allin <= 0.90) { dynLabel = "DROGO"; dynColor = "#e67e22"; }
+        else { dynLabel = "B. DROGO"; dynColor = "#e74c3c"; }
+        badge.textContent = `${dynLabel} (${allin.toFixed(2)} zł)`;
+        badge.style.background = dynColor;
+        badge.style.color = allin > 0.90 ? "#fff" : "#000";
+      } else {
+        badge.textContent = labels[currentZone];
+        badge.style.background = colors[currentZone];
+        badge.style.color = (currentZone === "peak") ? "#fff" : "#000";
+      }
     }
 
     // Weekend badge
@@ -943,7 +1021,8 @@ class SmartingHomePanel extends HTMLElement {
     // Day type label
     const dayType = this.shadowRoot.getElementById("g13-day-type");
     if (dayType) {
-      if (tariff === "G11") dayType.textContent = "(stała cena — brak stref)";
+      if (tariff === "Dynamic") dayType.textContent = "(cena zmienia się co godzinę)";
+      else if (tariff === "G11") dayType.textContent = "(stała cena — brak stref)";
       else if (isWeekend && (tariff === "G13" || tariff === "G12w")) dayType.textContent = "(weekend — cały dzień off-peak)";
       else dayType.textContent = "(dzień roboczy)";
     }
@@ -951,7 +1030,11 @@ class SmartingHomePanel extends HTMLElement {
     // Season
     const seasonEl = this.shadowRoot.getElementById("v-g13-season");
     if (seasonEl) {
-      if (tariff === "G13") {
+      if (tariff === "Dynamic") {
+        seasonEl.textContent = "⚡ Cena godzinowa ENTSO-E";
+        seasonEl.style.color = "#a855f7";
+        seasonEl.parentElement.style.display = "";
+      } else if (tariff === "G13") {
         seasonEl.textContent = isSummer ? "☀️ Lato (kwi–wrz)" : "❄️ Zima (paź–mar)";
         seasonEl.style.color = isSummer ? "#f7b731" : "#00d4ff";
         seasonEl.parentElement.style.display = "";
@@ -979,7 +1062,16 @@ class SmartingHomePanel extends HTMLElement {
 
     let zone, zoneName, zoneColor, price;
 
-    if (tariff === "G11") {
+    if (tariff === "Dynamic") {
+      // Read live ENTSO-E all-in price from HA state
+      const allinNow = parseFloat(this._haState("sensor.entso_e_koszt_all_in_teraz")) || 0;
+      price = allinNow.toFixed(2);
+      if (allinNow <= 0.10) { zone = "very_cheap"; zoneName = "B. TANIO"; zoneColor = "#00e676"; }
+      else if (allinNow <= 0.30) { zone = "cheap"; zoneName = "TANIO"; zoneColor = "#2ecc71"; }
+      else if (allinNow <= 0.60) { zone = "normal"; zoneName = "NORMALNIE"; zoneColor = "#f7b731"; }
+      else if (allinNow <= 0.90) { zone = "expensive"; zoneName = "DROGO"; zoneColor = "#e67e22"; }
+      else { zone = "very_expensive"; zoneName = "B. DROGO"; zoneColor = "#e74c3c"; }
+    } else if (tariff === "G11") {
       zone = "flat"; zoneName = "STAŁA"; zoneColor = "#3b82f6"; price = "0.87";
     } else if (tariff === "G12") {
       if ((h >= 13 && h < 15) || h >= 22 || h < 6) {
@@ -1014,6 +1106,7 @@ class SmartingHomePanel extends HTMLElement {
   /** Average tariff price for savings calculations */
   _getTariffAvgPrice() {
     const t = this._settings.tariff_plan || "G13";
+    if (t === "Dynamic") return parseFloat(this._haState("sensor.entso_e_srednia_dzisiaj")) || 0.50;
     if (t === "G11") return 0.87;
     if (t === "G12" || t === "G12w") return 0.82;
     return 0.87; // G13 weighted avg
@@ -2196,13 +2289,22 @@ class SmartingHomePanel extends HTMLElement {
 
     // ── Dynamic tariff labels for W1 layer + battery arbitrage ──
     const w1Name = this.shadowRoot.getElementById("hems-w1-name");
-    if (w1Name) w1Name.textContent = `Harmonogram ${tInfo.tariff}`;
+    if (w1Name) {
+      if (tInfo.tariff === "Dynamic") w1Name.textContent = "Ceny Dynamiczne ENTSO-E";
+      else w1Name.textContent = `Harmonogram ${tInfo.tariff}`;
+    }
 
     // W1 card descriptions — adapt to tariff
     const msDesc = this.shadowRoot.getElementById("hac-morning-sell-desc");
     const mcDesc = this.shadowRoot.getElementById("hac-midday-charge-desc");
     const epDesc = this.shadowRoot.getElementById("hac-evening-peak-desc");
-    if (tInfo.tariff === "G13") {
+    if (tInfo.tariff === "Dynamic") {
+      const dynPrice = parseFloat(this._haState("sensor.entso_e_koszt_all_in_teraz")) || 0;
+      const dynAvg = parseFloat(this._haState("sensor.entso_e_srednia_dzisiaj")) || 0;
+      if (msDesc) msDesc.textContent = `Cena > średnia (${dynAvg.toFixed(2)} zł) → sprzedawaj / rozładowuj baterię.`;
+      if (mcDesc) mcDesc.textContent = `Cena < średnia (${dynAvg.toFixed(2)} zł) → ładuj baterię.`;
+      if (epDesc) epDesc.textContent = `Teraz: ${dynPrice.toFixed(2)} zł/kWh. Bateria reaguje na cenę rynkową.`;
+    } else if (tInfo.tariff === "G13") {
       if (msDesc) msDesc.textContent = "G13 szczyt poranny (0.91 zł). Sprzedawaj 7-13 Pn-Pt.";
       if (mcDesc) mcDesc.textContent = "Off-peak (0.63 zł). Ładuj baterię 13:00-szczyt Pn-Pt.";
       if (epDesc) epDesc.textContent = "G13 szczyt (1.50 zł). Bateria zasila dom.";
@@ -3343,10 +3445,10 @@ class SmartingHomePanel extends HTMLElement {
           
           if (batt < -10) {
             // Charging — pulse upwards (bottom bars first)
-            bar.style.animation = `batt-pulse-up 1.5s infinite ${(barsCount - barLevel) * 0.12}s`;
+            bar.style.animation = `batt-pulse-up 1.5s infinite ${(barLevel - 1) * 0.12}s`;
           } else if (batt > 10) {
             // Discharging — pulse downwards (top bars first)
-            bar.style.animation = `batt-pulse-down 1.5s infinite ${barLevel * 0.12}s`;
+            bar.style.animation = `batt-pulse-down 1.5s infinite ${(barsCount - barLevel) * 0.12}s`;
           } else {
             // Standby — static glow
             bar.style.boxShadow = `0 0 6px ${color}60`;
@@ -6356,6 +6458,13 @@ class SmartingHomePanel extends HTMLElement {
                     <td style="text-align:center; padding:6px; font-weight:800; color:#2ecc71">0.83 zł</td>
                     <td style="text-align:center; padding:6px; color:#2ecc71; font-weight:700">85% off-peak + weekendy</td>
                   </tr>
+                  <tr style="border-top:2px solid rgba(168,85,247,0.3); background:rgba(168,85,247,0.06)">
+                    <td style="padding:6px; font-weight:800; color:#a855f7">⚡ Dynamiczna</td>
+                    <td style="text-align:center; padding:6px; color:#a855f7">zmienna</td>
+                    <td style="text-align:center; padding:6px; color:#a855f7">zmienna</td>
+                    <td style="text-align:center; padding:6px; color:#a855f7">zmienna</td>
+                    <td style="text-align:center; padding:6px; color:#a855f7; font-weight:700">cena co godzinę wg ENTSO-E</td>
+                  </tr>
                 </tbody>
               </table>
             </div>
@@ -8001,6 +8110,7 @@ class SmartingHomePanel extends HTMLElement {
                   <option value="G12w">G12w — dwustrefowa + weekendy (13-15 + 22-06 + weekendy taniej)</option>
                   <option value="G12">G12 — dwustrefowa (13-15 + 22-06 taniej)</option>
                   <option value="G11">G11 — jednostrefowa (stała cena cały czas)</option>
+                  <option value="Dynamic">Dynamiczna — cena godzinowa ENTSO-E (Tauron Prąd z Ceną Dynamiczną)</option>
                 </select>
               </div>
             </div>
@@ -8141,7 +8251,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.25.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.26.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

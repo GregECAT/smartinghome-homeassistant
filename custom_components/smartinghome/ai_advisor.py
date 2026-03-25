@@ -270,12 +270,32 @@ class AIAdvisor:
             f"- Sun Hours Today: {data.get('sun_hours_today', 'N/A')} h",
             f"- UV Index: {data.get('uv_index', 'N/A')}",
             "",
-            "## Tariff (G13 Tauron 2026)",
-            f"- Current Zone: {data.get('g13_zone', 'unknown')}",
-            f"- Current Price: {data.get('g13_price', 0)} PLN/kWh",
-            f"- Off-peak: {G13_PRICES[G13Zone.OFF_PEAK]} PLN/kWh",
-            f"- Morning peak: {G13_PRICES[G13Zone.MORNING_PEAK]} PLN/kWh",
-            f"- Afternoon peak: {G13_PRICES[G13Zone.AFTERNOON_PEAK]} PLN/kWh",
+        ]
+
+        # Tariff section — dynamic or G13
+        if data.get("dynamic_zone"):
+            lines.extend([
+                "## Tariff (Dynamic — Tauron Cena Dynamiczna)",
+                "- Type: HOURLY DYNAMIC (price changes every hour based on ENTSO-E market)",
+                f"- Current all-in price: {data.get('dynamic_buy_price', 0)} PLN/kWh",
+                f"- Next hour price: {data.get('dynamic_next_price', 0)} PLN/kWh",
+                f"- Today's range: {data.get('dynamic_min_today', 0)} – {data.get('dynamic_max_today', 0)} PLN/kWh",
+                f"- Today's average: {data.get('dynamic_avg_today', 0)} PLN/kWh",
+                f"- Current rank: {data.get('dynamic_rank', '?')}/24 (percentile: {data.get('dynamic_percentile', '?')}%)",
+                f"- Zone: {data.get('dynamic_zone', 'unknown')}",
+                "- STRATEGY: Buy when price < avg, sell/discharge battery when price > avg",
+            ])
+        else:
+            lines.extend([
+                "## Tariff (G13 Tauron 2026)",
+                f"- Current Zone: {data.get('g13_zone', 'unknown')}",
+                f"- Current Price: {data.get('g13_price', 0)} PLN/kWh",
+                f"- Off-peak: {G13_PRICES[G13Zone.OFF_PEAK]} PLN/kWh",
+                f"- Morning peak: {G13_PRICES[G13Zone.MORNING_PEAK]} PLN/kWh",
+                f"- Afternoon peak: {G13_PRICES[G13Zone.AFTERNOON_PEAK]} PLN/kWh",
+            ])
+
+        lines.extend([
             "",
             "## RCE Dynamic Pricing",
             f"- Current RCE: {data.get('rce_price', 0)} PLN/MWh",
