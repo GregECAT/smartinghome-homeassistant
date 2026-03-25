@@ -781,22 +781,42 @@ class SmartingHomePanel extends HTMLElement {
     const badges = ["", "", "✅ REKOMENDOWANE"];
 
     const ct = this.shadowRoot.getElementById("roi-scenario-cards");
+    // Total house consumption = self-use + import (what the house actually consumes)
+    const totalConsumption = yearlySelfUse + yearlyImport;
+
     if (ct && yearlyPV > 0) {
       const results = keys.map((k, i) => {
         const s = scenarios[k];
-        const importCost = yearlyImport * s.importPrice;
-        const exportRev = yearlyExport * s.exportPrice;
-        const selfSavings = yearlySelfUse * s.importPrice;
-        const yearlySav = exportRev + selfSavings - importCost;
-        const payback = invest > 0 && yearlySav > 0 ? invest / yearlySav : null;
-        const profit25 = invest > 0 ? yearlySav * 25 - invest : yearlySav * 25;
-        return { key: k, label: s.label, desc: s.desc, importCost, exportRev, selfSavings, yearlySav, payback, profit25, importPrice: s.importPrice, exportPrice: s.exportPrice };
+        // Simulate different energy proportions per scenario
+        const scSelfUse = yearlyPV * (s.selfConsumptionRate || 0.70);
+        const scExport = Math.max(0, yearlyPV - scSelfUse);
+        const scImport = Math.max(0, totalConsumption - scSelfUse);
+        const scSelfConsPct = Math.round((s.selfConsumptionRate || 0.70) * 100);
+
+        const importCost = scImport * s.importPrice;
+        const exportRev = scExport * s.exportPrice;
+        const selfSavings = scSelfUse * s.importPrice;
+
+        // yearlyBenefit = total annual value from PV (savings from self-consumption + export revenue)
+        // This is the correct basis for ROI/payback: how much you save vs having NO PV at all
+        const yearlyBenefit = selfSavings + exportRev;
+
+        // yearlyBilans = net cash flow (export revenue minus import cost) — what hits your bank account
+        const yearlyBilans = exportRev - importCost;
+
+        const payback = invest > 0 && yearlyBenefit > 0 ? invest / yearlyBenefit : null;
+        const profit25 = invest > 0 ? yearlyBenefit * 25 - invest : yearlyBenefit * 25;
+        return { key: k, label: s.label, desc: s.desc, importCost, exportRev, selfSavings, yearlyBenefit, yearlyBilans, payback, profit25, importPrice: s.importPrice, exportPrice: s.exportPrice, scSelfUse, scExport, scImport, scSelfConsPct };
       });
+
+      // Calculate savings vs worst scenario
+      const worstBenefit = results[0].yearlyBenefit;
 
       ct.innerHTML = results.map((r, i) => {
         const paybackStr = r.payback ? `~${r.payback.toFixed(1)} lat` : (invest > 0 ? "∞ (strata)" : "— (podaj koszt)");
         const paybackPct = r.payback ? Math.min(100, (25 / r.payback) * (100 / 25)) : 0;
         const paybackColor = r.payback ? (r.payback <= 8 ? "#2ecc71" : r.payback <= 15 ? "#f7b731" : "#e74c3c") : "#e74c3c";
+        const diffVsNone = i > 0 ? r.yearlyBenefit - worstBenefit : 0;
         return `<div style="background:${bgs[i]}; border:1px solid ${borders[i]}; border-radius:14px; padding:16px; position:relative; overflow:hidden">
           ${badges[i] ? `<div style="position:absolute; top:8px; right:8px; font-size:8px; color:${colors[i]}; font-weight:700; letter-spacing:0.5px">${badges[i]}</div>` : ""}
           <div style="font-size:13px; font-weight:700; color:${colors[i]}; margin-bottom:4px">${r.label}</div>
@@ -804,6 +824,14 @@ class SmartingHomePanel extends HTMLElement {
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:10px; margin-bottom:10px">
             <div style="color:#64748b">Import:</div><div style="color:#e74c3c; font-weight:600">${r.importPrice.toFixed(2)} zł/kWh</div>
             <div style="color:#64748b">Eksport:</div><div style="color:#2ecc71; font-weight:600">${r.exportPrice.toFixed(2)} zł/kWh</div>
+          </div>
+          <div style="background:rgba(255,255,255,0.03); border-radius:8px; padding:8px; margin-bottom:10px">
+            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">📊 Symulacja przepływów energii</div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:3px; font-size:10px">
+              <div style="color:#94a3b8">🏠 Autokonsumpcja:</div><div style="color:#00d4ff; font-weight:600">${Math.round(r.scSelfUse)} kWh <span style="color:#64748b; font-weight:400">(${r.scSelfConsPct}%)</span></div>
+              <div style="color:#94a3b8">↓ Import z sieci:</div><div style="color:#e74c3c; font-weight:600">${Math.round(r.scImport)} kWh</div>
+              <div style="color:#94a3b8">↑ Eksport do sieci:</div><div style="color:#2ecc71; font-weight:600">${Math.round(r.scExport)} kWh</div>
+            </div>
           </div>
           <div style="border-top:1px solid rgba(255,255,255,0.06); padding-top:8px">
             <div style="font-size:9px; color:#64748b">Oszczędności roczne (autokonsumpcja)</div>
@@ -814,8 +842,10 @@ class SmartingHomePanel extends HTMLElement {
             <div style="font-size:16px; font-weight:700; color:#e74c3c">-${r.importCost.toFixed(0)} zł</div>
           </div>
           <div style="margin-top:10px; padding:10px; border-radius:10px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.06)">
-            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Bilans roczny netto</div>
-            <div style="font-size:24px; font-weight:900; color:${r.yearlySav >= 0 ? "#2ecc71" : "#e74c3c"}">${r.yearlySav >= 0 ? "+" : ""}${r.yearlySav.toFixed(0)} zł</div>
+            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Korzyść roczna z PV</div>
+            <div style="font-size:24px; font-weight:900; color:${r.yearlyBenefit >= 0 ? "#2ecc71" : "#e74c3c"}">${r.yearlyBenefit >= 0 ? "+" : ""}${r.yearlyBenefit.toFixed(0)} zł</div>
+            <div style="font-size:9px; color:#94a3b8; margin-top:1px">oszczędność + przychód vs brak PV</div>
+            ${i > 0 ? `<div style="font-size:10px; color:#2ecc71; margin-top:4px">+${diffVsNone.toFixed(0)} zł vs brak zarządzania</div>` : `<div style="font-size:10px; color:#e74c3c; margin-top:4px">brak automatyzacji</div>`}
           </div>
           ${invest > 0 ? `
           <div style="margin-top:10px">
@@ -833,8 +863,18 @@ class SmartingHomePanel extends HTMLElement {
           </div>` : ""}
         </div>`;
       }).join("");
+
+      // Show total HEMS savings summary below cards
+      const hemsSavings = results[2].yearlyBenefit - results[0].yearlyBenefit;
+      if (hemsSavings > 0) {
+        ct.innerHTML += `<div style="grid-column:1/-1; margin-top:12px; padding:12px; background:rgba(46,204,113,0.08); border:1px solid rgba(46,204,113,0.2); border-radius:10px; text-align:center">
+          <div style="font-size:11px; color:#94a3b8">💰 Oszczędność dzięki automatyzacji HEMS</div>
+          <div style="font-size:28px; font-weight:900; color:#2ecc71; margin-top:4px">+${hemsSavings.toFixed(0)} zł/rok</div>
+          <div style="font-size:10px; color:#64748b; margin-top:2px">Różnica między brakiem zarządzania a optymalnym HEMS</div>
+        </div>`;
+      }
     } else if (ct && yearlyPV === 0) {
-      ct.innerHTML = '<div style="text-align:center; padding:20px; color:#64748b; font-size:11px">Brak danych PV — zmień okres na \"Miesiąc\" lub \"Rok\" aby zobaczyć porównanie.</div>';
+      ct.innerHTML = '<div style="text-align:center; padding:20px; color:#64748b; font-size:11px">Brak danych PV — zmień okres na "Miesiąc" lub "Rok" aby zobaczyć porównanie.</div>';
     }
 
     // Summary table — all periods
@@ -2760,12 +2800,46 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
   // ── Winter Tab (Zima na plusie) ──
-  // Financial scenario definitions
+  // Financial scenario definitions — dynamic per tariff
   _winterScenarios() {
+    const tariff = this._settings.tariff_plan || 'G13';
+
+    if (tariff === 'Dynamic') {
+      // Dynamic tariff — prices from ENTSO-E sensors
+      const avgPrice = parseFloat(this._haState('sensor.entso_e_srednia_dzisiaj')) || 0.50;
+      const minPrice = Math.max(0.05, avgPrice * 0.3);   // cheapest hours ~30% of avg
+      const maxPrice = avgPrice * 2.0;                     // peak hours ~200% of avg
+      return {
+        none:    { label: '🔴 Bez zarządzania',  importPrice: avgPrice, exportPrice: minPrice, desc: `Import po średniej ENTSO-E (${avgPrice.toFixed(2)} zł), eksport po najniższej cenie`, selfConsumptionRate: 0.55 },
+        basic:   { label: '🟡 Podstawowe',        importPrice: avgPrice * 0.7, exportPrice: avgPrice * 0.8, desc: 'Ładowanie w tanich godzinach, sprzedaż po średniej RCE', selfConsumptionRate: 0.70 },
+        optimal: { label: '🟢 HEMS Optymalne',     importPrice: minPrice, exportPrice: maxPrice, desc: 'Import w najtańszych godzinach, sprzedaż w najdroższych — pełny arbitraż cenowy', selfConsumptionRate: 0.85 }
+      };
+    }
+
+    if (tariff === 'G11') {
+      // G11 — flat rate, no time-of-use optimization possible for import
+      return {
+        none:    { label: '🔴 Bez zarządzania',  importPrice: 0.87, exportPrice: 0.20, desc: 'Stała cena G11, eksport po najniższej RCE', selfConsumptionRate: 0.55 },
+        basic:   { label: '🟡 Podstawowe',        importPrice: 0.87, exportPrice: 0.35, desc: 'Maksymalizacja autokonsumpcji, eksport po średniej RCE', selfConsumptionRate: 0.70 },
+        optimal: { label: '🟢 HEMS Optymalne',     importPrice: 0.87, exportPrice: 0.55, desc: 'Max autokonsumpcja + sprzedaż nadwyżek po lepszej RCE', selfConsumptionRate: 0.85 }
+      };
+    }
+
+    if (tariff === 'G12' || tariff === 'G12w') {
+      // G12/G12w — two zones: off-peak 0.55, peak 1.10
+      const label = tariff === 'G12w' ? 'G12w (weekend off-peak)' : 'G12';
+      return {
+        none:    { label: '🔴 Bez zarządzania',  importPrice: 0.82, exportPrice: 0.20, desc: `Import po średniej ${label}, eksport po najniższej RCE`, selfConsumptionRate: 0.55 },
+        basic:   { label: '🟡 Podstawowe',        importPrice: 0.55, exportPrice: 0.40, desc: `Ładowanie off-peak ${label} (0.55 zł), sprzedaż po średniej RCE`, selfConsumptionRate: 0.70 },
+        optimal: { label: '🟢 HEMS Optymalne',     importPrice: 0.55, exportPrice: 0.90, desc: `Off-peak import (0.55 zł), sprzedaż w szczycie ${label} po RCE×1.23`, selfConsumptionRate: 0.85 }
+      };
+    }
+
+    // G13 — three zones: off-peak 0.63, morning 0.91, peak 1.50
     return {
-      none:    { label: '🔴 Bez zarządzania',  importPrice: 0.87, exportPrice: 0.20, desc: 'Import po średniej G13, eksport po najgorszej RCE' },
-      basic:   { label: '🟡 Podstawowe',        importPrice: 0.63, exportPrice: 0.35, desc: 'Nocne ładowanie off-peak, sprzedaż po średniej RCE' },
-      optimal: { label: '🟢 HEMS Optymalne',     importPrice: 0.63, exportPrice: 1.08, desc: 'Off-peak import, sprzedaż w szczycie G13 po RCE×1.23' }
+      none:    { label: '🔴 Bez zarządzania',  importPrice: 0.87, exportPrice: 0.20, desc: 'Import po średniej G13, eksport po najniższej RCE', selfConsumptionRate: 0.55 },
+      basic:   { label: '🟡 Podstawowe',        importPrice: 0.63, exportPrice: 0.35, desc: 'Nocne ładowanie off-peak G13 (0.63 zł), sprzedaż po średniej RCE', selfConsumptionRate: 0.70 },
+      optimal: { label: '🟢 HEMS Optymalne',     importPrice: 0.63, exportPrice: 1.08, desc: 'Off-peak import G13, sprzedaż w szczycie po RCE×1.23', selfConsumptionRate: 0.85 }
     };
   }
 
@@ -8480,7 +8554,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.28.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.28.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
