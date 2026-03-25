@@ -118,6 +118,8 @@ The frontend reads settings.json via HTTP fetch and writes via HA services:
 | `ecowitt_*` | services | Ecowitt integration settings |
 | `sub_meters` | services | Sub-meter configurations |
 | `winter_*` | services | Winter tab data |
+| `wind_turbine` | panel.js | Wind turbine configuration (power, diameter, etc.) |
+| `wind_turbine_preset` | panel.js | Active wind turbine preset (`small`, `medium`, `large`, `custom`) |
 | `ai_strategic_plan` | strategy_controller | AI 24h strategic plan |
 | `ai_cron_*` | cron_scheduler | AI cron job results |
 | `inverter_capabilities` | inverter_agent | Detected inverter features |
