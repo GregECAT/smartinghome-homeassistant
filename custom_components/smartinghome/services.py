@@ -48,7 +48,7 @@ SERVICE_TRIGGER_AUTOPILOT_ACTION = "trigger_autopilot_action"
 SERVICE_TOGGLE_AUTOPILOT_ACTION = "toggle_autopilot_action"
 SERVICE_SYNC_ECOWITT_STATE = "sync_ecowitt_state"
 
-SETTINGS_FILE = "settings.json"
+from .settings_io import read_sync as _read_settings_io, write_sync as _write_settings_io, write_async as _update_settings_file_io, get_path as _get_settings_path_io
 
 SET_MODE_SCHEMA = vol.Schema(
     {
@@ -155,34 +155,15 @@ async def async_setup_services(
     entry = coordinator.entry
     device_id = entry.data.get("device_id", "")
 
-    # Helper functions for settings.json (defined first so they can be used below)
+    # Helper functions for settings.json — delegated to centralized settings_io
     def _get_settings_path(h: HomeAssistant) -> Path:
-        """Return path to settings.json."""
-        d = Path(h.config.path("www")) / "smartinghome"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / SETTINGS_FILE
+        return _get_settings_path_io(h)
 
     def _read_settings(h: HomeAssistant) -> dict:
-        """Read settings from JSON (sync — call via executor for async contexts)."""
-        p = _get_settings_path(h)
-        if p.exists():
-            try:
-                return json.loads(p.read_text())
-            except Exception:
-                return {}
-        return {}
-
-    def _write_settings_sync(h: HomeAssistant, updates: dict) -> None:
-        """Merge updates into settings.json (sync — for executor)."""
-        current = _read_settings(h)
-        current.update(updates)
-        p = _get_settings_path(h)
-        p.write_text(json.dumps(current, indent=2, ensure_ascii=False))
-        _LOGGER.debug("Settings updated: %s", list(updates.keys()))
+        return _read_settings_io(h)
 
     async def _update_settings_file(h: HomeAssistant, updates: dict) -> None:
-        """Merge updates into settings.json (async-safe)."""
-        await h.async_add_executor_job(_write_settings_sync, h, updates)
+        await _update_settings_file_io(h, updates)
 
     energy_mgr = EnergyManager(hass, device_id)
 

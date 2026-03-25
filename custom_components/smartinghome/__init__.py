@@ -168,22 +168,12 @@ async def async_setup_entry(
         hass, coordinator, license_mgr, strategy_ctrl,
     )
 
-    # Restore saved strategy from settings.json
+    # Restore saved autopilot state from settings.json
+    #   (strategy, enabled, action toggles, disabled actions)
     try:
-        import json
-        settings_path = Path(hass.config.path("www")) / "smartinghome" / "settings.json"
-        if settings_path.exists():
-            settings = json.loads(settings_path.read_text())
-            saved_strategy = settings.get("autopilot_active_strategy")
-            if saved_strategy:
-                await strategy_ctrl.activate_strategy(
-                    AutopilotStrategy(saved_strategy)
-                )
-                _LOGGER.info(
-                    "Restored autopilot strategy: %s", saved_strategy
-                )
+        await strategy_ctrl.restore_state()
     except Exception as err:
-        _LOGGER.debug("Could not restore autopilot strategy: %s", err)
+        _LOGGER.debug("Could not restore autopilot state: %s", err)
 
     # Store references for cleanup
     hass.data[DOMAIN][entry.entry_id]["cron_scheduler"] = cron_scheduler

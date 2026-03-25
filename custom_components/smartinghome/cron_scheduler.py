@@ -185,30 +185,23 @@ class AICronScheduler:
 
     def _get_settings_path(self) -> Path:
         """Return path to settings.json."""
-        d = Path(self.hass.config.path("www")) / "smartinghome"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / SETTINGS_FILE
+        from .settings_io import get_path
+        return get_path(self.hass)
 
     def _read_settings(self) -> dict:
         """Read settings from JSON (sync — safe for executor context)."""
-        p = self._get_settings_path()
-        if p.exists():
-            try:
-                return json.loads(p.read_text())
-            except Exception:
-                return {}
-        return {}
+        from .settings_io import read_sync
+        return read_sync(self.hass)
 
     def _write_settings_sync(self, updates: dict) -> None:
-        """Merge updates into settings.json (sync — for executor)."""
-        current = self._read_settings()
-        current.update(updates)
-        p = self._get_settings_path()
-        p.write_text(json.dumps(current, indent=2, ensure_ascii=False))
+        """Merge updates into settings.json (sync — thread-safe via settings_io)."""
+        from .settings_io import write_sync
+        write_sync(self.hass, updates)
 
     async def _update_settings(self, updates: dict) -> None:
         """Merge updates into settings.json (async-safe)."""
-        await self.hass.async_add_executor_job(self._write_settings_sync, updates)
+        from .settings_io import write_async
+        await write_async(self.hass, updates)
 
     async def async_start(self) -> None:
         """Start all enabled cron jobs."""

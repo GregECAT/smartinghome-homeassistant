@@ -250,19 +250,12 @@ class InverterAgent:
 
     async def _persist_capabilities(self) -> None:
         """Save discovered capabilities to settings.json."""
+        from .settings_io import write_sync
         try:
-            if _SETTINGS_PATH.exists():
-                settings = json.loads(_SETTINGS_PATH.read_text(encoding="utf-8"))
-            else:
-                _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-                settings = {}
-
-            settings["inverter_capabilities"] = self._capabilities
-            _SETTINGS_PATH.write_text(
-                json.dumps(settings, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            _LOGGER.info("InverterAgent: capabilities persisted to %s", _SETTINGS_PATH)
+            def _do_persist() -> None:
+                write_sync(self.hass, {"inverter_capabilities": self._capabilities})
+            await self.hass.async_add_executor_job(_do_persist)
+            _LOGGER.info("InverterAgent: capabilities persisted to settings.json")
         except Exception as err:
             _LOGGER.warning("InverterAgent: failed to persist capabilities: %s", err)
 

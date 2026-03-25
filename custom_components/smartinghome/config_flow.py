@@ -674,37 +674,27 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
             )
 
             # Also write to settings.json for panel UI
-            settings_path = (
-                Path(self.hass.config.path("www"))
-                / "smartinghome"
-                / "settings.json"
-            )
-            settings_path.parent.mkdir(parents=True, exist_ok=True)
-
-            try:
-                existing = json.loads(settings_path.read_text()) if settings_path.exists() else {}
-            except Exception:
-                existing = {}
+            from .settings_io import write_sync
 
             gk = user_input.get(CONF_GEMINI_API_KEY, "")
             ak = user_input.get(CONF_ANTHROPIC_API_KEY, "")
 
+            updates = {}
             if gk:
-                existing["gemini_api_key"] = gk
-                existing["gemini_key_status"] = "saved"
-                existing["gemini_key_masked"] = (
+                updates["gemini_api_key"] = gk
+                updates["gemini_key_status"] = "saved"
+                updates["gemini_key_masked"] = (
                     gk[:6] + "***" + gk[-4:] if len(gk) > 10 else "***"
                 )
             if ak:
-                existing["anthropic_api_key"] = ak
-                existing["anthropic_key_status"] = "saved"
-                existing["anthropic_key_masked"] = (
+                updates["anthropic_api_key"] = ak
+                updates["anthropic_key_status"] = "saved"
+                updates["anthropic_key_masked"] = (
                     ak[:7] + "***" + ak[-4:] if len(ak) > 11 else "***"
                 )
 
-            settings_path.write_text(
-                json.dumps(existing, indent=2, ensure_ascii=False)
-            )
+            if updates:
+                write_sync(self.hass, updates)
 
             _LOGGER.info("API keys saved via options flow")
             return self.async_create_entry(title="", data={})
