@@ -3978,24 +3978,35 @@ class SmartingHomePanel extends HTMLElement {
     const netEl = this.shadowRoot.getElementById("v-net-balance");
     if (netEl) { netEl.textContent = netBal.toFixed(2); netEl.style.color = netBal >= 0 ? "#2ecc71" : "#e74c3c"; }
     
-    const ftoday = this._f("sensor.smartinghome_pv_forecast_today_total");
-    const ftomor = this._f("sensor.smartinghome_pv_forecast_tomorrow_total");
-    this._setText("v-forecast-today", `${ftoday} kWh`);
-    this._setText("v-forecast-tomorrow", `${ftomor} kWh`);
-    this._setText("v-forecast-today-tab", `${ftoday} kWh`);
-    this._setText("v-forecast-tomorrow-tab", `${ftomor} kWh`);
+    const ftoday = this._n("sensor.smartinghome_pv_forecast_today_total")
+      ?? this._n("sensor.energy_production_today")
+      ?? this._n("sensor.solcast_pv_forecast_today")
+      ?? this._n("sensor.forecast_solar_energy_production_today");
+    const ftomor = this._n("sensor.smartinghome_pv_forecast_tomorrow_total")
+      ?? this._n("sensor.energy_production_tomorrow")
+      ?? this._n("sensor.solcast_pv_forecast_tomorrow")
+      ?? this._n("sensor.forecast_solar_energy_production_tomorrow");
+    this._setText("v-forecast-today", ftoday !== null ? `${ftoday.toFixed(1)} kWh` : "— kWh");
+    this._setText("v-forecast-tomorrow", ftomor !== null ? `${ftomor.toFixed(1)} kWh` : "— kWh");
+    this._setText("v-forecast-today-tab", ftoday !== null ? `${ftoday.toFixed(1)} kWh` : "— kWh");
+    this._setText("v-forecast-tomorrow-tab", ftomor !== null ? `${ftomor.toFixed(1)} kWh` : "— kWh");
     
     // AccuWeather data for Energy tab
-    const wEntity = this._hass?.states?.["weather.dom"];
+    const wEntity = this._hass?.states?.["weather.dom"] || this._hass?.states?.["weather.forecast_dom"];
     if (wEntity) {
       this._setText("v-energy-temp", `${wEntity.attributes?.temperature ?? '—'}°C`);
       this._setText("v-energy-clouds", `${wEntity.attributes?.cloud_coverage ?? '—'}%`);
       this._setText("v-energy-condition", wEntity.state || '—');
+      // Wind from weather entity attributes as fallback
+      const windSpeed = this._s("sensor.dom_predkosc_wiatru_dzien_0")
+        || wEntity.attributes?.wind_speed;
+      this._setText("v-energy-wind", windSpeed ? `${windSpeed} km/h` : '—');
+    } else {
+      this._setText("v-energy-wind", `${this._s("sensor.dom_predkosc_wiatru_dzien_0") || '—'} km/h`);
     }
     this._setText("v-energy-realfeel", `${this._s("sensor.dom_temperatura_realfeel") || '—'}°C`);
     this._setText("v-energy-sunhours", `${this._s("sensor.dom_godziny_sloneczne_dzien_0") || '—'} h`);
     this._setText("v-energy-uv", this._s("sensor.dom_indeks_uv_dzien_0") || '—');
-    this._setText("v-energy-wind", `${this._s("sensor.dom_predkosc_wiatru_dzien_0") || '—'} km/h`);
     
     // Battery energy: SOC × capacity
     const battCapOv = this._settings.battery_capacity_kwh || 10.2;
@@ -4276,7 +4287,10 @@ class SmartingHomePanel extends HTMLElement {
       if (pvHomeBar) pvHomeBar.style.width = `${enPvHomePct}%`;
     }
     // Forecast accuracy: actual / forecast * 100
-    const fTodayVal = this._n("sensor.smartinghome_pv_forecast_today_total");
+    const fTodayVal = this._n("sensor.smartinghome_pv_forecast_today_total")
+      ?? this._n("sensor.energy_production_today")
+      ?? this._n("sensor.solcast_pv_forecast_today")
+      ?? this._n("sensor.forecast_solar_energy_production_today");
     const fAccuracy = (fTodayVal && fTodayVal > 0 && enPvToday > 0) ? Math.min(200, (enPvToday / fTodayVal) * 100) : null;
     this._setText("v-en-forecast-accuracy", fAccuracy !== null ? `${Math.round(fAccuracy)}%` : "—%");
 
@@ -5851,7 +5865,7 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
           <!-- Center: Sun Widget (compact) -->
-          <div class="top-center" style="justify-content:space-between; gap:6px; padding:4px 14px">
+          <div class="top-center" style="justify-content:space-between; gap:6px; padding:4px 22px">
             <div style="text-align:left; min-width:75px; flex-shrink:0">
               <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.8px" id="ov-date">—</div>
               <div style="font-size:28px; font-weight:900; color:#fff; letter-spacing:-1px; line-height:1" id="ov-clock">--:--</div>
@@ -8462,7 +8476,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.27.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.27.4</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
