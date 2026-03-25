@@ -292,6 +292,9 @@ class StrategyController:
             old, strategy.value, len(self._active_action_ids),
         )
 
+        # Persist full autopilot state
+        await self._persist_autopilot_state()
+
         # Fire event for frontend
         self.hass.bus.async_fire(
             f"{DOMAIN}_strategy_changed",
@@ -316,6 +319,9 @@ class StrategyController:
             msg += f" (przywrócono {len(restored)} automatyzacji)"
         self._log_decision("deactivated", msg)
         _LOGGER.info("Strategy controller deactivated, restored: %s", restored)
+
+        # Persist deactivated state
+        await self._persist_autopilot_state()
 
     # ══════════════════════════════════════════════════════════════
     # Action-based system — public API
@@ -512,6 +518,10 @@ class StrategyController:
         _LOGGER.info(
             "Action %s: %s", action_id, "enabled" if enabled else "disabled",
         )
+
+        # Persist state change (fire-and-forget, sync via executor)
+        self.hass.async_create_task(self._persist_autopilot_state())
+
         return True
 
     async def execute_tick(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -1378,24 +1388,15 @@ class StrategyController:
 
     async def _persist_strategic_plan(self, plan: dict) -> None:
         """Save strategic plan to settings.json."""
-        import json
-        from pathlib import Path
+        from .settings_io import write_sync
 
-        settings_path = Path("/config/www/smartinghome/settings.json")
-        try:
-            if settings_path.exists():
-                settings = json.loads(settings_path.read_text(encoding="utf-8"))
-            else:
-                settings_path.parent.mkdir(parents=True, exist_ok=True)
-                settings = {}
+        def _do_persist() -> None:
+            try:
+                write_sync(self.hass, {"ai_strategic_plan": plan})
+            except Exception as err:
+                _LOGGER.warning("Failed to persist strategic plan: %s", err)
 
-            settings["ai_strategic_plan"] = plan
-            settings_path.write_text(
-                json.dumps(settings, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-        except Exception as err:
-            _LOGGER.warning("Failed to persist strategic plan: %s", err)
+        await self.hass.async_add_executor_job(_do_persist)
 
     def _find_current_time_block(self) -> dict | None:
         """Find the time_block matching the current time."""
@@ -1600,6 +1601,97 @@ class StrategyController:
             return False
         self._last_action[action_name] = now
         return True
+
+    # ------------------------------------------------------------------
+    #  Full autopilot state persistence & restore
+    # ------------------------------------------------------------------
+
+    async def _persist_autopilot_state(self) -> None:
+        """Persist full autopilot state to settings.json.
+
+        Saved keys:
+          - autopilot_active_strategy: str (enum value)
+          - autopilot_enabled: bool
+          - autopilot_active_action_ids: list[str]
+          - autopilot_disabled_action_ids: list[str]
+        """
+        from .settings_io import write_sync
+
+        disabled_ids = [
+            a.id for a in self._all_actions
+            if a.status == ActionStatus.DISABLED
+        ]
+
+        updates = {
+            "autopilot_active_strategy": self._active_strategy.value,
+            "autopilot_enabled": self._enabled,
+            "autopilot_active_action_ids": list(self._active_action_ids),
+            "autopilot_disabled_action_ids": disabled_ids,
+        }
+
+        def _do_write() -> None:
+            try:
+                write_sync(self.hass, updates)
+            except Exception as err:
+                _LOGGER.warning("Failed to persist autopilot state: %s", err)
+
+        await self.hass.async_add_executor_job(_do_write)
+
+    async def restore_state(self) -> None:
+        """Restore full autopilot state from settings.json on startup.
+
+        Called from __init__.py after the controller is created.
+        """
+        from .settings_io import read_sync
+
+        try:
+            settings = await self.hass.async_add_executor_job(
+                read_sync, self.hass
+            )
+        except Exception as err:
+            _LOGGER.debug("Could not read settings for autopilot restore: %s", err)
+            return
+
+        # Restore strategy
+        saved_strategy = settings.get("autopilot_active_strategy", "")
+        saved_enabled = settings.get("autopilot_enabled", False)
+        saved_active_ids = settings.get("autopilot_active_action_ids", [])
+        saved_disabled_ids = settings.get("autopilot_disabled_action_ids", [])
+
+        if not saved_strategy or not saved_enabled:
+            _LOGGER.debug("No active autopilot strategy to restore")
+            return
+
+        try:
+            strategy = AutopilotStrategy(saved_strategy)
+        except ValueError:
+            _LOGGER.warning("Invalid saved strategy: %s", saved_strategy)
+            return
+
+        # Restore strategy and enabled flag (without re-triggering automation scan)
+        self._active_strategy = strategy
+        self._enabled = True
+
+        # Restore action IDs
+        if saved_active_ids:
+            self._active_action_ids = set(saved_active_ids)
+        else:
+            self._active_action_ids = get_active_action_ids(strategy)
+
+        # Restore disabled actions
+        for action_id in saved_disabled_ids:
+            action = self._action_map.get(action_id)
+            if action:
+                action.status = ActionStatus.DISABLED
+                self._active_action_ids.discard(action_id)
+
+        self._update_action_statuses()
+
+        _LOGGER.info(
+            "Restored autopilot: strategy=%s, enabled=%s, %d active actions, %d disabled",
+            strategy.value, saved_enabled,
+            len(self._active_action_ids), len(saved_disabled_ids),
+        )
 
     def _log_decision(self, action: str, message: str) -> None:
         """Add to decision log and fire event."""
