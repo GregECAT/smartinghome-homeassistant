@@ -53,6 +53,17 @@ class SmartingHomePanel extends HTMLElement {
       }
     };
     document.addEventListener('visibilitychange', this._visHandler);
+    // Persist day/night accumulators when page is being closed
+    this._unloadHandler = () => {
+      if (this._energyDayWs > 0 || this._energyNightWs > 0) {
+        this._savePanelSettings({
+          _accum_day_ws: Math.round(this._energyDayWs),
+          _accum_night_ws: Math.round(this._energyNightWs),
+          _accum_date: new Date().toISOString().slice(0, 10)
+        });
+      }
+    };
+    window.addEventListener('beforeunload', this._unloadHandler);
   }
   disconnectedCallback() {
     if (this._interval) clearInterval(this._interval);
@@ -63,6 +74,7 @@ class SmartingHomePanel extends HTMLElement {
         document.removeEventListener(ev, this._fsHandler);
       });
     }
+    if (this._unloadHandler) window.removeEventListener('beforeunload', this._unloadHandler);
     // Unsubscribe all event subscriptions
     if (this._cronSub) { try { this._cronSub(); } catch(e) {} this._cronSub = null; }
     if (this._actionStateSub) { try { this._actionStateSub(); } catch(e) {} this._actionStateSub = null; }
@@ -168,6 +180,19 @@ class SmartingHomePanel extends HTMLElement {
       if (r.ok) {
         this._settings = await r.json();
         this._settingsLoaded = true;
+        // Restore day/night energy accumulators from settings immediately
+        {
+          const todayStr = new Date().toISOString().slice(0, 10);
+          if (this._settings._accum_date === todayStr) {
+            this._energyDayWs = this._settings._accum_day_ws || 0;
+            this._energyNightWs = this._settings._accum_night_ws || 0;
+          } else {
+            this._energyDayWs = 0;
+            this._energyNightWs = 0;
+          }
+          this._accumDate = todayStr;
+          this._lastAccumTs = null; // reset so first interval doesn't produce huge delta
+        }
         this._updateKeyStatus();
         // Restore model selections
         const gSel = this.shadowRoot.getElementById('sel-gemini-model');
@@ -821,17 +846,12 @@ class SmartingHomePanel extends HTMLElement {
 
       // Calculate savings vs worst scenario
       const worstBenefit = results[0].yearlyBenefit;
->>>>>>> b3dd655 (release: v1.28.1 — ROI scenario simulation + dynamic tariff + formula fix)
 
       ct.innerHTML = results.map((r, i) => {
         const paybackStr = r.payback ? `~${r.payback.toFixed(1)} lat` : (invest > 0 ? "∞ (strata)" : "— (podaj koszt)");
         const paybackPct = r.payback ? Math.min(100, (25 / r.payback) * (100 / 25)) : 0;
         const paybackColor = r.payback ? (r.payback <= 8 ? "#2ecc71" : r.payback <= 15 ? "#f7b731" : "#e74c3c") : "#e74c3c";
-<<<<<<< HEAD
-        const diffVsNone = i > 0 ? r.yearlySav - worstNet : 0;
-=======
         const diffVsNone = i > 0 ? r.yearlyBenefit - worstBenefit : 0;
->>>>>>> b3dd655 (release: v1.28.1 — ROI scenario simulation + dynamic tariff + formula fix)
         return `<div style="background:${bgs[i]}; border:1px solid ${borders[i]}; border-radius:14px; padding:16px; position:relative; overflow:hidden">
           ${badges[i] ? `<div style="position:absolute; top:8px; right:8px; font-size:8px; color:${colors[i]}; font-weight:700; letter-spacing:0.5px">${badges[i]}</div>` : ""}
           <div style="font-size:13px; font-weight:700; color:${colors[i]}; margin-bottom:4px">${r.label}</div>
@@ -841,11 +861,7 @@ class SmartingHomePanel extends HTMLElement {
             <div style="color:#64748b">Eksport:</div><div style="color:#2ecc71; font-weight:600">${r.exportPrice.toFixed(2)} zł/kWh</div>
           </div>
           <div style="background:rgba(255,255,255,0.03); border-radius:8px; padding:8px; margin-bottom:10px">
-<<<<<<< HEAD
-            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px">📊 Symulacja przepływów energii</div>
-=======
             <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">📊 Symulacja przepływów energii</div>
->>>>>>> b3dd655 (release: v1.28.1 — ROI scenario simulation + dynamic tariff + formula fix)
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:3px; font-size:10px">
               <div style="color:#94a3b8">🏠 Autokonsumpcja:</div><div style="color:#00d4ff; font-weight:600">${Math.round(r.scSelfUse)} kWh <span style="color:#64748b; font-weight:400">(${r.scSelfConsPct}%)</span></div>
               <div style="color:#94a3b8">↓ Import z sieci:</div><div style="color:#e74c3c; font-weight:600">${Math.round(r.scImport)} kWh</div>
@@ -861,16 +877,10 @@ class SmartingHomePanel extends HTMLElement {
             <div style="font-size:16px; font-weight:700; color:#e74c3c">-${r.importCost.toFixed(0)} zł</div>
           </div>
           <div style="margin-top:10px; padding:10px; border-radius:10px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.06)">
-<<<<<<< HEAD
-            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Bilans roczny netto</div>
-            <div style="font-size:24px; font-weight:900; color:${r.yearlySav >= 0 ? "#2ecc71" : "#e74c3c"}">${r.yearlySav >= 0 ? "+" : ""}${r.yearlySav.toFixed(0)} zł</div>
-            ${i > 0 ? `<div style="font-size:10px; color:#2ecc71; margin-top:2px">+${diffVsNone.toFixed(0)} zł vs brak zarządzania</div>` : `<div style="font-size:10px; color:#e74c3c; margin-top:2px">brak automatyzacji</div>`}
-=======
             <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Korzyść roczna z PV</div>
             <div style="font-size:24px; font-weight:900; color:${r.yearlyBenefit >= 0 ? "#2ecc71" : "#e74c3c"}">${r.yearlyBenefit >= 0 ? "+" : ""}${r.yearlyBenefit.toFixed(0)} zł</div>
             <div style="font-size:9px; color:#94a3b8; margin-top:1px">oszczędność + przychód vs brak PV</div>
             ${i > 0 ? `<div style="font-size:10px; color:#2ecc71; margin-top:4px">+${diffVsNone.toFixed(0)} zł vs brak zarządzania</div>` : `<div style="font-size:10px; color:#e74c3c; margin-top:4px">brak automatyzacji</div>`}
->>>>>>> b3dd655 (release: v1.28.1 — ROI scenario simulation + dynamic tariff + formula fix)
           </div>
           ${invest > 0 ? `
           <div style="margin-top:10px">
@@ -890,11 +900,7 @@ class SmartingHomePanel extends HTMLElement {
       }).join("");
 
       // Show total HEMS savings summary below cards
-<<<<<<< HEAD
-      const hemsSavings = results[2].yearlySav - results[0].yearlySav;
-=======
       const hemsSavings = results[2].yearlyBenefit - results[0].yearlyBenefit;
->>>>>>> b3dd655 (release: v1.28.1 — ROI scenario simulation + dynamic tariff + formula fix)
       if (hemsSavings > 0) {
         ct.innerHTML += `<div style="grid-column:1/-1; margin-top:12px; padding:12px; background:rgba(46,204,113,0.08); border:1px solid rgba(46,204,113,0.2); border-radius:10px; text-align:center">
           <div style="font-size:11px; color:#94a3b8">💰 Oszczędność dzięki automatyzacji HEMS</div>
@@ -3499,18 +3505,18 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-load-l3", `L3: ${this._fm("power_l3", 0)} W`);
 
     // ── Day/Night energy accumulation ──
-    {
+    if (!this._settingsLoaded) {
+      // Wait for settings to load before restoring/accumulating — show placeholders
+      this._setText("v-load-day", "—");
+      this._setText("v-load-night", "—");
+      this._setText("v-load-from-pv", "— kWh");
+      this._setText("v-load-from-pv-pct", "");
+    } else {
       const sunState = this._hass?.states?.["sun.sun"];
       const isDay = sunState?.state === "above_horizon";
       const nowTs = Date.now();
       const todayStr = new Date().toISOString().slice(0, 10);
 
-      // Restore persisted accumulators on first run
-      if (!this._accumDate && this._settings._accum_date === todayStr) {
-        this._energyDayWs = this._settings._accum_day_ws || 0;
-        this._energyNightWs = this._settings._accum_night_ws || 0;
-        this._accumDate = todayStr;
-      }
       // Midnight reset: if date changed, reset accumulators
       if (this._accumDate && this._accumDate !== todayStr) {
         this._energyDayWs = 0;
@@ -3518,7 +3524,6 @@ class SmartingHomePanel extends HTMLElement {
         this._accumDate = todayStr;
         this._savePanelSettings({ _accum_day_ws: 0, _accum_night_ws: 0, _accum_date: todayStr });
       }
-      if (!this._accumDate) this._accumDate = todayStr;
 
       if (this._lastAccumTs && load > 0) {
         let dtSec = (nowTs - this._lastAccumTs) / 1000;
@@ -3621,6 +3626,41 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-batt-temp", `${this._fm("battery_temp")}°C`);
     this._setText("v-batt-charge", `↑ ${this._fm("battery_charge_today")} kWh`);
     this._setText("v-batt-discharge", `↓ ${this._fm("battery_discharge_today")} kWh`);
+
+    // Battery ETA — czas do pełna / rozładowania
+    const battEtaEl = this.shadowRoot.getElementById("v-batt-eta");
+    const battEtaText = this.shadowRoot.getElementById("v-batt-eta-text");
+    if (battEtaEl && battEtaText) {
+      const battCap = this._settings.battery_capacity_kwh || 10.2;
+      const absPower = Math.abs(batt);
+      if (absPower > 10) {
+        const powerKw = absPower / 1000;
+        let remainKwh, label, color;
+        if (batt < -10) {
+          // Ładowanie → czas do 100%
+          remainKwh = ((100 - soc) / 100) * battCap;
+          label = "do pełna";
+          color = "#2ecc71";
+        } else {
+          // Rozładowanie → czas do 0%
+          remainKwh = (soc / 100) * battCap;
+          label = "do rozładowania";
+          color = "#f39c12";
+        }
+        const etaH = remainKwh / powerKw;
+        let timeStr;
+        if (etaH < 1/60) timeStr = "< 1 min";
+        else if (etaH > 24) timeStr = "> 24h";
+        else if (etaH < 1) timeStr = `${Math.round(etaH * 60)}min`;
+        else timeStr = `${Math.floor(etaH)}h ${Math.round((etaH - Math.floor(etaH)) * 60)}min`;
+        battEtaText.textContent = `~${timeStr} ${label}`;
+        battEtaEl.style.color = (batt > 10 && etaH < 0.5) ? "#e74c3c" : color;
+        battEtaEl.style.animation = (batt > 10 && etaH < 0.5) ? "etaPulseFast 1.2s ease-in-out infinite" : "etaPulse 2.5s ease-in-out infinite";
+        battEtaEl.style.display = "";
+      } else {
+        battEtaEl.style.display = "none";
+      }
+    }
     // Dynamic Battery node coloring: green=charging, orange=discharging
     const battNode = this.shadowRoot.getElementById("batt-node");
     const battDirEl = this.shadowRoot.getElementById("v-batt-dir");
@@ -5188,6 +5228,14 @@ class SmartingHomePanel extends HTMLElement {
           50%  { opacity: 0.35; }
           100% { opacity: 1; box-shadow: 0 0 8px currentColor; }
         }
+        @keyframes etaPulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.55; }
+        }
+        @keyframes etaPulseFast {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.4; }
+        }
 
         /* General SOC progress bars (used in tabs) */
         .soc-bar { width: 100%; height: 100%; background: rgba(255,255,255,0.05); border-radius: 4px; overflow: hidden; }
@@ -5363,8 +5411,13 @@ class SmartingHomePanel extends HTMLElement {
 
         /* ═══ PHONE (≤480px) ═══ */
         @media (max-width: 480px) {
-          .top-center { min-width: unset; flex: 1 1 100%; justify-content: space-between; padding: 4px 10px; }
-          .top-center svg { max-width: 160px; }
+          .top-center { min-width: unset; flex: 1 1 100%; justify-content: space-between; padding: 4px 8px; gap: 4px; overflow: hidden; }
+          .top-center svg { max-width: 140px; }
+          .sun-arc-wrap { max-width: 140px; height: 60px; }
+          .sun-side-left { min-width: 55px !important; }
+          .sun-side-left .sun-clock { font-size: 22px !important; }
+          .sun-side-right { min-width: 60px !important; }
+          .sun-side-right .sun-pct { font-size: 18px !important; }
           .top-right { flex: 1 1 100%; flex-direction: row; justify-content: center; }
           .header h1 { font-size: 14px; }
           .tabs { padding: 4px 8px; }
@@ -5973,12 +6026,12 @@ class SmartingHomePanel extends HTMLElement {
           </div>
           <!-- Center: Sun Widget (compact) -->
           <div class="top-center" style="justify-content:space-between; gap:6px; padding:4px 22px">
-            <div style="text-align:left; min-width:75px; flex-shrink:0">
+            <div class="sun-side-left" style="text-align:left; min-width:65px; flex-shrink:1">
               <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.8px" id="ov-date">—</div>
-              <div style="font-size:28px; font-weight:900; color:#fff; letter-spacing:-1px; line-height:1" id="ov-clock">--:--</div>
+              <div class="sun-clock" style="font-size:28px; font-weight:900; color:#fff; letter-spacing:-1px; line-height:1" id="ov-clock">--:--</div>
               <div style="font-size:10px; color:#94a3b8; margin-top:2px" id="ov-day-name">—</div>
             </div>
-            <div style="position:relative; width:240px; height:78px; flex-shrink:0">
+            <div class="sun-arc-wrap" style="position:relative; flex:1 1 auto; min-width:0; max-width:240px; height:78px">
               <svg viewBox="0 0 200 105" style="width:100%; height:100%">
                 <defs>
                   <clipPath id="sun-clip"><rect id="ov-sun-clip-rect" x="0" y="-20" width="0" height="150" /></clipPath>
@@ -5991,9 +6044,9 @@ class SmartingHomePanel extends HTMLElement {
               <div style="position:absolute; bottom:0; left:2px; font-size:9px; color:#f7b731">🌅 <span id="ov-sunrise">—</span></div>
               <div style="position:absolute; bottom:0; right:2px; font-size:9px; color:#e67e22; text-align:right">🌇 <span id="ov-sunset">—</span></div>
             </div>
-            <div style="text-align:right; min-width:85px; flex-shrink:0">
+            <div class="sun-side-right" style="text-align:right; min-width:70px; flex-shrink:1">
               <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px" id="ov-status-label">Dzień</div>
-              <div style="font-size:24px; font-weight:800; color:#f7b731" id="ov-daylight-pct">—%</div>
+              <div class="sun-pct" style="font-size:24px; font-weight:800; color:#f7b731" id="ov-daylight-pct">—%</div>
               <div style="font-size:10px; color:#94a3b8" id="ov-daylight-left">—</div>
               <div style="font-size:8px; color:#8b9dc3; margin-top:1px; display:none" id="ov-moon-phase-name"></div>
             </div>
@@ -6163,6 +6216,7 @@ class SmartingHomePanel extends HTMLElement {
                       <div style="font-size:16px; font-weight:700; color:#fff" id="v-batt">— W</div>
                     </div>
                     <div class="node-dir" id="v-batt-dir" style="color:#00d4ff; margin-top:2px;">STANDBY</div>
+                    <div id="v-batt-eta" style="font-size:10px; margin-top:3px; font-weight:600; transition:all 0.3s; display:none; animation: etaPulse 2.5s ease-in-out infinite"><span style="opacity:0.7">⏱</span> <span id="v-batt-eta-text">—</span></div>
                     <div class="node-detail" style="margin-top:auto; padding-top:8px;">
                       <div><span id="v-batt-v">— V</span> · <span id="v-batt-a">— A</span> · <span id="v-batt-temp">—°C</span></div>
                       <div style="display:flex; justify-content:space-between; margin-top:4px;">
@@ -8583,7 +8637,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.28.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.28.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
