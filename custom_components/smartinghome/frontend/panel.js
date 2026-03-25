@@ -5850,13 +5850,13 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
           <!-- Center: Sun Widget (compact) -->
-          <div class="top-center">
-            <div style="text-align:left; min-width:70px">
-              <div style="font-size:8px; color:#64748b; text-transform:uppercase; letter-spacing:0.8px" id="ov-date">—</div>
-              <div style="font-size:24px; font-weight:900; color:#fff; letter-spacing:-1px; line-height:1" id="ov-clock">--:--</div>
-              <div style="font-size:9px; color:#94a3b8; margin-top:1px" id="ov-day-name">—</div>
+          <div class="top-center" style="justify-content:space-between; gap:6px; padding:4px 14px">
+            <div style="text-align:left; min-width:75px; flex-shrink:0">
+              <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.8px" id="ov-date">—</div>
+              <div style="font-size:28px; font-weight:900; color:#fff; letter-spacing:-1px; line-height:1" id="ov-clock">--:--</div>
+              <div style="font-size:10px; color:#94a3b8; margin-top:2px" id="ov-day-name">—</div>
             </div>
-            <div style="position:relative; width:180px; height:70px; flex-shrink:0">
+            <div style="position:relative; width:240px; height:78px; flex-shrink:0">
               <svg viewBox="0 0 200 105" style="width:100%; height:100%">
                 <defs>
                   <clipPath id="sun-clip"><rect id="ov-sun-clip-rect" x="0" y="-20" width="0" height="150" /></clipPath>
@@ -5866,14 +5866,14 @@ class SmartingHomePanel extends HTMLElement {
                 <line x1="5" y1="98" x2="195" y2="98" stroke="rgba(255,255,255,0.08)" stroke-width="0.5" />
                 <circle id="ov-sun-dot" cx="100" cy="50" r="7" fill="#f7b731" style="filter:drop-shadow(0 0 8px #f7b731); transition: all 1s ease" />
               </svg>
-              <div style="position:absolute; bottom:0; left:2px; font-size:8px; color:#f7b731">🌅 <span id="ov-sunrise">—</span></div>
-              <div style="position:absolute; bottom:0; right:2px; font-size:8px; color:#e67e22; text-align:right">🌇 <span id="ov-sunset">—</span></div>
+              <div style="position:absolute; bottom:0; left:2px; font-size:9px; color:#f7b731">🌅 <span id="ov-sunrise">—</span></div>
+              <div style="position:absolute; bottom:0; right:2px; font-size:9px; color:#e67e22; text-align:right">🌇 <span id="ov-sunset">—</span></div>
             </div>
-            <div style="text-align:right; min-width:70px">
-              <div style="font-size:8px; color:#64748b; text-transform:uppercase" id="ov-status-label">Dzień</div>
-              <div style="font-size:18px; font-weight:800; color:#f7b731" id="ov-daylight-pct">—%</div>
-              <div style="font-size:8px; color:#94a3b8" id="ov-daylight-left">—</div>
-              <div style="font-size:7px; color:#8b9dc3; margin-top:1px; display:none" id="ov-moon-phase-name"></div>
+            <div style="text-align:right; min-width:85px; flex-shrink:0">
+              <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px" id="ov-status-label">Dzień</div>
+              <div style="font-size:24px; font-weight:800; color:#f7b731" id="ov-daylight-pct">—%</div>
+              <div style="font-size:10px; color:#94a3b8" id="ov-daylight-left">—</div>
+              <div style="font-size:8px; color:#8b9dc3; margin-top:1px; display:none" id="ov-moon-phase-name"></div>
             </div>
           </div>
           <!-- Right: Actions -->
@@ -8461,7 +8461,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.27.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.27.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
