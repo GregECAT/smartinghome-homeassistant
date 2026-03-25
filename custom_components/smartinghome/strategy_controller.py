@@ -54,28 +54,22 @@ from .const import (
     SENSOR_LOAD_TOTAL,
     SENSOR_GRID_POWER_TOTAL,
     SENSOR_RCE_PRICE,
-    SENSOR_RCE_SELL_PROSUMER,
     SENSOR_RCE_NEXT_HOUR,
     SENSOR_RCE_2H,
     SENSOR_RCE_3H,
-    SENSOR_RCE_AVG_TODAY,
-    SENSOR_RCE_MIN_TODAY,
-    SENSOR_RCE_MAX_TODAY,
-    BINARY_RCE_CHEAPEST,
-    BINARY_RCE_EXPENSIVE,
+    SWITCH_BOILER,
+    SWITCH_AC,
+    SWITCH_SOCKET2,
 )
 from .energy_manager import EnergyManager
 from .inverter_agent import InverterAgent
 from .autopilot_actions import (
     AutopilotAction,
     ActionStatus,
-    ActionCategory,
     CATEGORY_LABELS,
     CATEGORY_ORDER,
     build_all_actions,
     get_active_action_ids,
-    get_actions_by_category,
-    STRATEGY_ACTION_MAP,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -103,7 +97,6 @@ HEMS_CONFLICT_SERVICES = {
 }
 
 # Switches managed by StrategyController — automations toggling these conflict
-from .const import SWITCH_BOILER, SWITCH_AC, SWITCH_SOCKET2
 HEMS_MANAGED_SWITCHES = {SWITCH_BOILER, SWITCH_AC, SWITCH_SOCKET2}
 
 
@@ -314,7 +307,7 @@ class StrategyController:
         # Restore previously disabled automations
         restored = await self._restore_automations()
 
-        msg = f"Autopilot wyłączony — tryb manualny"
+        msg = "Autopilot wyłączony — tryb manualny"
         if restored:
             msg += f" (przywrócono {len(restored)} automatyzacji)"
         self._log_decision("deactivated", msg)
@@ -780,7 +773,6 @@ class StrategyController:
         }
 
         now_ts = _time.time()
-        changed = False
 
         for action in self._all_actions:
             if action.status == ActionStatus.DISABLED:
@@ -791,7 +783,6 @@ class StrategyController:
             if not is_in_preset:
                 if action.status != ActionStatus.IDLE:
                     action.status = ActionStatus.IDLE
-                    changed = True
                 continue
 
             # Check condition
@@ -806,11 +797,10 @@ class StrategyController:
             if cond_met or recently_triggered:
                 if action.status != ActionStatus.ACTIVE:
                     action.status = ActionStatus.ACTIVE
-                    changed = True
             else:
                 if action.status != ActionStatus.WAITING:
                     action.status = ActionStatus.WAITING
-                    changed = True
+                    _changed = True  # noqa: F841
 
         # Fire event for frontend (every tick — lightweight payload)
         self.hass.bus.async_fire(
@@ -876,7 +866,7 @@ class StrategyController:
 
         if max_v > VOLTAGE_THRESHOLD_CRITICAL:
             if await self._throttled_action("v_cascade_t3"):
-                result = await self._em.check_voltage_protection(v_l1, v_l2, v_l3, soc)
+                await self._em.check_voltage_protection(v_l1, v_l2, v_l3, soc)
                 self._voltage_cascade_active = True
                 msg = f"W4: ⚡ Napięcie krytyczne {max_v:.0f}V — kaskada T3 (bojler+AC+ładowanie)"
                 actions.append(msg)
@@ -884,7 +874,7 @@ class StrategyController:
 
         elif max_v > VOLTAGE_THRESHOLD_HIGH:
             if await self._throttled_action("v_cascade_t2"):
-                result = await self._em.check_voltage_protection(v_l1, v_l2, v_l3, soc)
+                await self._em.check_voltage_protection(v_l1, v_l2, v_l3, soc)
                 self._voltage_cascade_active = True
                 msg = f"W4: ⚡ Napięcie wysokie {max_v:.0f}V — kaskada T2 (bojler+AC)"
                 actions.append(msg)
@@ -892,7 +882,7 @@ class StrategyController:
 
         elif max_v > VOLTAGE_THRESHOLD_WARNING:
             if await self._throttled_action("v_cascade_t1"):
-                result = await self._em.check_voltage_protection(v_l1, v_l2, v_l3, soc)
+                await self._em.check_voltage_protection(v_l1, v_l2, v_l3, soc)
                 self._voltage_cascade_active = True
                 msg = f"W4: ⚡ Napięcie podwyższone {max_v:.0f}V — kaskada T1 (bojler)"
                 actions.append(msg)
@@ -900,7 +890,7 @@ class StrategyController:
 
         elif max_v < VOLTAGE_THRESHOLD_RECOVERY and self._voltage_cascade_active:
             if await self._throttled_action("v_cascade_recovery"):
-                result = await self._em.check_voltage_protection(v_l1, v_l2, v_l3, soc)
+                await self._em.check_voltage_protection(v_l1, v_l2, v_l3, soc)
                 self._voltage_cascade_active = False
                 msg = f"W4: ✅ Napięcie znormalizowane {max_v:.0f}V — odzyskiwanie"
                 actions.append(msg)
@@ -920,7 +910,7 @@ class StrategyController:
 
         if soc < 50 and self._surplus_cascade_active:
             if await self._throttled_action("surplus_emergency_off"):
-                result = await self._em.check_pv_surplus(surplus, soc)
+                await self._em.check_pv_surplus(surplus, soc)
                 self._surplus_cascade_active = False
                 msg = f"W4: SOC={soc:.0f}% < 50% — wyłączenie odbiorników kaskadowych"
                 actions.append(msg)
@@ -929,7 +919,7 @@ class StrategyController:
 
         if surplus > PV_SURPLUS_TIER3 and soc >= PV_SURPLUS_MIN_SOC_TIER3:
             if await self._throttled_action("surplus_t3"):
-                result = await self._em.check_pv_surplus(surplus, soc)
+                await self._em.check_pv_surplus(surplus, soc)
                 self._surplus_cascade_active = True
                 msg = f"W4: ☀️ Nadwyżka {surplus:.0f}W — T3: bojler+AC+gniazdko"
                 actions.append(msg)
@@ -937,7 +927,7 @@ class StrategyController:
 
         elif surplus > PV_SURPLUS_TIER2 and soc >= PV_SURPLUS_MIN_SOC_TIER2:
             if await self._throttled_action("surplus_t2"):
-                result = await self._em.check_pv_surplus(surplus, soc)
+                await self._em.check_pv_surplus(surplus, soc)
                 self._surplus_cascade_active = True
                 msg = f"W4: ☀️ Nadwyżka {surplus:.0f}W — T2: bojler+AC"
                 actions.append(msg)
@@ -945,7 +935,7 @@ class StrategyController:
 
         elif surplus > PV_SURPLUS_TIER1 and soc >= PV_SURPLUS_MIN_SOC_TIER1:
             if await self._throttled_action("surplus_t1"):
-                result = await self._em.check_pv_surplus(surplus, soc)
+                await self._em.check_pv_surplus(surplus, soc)
                 self._surplus_cascade_active = True
                 msg = f"W4: ☀️ Nadwyżka {surplus:.0f}W — T1: bojler"
                 actions.append(msg)
@@ -953,7 +943,7 @@ class StrategyController:
 
         elif surplus < PV_SURPLUS_OFF and self._surplus_cascade_active:
             if await self._throttled_action("surplus_off"):
-                result = await self._em.check_pv_surplus(surplus, soc)
+                await self._em.check_pv_surplus(surplus, soc)
                 self._surplus_cascade_active = False
                 msg = f"W4: Nadwyżka spadła do {surplus:.0f}W — wyłączanie odbiorników"
                 actions.append(msg)

@@ -18,10 +18,9 @@ Future: GoodWeAgent / DeyeAgent / GrowattAgent inherit from base class.
 """
 from __future__ import annotations
 
-import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -29,12 +28,8 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from .const import (
-    CONF_INVERTER_BRAND,
     DEFAULT_GOODWE_DEVICE_ID,
-    DEFAULT_BATTERY_CHARGE_CURRENT_MAX,
-    DEFAULT_BATTERY_CHARGE_CURRENT_BLOCK,
     DEFAULT_DOD_ON_GRID,
-    DEFAULT_EXPORT_LIMIT,
     INVERTER_BRAND_GOODWE,
     INVERTER_BRAND_DEYE,
     INVERTER_BRAND_GROWATT,

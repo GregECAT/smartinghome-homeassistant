@@ -113,7 +113,7 @@
       },
       "api_keys": {
         "title": "🔑 API Keys — AI Advisor",
-        "description": "Enter your API keys for the AI energy advisor.\nGet Gemini key at: https://aistudio.google.com/apikey\nGet Claude key at: https://console.anthropic.com/settings/keys",
+        "description": "Enter your API keys for the AI energy advisor. Get your Gemini key from Google AI Studio and your Claude key from the Anthropic Console.",
         "data": {
           "gemini_api_key": "🤖 Google Gemini API Key",
           "anthropic_api_key": "🤖 Anthropic Claude API Key"

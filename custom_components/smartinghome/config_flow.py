@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
@@ -654,7 +653,6 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
         Saves keys to entry.data + settings.json without triggering reload.
         """
         if user_input is not None:
-            import json
 
             current = self._config_entry.data
             new_data = {**current}

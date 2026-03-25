@@ -3,6 +3,5 @@
   "homeassistant": "2025.1.0",
   "render_readme": true,
   "country": ["PL"],
-  "content_in_root": false,
-  "icon_url": "https://raw.githubusercontent.com/GregECAT/smartinghome-homeassistant/main/custom_components/smartinghome/icon.png"
+  "content_in_root": false
 }
