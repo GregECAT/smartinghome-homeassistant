@@ -2842,8 +2842,8 @@ class SmartingHomePanel extends HTMLElement {
   // ── Winter Tab (Zima na plusie) ──
   // Tariff-based scenario definitions — same energy flows, different prices
   _winterScenarios() {
-    // Dynamic tariff prices from ENTSO-E sensors
-    const avgPrice = parseFloat(this._haState('sensor.entso_e_srednia_dzisiaj')) || 0.50;
+    // Dynamic tariff prices from ENTSO-E sensors (safe access — _haState may not exist during early render)
+    const avgPrice = parseFloat(this._hass?.states?.['sensor.entso_e_srednia_dzisiaj']?.state) || 0.50;
     const minPrice = Math.max(0.05, avgPrice * 0.3);
     const maxPrice = avgPrice * 2.0;
 
@@ -8634,7 +8634,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.29.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.29.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
