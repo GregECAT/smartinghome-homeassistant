@@ -5200,8 +5200,8 @@ class SmartingHomePanel extends HTMLElement {
         @media (max-width: 1024px) {
           .top-bar { flex-wrap: wrap; }
           .top-left { flex: 1 1 100%; order: 1; }
-          .top-center { flex: 1 1 auto; order: 2; min-width: 200px; border-left: none; border-top: 1px solid rgba(255,255,255,0.06); padding: 6px 12px; }
-          .top-right { order: 3; flex-direction: row; padding: 6px 12px; border-left: none; border-top: 1px solid rgba(255,255,255,0.06); }
+          .top-center { flex: 1 1 100%; order: 2; min-width: 200px; border-left: none; border-top: 1px solid rgba(255,255,255,0.06); padding: 6px 12px; overflow: hidden; }
+          .top-right { order: 3; flex: 1 1 100%; flex-direction: row; justify-content: flex-end; padding: 6px 12px; border-left: none; border-top: 1px solid rgba(255,255,255,0.06); }
           .tabs { padding: 4px 12px; }
           .flow-wrapper { min-height: 440px; }
           .flow-nodes { min-height: 440px; gap: 8px; }
@@ -5242,7 +5242,8 @@ class SmartingHomePanel extends HTMLElement {
 
         /* ═══ PHONE (≤480px) ═══ */
         @media (max-width: 480px) {
-          .top-center { min-width: unset; flex: 1 1 100%; justify-content: space-around; }
+          .top-center { min-width: unset; flex: 1 1 100%; justify-content: space-between; padding: 4px 10px; }
+          .top-center svg { max-width: 160px; }
           .top-right { flex: 1 1 100%; flex-direction: row; justify-content: center; }
           .header h1 { font-size: 14px; }
           .tabs { padding: 4px 8px; }
@@ -8461,7 +8462,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.27.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.27.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
