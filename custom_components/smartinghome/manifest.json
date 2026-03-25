@@ -1,6 +1,7 @@
 {
   "domain": "smartinghome",
   "name": "Smarting HOME — Energy Management",
+  "after_dependencies": ["lovelace"],
   "codeowners": ["@GregECAT"],
   "config_flow": true,
   "documentation": "https://smartinghome.pl/docs",
@@ -10,6 +11,5 @@
   "requirements": [
     "aiohttp>=3.9.0"
   ],
-  "after_dependencies": ["lovelace"],
-  "version": "1.28.5"
+  "version": "1.28.6"
 }
