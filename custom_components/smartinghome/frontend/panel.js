@@ -5207,8 +5207,8 @@ class SmartingHomePanel extends HTMLElement {
         /* ── Top bar container ── */
         .top-bar { display: flex; align-items: stretch; background: rgba(255,255,255,0.03); border-bottom: 1px solid rgba(255,255,255,0.06); flex-wrap: wrap; }
         .top-left { flex: 2; min-width: 0; }
-        .top-center { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 4px 10px; border-left: 1px solid rgba(255,255,255,0.06); min-width: 200px; }
-        .top-right { display: flex; flex-direction: column; justify-content: center; align-items: flex-end; gap: 6px; padding: 6px 14px; border-left: 1px solid rgba(255,255,255,0.06); }
+        .top-center { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 4px 10px; border-left: 1px solid rgba(255,255,255,0.06); min-width: 200px; overflow: hidden; }
+        .top-right { display: flex; flex-direction: column; justify-content: center; align-items: flex-end; gap: 6px; padding: 6px 14px; border-left: 1px solid rgba(255,255,255,0.06); flex-shrink: 0; }
 
         /* ═══ TABLET LANDSCAPE (≤1024px) ═══ */
         @media (max-width: 1024px) {
@@ -8476,7 +8476,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.27.4</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.27.5</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
