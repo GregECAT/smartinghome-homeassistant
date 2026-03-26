@@ -222,8 +222,8 @@ class AIAdvisor:
                           'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień']
         season = 'zima' if now.month in (12, 1, 2) else 'wiosna' if now.month in (3, 4, 5) else 'lato' if now.month in (6, 7, 8) else 'jesień'
         # GoodWe convention: positive=import, negative=export (grid)
-        # GoodWe convention: positive=charge, negative=discharge (battery)
-        # Values already match AI description — no sign flip needed
+        # GoodWe convention: NEGATIVE=charging (into battery), POSITIVE=discharging (from battery)
+        # grid_power: NEGATIVE=export, POSITIVE=import
         raw_grid = data.get('grid_power', 0)
         try:
             grid_for_ai = float(raw_grid) if raw_grid is not None else 0
@@ -234,13 +234,20 @@ class AIAdvisor:
             raw_battery_f = float(raw_battery) if raw_battery is not None else 0
         except (ValueError, TypeError):
             raw_battery_f = 0
-        battery_for_ai = raw_battery_f  # no flip needed
-        if raw_battery_f > 50:
-            battery_state = "CHARGING (battery absorbs power)"
-        elif raw_battery_f < -50:
-            battery_state = "DISCHARGING (battery powers the home)"
+        battery_for_ai = raw_battery_f
+        if raw_battery_f < -50:
+            battery_state = f"ŁADOWANIE {abs(raw_battery_f):.0f}W (bateria się ładuje z sieci/PV)"
+        elif raw_battery_f > 50:
+            battery_state = f"ROZŁADOWYWANIE {abs(raw_battery_f):.0f}W (bateria zasila dom)"
         else:
-            battery_state = "IDLE"
+            battery_state = "BEZCZYNNA (idle)"
+        
+        if grid_for_ai > 50:
+            grid_state = f"IMPORT {abs(grid_for_ai):.0f}W (pobór z sieci)"
+        elif grid_for_ai < -50:
+            grid_state = f"EKSPORT {abs(grid_for_ai):.0f}W (sprzedaż do sieci)"
+        else:
+            grid_state = "ZERO (brak przepływu)"
         lines = [
             "=== SMARTING HOME — ENERGY SYSTEM STATUS ===",
             "",
@@ -250,14 +257,13 @@ class AIAdvisor:
             f"- Month: {month_names_pl[now.month]} {now.year}",
             f"- Season: {season}",
             "",
-            "## Current State",
-            f"- PV Power: {data.get('pv_power', 0)} W",
-            f"- Grid Power: {grid_for_ai} W (positive=import from grid, negative=export to grid)",
-            f"- Battery SOC: {data.get('battery_soc', 0)}%",
-            f"- Battery Power: {battery_for_ai} W (positive=charging, negative=discharging)",
-            f"- Battery State: {battery_state}",
-            f"- Home Load: {data.get('load', 0)} W",
-            f"- PV Surplus: {data.get('pv_surplus', 0)} W",
+            "## Stan aktualny",
+            f"- Produkcja PV: {data.get('pv_power', 0)} W",
+            f"- Sieć: {grid_state}",
+            f"- Bateria SOC: {data.get('battery_soc', 0)}%",
+            f"- Bateria: {battery_state}",
+            f"- Zużycie domu (Load): {data.get('load', 0)} W",
+            f"- Nadwyżka PV: {data.get('pv_surplus', 0)} W",
             "",
             "## Weather",
             f"- Temperature: {data.get('weather_temp', 'N/A')}°C",
