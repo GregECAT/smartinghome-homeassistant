@@ -177,12 +177,27 @@ class SmartingHomePanel extends HTMLElement {
 
   /* ── Force Charge/Discharge Buttons ────────── */
   _executeForceAction(type) {
-    const btnEl = this.shadowRoot.getElementById(`btn-force-${type}`);
+    const serviceMap = {
+      charge: 'force_charge', discharge: 'force_discharge',
+      stop_charge: 'stop_force_charge', stop_discharge: 'stop_force_discharge',
+      emergency_stop: 'emergency_stop',
+    };
+    const colorMap = {
+      charge: '46,204,113', discharge: '231,76,60',
+      stop_charge: '245,158,11', stop_discharge: '245,158,11',
+      emergency_stop: '231,76,60',
+    };
+    const btnIdMap = {
+      charge: 'btn-force-charge', discharge: 'btn-force-discharge',
+      stop_charge: 'btn-stop-charge', stop_discharge: 'btn-stop-discharge',
+      emergency_stop: 'btn-emergency-stop',
+    };
+    const btnEl = this.shadowRoot.getElementById(btnIdMap[type] || `btn-force-${type}`);
     const statusEl = this.shadowRoot.getElementById(`fc-${type}-status`);
     if (!this._hass) return;
 
-    const service = type === 'charge' ? 'force_charge' : 'force_discharge';
-    const color = type === 'charge' ? '46,204,113' : '231,76,60';
+    const service = serviceMap[type] || `force_${type}`;
+    const color = colorMap[type] || '100,100,100';
 
     // ── VISUAL: button press animation ──
     if (btnEl) {
@@ -6749,6 +6764,8 @@ class SmartingHomePanel extends HTMLElement {
           <!-- ROW 7: Quick Actions -->
           <div class="card">
             <div class="card-title">⚡ Szybkie akcje</div>
+
+            <!-- START row -->
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:8px 0">
 
               <!-- ═══ CHARGE button ═══ -->
@@ -6774,6 +6791,30 @@ class SmartingHomePanel extends HTMLElement {
               </div>
 
             </div>
+
+            <!-- STOP row -->
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:4px 0">
+
+              <!-- ═══ STOP CHARGE ═══ -->
+              <div style="text-align:center">
+                <button id="btn-stop-charge" class="action-btn" style="width:100%; padding:8px; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.4); color:#f59e0b; font-weight:700; font-size:12px; border-radius:8px; cursor:pointer; transition:transform 0.1s ease, box-shadow 0.2s ease" onclick="this.getRootNode().host._executeForceAction('stop_charge')">⏹ STOP Ładow.</button>
+                <div id="fc-stop_charge-status" style="font-size:9px; color:#64748b; text-align:center; min-height:14px; margin-top:4px"></div>
+              </div>
+
+              <!-- ═══ STOP DISCHARGE ═══ -->
+              <div style="text-align:center">
+                <button id="btn-stop-discharge" class="action-btn" style="width:100%; padding:8px; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.4); color:#f59e0b; font-weight:700; font-size:12px; border-radius:8px; cursor:pointer; transition:transform 0.1s ease, box-shadow 0.2s ease" onclick="this.getRootNode().host._executeForceAction('stop_discharge')">⏹ STOP Rozład.</button>
+                <div id="fc-stop_discharge-status" style="font-size:9px; color:#64748b; text-align:center; min-height:14px; margin-top:4px"></div>
+              </div>
+
+            </div>
+
+            <!-- EMERGENCY STOP -->
+            <div style="padding:4px 0 8px 0">
+              <button id="btn-emergency-stop" class="action-btn" style="width:100%; padding:12px; background:rgba(231,76,60,0.2); border:2px solid #e74c3c; color:#e74c3c; font-weight:900; font-size:14px; border-radius:10px; cursor:pointer; transition:transform 0.1s ease, box-shadow 0.2s ease; letter-spacing:1px" onclick="this.getRootNode().host._executeForceAction('emergency_stop')">🚨 EMERGENCY STOP</button>
+              <div id="fc-emergency_stop-status" style="font-size:9px; color:#64748b; text-align:center; min-height:14px; margin-top:4px"></div>
+            </div>
+
           </div>
 
         </div>
@@ -7206,8 +7247,13 @@ class SmartingHomePanel extends HTMLElement {
             <div class="actions">
               <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'auto'})">🔄 Tryb Auto</button>
               <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'sell'})">💰 Max Sprzedaż</button>
-              <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'charge'})">🔋 Zmuś Ładowanie</button>
-              <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'peak_save'})">🏠 Szczyt (Z domu)</button>
+              <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'charge'})">🔋 Tryb Charge</button>
+              <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'peak_save'})">🏠 Szczyt</button>
+            </div>
+            <div class="actions" style="margin-top:6px">
+              <button class="action-btn" style="background:rgba(46,204,113,0.15);border:1px solid #2ecc71;color:#2ecc71" onclick="this.getRootNode().host._executeForceAction('charge')">🔋 Wymuś Ładow.</button>
+              <button class="action-btn" style="background:rgba(231,76,60,0.15);border:1px solid #e74c3c;color:#e74c3c" onclick="this.getRootNode().host._executeForceAction('discharge')">⚡ Wymuś Rozład.</button>
+              <button class="action-btn" style="background:rgba(231,76,60,0.2);border:2px solid #e74c3c;color:#e74c3c;font-weight:900" onclick="this.getRootNode().host._executeForceAction('emergency_stop')">🚨 STOP</button>
             </div>
           </div>
 
@@ -8793,7 +8839,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.32.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.33.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

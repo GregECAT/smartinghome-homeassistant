@@ -649,8 +649,11 @@ Use tables for comparisons. Be concise but comprehensive. Focus on actionable in
 
 # Available tools the AI can call — these map to EnergyManager methods
 AI_CONTROLLER_TOOLS = {
-    "force_charge": "Force battery charging from grid+PV (call when battery needs charging)",
-    "force_discharge": "Force battery discharge (sell/self-consume, call when selling makes sense)",
+    "force_charge": "Force battery charge from grid via Eco Mode (eco_charge, soc=100%, power=100%, current=18.5A)",
+    "force_discharge": "Force battery discharge to grid via Eco Mode (eco_discharge, soc=5%, power=100%, grid_export=ON)",
+    "stop_force_charge": "STOP forced charging — restore general mode (eco_mode_power=0, eco_mode_soc=100, general, charge=18.5A)",
+    "stop_force_discharge": "STOP forced discharge — restore general mode (eco_mode_power=0, eco_mode_soc=100, general, charge=18.5A, export=16kW)",
+    "emergency_stop": "EMERGENCY STOP all force operations — reset everything to general mode immediately",
     "set_dod": "Set max depth of discharge (params: dod: int 0-95). Higher = more capacity available. Max is 95.",
     "set_export_limit": "Set grid export limit in watts (params: limit: int). 0 = no export",
     "switch_on": "Turn on managed load (params: entity: 'boiler'|'ac'|'socket2')",
