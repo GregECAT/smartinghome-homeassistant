@@ -662,6 +662,7 @@ User question: {question}"""
         prompt: str,
         provider: str = "auto",
         raw_json: bool = False,
+        max_tokens: int | None = None,
     ) -> dict[str, Any]:
         """Ask AI to return structured JSON commands for inverter control.
 
@@ -704,7 +705,7 @@ User question: {question}"""
                 payload = {
                     "contents": [{"parts": [{"text": prompt}]}],
                     "generationConfig": {
-                        "maxOutputTokens": self._CONTROLLER_MAX_TOKENS,
+                        "maxOutputTokens": max_tokens or self._CONTROLLER_MAX_TOKENS,
                         "temperature": 0.2,  # Lower temp for deterministic control
                         "responseMimeType": "application/json",
                     },
@@ -735,7 +736,7 @@ User question: {question}"""
                 }
                 payload = {
                     "model": self._anthropic_model,
-                    "max_tokens": self._CONTROLLER_MAX_TOKENS,
+                    "max_tokens": max_tokens or self._CONTROLLER_MAX_TOKENS,
                     "temperature": 0.2,
                     "messages": [{"role": "user", "content": prompt}],
                 }
@@ -814,7 +815,8 @@ User question: {question}"""
                 raise ValueError("'commands' is not a list")
 
             # Validate each command — supports both {"action":"id"} and {"tool":"name"}
-            valid_tools = {"force_charge", "force_discharge", "set_dod",
+            valid_tools = {"force_charge", "force_discharge", "stop_force_charge",
+                           "stop_force_discharge", "emergency_stop", "set_dod",
                            "set_export_limit", "switch_on", "switch_off", "no_action"}
             validated_commands = []
             for cmd in parsed["commands"][:3]:  # Max 3 commands
