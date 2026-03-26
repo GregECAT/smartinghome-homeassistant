@@ -506,6 +506,133 @@ def _render_forecast(data: dict[str, Any]) -> str:
     return chr(10).join(lines) + chr(10)
 
 
+def _render_energy_history(data: dict[str, Any]) -> str:
+    """Render 3-day energy consumption history table for AI prompt."""
+    history = data.get("energy_history_3d")
+    if not history:
+        return "  Brak danych historycznych (Recorder niedostępny)"
+
+    lines = []
+    totals: dict[str, float] = {"load": 0, "pv": 0, "imp": 0, "exp": 0}
+    count = 0
+    for day in history:
+        d = day.get("date", "?")
+        load = float(day.get("load_kwh", 0))
+        pv = float(day.get("pv_kwh", 0))
+        imp = float(day.get("import_kwh", 0))
+        exp = float(day.get("export_kwh", 0))
+        lines.append(
+            f"  {d} | {load:6.1f} kWh | {pv:6.1f} kWh | {imp:6.1f} kWh | {exp:6.1f} kWh"
+        )
+        totals["load"] += load
+        totals["pv"] += pv
+        totals["imp"] += imp
+        totals["exp"] += exp
+        count += 1
+
+    if count > 0:
+        lines.append(
+            f"  Średnia:    | {totals['load']/count:6.1f} kWh | {totals['pv']/count:6.1f} kWh "
+            f"| {totals['imp']/count:6.1f} kWh | {totals['exp']/count:6.1f} kWh"
+        )
+
+    header = "  Data       | Zużycie dom | Produkcja PV | Import sieć  | Eksport"
+    return header + chr(10) + chr(10).join(lines)
+
+
+def _render_weather_detailed(data: dict[str, Any]) -> str:
+    """Render detailed weather section for AI prompt (local station + forecast)."""
+    lines = []
+
+    # Local station data (Ecowitt)
+    local_temp = data.get("local_temp") or data.get("weather_temp")
+    local_humidity = data.get("local_humidity") or data.get("weather_humidity")
+    local_wind = data.get("local_wind_speed") or data.get("weather_wind_speed")
+    local_rain = data.get("local_rain_rate")
+    local_radiation = data.get("local_solar_radiation")
+    local_uv = data.get("local_uv_index") or data.get("weather_uv_index")
+    local_pressure = data.get("local_pressure") or data.get("weather_pressure")
+    local_clouds = data.get("weather_clouds") or data.get("local_cloud_cover")
+    condition = data.get("weather_condition", "N/A")
+
+    lines.append(f"  TERAZ: {condition}, {local_temp or 'N/A'}°C, wilgotność {local_humidity or 'N/A'}%")
+    lines.append(f"  Wiatr: {local_wind or 'N/A'} km/h | Ciśnienie: {local_pressure or 'N/A'} hPa")
+    lines.append(f"  Chmury: {local_clouds or 'N/A'}% | UV: {local_uv or 'N/A'} | Promieniowanie: {local_radiation or 'N/A'} W/m²")
+    if local_rain and float(local_rain or 0) > 0:
+        lines.append(f"  Deszcz: {local_rain} mm/h")
+
+    # Multi-day forecast (if available)
+    forecast = data.get("weather_forecast")
+    if forecast:
+        lines.append("")
+        lines.append("  PROGNOZA:")
+        for day in forecast[:2]:  # today + tomorrow
+            date = day.get("date", "?")[:10]
+            cond = day.get("condition", "?")
+            hi = day.get("temp_high", "?")
+            lo = day.get("temp_low", "?")
+            clouds_f = day.get("cloud_coverage", "?")
+            prob = day.get("precipitation_probability", "?")
+            precip = day.get("precipitation", 0)
+            lines.append(
+                f"  {date}: {cond}, {lo}–{hi}°C, chmury {clouds_f}%, opad {precip}mm ({prob}%)"
+            )
+
+    return chr(10).join(lines)
+
+
+def _render_night_charging_logic(data: dict[str, Any], bat_cap_kwh: float) -> str:
+    """Calculate and render night charging optimization (PV space vs battery).
+
+    Key insight: if tomorrow is sunny and PV will exceed battery capacity,
+    DON'T charge to 100% — leave room for free PV energy.
+    """
+    forecast_tomorrow = float(data.get("forecast_tomorrow", 0))
+    soc = float(data.get("battery_soc", 0))
+    usable_kwh = bat_cap_kwh * 0.9  # 90% usable (DOD 95% - min 5%)
+
+    # Estimate average daily consumption from history
+    history = data.get("energy_history_3d", [])
+    if history:
+        avg_load = sum(float(d.get("load_kwh", 0)) for d in history) / len(history)
+    else:
+        avg_load = 15.0  # default estimate
+
+    # Solar hours: assume ~10h of production (07:00-17:00)
+    # Load during solar hours is roughly 60% of daily
+    load_during_solar = avg_load * 0.6
+    pv_surplus_tomorrow = max(0.0, forecast_tomorrow - load_during_solar)
+
+    # How much battery space to leave for PV surplus
+    if forecast_tomorrow >= 8.0 and pv_surplus_tomorrow > 2.0:
+        # Good sun — leave space for PV
+        space_pct = min(50.0, (pv_surplus_tomorrow / usable_kwh) * 100)
+        optimal_soc = max(50, int(100 - space_pct))
+        recommendation = f"DOBRA POGODA → ładuj do {optimal_soc}% (zostaw ~{space_pct:.0f}% na darmowe PV)"
+    elif forecast_tomorrow >= 5.0:
+        optimal_soc = 80
+        recommendation = f"UMIARKOWANA POGODA → ładuj do {optimal_soc}% (kompromis: bezpieczeństwo + miejsce na PV)"
+    else:
+        optimal_soc = 100
+        recommendation = "ZŁA POGODA → ładuj do 100% (brak PV do ładowania)"
+
+    lines = [
+        f"  Pojemność baterii: {bat_cap_kwh:.1f} kWh (usable: {usable_kwh:.1f} kWh)",
+        f"  Aktualny SOC: {soc:.0f}%",
+        f"  Prognoza PV jutro: {forecast_tomorrow:.1f} kWh",
+        f"  Średnie zużycie dzienne: {avg_load:.1f} kWh",
+        f"  Zużycie w godzinach słonecznych: ~{load_during_solar:.1f} kWh",
+        f"  Szacowana nadwyżka PV jutro: ~{pv_surplus_tomorrow:.1f} kWh",
+        f"",
+        f"  ⚠️ UWAGA: Nadwyżka PV powyżej pojemności baterii = DARMOWY eksport do sieci!",
+        f"  Darmowe PV > nocny prąd za 0.63 PLN/kWh — zostaw miejsce w baterii!",
+        f"",
+        f"  🎯 REKOMENDACJA: {recommendation}",
+        f"  Optymalny SOC na rano: {optimal_soc}%",
+    ]
+    return chr(10).join(lines)
+
+
 def build_autopilot_ai_prompt(
     strategy: AutopilotStrategy,
     current_data: dict[str, Any],
@@ -919,11 +1046,16 @@ Odpowiedz WYŁĄCZNIE poprawnym JSON.
   RCE +2h: {current_data.get('rce_2h', 'N/A')} PLN/MWh
   RCE +3h: {current_data.get('rce_3h', 'N/A')} PLN/MWh
 
-═══ WEATHER ═══
-  Conditions: {current_data.get('weather_condition', 'N/A')}, {current_data.get('weather_temp', 'N/A')}°C
-  Clouds: {current_data.get('weather_clouds', 'N/A')}%
+═══ WEATHER & FORECAST ═══
+{_render_weather_detailed(current_data)}
   PV forecast remaining today: {current_data.get('forecast_remaining', 0)} kWh
   PV forecast tomorrow: {current_data.get('forecast_tomorrow', 0)} kWh
+
+═══ HISTORIA ZUŻYCIA (3 DNI) ═══
+{_render_energy_history(current_data)}
+
+═══ NOCNE ŁADOWANIE — OPTYMALIZACJA ═══
+{_render_night_charging_logic(current_data, bat_cap_kwh)}
 
 ═══ ACTIVE STRATEGY ═══
 {STRATEGY_AI_INSTRUCTIONS.get(active_strategy, STRATEGY_AI_INSTRUCTIONS['ai_full_autonomy'])}
@@ -934,7 +1066,7 @@ Odpowiedz WYŁĄCZNIE poprawnym JSON.
 1. ARBITRAGE: off_peak(0.63)→afternoon_peak(1.50)=0.87 margin. Charge cheap, discharge expensive.
 2. If approaching afternoon_peak AND SOC < 90% → force_charge NOW
 3. During afternoon_peak → force_discharge (avoid import at 1.50)
-4. Night 22-06: charge battery from grid if tomorrow PV < 5 kWh
+4. Night 22-06: ładuj baterię ale SPRAWDŹ sekcję NOCNE ŁADOWANIE — nie ładuj do 100% jeśli jutro dobra pogoda!
 5. PV surplus > 2kW + SOC > 80% → switch_on boiler
 6. AUTO-STOP CHARGE: when SOC >= 95% → call stop_force_charge
 7. AUTO-STOP DISCHARGE: when SOC <= 20% → call stop_force_discharge
@@ -1077,6 +1209,20 @@ This plan will be executed automatically by the InverterAgent. Respond ONLY with
   {current_data.get('weather_condition', 'N/A')}, {current_data.get('weather_temp', 'N/A')}°C, clouds {current_data.get('weather_clouds', 'N/A')}%
   PV remaining today: {current_data.get('forecast_remaining', 0)} kWh | Tomorrow: {current_data.get('forecast_tomorrow', 0)} kWh
 
+═══ HISTORIA ZUŻYCIA (3 DNI) ═══
+{_render_energy_history(current_data)}
+
+═══ POGODA SZCZEGÓŁOWO ═══
+{_render_weather_detailed(current_data)}
+
+═══ PROGNOZA PRODUKCJI PV ═══
+  Forecast.Solar — dziś (pozostało): {current_data.get('forecast_remaining', 0)} kWh
+  Forecast.Solar — jutro: {current_data.get('forecast_tomorrow', 0)} kWh
+  Forecast.Solar — dziś (total): {current_data.get('forecast_today', 0)} kWh
+
+═══ NOCNE ŁADOWANIE — OPTYMALIZACJA MIEJSCA NA PV ═══
+{_render_night_charging_logic(current_data, bat_cap_kwh)}
+
 ═══ MATHEMATICAL MODEL (current estimation) ═══
 {chr(10).join(plan_lines) if plan_lines else '  No hourly plan available'}
 
@@ -1104,9 +1250,14 @@ Net savings: {estimation.get('net_savings', 0):.2f} PLN
 9. SELL PROFITABILITY: sprzedawaj TYLKO gdy RCE sell ({rce_sell:.4f}) > G13 buy (0.63 PLN/kWh)
    - Jeśli RCE sell < 0.63 → nie opłaca się, zostaw w baterii  
 10. NEVER discharge below 10% SOC.
-11. Consider weather: cloudy tomorrow → charge more tonight.
+11. NOCNE ŁADOWANIE vs PV: Sprawdź sekcję "NOCNE ŁADOWANIE — OPTYMALIZACJA MIEJSCA NA PV":
+   - Dobra pogoda jutro (PV > 8kWh) → NIE ładuj do 100%, zostaw miejsce na darmowe PV!
+   - Zła pogoda (PV < 5kWh) → ładuj do 100%
+   - Darmowe PV z paneli jest ZAWSZE lepsze niż nocny prąd za 0.63 PLN/kWh
+   - Nadwyżka PV ponad pojemność baterii = STRATA (oddana za darmo do sieci)
 12. CHECK DEVICE STATUS — don't send commands the system is already executing.
 13. ALWAYS include stop_force commands when forced state should end (zone transition).
+14. HISTORIA: Analizuj średnie zużycie z ostatnich 3 dni aby precyzyjnie planować ładowanie.
 
 ═══ FORMAT ODPOWIEDZI ═══
 KRYTYCZNE: Odpowiedz WYŁĄCZNIE poprawnym JSON. Bez markdown, bez tekstu przed/po.
