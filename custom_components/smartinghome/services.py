@@ -16,6 +16,7 @@ from .const import (
     SERVICE_SET_MODE,
     SERVICE_FORCE_CHARGE,
     SERVICE_FORCE_DISCHARGE,
+    SERVICE_FORCE_CUSTOM,
     SERVICE_SET_EXPORT_LIMIT,
     SERVICE_ASK_AI,
     SERVICE_GENERATE_REPORT,
@@ -52,6 +53,19 @@ SERVICE_DEACTIVATE_AUTOPILOT = "deactivate_autopilot"
 SERVICE_TRIGGER_AUTOPILOT_ACTION = "trigger_autopilot_action"
 SERVICE_TOGGLE_AUTOPILOT_ACTION = "toggle_autopilot_action"
 SERVICE_SYNC_ECOWITT_STATE = "sync_ecowitt_state"
+
+FORCE_CUSTOM_SCHEMA = vol.Schema(
+    {
+        vol.Optional("work_mode"): cv.string,
+        vol.Optional("modbus_47511", default=-1): vol.All(
+            vol.Coerce(int), vol.Range(min=-1, max=10)
+        ),
+        vol.Optional("charge_current"): cv.string,
+        vol.Optional("export_limit"): vol.All(
+            vol.Coerce(int), vol.Range(min=0, max=16000)
+        ),
+    }
+)
 
 SET_MODE_SCHEMA = vol.Schema(
     {
@@ -197,6 +211,27 @@ async def async_setup_services(
     async def handle_force_discharge(call: ServiceCall) -> None:
         """Handle force_discharge service."""
         await energy_mgr.force_discharge()
+
+    async def handle_force_custom(call: ServiceCall) -> None:
+        """Handle force_custom service — configurable force command."""
+        work_mode = call.data.get("work_mode")
+        modbus_val = call.data.get("modbus_47511", -1)
+        charge_current = call.data.get("charge_current")
+        export_limit = call.data.get("export_limit")
+
+        result = await energy_mgr.force_custom(
+            work_mode=work_mode,
+            modbus_47511=modbus_val if modbus_val >= 0 else None,
+            charge_current=charge_current,
+            export_limit=export_limit,
+        )
+
+        # Fire event for frontend feedback
+        hass.bus.async_fire(
+            f"{DOMAIN}_force_custom_result",
+            result,
+        )
+        _LOGGER.info("Force custom: %s", result)
 
     async def handle_set_export_limit(call: ServiceCall) -> None:
         """Handle set_export_limit service."""
@@ -704,6 +739,10 @@ async def async_setup_services(
         DOMAIN, SERVICE_FORCE_DISCHARGE, handle_force_discharge
     )
     hass.services.async_register(
+        DOMAIN, SERVICE_FORCE_CUSTOM, handle_force_custom,
+        schema=FORCE_CUSTOM_SCHEMA,
+    )
+    hass.services.async_register(
         DOMAIN, SERVICE_SET_EXPORT_LIMIT, handle_set_export_limit,
         schema=SET_EXPORT_LIMIT_SCHEMA,
     )
@@ -753,7 +792,7 @@ async def async_setup_services(
         schema=SYNC_ECOWITT_STATE_SCHEMA,
     )
 
-    _LOGGER.info("Registered %d Smarting HOME services", 16)
+    _LOGGER.info("Registered %d Smarting HOME services", 17)
 
     # Start AI Cron Scheduler
     cron = AICronScheduler(
@@ -772,6 +811,7 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_SET_MODE,
         SERVICE_FORCE_CHARGE,
         SERVICE_FORCE_DISCHARGE,
+        SERVICE_FORCE_CUSTOM,
         SERVICE_SET_EXPORT_LIMIT,
         SERVICE_ASK_AI,
         SERVICE_GENERATE_REPORT,
