@@ -33,6 +33,55 @@ force_discharge:
     Force the battery to discharge by blocking charge current (0A).
     Battery will power the home load and export surplus to grid.
 
+force_custom:
+  name: Force Custom Command
+  description: >-
+    Execute a custom force charge/discharge command with configurable parameters.
+    Allows manual testing of different inverter work modes, Modbus values,
+    charge currents, and export limits. All parameters are optional.
+  fields:
+    work_mode:
+      name: Work Mode
+      description: "Inverter work mode (general, eco_charge, eco_discharge, backup, peak_shaving, eco)"
+      required: false
+      example: "general"
+      selector:
+        select:
+          options:
+            - "general"
+            - "eco_charge"
+            - "eco_discharge"
+            - "backup"
+            - "peak_shaving"
+            - "eco"
+    modbus_47511:
+      name: Modbus Register 47511
+      description: "EMS Mode register value (-1 = skip, 0-10 = write)"
+      required: false
+      default: -1
+      selector:
+        number:
+          min: -1
+          max: 10
+          step: 1
+    charge_current:
+      name: Charge Current
+      description: "Battery charge current in Amps (e.g. '18.5' for max, '0' to block)"
+      required: false
+      example: "18.5"
+      selector:
+        text:
+    export_limit:
+      name: Export Limit
+      description: "Grid export limit in Watts (0-16000)"
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 16000
+          step: 500
+          unit_of_measurement: W
+
 set_export_limit:
   name: Set Grid Export Limit
   description: >-

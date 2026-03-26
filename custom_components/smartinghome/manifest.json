@@ -11,5 +11,5 @@
   "requirements": [
     "aiohttp>=3.9.0"
   ],
-  "version": "1.29.4"
+  "version": "1.30.0"
 }

@@ -130,6 +130,52 @@ class EnergyManager:
         await self._set_work_mode("general")
         self._current_mode = HEMSMode.SELL
 
+    async def force_custom(
+        self,
+        work_mode: str | None = None,
+        modbus_47511: int | None = None,
+        charge_current: str | None = None,
+        export_limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Execute custom force command with user-specified parameters.
+
+        Each parameter is optional — only provided values are applied.
+        This allows manual testing of different inverter configurations.
+        """
+        results: list[str] = []
+
+        # 1. Set charge current first (most important for charge/discharge)
+        if charge_current is not None:
+            await self._set_charge_current(charge_current)
+            results.append(f"charge_current={charge_current}")
+
+        # 2. Set work mode
+        if work_mode is not None:
+            await self._set_work_mode(work_mode)
+            results.append(f"work_mode={work_mode}")
+
+        # 3. Write Modbus register 47511 (EMS mode, -1 = skip)
+        if modbus_47511 is not None and modbus_47511 >= 0:
+            await self.hass.services.async_call(
+                "modbus",
+                "write_register",
+                {
+                    "hub": "goodwe_rs485",
+                    "slave": 247,
+                    "address": 47511,
+                    "value": modbus_47511,
+                },
+            )
+            results.append(f"modbus_47511={modbus_47511}")
+
+        # 4. Set export limit
+        if export_limit is not None:
+            await self._set_export_limit(export_limit)
+            results.append(f"export_limit={export_limit}")
+
+        _LOGGER.info("Force custom executed: %s", ", ".join(results) or "no actions")
+        return {"success": True, "actions": results}
+
     async def set_export_limit(self, limit: int) -> None:
         """Set grid export limit."""
         _LOGGER.info("Setting export limit to %d W", limit)
@@ -401,6 +447,18 @@ class EnergyManager:
                 "device_id": self._device_id,
                 "parameter": "battery_charge_current",
                 "value": DEFAULT_BATTERY_CHARGE_CURRENT_BLOCK,
+            },
+        )
+
+    async def _set_charge_current(self, value: str) -> None:
+        """Set battery charge current to an arbitrary value (string)."""
+        await self.hass.services.async_call(
+            "goodwe",
+            "set_parameter",
+            {
+                "device_id": self._device_id,
+                "parameter": "battery_charge_current",
+                "value": value,
             },
         )
 

@@ -174,6 +174,111 @@ class SmartingHomePanel extends HTMLElement {
   _nm(k) { return this._n(this._m(k)); }
   _setText(id, val) { const el = this.shadowRoot.getElementById(id); if (el) el.textContent = val; }
   _callService(domain, service, data = {}) { if (this._hass) this._hass.callService(domain, service, data); }
+
+  /* ── Force Custom Configurator ────────── */
+  _executeForceCustom(type) {
+    const prefix = `fc-${type}`;
+    const modeEl = this.shadowRoot.getElementById(`${prefix}-mode`);
+    const modbusEl = this.shadowRoot.getElementById(`${prefix}-modbus`);
+    const currentEl = this.shadowRoot.getElementById(`${prefix}-current`);
+    const exportEl = this.shadowRoot.getElementById(`${prefix}-export`);
+    const statusEl = this.shadowRoot.getElementById(`${prefix}-status`);
+
+    // Find the execute button via event delegation
+    const btnSelector = type === 'charge'
+      ? '[onclick*="force_custom(\'charge\')"]'  // won't work in shadow DOM — use ID instead
+      : '[onclick*="force_custom(\'discharge\')"]';
+    // Fallback: find by traversing from statusEl
+    const btnEl = statusEl?.previousElementSibling;
+
+    if (!modeEl || !this._hass) return;
+
+    // ── VISUAL: button press animation ──
+    if (btnEl && btnEl.tagName === 'BUTTON') {
+      btnEl.style.transition = 'transform 0.1s ease, box-shadow 0.1s ease';
+      btnEl.style.transform = 'scale(0.93)';
+      btnEl.style.boxShadow = type === 'charge'
+        ? '0 0 12px rgba(46,204,113,0.5)' : '0 0 12px rgba(231,76,60,0.5)';
+      setTimeout(() => {
+        btnEl.style.transform = 'scale(1)';
+      }, 150);
+    }
+
+    const data = {};
+    const modeVal = modeEl.value;
+    if (modeVal) data.work_mode = modeVal;
+
+    const modbusVal = parseInt(modbusEl?.value ?? '-1', 10);
+    data.modbus_47511 = isNaN(modbusVal) ? -1 : modbusVal;
+
+    const currentVal = currentEl?.value?.trim();
+    if (currentVal !== '' && currentVal !== undefined) data.charge_current = currentVal;
+
+    const exportVal = exportEl?.value?.trim();
+    if (exportVal !== '' && exportVal !== undefined) data.export_limit = parseInt(exportVal, 10);
+
+    // Status: sending
+    if (statusEl) {
+      statusEl.textContent = '⏳ Wysyłanie...';
+      statusEl.style.color = '#f59e0b';
+      statusEl.style.transition = 'color 0.3s ease';
+    }
+
+    // Disable button during call
+    if (btnEl) { btnEl.disabled = true; btnEl.style.opacity = '0.6'; }
+
+    this._hass.callService('smartinghome', 'force_custom', data).then(() => {
+      const now = new Date().toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      if (statusEl) {
+        statusEl.textContent = `✅ Wykonano ${now}`;
+        statusEl.style.color = '#2ecc71';
+      }
+      // Success glow on button
+      if (btnEl) {
+        btnEl.disabled = false; btnEl.style.opacity = '1';
+        btnEl.style.boxShadow = type === 'charge'
+          ? '0 0 20px rgba(46,204,113,0.7)' : '0 0 20px rgba(231,76,60,0.7)';
+        setTimeout(() => { btnEl.style.boxShadow = 'none'; }, 1500);
+      }
+      // Auto-save config for this type
+      const configKey = `force_${type}_config`;
+      this._savePanelSettings({
+        [configKey]: {
+          work_mode: modeVal || null,
+          modbus_47511: modbusVal,
+          charge_current: currentVal || null,
+          export_limit: exportVal ? parseInt(exportVal, 10) : null,
+        }
+      });
+    }).catch(err => {
+      if (statusEl) {
+        statusEl.textContent = `❌ Błąd: ${err.message || err}`;
+        statusEl.style.color = '#e74c3c';
+      }
+      if (btnEl) {
+        btnEl.disabled = false; btnEl.style.opacity = '1';
+        btnEl.style.boxShadow = '0 0 20px rgba(231,76,60,0.7)';
+        setTimeout(() => { btnEl.style.boxShadow = 'none'; }, 1500);
+      }
+    });
+  }
+
+  _restoreForceCustomSettings() {
+    const types = ['charge', 'discharge'];
+    for (const type of types) {
+      const cfg = this._settings?.[`force_${type}_config`];
+      if (!cfg) continue;
+      const prefix = `fc-${type}`;
+      const modeEl = this.shadowRoot.getElementById(`${prefix}-mode`);
+      const modbusEl = this.shadowRoot.getElementById(`${prefix}-modbus`);
+      const currentEl = this.shadowRoot.getElementById(`${prefix}-current`);
+      const exportEl = this.shadowRoot.getElementById(`${prefix}-export`);
+      if (modeEl && cfg.work_mode !== undefined && cfg.work_mode !== null) modeEl.value = cfg.work_mode;
+      if (modbusEl && cfg.modbus_47511 !== undefined) modbusEl.value = cfg.modbus_47511;
+      if (currentEl && cfg.charge_current !== undefined && cfg.charge_current !== null) currentEl.value = cfg.charge_current;
+      if (exportEl && cfg.export_limit !== undefined && cfg.export_limit !== null) exportEl.value = cfg.export_limit;
+    }
+  }
   _tier() {
     // Try known entity_id patterns first
     const ids = [
@@ -265,6 +370,8 @@ class SmartingHomePanel extends HTMLElement {
         const smCardChk = this.shadowRoot.getElementById('chk-submeters-in-card');
         if (smCardChk && this._settings.sub_meters_in_card !== undefined) smCardChk.checked = this._settings.sub_meters_in_card;
         this._renderSubMetersSettings();
+        // Restore force custom configurator settings
+        this._restoreForceCustomSettings();
       } else if (retryCount < MAX_RETRIES) {
         // Server returned error (e.g. not ready after restart) — retry
         const delay = 1000 * Math.pow(2, retryCount); // 1s, 2s, 4s, 8s, 16s
@@ -6707,12 +6814,77 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
-          <!-- ROW 7: Quick Actions -->
+          <!-- ROW 7: Quick Actions — Configurator -->
           <div class="card">
-            <div class="card-title">🔧 Szybkie akcje</div>
-            <div class="actions">
-              <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','force_charge')">🔋 Wymuś Ład.</button>
-              <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','force_discharge')">⚡ Wymuś Rozład.</button>
+            <div class="card-title">🔧 Szybkie akcje — Konfigurator</div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:8px 0">
+
+              <!-- ═══ CHARGE column ═══ -->
+              <div style="background:rgba(46,204,113,0.06); border:1px solid rgba(46,204,113,0.15); border-radius:10px; padding:12px">
+                <div style="font-size:13px; font-weight:700; color:#2ecc71; margin-bottom:10px; text-align:center">🔋 Wymuś Ładowanie</div>
+                <div style="display:flex; flex-direction:column; gap:8px">
+                  <div>
+                    <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Tryb pracy</label>
+                    <select id="fc-charge-mode" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px">
+                      <option value="">(bez zmian)</option>
+                      <option value="general" selected>general</option>
+                      <option value="eco_charge">eco_charge</option>
+                      <option value="eco_discharge">eco_discharge</option>
+                      <option value="backup">backup</option>
+                      <option value="peak_shaving">peak_shaving</option>
+                      <option value="eco">eco</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Modbus 47511</label>
+                    <input id="fc-charge-modbus" type="number" min="-1" max="10" value="4" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px; box-sizing:border-box" placeholder="-1 = nie pisz">
+                  </div>
+                  <div>
+                    <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Prąd ładowania (A)</label>
+                    <input id="fc-charge-current" type="text" value="18.5" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px; box-sizing:border-box" placeholder="pusty = bez zmian">
+                  </div>
+                  <div>
+                    <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Export limit (W)</label>
+                    <input id="fc-charge-export" type="number" min="0" max="16000" step="500" value="" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px; box-sizing:border-box" placeholder="pusty = bez zmian">
+                  </div>
+                  <button class="action-btn" style="margin-top:4px; background:rgba(46,204,113,0.15); border:1px solid #2ecc71; color:#2ecc71; font-weight:700" onclick="this.getRootNode().host._executeForceCustom('charge')">▶ WYKONAJ</button>
+                  <div id="fc-charge-status" style="font-size:10px; color:#64748b; text-align:center; min-height:16px">— oczekuje</div>
+                </div>
+              </div>
+
+              <!-- ═══ DISCHARGE column ═══ -->
+              <div style="background:rgba(231,76,60,0.06); border:1px solid rgba(231,76,60,0.15); border-radius:10px; padding:12px">
+                <div style="font-size:13px; font-weight:700; color:#e74c3c; margin-bottom:10px; text-align:center">⚡ Wymuś Rozładowanie</div>
+                <div style="display:flex; flex-direction:column; gap:8px">
+                  <div>
+                    <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Tryb pracy</label>
+                    <select id="fc-discharge-mode" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px">
+                      <option value="">(bez zmian)</option>
+                      <option value="general" selected>general</option>
+                      <option value="eco_charge">eco_charge</option>
+                      <option value="eco_discharge">eco_discharge</option>
+                      <option value="backup">backup</option>
+                      <option value="peak_shaving">peak_shaving</option>
+                      <option value="eco">eco</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Modbus 47511</label>
+                    <input id="fc-discharge-modbus" type="number" min="-1" max="10" value="-1" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px; box-sizing:border-box" placeholder="-1 = nie pisz">
+                  </div>
+                  <div>
+                    <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Prąd ładowania (A)</label>
+                    <input id="fc-discharge-current" type="text" value="0" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px; box-sizing:border-box" placeholder="pusty = bez zmian">
+                  </div>
+                  <div>
+                    <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Export limit (W)</label>
+                    <input id="fc-discharge-export" type="number" min="0" max="16000" step="500" value="" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px; box-sizing:border-box" placeholder="pusty = bez zmian">
+                  </div>
+                  <button class="action-btn" style="margin-top:4px; background:rgba(231,76,60,0.15); border:1px solid #e74c3c; color:#e74c3c; font-weight:700" onclick="this.getRootNode().host._executeForceCustom('discharge')">▶ WYKONAJ</button>
+                  <div id="fc-discharge-status" style="font-size:10px; color:#64748b; text-align:center; min-height:16px">— oczekuje</div>
+                </div>
+              </div>
+
             </div>
           </div>
 
@@ -8733,7 +8905,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.29.4</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.30.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
