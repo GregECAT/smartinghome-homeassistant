@@ -462,6 +462,15 @@ class StrategyController:
         elif tool == "no_action":
             reason = params.get("reason", "No action needed")
             return reason
+        elif tool == "stop_force_charge":
+            await em.stop_force_charge()
+            return "Stop force charge — general mode restored"
+        elif tool == "stop_force_discharge":
+            await em.stop_force_discharge()
+            return "Stop force discharge — general mode restored"
+        elif tool == "emergency_stop":
+            await em.emergency_stop()
+            return "EMERGENCY STOP — all force operations halted"
         else:
             return f"Unknown tool: {tool}"
 
@@ -1343,7 +1352,7 @@ class StrategyController:
             device_status_text = self._inverter_agent.format_status_for_prompt()
             ai_data = _build_ai_data(data)
             action_states = self._get_action_states_for_ai()
-            prompt = build_ai_strategist_prompt(ai_data, estimation, device_status_text, action_states)
+            prompt = build_ai_strategist_prompt(ai_data, estimation, device_status_text, action_states, self._active_strategy.value)
             plan = await self._ai.ask_controller(prompt, raw_json=True)
 
             if plan and plan.get("time_blocks"):
@@ -1427,7 +1436,7 @@ class StrategyController:
                 device_status_text = self._inverter_agent.format_status_for_prompt()
                 ai_data = _build_ai_data(data)
                 action_states = self._get_action_states_for_ai()
-                prompt = build_ai_controller_prompt(ai_data, device_status_text, action_states)
+                prompt = build_ai_controller_prompt(ai_data, device_status_text, action_states, self._active_strategy.value)
                 ai_result = await self._ai.ask_controller(prompt)
 
                 self._ai_last_call = now
