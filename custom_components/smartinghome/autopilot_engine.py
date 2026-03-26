@@ -661,6 +661,59 @@ AI_CONTROLLER_TOOLS = {
     "no_action": "Do nothing this tick (params: reason: string). Use when current state is optimal",
 }
 
+# Per-strategy behavioral instructions for AI prompt injection
+STRATEGY_AI_INSTRUCTIONS: dict[str, str] = {
+    "max_self_consumption": (
+        "STRATEGIA: 🟢 Max Autokonsumpcja\n"
+        "  Priorytet: zużyj CAŁE PV w domu + baterii. MIN import z sieci, MIN eksport.\n"
+        "  NIE sprzedawaj do sieci (chyba że SOC=100% i nadwyżka PV).\n"
+        "  NIE ładuj z sieci (chyba że emergency SOC < 5%).\n"
+        "  SOC limits: min=10%, max=100%."
+    ),
+    "max_profit": (
+        "STRATEGIA: 💰 Max Zysk (Arbitraż Cenowy)\n"
+        "  Priorytet: kupuj tanio, sprzedawaj drogo. Arbitraż G13 + RCE.\n"
+        "  Off-peak (0.63): force_charge z sieci → naładuj baterię do 95-100%.\n"
+        "  Afternoon_peak (1.50): force_discharge → zasil dom z baterii, sprzedawaj nadwyżki.\n"
+        "  SPRZEDAWAJ TYLKO gdy RCE sell > 0.63 PLN/kWh (koszt zakupu). Inaczej zachowaj.\n"
+        "  Zostaw min 20% SOC na przetrwanie szczytu po rozładowaniu.\n"
+        "  SOC limits: min=15%, max=100%."
+    ),
+    "battery_protection": (
+        "STRATEGIA: 🔋 Ochrona Baterii\n"
+        "  Priorytet: minimalne obciążenie baterii, łagodne cykle.\n"
+        "  SOC ZAWSZE w zakresie 30-80%. NIGDY poniżej 30%, NIGDY powyżej 80%.\n"
+        "  set_dod(70). Unikaj force_charge/force_discharge.\n"
+        "  Preferuj PV → dom. Bateria tylko jako bufor.\n"
+        "  SOC limits: min=30%, max=80%."
+    ),
+    "zero_export": (
+        "STRATEGIA: ⚡ Zero Export\n"
+        "  Priorytet: ZERO eksportu do sieci. Cała energia w domu + bateria.\n"
+        "  set_export_limit(0) — nie pozwól na żaden eksport.\n"
+        "  PV → dom → bateria → obciążenia zarządzane (bojler, klima).\n"
+        "  NIE używaj force_discharge. NIE sprzedawaj.\n"
+        "  SOC limits: min=10%, max=100%."
+    ),
+    "weather_adaptive": (
+        "STRATEGIA: 🌧️ Pogodowy Adaptacyjny\n"
+        "  Priorytet: dynamiczna adaptacja do pogody godzina po godzinie.\n"
+        "  Zła pogoda (PV forecast < 5kWh) + tania strefa → force_charge z sieci.\n"
+        "  Dobra pogoda + dużo PV → PV pokryje zapotrzebowanie, oszczędzaj siatkę.\n"
+        "  Przed szczytem: jeśli SOC < 80% i słaba prognoza → force_charge.\n"
+        "  Po szczycie: stop_force, wróć do general.\n"
+        "  SOC limits: min=15%, max=95%."
+    ),
+    "ai_full_autonomy": (
+        "STRATEGIA: 🧠 AI Pełna Autonomia\n"
+        "  Masz pełną swobodę decyzji. Mieszaj techniki per godzina.\n"
+        "  Możesz: arbitraż, autokonsumpcja, sprzedaż, ładowanie z sieci.\n"
+        "  PAMIĘTAJ o stop_force po zakończeniu wymuszania!\n"
+        "  NIGDY nie zostawiaj falownika w trybie wymuszonym na dłużej niż 6h.\n"
+        "  SOC limits: min=10%, max=100%."
+    ),
+}
+
 
 def build_action_catalog_text(
     action_states: dict[str, Any] | None = None,
@@ -709,6 +762,7 @@ def build_ai_controller_prompt(
     current_data: dict[str, Any],
     device_status_text: str = "",
     action_states: dict[str, Any] | None = None,
+    active_strategy: str = "ai_full_autonomy",
 ) -> str:
     """Build a concise prompt for AI to return structured JSON commands.
 
@@ -799,13 +853,26 @@ Respond ONLY with valid JSON.
   PV forecast remaining today: {current_data.get('forecast_remaining', 0)} kWh
   PV forecast tomorrow: {current_data.get('forecast_tomorrow', 0)} kWh
 
+═══ ACTIVE STRATEGY ═══
+{STRATEGY_AI_INSTRUCTIONS.get(active_strategy, STRATEGY_AI_INSTRUCTIONS['ai_full_autonomy'])}
+
 ═══ KEY RULES ═══
 1. ARBITRAGE: off_peak(0.63)→afternoon_peak(1.50)=0.87 margin. Charge cheap, discharge expensive.
 2. If approaching afternoon_peak AND SOC < 90% → force_charge NOW
 3. During afternoon_peak → force_discharge (avoid import at 1.50)
 4. Night 22-06: charge battery from grid if tomorrow PV < 5 kWh
 5. PV surplus > 2kW + SOC > 80% → switch_on boiler
-6. CHECK DEVICE STATUS — if already active, use "no_action"!
+6. AUTO-STOP CHARGE: when SOC >= 95% → call stop_force_charge
+7. AUTO-STOP DISCHARGE: when SOC <= 20% → call stop_force_discharge
+8. EMERGENCY: SOC < 5% → call emergency_stop, then force_charge
+9. ZONE TRADING:
+   - Tania strefa (off_peak 0.63) + zła pogoda (PV forecast < 5kWh) → force_charge z sieci
+   - Droga strefa (afternoon_peak 1.50) + SOC > 30% → force_discharge (zasil dom)
+   - Zostaw min 20% SOC na przetrwanie szczytu
+10. SELL PROFITABILITY: sprzedawaj TYLKO gdy RCE sell ({rce_sell:.4f}) > G13 buy (0.63 PLN/kWh)
+   - Jeśli RCE sell < 0.63 → nie opłaca się, zostaw w baterii
+11. ALWAYS call stop_force after force operations end. NEVER leave inverter in forced state.
+12. CHECK DEVICE STATUS — if already active, use "no_action"!
 
 ═══ RESPONSE FORMAT ═══
 ONLY valid JSON. No text, no markdown, no explanation outside JSON.
@@ -831,6 +898,7 @@ def build_ai_strategist_prompt(
     estimation: dict[str, Any],
     device_status_text: str = "",
     action_states: dict[str, Any] | None = None,
+    active_strategy: str = "ai_full_autonomy",
 ) -> str:
     """Build prompt for AI Strategist — deep 24h strategic plan.
 
@@ -932,16 +1000,27 @@ TOTALS: Import {estimation.get('total_import_kwh', 0)} kWh ({estimation.get('tot
 Export {estimation.get('total_export_kwh', 0)} kWh ({estimation.get('total_revenue', 0):.2f} PLN) | \
 Net savings: {estimation.get('net_savings', 0):.2f} PLN
 
+═══ ACTIVE STRATEGY ═══
+{STRATEGY_AI_INSTRUCTIONS.get(active_strategy, STRATEGY_AI_INSTRUCTIONS['ai_full_autonomy'])}
+
 ═══ STRATEGIC RULES ═══
 1. ARBITRAGE IS KING: charge battery at off_peak (0.63) → discharge at afternoon_peak (1.50) = 0.87 PLN/kWh
 2. Before EVERY peak: battery MUST be at 95-100% SOC. Plan charging accordingly.
 3. Night charge (21:00-07:00 off_peak at 0.63) is CRITICAL for morning peak coverage.
 4. During peaks: ZERO grid import. Battery + PV must cover all load.
 5. Managed loads (boiler, AC) should run ONLY during off-peak or PV surplus > 2kW.
-6. If RCE sell > current G13 buy AND battery is full → consider export.
-7. NEVER discharge below 10% SOC.
-8. Consider weather: cloudy tomorrow → charge more tonight.
-9. CHECK DEVICE STATUS — don't send commands the system is already executing.
+6. AUTO-STOP CHARGE: plan stop_force_charge when SOC reaches 95%. Include in commands.
+7. AUTO-STOP DISCHARGE: plan stop_force_discharge when SOC reaches 20%.
+8. ZONE TRADING:
+   - Tania strefa (off_peak 0.63) + zła pogoda (PV forecast < 5kWh) → force_charge z sieci
+   - Droga strefa (afternoon_peak 1.50) + SOC > 30% → force_discharge (zasil dom)
+   - Zostaw zawsze min 20% SOC na przetrwanie szczytu po rozładowaniu
+9. SELL PROFITABILITY: sprzedawaj TYLKO gdy RCE sell ({rce_sell:.4f}) > G13 buy (0.63 PLN/kWh)
+   - Jeśli RCE sell < 0.63 → nie opłaca się, zostaw w baterii  
+10. NEVER discharge below 10% SOC.
+11. Consider weather: cloudy tomorrow → charge more tonight.
+12. CHECK DEVICE STATUS — don't send commands the system is already executing.
+13. ALWAYS include stop_force commands when forced state should end (zone transition).
 
 ═══ RESPONSE FORMAT ═══
 CRITICAL: Respond with ONLY valid JSON. No markdown, no text before/after.

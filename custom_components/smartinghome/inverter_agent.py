@@ -335,6 +335,12 @@ class InverterAgent:
                     message=reason,
                     reason=reason,
                 )
+            elif tool == "stop_force_charge":
+                return await self._exec_stop_force_charge()
+            elif tool == "stop_force_discharge":
+                return await self._exec_stop_force_discharge()
+            elif tool == "emergency_stop":
+                return await self._exec_emergency_stop()
             else:
                 _LOGGER.warning("InverterAgent: unknown tool '%s'", tool)
                 return ExecutionResult(
@@ -519,6 +525,49 @@ class InverterAgent:
             message=f"{prefix}: switch_{desired}({friendly_name}) → {'włączono' if desired == 'on' else 'wyłączono'}",
             previous_state=current,
             new_state=desired,
+        )
+
+    async def _exec_stop_force_charge(self) -> ExecutionResult:
+        """Stop forced charging — restore general mode."""
+        prefix = "🧠 AI CTRL" if not self._dry_run else "🧠 AI DRY-RUN"
+        if not self._dry_run:
+            await self._em.stop_force_charge()
+        self._commanded_charging = None
+        self._mark_executed("stop_force_charge")
+        return ExecutionResult(
+            tool="stop_force_charge",
+            executed=True,
+            message=f"{prefix}: stop_force_charge → general mode restored",
+            new_state="general (idle)",
+        )
+
+    async def _exec_stop_force_discharge(self) -> ExecutionResult:
+        """Stop forced discharge — restore general mode."""
+        prefix = "🧠 AI CTRL" if not self._dry_run else "🧠 AI DRY-RUN"
+        if not self._dry_run:
+            await self._em.stop_force_discharge()
+        self._commanded_charging = None
+        self._mark_executed("stop_force_discharge")
+        return ExecutionResult(
+            tool="stop_force_discharge",
+            executed=True,
+            message=f"{prefix}: stop_force_discharge → general mode restored",
+            new_state="general (idle)",
+        )
+
+    async def _exec_emergency_stop(self) -> ExecutionResult:
+        """Emergency stop — reset everything to general mode."""
+        prefix = "🧠 AI CTRL" if not self._dry_run else "🧠 AI DRY-RUN"
+        if not self._dry_run:
+            await self._em.emergency_stop()
+        self._commanded_charging = None
+        self._commanded_dod = None
+        self._mark_executed("emergency_stop")
+        return ExecutionResult(
+            tool="emergency_stop",
+            executed=True,
+            message=f"{prefix}: 🚨 EMERGENCY STOP → all force operations halted",
+            new_state="general (emergency reset)",
         )
 
     # ------------------------------------------------------------------

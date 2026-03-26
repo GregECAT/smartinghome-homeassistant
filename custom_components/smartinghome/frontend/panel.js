@@ -8403,7 +8403,10 @@ class SmartingHomePanel extends HTMLElement {
           <div class="card" style="margin-bottom:14px">
             <div class="card-title" style="display:flex; justify-content:space-between; align-items:center">
               <span>📋 Preset strategii</span>
-              <span style="font-size:11px; color:#64748b">Wybierz preset → aktywuje zestaw akcji</span>
+              <div style="display:flex; align-items:center; gap:8px">
+                <span style="font-size:11px; color:#64748b">Wybierz preset → aktywuje zestaw akcji</span>
+                <button onclick="this.getRootNode().host._showStrategyHelp()" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.12); border-radius:50%; width:24px; height:24px; color:#94a3b8; font-size:13px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all 0.2s" title="Jak działają strategie?">❓</button>
+              </div>
             </div>
             <div style="display:flex; flex-wrap:wrap; gap:6px" id="ap-strategy-presets"></div>
           </div>
@@ -8839,7 +8842,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.33.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.34.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -9003,6 +9006,105 @@ class SmartingHomePanel extends HTMLElement {
         onclick="this.getRootNode().host._switchAutopilotStrategy('${s.id}')"
         title="${s.name}">${s.icon} ${s.name}${badge}</button>`;
     }).join('');
+  }
+
+  /* ── Show strategy help modal ── */
+  _showStrategyHelp() {
+    // Remove existing modal if any
+    const existing = this.shadowRoot.getElementById('strategy-help-modal');
+    if (existing) { existing.remove(); return; }
+
+    const strategies = [
+      {
+        icon: '🟢', name: 'Max Autokonsumpcja',
+        subtitle: 'Maksymalne zużycie własne',
+        soc: '10% – 100%',
+        desc: 'Cała energia z paneli PV jest kierowana do zasilania domu i ładowania baterii. Zero eksportu do sieci (chyba że bateria pełna). Zero importu z sieci (chyba że SOC krytycznie niski). Idealna strategia gdy nie opłaca się sprzedawać do sieci.',
+        actions: ['PV → dom + bateria', 'Brak handlu z siecią', 'Bojler/klima z nadwyżki PV'],
+        best: 'Dla prosumentów bez net-billingu lub z niskimi cenami sprzedaży.',
+        color: '#2ecc71'
+      },
+      {
+        icon: '💰', name: 'Max Zysk (Arbitraż)',
+        subtitle: 'Kupuj tanio, sprzedawaj drogo',
+        soc: '15% – 100%',
+        desc: 'Agresywna strategia cenowa. Ładuje baterię w tanich strefach G13 (off-peak 0.63 zł/kWh) i rozładowuje w drogich (afternoon peak 1.50 zł/kWh). Wykorzystuje RCE do dynamicznego handlu. Margin na cykl: ~0.87 zł/kWh.',
+        actions: ['Off-peak → force_charge z sieci', 'Peak → force_discharge + sprzedaż', 'RCE > 0.63 → sprzedaj, RCE < 0.63 → zachowaj', 'Min 20% SOC buffer na przetrwanie szczytu'],
+        best: 'Dla taryfy G13 z dużą baterią. Max oszczędności finansowe.',
+        color: '#f7b731'
+      },
+      {
+        icon: '🔋', name: 'Ochrona Baterii',
+        subtitle: 'Łagodne cykle, długa żywotność',
+        soc: '30% – 80%',
+        desc: 'Zachowawcza strategia chroniąca żywotność baterii. SOC zawsze w bezpiecznym zakresie 30-80% (rekomendacja producentów Li-ion). DOD ograniczony do 70%. Unika wymuszonych ładowań/rozładowań. Bateria pracuje tylko jako bufor PV.',
+        actions: ['DOD = 70%', 'Brak force_charge/discharge', 'PV → dom, nadwyżka → bateria', 'Minimalne cyklowanie'],
+        best: 'Dla nowych baterii lub gdy żywotność jest priorytetem nad oszczędnościami.',
+        color: '#3498db'
+      },
+      {
+        icon: '⚡', name: 'Zero Export',
+        subtitle: 'Żadna energia nie trafia do sieci',
+        soc: '10% – 100%',
+        desc: 'Całkowity zakaz eksportu do sieci. Limit eksportu ustawiony na 0W. Cała energia PV jest kierowana do domu, baterii i obciążeń zarządzanych. Przydatna gdy operator sieci ogranicza eksport lub gdy brak umowy prosumenckiej.',
+        actions: ['set_export_limit(0)', 'PV → dom → bateria → bojler/klima', 'Brak sprzedaży', 'Automatyczne zarządzanie obciążeniami'],
+        best: 'Gdy operator zabrania eksportu lub gdy brak korzystnej umowy sprzedaży.',
+        color: '#e74c3c'
+      },
+      {
+        icon: '🌧️', name: 'Pogodowy Adaptacyjny',
+        subtitle: 'Dynamiczna adaptacja do pogody',
+        soc: '15% – 95%',
+        desc: 'AI analizuje prognozę pogody i dynamicznie zmienia zachowanie godzina po godzinie. Słaba prognoza PV + tania strefa = ładowanie z sieci. Dobra pogoda = PV pokryje zapotrzebowanie. Przed szczytem sprawdza czy bateria jest gotowa.',
+        actions: ['Zła pogoda + off-peak → force_charge', 'Dobra pogoda → PV samowystarczalne', 'Przed szczytem: SOC < 80% → ładuj', 'Automatyczne stop_force po zmianie strefy'],
+        best: 'Dla zmiennego klimatu. Balans między oszczędnościami a bezpieczeństwem.',
+        color: '#9b59b6'
+      },
+      {
+        icon: '🧠', name: 'AI Pełna Autonomia',
+        subtitle: 'AI sam decyduje o wszystkim',
+        soc: '10% – 100%',
+        desc: 'Pełna autonomia AI. Agent energetyczny sam wybiera optymalną taktykę dla każdej godziny: arbitraż, autokonsumpcja, sprzedaż lub ładowanie z sieci. Wykorzystuje model matematyczny, prognozę pogody, ceny RCE i G13 do podejmowania decyzji.',
+        actions: ['Dostęp do wszystkich 35 akcji', 'Dynamiczne mieszanie strategii', 'Automatyczne stop_force po operacjach', 'Max 6h trybu wymuszonego'],
+        best: 'Dla zaawansowanych użytkowników. Wymaga skonfigurowanego dostawcy AI.',
+        color: '#1abc9c'
+      }
+    ];
+
+    const modal = document.createElement('div');
+    modal.id = 'strategy-help-modal';
+    modal.style.cssText = 'position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); backdrop-filter:blur(8px); z-index:9999; display:flex; align-items:center; justify-content:center; padding:20px; animation:fadeIn 0.2s ease';
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+
+    modal.innerHTML = `
+      <div style="background:linear-gradient(145deg, #1e293b, #0f172a); border:1px solid rgba(255,255,255,0.1); border-radius:20px; max-width:680px; width:100%; max-height:85vh; overflow-y:auto; padding:28px; box-shadow:0 25px 50px rgba(0,0,0,0.5)">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px">
+          <div>
+            <div style="font-size:18px; font-weight:700; color:#f8fafc">📋 Strategie Autopilota</div>
+            <div style="font-size:12px; color:#64748b; margin-top:4px">Każda strategia definiuje jakie akcje i reguły są aktywne</div>
+          </div>
+          <button onclick="this.closest('#strategy-help-modal').remove()" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.12); border-radius:10px; width:32px; height:32px; color:#94a3b8; font-size:16px; cursor:pointer">✕</button>
+        </div>
+        ${strategies.map(s => `
+          <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:14px; padding:18px; margin-bottom:12px; border-left:3px solid ${s.color}">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px">
+              <div>
+                <div style="font-size:15px; font-weight:700; color:#f8fafc">${s.icon} ${s.name}</div>
+                <div style="font-size:11px; color:${s.color}; font-weight:600; margin-top:2px">${s.subtitle}</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.06); padding:3px 10px; border-radius:8px; font-size:10px; color:#94a3b8; white-space:nowrap">SOC: ${s.soc}</div>
+            </div>
+            <div style="font-size:12px; color:#cbd5e1; line-height:1.7; margin-bottom:12px">${s.desc}</div>
+            <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px">
+              ${s.actions.map(a => `<span style="font-size:10px; background:rgba(255,255,255,0.06); color:#94a3b8; padding:3px 8px; border-radius:6px">▸ ${a}</span>`).join('')}
+            </div>
+            <div style="font-size:11px; color:#64748b; font-style:italic">💡 ${s.best}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+
+    this.shadowRoot.appendChild(modal);
   }
 
   /* ── Render action sections (W0-W5) ── */
