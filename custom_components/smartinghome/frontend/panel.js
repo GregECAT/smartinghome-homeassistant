@@ -1414,8 +1414,8 @@ class SmartingHomePanel extends HTMLElement {
         </div>
         <div style="background:rgba(255,255,255,0.03); border-radius:10px; padding:12px; border:1px solid rgba(255,255,255,0.06)">
           <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">💨 Wiatr</div>
-          <div style="font-size:20px; font-weight:800; color:#00d4ff; margin-top:4px">${wind !== null ? wind.toFixed(1) + ' km/h' : '—'}</div>
-          <div style="font-size:10px; color:#94a3b8; margin-top:2px">Porywy: ${gust !== null ? gust.toFixed(1) + ' km/h' : '—'} | ${windDir !== null ? windDir + '° ' + windDirLabel(windDir) : '—'}</div>
+          <div style="font-size:20px; font-weight:800; color:#00d4ff; margin-top:4px">${wind !== null ? wind.toFixed(1) + ' km/h' + ' <span style="font-size:12px; color:#64748b">(' + (wind / 3.6).toFixed(1) + ' m/s)</span>' : '—'}</div>
+          <div style="font-size:10px; color:#94a3b8; margin-top:2px">Porywy: ${gust !== null ? gust.toFixed(1) + ' km/h (' + (gust / 3.6).toFixed(1) + ' m/s)' : '—'} | ${windDir !== null ? windDir + '° ' + windDirLabel(windDir) : '—'}</div>
         </div>
         <div style="background:rgba(255,255,255,0.03); border-radius:10px; padding:12px; border:1px solid rgba(255,255,255,0.06)">
           <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">🌧️ Opady</div>
@@ -1446,7 +1446,7 @@ class SmartingHomePanel extends HTMLElement {
         uvEl.style.color = uv === null ? '#64748b' : uv <= 2 ? '#2ecc71' : uv <= 5 ? '#f7b731' : '#e74c3c';
       }
       this._setText('pv-eco-temp', temp !== null ? `${temp.toFixed(1)}°C` : '—');
-      this._setText('pv-eco-wind', wind !== null ? `${wind.toFixed(1)} km/h` : '—');
+      this._setText('pv-eco-wind', wind !== null ? `${wind.toFixed(1)} km/h (${(wind / 3.6).toFixed(1)} m/s)` : '—');
     }
   }
 
@@ -1838,7 +1838,8 @@ class SmartingHomePanel extends HTMLElement {
     this._windActivePreset = this._settings.wind_turbine_preset || 'custom';
     this._updateWindPresetButtons();
     this._recalcWindProfitability();
-    this._windLoading = false;
+    // Keep _windLoading true longer than the 1500ms auto-save debounce to prevent overwrite
+    setTimeout(() => { this._windLoading = false; }, 2500);
   }
 
   _saveWindData() {
@@ -1947,9 +1948,11 @@ class SmartingHomePanel extends HTMLElement {
 
     const beaufort = this._getBeaufort(wind || 0);
 
-    // Wind speed card
+    // Wind speed card — dual units km/h + m/s
     this._setText('wind-speed-val', wind !== null ? wind.toFixed(1) : '—');
+    this._setText('wind-speed-ms', wind !== null ? (wind / 3.6).toFixed(1) + ' m/s' : '');
     this._setText('wind-gust-val', gust !== null ? gust.toFixed(1) : '—');
+    this._setText('wind-gust-ms', gust !== null ? '(' + (gust / 3.6).toFixed(1) + ' m/s)' : '');
     this._setText('wind-beaufort-name', `${beaufort.icon} ${beaufort.name}`);
     const bfEl = this.shadowRoot.getElementById('wind-beaufort-name');
     if (bfEl) bfEl.style.color = beaufort.color;
@@ -4183,12 +4186,24 @@ class SmartingHomePanel extends HTMLElement {
       this._setText("v-energy-temp", `${wEntity.attributes?.temperature ?? '—'}°C`);
       this._setText("v-energy-clouds", `${wEntity.attributes?.cloud_coverage ?? '—'}%`);
       this._setText("v-energy-condition", wEntity.state || '—');
-      // Wind from weather entity attributes as fallback
       const windSpeed = this._s("sensor.dom_predkosc_wiatru_dzien_0")
         || wEntity.attributes?.wind_speed;
-      this._setText("v-energy-wind", windSpeed ? `${windSpeed} km/h` : '—');
+      if (windSpeed) {
+        const wsNum = parseFloat(windSpeed);
+        const msVal = !isNaN(wsNum) ? ` (${(wsNum / 3.6).toFixed(1)} m/s)` : '';
+        this._setText("v-energy-wind", `${windSpeed} km/h${msVal}`);
+      } else {
+        this._setText("v-energy-wind", '—');
+      }
     } else {
-      this._setText("v-energy-wind", `${this._s("sensor.dom_predkosc_wiatru_dzien_0") || '—'} km/h`);
+      const ws = this._s("sensor.dom_predkosc_wiatru_dzien_0");
+      if (ws) {
+        const wsNum = parseFloat(ws);
+        const msVal = !isNaN(wsNum) ? ` (${(wsNum / 3.6).toFixed(1)} m/s)` : '';
+        this._setText("v-energy-wind", `${ws} km/h${msVal}`);
+      } else {
+        this._setText("v-energy-wind", '—');
+      }
     }
     this._setText("v-energy-realfeel", `${this._s("sensor.dom_temperatura_realfeel") || '—'}°C`);
     this._setText("v-energy-sunhours", `${this._s("sensor.dom_godziny_sloneczne_dzien_0") || '—'} h`);
@@ -4529,7 +4544,7 @@ class SmartingHomePanel extends HTMLElement {
       const ecoSolar = this._n(this._m("local_solar_radiation"));
       this._setText("v-en-eco-solar", ecoSolar !== null ? `${Math.round(ecoSolar)} W/m²` : "— W/m²");
       const ecoWind = this._n(this._m("local_wind_speed"));
-      this._setText("v-en-eco-wind", ecoWind !== null ? `${ecoWind.toFixed(1)} km/h` : "— km/h");
+      this._setText("v-en-eco-wind", ecoWind !== null ? `${ecoWind.toFixed(1)} km/h (${(ecoWind / 3.6).toFixed(1)} m/s)` : "—");
       const ecoRain = this._n(this._m("local_rain_rate"));
       this._setText("v-en-eco-rain", ecoRain !== null ? `${ecoRain.toFixed(1)} mm/h` : "— mm/h");
       const ecoPressure = this._n(this._m("local_pressure"));
@@ -6666,7 +6681,7 @@ class SmartingHomePanel extends HTMLElement {
               </div>
               <div style="background:rgba(46,204,113,0.06); border-radius:8px; padding:10px; text-align:center">
                 <div style="font-size:9px; color:#2ecc71; text-transform:uppercase">💨 Wiatr</div>
-                <div style="font-size:18px; font-weight:800; color:#fff; margin-top:2px" id="v-en-eco-wind">— km/h</div>
+                <div style="font-size:18px; font-weight:800; color:#fff; margin-top:2px" id="v-en-eco-wind">—</div>
               </div>
               <div style="background:rgba(0,150,255,0.06); border-radius:8px; padding:10px; text-align:center">
                 <div style="font-size:9px; color:#0096ff; text-transform:uppercase">🌧️ Deszcz</div>
@@ -7857,7 +7872,8 @@ class SmartingHomePanel extends HTMLElement {
                 <div style="background:rgba(0,212,255,0.06); border:1px solid rgba(0,212,255,0.15); border-radius:14px; padding:16px; text-align:center">
                   <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">💨 Prędkość wiatru</div>
                   <div style="font-size:32px; font-weight:900; color:#00d4ff; margin-top:6px"><span id="wind-speed-val">—</span> <span style="font-size:14px; font-weight:400; color:#94a3b8">km/h</span></div>
-                  <div style="font-size:11px; color:#94a3b8; margin-top:4px">Porywy: <span id="wind-gust-val" style="color:#f39c12; font-weight:600">—</span> km/h</div>
+                  <div style="font-size:12px; color:#64748b; margin-top:2px" id="wind-speed-ms"></div>
+                  <div style="font-size:11px; color:#94a3b8; margin-top:4px">Porywy: <span id="wind-gust-val" style="color:#f39c12; font-weight:600">—</span> km/h <span id="wind-gust-ms" style="color:#64748b; font-size:10px"></span></div>
                   <div style="margin-top:8px; padding:6px 12px; border-radius:20px; background:rgba(255,255,255,0.05); display:inline-block">
                     <span id="wind-beaufort-name" style="font-size:12px; font-weight:700">—</span>
                     <span id="wind-beaufort-scale" style="font-size:10px; color:#64748b; margin-left:4px">—</span>
@@ -8005,11 +8021,11 @@ class SmartingHomePanel extends HTMLElement {
           <div class="card" style="margin-bottom:12px">
             <div class="card-title">📖 Skala Beauforta — Referencja</div>
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:6px; margin-top:8px">
-              <div style="background:rgba(100,116,139,0.1); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🍃</div><div style="font-size:10px; font-weight:700; color:#64748b">0 — Cisza</div><div style="font-size:9px; color:#94a3b8">&lt; 1 km/h</div></div>
-              <div style="background:rgba(46,204,113,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🌿</div><div style="font-size:10px; font-weight:700; color:#2ecc71">2-3 — Słaby/Łagodny</div><div style="font-size:9px; color:#94a3b8">6–19 km/h</div></div>
-              <div style="background:rgba(247,183,49,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🌬️</div><div style="font-size:10px; font-weight:700; color:#f7b731">4-5 — Umiarkowany</div><div style="font-size:9px; color:#94a3b8">20–38 km/h</div><div style="font-size:8px; color:#00d4ff; margin-top:2px">⚡ START turbiny</div></div>
-              <div style="background:rgba(231,76,60,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">💨</div><div style="font-size:10px; font-weight:700; color:#e67e22">6-7 — Silny</div><div style="font-size:9px; color:#94a3b8">39–61 km/h</div><div style="font-size:8px; color:#2ecc71; margin-top:2px">⚡ Optymalna moc</div></div>
-              <div style="background:rgba(192,57,43,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🌪️</div><div style="font-size:10px; font-weight:700; color:#c0392b">8+ — Sztorm</div><div style="font-size:9px; color:#94a3b8">&gt; 62 km/h</div><div style="font-size:8px; color:#e74c3c; margin-top:2px">⛔ STOP bezpieczeństwa</div></div>
+              <div style="background:rgba(100,116,139,0.1); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🍃</div><div style="font-size:10px; font-weight:700; color:#64748b">0 — Cisza</div><div style="font-size:9px; color:#94a3b8">&lt; 1 km/h (&lt; 0.3 m/s)</div></div>
+              <div style="background:rgba(46,204,113,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🌿</div><div style="font-size:10px; font-weight:700; color:#2ecc71">2-3 — Słaby/Łagodny</div><div style="font-size:9px; color:#94a3b8">6–19 km/h (1.7–5.3 m/s)</div></div>
+              <div style="background:rgba(247,183,49,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🌬️</div><div style="font-size:10px; font-weight:700; color:#f7b731">4-5 — Umiarkowany</div><div style="font-size:9px; color:#94a3b8">20–38 km/h (5.6–10.6 m/s)</div><div style="font-size:8px; color:#00d4ff; margin-top:2px">⚡ START turbiny</div></div>
+              <div style="background:rgba(231,76,60,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">💨</div><div style="font-size:10px; font-weight:700; color:#e67e22">6-7 — Silny</div><div style="font-size:9px; color:#94a3b8">39–61 km/h (10.8–16.9 m/s)</div><div style="font-size:8px; color:#2ecc71; margin-top:2px">⚡ Optymalna moc</div></div>
+              <div style="background:rgba(192,57,43,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🌪️</div><div style="font-size:10px; font-weight:700; color:#c0392b">8+ — Sztorm</div><div style="font-size:9px; color:#94a3b8">&gt; 62 km/h (&gt; 17.2 m/s)</div><div style="font-size:8px; color:#e74c3c; margin-top:2px">⛔ STOP bezpieczeństwa</div></div>
             </div>
           </div>
 
@@ -8704,7 +8720,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.29.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.29.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
