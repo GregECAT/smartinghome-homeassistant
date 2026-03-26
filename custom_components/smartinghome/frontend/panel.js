@@ -21,6 +21,19 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   set hass(hass) {
+    // Auto-reload on HA reconnect (after restart / power loss)
+    if (this._wasDisconnected && hass.connected) {
+      console.log('[SmartingHOME] HA reconnected after disconnect — auto-reloading panel...');
+      if (!this._reloadScheduled) {
+        this._reloadScheduled = true;
+        setTimeout(() => location.reload(), 2000);
+      }
+      return;
+    }
+    if (hass.connected === false) {
+      this._wasDisconnected = true;
+      console.log('[SmartingHOME] HA connection lost — waiting for reconnect...');
+    }
     this._hass = hass;
     this._ensureSubscriptions();
     if (!this.shadowRoot.querySelector(".panel-container")) {
@@ -8720,7 +8733,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.29.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.29.4</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
