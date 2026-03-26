@@ -1024,10 +1024,10 @@ Net savings: {estimation.get('net_savings', 0):.2f} PLN
 
 ═══ RESPONSE FORMAT ═══
 CRITICAL: Respond with ONLY valid JSON. No markdown, no text before/after.
+KEEP IT SHORT: analysis max 2 sentences. time_blocks MUST come before analysis.
 PREFER using "actions" (list of action IDs from the catalog) over raw "commands".
 
 {{
-  "analysis": "Krótka analiza obecnej sytuacji (max 3 zdania, po polsku)",
   "time_blocks": [
     {{
       "start": "HH:MM",
@@ -1035,18 +1035,17 @@ PREFER using "actions" (list of action IDs from the catalog) over raw "commands"
       "zone": "off_peak|morning_peak|afternoon_peak",
       "price": 0.63,
       "strategy": "aggressive_charge|discharge_self_consume|night_charge|pv_optimize|no_action",
-      "actions": ["action_id_1", "action_id_2"],
+      "actions": ["action_id_1"],
       "commands": [
-        {{"action": "action_id_from_catalog"}},
         {{"tool": "force_charge", "params": {{}}}}
       ],
-      "reasoning": "Uzasadnienie dla tego bloku (1 zdanie)"
+      "reasoning": "1 zdanie"
     }}
   ],
+  "analysis": "Max 2 zdania po polsku",
   "savings_estimate": {{
     "optimized_cost_pln": 7.56,
-    "net_savings_pln": 8.74,
-    "vs_current_plan_pln": 6.27
+    "net_savings_pln": 8.74
   }},
   "next_analysis_minutes": 30
 }}
@@ -1054,10 +1053,11 @@ PREFER using "actions" (list of action IDs from the catalog) over raw "commands"
 RULES FOR time_blocks:
 - Start from NOW ({now.strftime('%H:%M')}) and cover next 24h
 - Each block aligns with G13 tariff zone transitions
-- Max 8 blocks (group similar periods)
-- Max 4 commands per block
+- Max 6 blocks (group similar periods)
+- Max 3 commands per block
 - Order blocks chronologically
 - "actions": list of action IDs from ACTION CATALOG that should be active in this block
-- "commands": can use EITHER {{"action": "id"}} or {{"tool": "name", "params": {{}}}}"""
+- "commands": can use EITHER {{"action": "id"}} or {{"tool": "name", "params": {{}}}}
+- Keep reasoning to 1 short sentence per block"""
 
     return prompt
