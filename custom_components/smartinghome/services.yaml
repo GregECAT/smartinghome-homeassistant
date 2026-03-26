@@ -81,6 +81,26 @@ force_custom:
           max: 16000
           step: 500
           unit_of_measurement: W
+    eco_mode_power:
+      name: Eco Mode Power
+      description: "Eco Mode power percentage (0-100%, 100 = full inverter power)"
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 10
+          unit_of_measurement: "%"
+    eco_mode_soc:
+      name: Eco Mode SOC
+      description: "Eco Mode target SOC (0-100%, 100 for charge, 5 for discharge)"
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 5
+          unit_of_measurement: "%"
 
 set_export_limit:
   name: Set Grid Export Limit

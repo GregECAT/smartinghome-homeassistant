@@ -182,13 +182,11 @@ class SmartingHomePanel extends HTMLElement {
     const modbusEl = this.shadowRoot.getElementById(`${prefix}-modbus`);
     const currentEl = this.shadowRoot.getElementById(`${prefix}-current`);
     const exportEl = this.shadowRoot.getElementById(`${prefix}-export`);
+    const ecoPowerEl = this.shadowRoot.getElementById(`${prefix}-ecopower`);
+    const ecoSocEl = this.shadowRoot.getElementById(`${prefix}-ecosoc`);
     const statusEl = this.shadowRoot.getElementById(`${prefix}-status`);
 
-    // Find the execute button via event delegation
-    const btnSelector = type === 'charge'
-      ? '[onclick*="force_custom(\'charge\')"]'  // won't work in shadow DOM — use ID instead
-      : '[onclick*="force_custom(\'discharge\')"]';
-    // Fallback: find by traversing from statusEl
+    // Find the execute button via traversal from status label
     const btnEl = statusEl?.previousElementSibling;
 
     if (!modeEl || !this._hass) return;
@@ -216,6 +214,12 @@ class SmartingHomePanel extends HTMLElement {
 
     const exportVal = exportEl?.value?.trim();
     if (exportVal !== '' && exportVal !== undefined) data.export_limit = parseInt(exportVal, 10);
+
+    const ecoPowerVal = ecoPowerEl?.value?.trim();
+    if (ecoPowerVal !== '' && ecoPowerVal !== undefined) data.eco_mode_power = parseInt(ecoPowerVal, 10);
+
+    const ecoSocVal = ecoSocEl?.value?.trim();
+    if (ecoSocVal !== '' && ecoSocVal !== undefined) data.eco_mode_soc = parseInt(ecoSocVal, 10);
 
     // Status: sending
     if (statusEl) {
@@ -248,6 +252,8 @@ class SmartingHomePanel extends HTMLElement {
           modbus_47511: modbusVal,
           charge_current: currentVal || null,
           export_limit: exportVal ? parseInt(exportVal, 10) : null,
+          eco_mode_power: ecoPowerVal ? parseInt(ecoPowerVal, 10) : null,
+          eco_mode_soc: ecoSocVal ? parseInt(ecoSocVal, 10) : null,
         }
       });
     }).catch(err => {
@@ -273,10 +279,14 @@ class SmartingHomePanel extends HTMLElement {
       const modbusEl = this.shadowRoot.getElementById(`${prefix}-modbus`);
       const currentEl = this.shadowRoot.getElementById(`${prefix}-current`);
       const exportEl = this.shadowRoot.getElementById(`${prefix}-export`);
+      const ecoPowerEl = this.shadowRoot.getElementById(`${prefix}-ecopower`);
+      const ecoSocEl = this.shadowRoot.getElementById(`${prefix}-ecosoc`);
       if (modeEl && cfg.work_mode !== undefined && cfg.work_mode !== null) modeEl.value = cfg.work_mode;
       if (modbusEl && cfg.modbus_47511 !== undefined) modbusEl.value = cfg.modbus_47511;
       if (currentEl && cfg.charge_current !== undefined && cfg.charge_current !== null) currentEl.value = cfg.charge_current;
       if (exportEl && cfg.export_limit !== undefined && cfg.export_limit !== null) exportEl.value = cfg.export_limit;
+      if (ecoPowerEl && cfg.eco_mode_power !== undefined && cfg.eco_mode_power !== null) ecoPowerEl.value = cfg.eco_mode_power;
+      if (ecoSocEl && cfg.eco_mode_soc !== undefined && cfg.eco_mode_soc !== null) ecoSocEl.value = cfg.eco_mode_soc;
     }
   }
   _tier() {
@@ -6827,8 +6837,8 @@ class SmartingHomePanel extends HTMLElement {
                     <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Tryb pracy</label>
                     <select id="fc-charge-mode" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px">
                       <option value="">(bez zmian)</option>
-                      <option value="general" selected>general</option>
-                      <option value="eco_charge">eco_charge</option>
+                      <option value="general">general</option>
+                      <option value="eco_charge" selected>eco_charge</option>
                       <option value="eco_discharge">eco_discharge</option>
                       <option value="backup">backup</option>
                       <option value="peak_shaving">peak_shaving</option>
@@ -6836,8 +6846,12 @@ class SmartingHomePanel extends HTMLElement {
                     </select>
                   </div>
                   <div>
-                    <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Modbus 47511</label>
-                    <input id="fc-charge-modbus" type="number" min="-1" max="10" value="4" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px; box-sizing:border-box" placeholder="-1 = nie pisz">
+                    <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Eco Mode Power (%)</label>
+                    <input id="fc-charge-ecopower" type="number" min="0" max="100" step="10" value="100" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px; box-sizing:border-box" placeholder="pusty = bez zmian">
+                  </div>
+                  <div>
+                    <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Eco Mode SOC (%)</label>
+                    <input id="fc-charge-ecosoc" type="number" min="0" max="100" step="5" value="100" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px; box-sizing:border-box" placeholder="pusty = bez zmian">
                   </div>
                   <div>
                     <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Prąd ładowania (A)</label>
@@ -6846,6 +6860,10 @@ class SmartingHomePanel extends HTMLElement {
                   <div>
                     <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Export limit (W)</label>
                     <input id="fc-charge-export" type="number" min="0" max="16000" step="500" value="" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px; box-sizing:border-box" placeholder="pusty = bez zmian">
+                  </div>
+                  <div>
+                    <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Modbus 47511</label>
+                    <input id="fc-charge-modbus" type="number" min="-1" max="10" value="-1" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px; box-sizing:border-box" placeholder="-1 = nie pisz">
                   </div>
                   <button class="action-btn" style="margin-top:4px; background:rgba(46,204,113,0.15); border:1px solid #2ecc71; color:#2ecc71; font-weight:700" onclick="this.getRootNode().host._executeForceCustom('charge')">▶ WYKONAJ</button>
                   <div id="fc-charge-status" style="font-size:10px; color:#64748b; text-align:center; min-height:16px">— oczekuje</div>
@@ -6860,17 +6878,21 @@ class SmartingHomePanel extends HTMLElement {
                     <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Tryb pracy</label>
                     <select id="fc-discharge-mode" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px">
                       <option value="">(bez zmian)</option>
-                      <option value="general" selected>general</option>
+                      <option value="general">general</option>
                       <option value="eco_charge">eco_charge</option>
-                      <option value="eco_discharge">eco_discharge</option>
+                      <option value="eco_discharge" selected>eco_discharge</option>
                       <option value="backup">backup</option>
                       <option value="peak_shaving">peak_shaving</option>
                       <option value="eco">eco</option>
                     </select>
                   </div>
                   <div>
-                    <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Modbus 47511</label>
-                    <input id="fc-discharge-modbus" type="number" min="-1" max="10" value="-1" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px; box-sizing:border-box" placeholder="-1 = nie pisz">
+                    <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Eco Mode Power (%)</label>
+                    <input id="fc-discharge-ecopower" type="number" min="0" max="100" step="10" value="100" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px; box-sizing:border-box" placeholder="pusty = bez zmian">
+                  </div>
+                  <div>
+                    <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Eco Mode SOC (%)</label>
+                    <input id="fc-discharge-ecosoc" type="number" min="0" max="100" step="5" value="5" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px; box-sizing:border-box" placeholder="pusty = bez zmian">
                   </div>
                   <div>
                     <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Prąd ładowania (A)</label>
@@ -6878,7 +6900,11 @@ class SmartingHomePanel extends HTMLElement {
                   </div>
                   <div>
                     <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Export limit (W)</label>
-                    <input id="fc-discharge-export" type="number" min="0" max="16000" step="500" value="" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px; box-sizing:border-box" placeholder="pusty = bez zmian">
+                    <input id="fc-discharge-export" type="number" min="0" max="16000" step="500" value="16000" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px; box-sizing:border-box" placeholder="pusty = bez zmian">
+                  </div>
+                  <div>
+                    <label style="font-size:9px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px">Modbus 47511</label>
+                    <input id="fc-discharge-modbus" type="number" min="-1" max="10" value="-1" style="width:100%; padding:6px 8px; background:#1e293b; color:#fff; border:1px solid #334155; border-radius:6px; font-size:12px; margin-top:2px; box-sizing:border-box" placeholder="-1 = nie pisz">
                   </div>
                   <button class="action-btn" style="margin-top:4px; background:rgba(231,76,60,0.15); border:1px solid #e74c3c; color:#e74c3c; font-weight:700" onclick="this.getRootNode().host._executeForceCustom('discharge')">▶ WYKONAJ</button>
                   <div id="fc-discharge-status" style="font-size:10px; color:#64748b; text-align:center; min-height:16px">— oczekuje</div>
@@ -8905,7 +8931,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.30.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.31.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

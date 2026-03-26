@@ -38,6 +38,8 @@ from .const import (
     SWITCH_SOCKET2,
     SELECT_WORK_MODE,
     NUMBER_DOD_ON_GRID,
+    NUMBER_ECO_MODE_POWER,
+    NUMBER_ECO_MODE_SOC,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -100,34 +102,49 @@ class EnergyManager:
             pass  # No automatic actions
 
     async def force_charge(self) -> None:
-        """Force battery charging — enables grid→battery charging via BT-specific Modbus override."""
-        _LOGGER.info("Forcing battery charge (Modbus 47511=4 BT-Charge)")
+        """Force battery charging via Eco Mode (eco_charge).
+
+        Sequence per Instrukcja.md:
+        1. eco_mode_soc = 100
+        2. eco_mode_power = 100 (full power ~2-3kW from grid)
+        3. charge_current = 18.5A
+        4. select: eco_charge
+        """
+        _LOGGER.info("Forcing battery charge (eco_charge, soc=100, power=100)")
+        await self._set_eco_mode_soc(100)
+        await self._set_eco_mode_power(100)
         await self._enable_charging()
-        
-        # Opcjonalnie upewniamy się, że po stronie HA integracja ma 'general', żeby
-        # nie próbowała wtłoczyć 'eco_charge', co ograniczy moc
-        await self._set_work_mode("general")
-        
-        # Metoda 2: Bezpośredni zapis po Modbus
-        # W rejestrze 47511 wartość 4 wg dokumentacji to 'Force Discharge', 
-        # ale na GoodWe BT powoduje to pełne ŁADOWANIE z sieci.
+        await self._set_work_mode("eco_charge")
+        self._current_mode = HEMSMode.CHARGE
+
+    async def force_discharge(self) -> None:
+        """Force battery discharge to grid via Eco Mode (eco_discharge).
+
+        Sequence per Instrukcja.md:
+        1. Modbus 47509 = 1 (enable grid export — disabled by default on BT!)
+        2. export_limit = 16000W
+        3. charge_current = 0 (block charging)
+        4. eco_mode_soc = 5 (discharge target)
+        5. eco_mode_power = 100 (full power)
+        6. select: eco_discharge
+        """
+        _LOGGER.info("Forcing battery discharge (eco_discharge, soc=5, power=100, grid_export=ON)")
+        # Enable grid export (47509=1) — critical for BT!
         await self.hass.services.async_call(
             "modbus",
             "write_register",
             {
                 "hub": "goodwe_rs485",
                 "slave": 247,
-                "address": 47511,
-                "value": 4,
+                "address": 47509,
+                "value": 1,
             },
         )
-        self._current_mode = HEMSMode.CHARGE
-
-    async def force_discharge(self) -> None:
-        """Force battery discharge (block charging, restore general mode)."""
-        _LOGGER.info("Forcing battery discharge (work_mode=general)")
+        await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
         await self._block_charging()
-        await self._set_work_mode("general")
+        await self._set_eco_mode_soc(5)
+        await self._set_eco_mode_power(100)
+        await self._set_work_mode("eco_discharge")
         self._current_mode = HEMSMode.SELL
 
     async def force_custom(
@@ -136,6 +153,8 @@ class EnergyManager:
         modbus_47511: int | None = None,
         charge_current: str | None = None,
         export_limit: int | None = None,
+        eco_mode_power: int | None = None,
+        eco_mode_soc: int | None = None,
     ) -> dict[str, Any]:
         """Execute custom force command with user-specified parameters.
 
@@ -144,17 +163,27 @@ class EnergyManager:
         """
         results: list[str] = []
 
-        # 1. Set charge current first (most important for charge/discharge)
+        # 1. Eco Mode SOC (set early — before power and mode switch)
+        if eco_mode_soc is not None:
+            await self._set_eco_mode_soc(eco_mode_soc)
+            results.append(f"eco_mode_soc={eco_mode_soc}")
+
+        # 2. Eco Mode Power
+        if eco_mode_power is not None:
+            await self._set_eco_mode_power(eco_mode_power)
+            results.append(f"eco_mode_power={eco_mode_power}")
+
+        # 3. Set charge current
         if charge_current is not None:
             await self._set_charge_current(charge_current)
             results.append(f"charge_current={charge_current}")
 
-        # 2. Set work mode
-        if work_mode is not None:
-            await self._set_work_mode(work_mode)
-            results.append(f"work_mode={work_mode}")
+        # 4. Set export limit
+        if export_limit is not None:
+            await self._set_export_limit(export_limit)
+            results.append(f"export_limit={export_limit}")
 
-        # 3. Write Modbus register 47511 (EMS mode, -1 = skip)
+        # 5. Write Modbus register 47511 (EMS mode, -1 = skip)
         if modbus_47511 is not None and modbus_47511 >= 0:
             await self.hass.services.async_call(
                 "modbus",
@@ -168,10 +197,10 @@ class EnergyManager:
             )
             results.append(f"modbus_47511={modbus_47511}")
 
-        # 4. Set export limit
-        if export_limit is not None:
-            await self._set_export_limit(export_limit)
-            results.append(f"export_limit={export_limit}")
+        # 6. Set work mode (LAST — per Instrukcja.md)
+        if work_mode is not None:
+            await self._set_work_mode(work_mode)
+            results.append(f"work_mode={work_mode}")
 
         _LOGGER.info("Force custom executed: %s", ", ".join(results) or "no actions")
         return {"success": True, "actions": results}
@@ -488,13 +517,35 @@ class EnergyManager:
         )
 
     async def _set_work_mode(self, mode: str) -> None:
-        """Set inverter work mode."""
+        """Set inverter work mode via select.select_option."""
         await self.hass.services.async_call(
             "select",
             "select_option",
             {
                 "entity_id": SELECT_WORK_MODE,
                 "option": mode,
+            },
+        )
+
+    async def _set_eco_mode_power(self, value: int) -> None:
+        """Set Eco Mode power percentage (0-100%)."""
+        await self.hass.services.async_call(
+            "number",
+            "set_value",
+            {
+                "entity_id": NUMBER_ECO_MODE_POWER,
+                "value": value,
+            },
+        )
+
+    async def _set_eco_mode_soc(self, value: int) -> None:
+        """Set Eco Mode target SOC percentage (0-100%)."""
+        await self.hass.services.async_call(
+            "number",
+            "set_value",
+            {
+                "entity_id": NUMBER_ECO_MODE_SOC,
+                "value": value,
             },
         )
 
