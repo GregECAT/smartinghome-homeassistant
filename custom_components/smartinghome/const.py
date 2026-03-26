@@ -739,7 +739,7 @@ AI_CLAUDE_MODELS: Final = {
     "claude-opus-4-6": "Claude Opus 4.6 (najpotężniejszy)",
     "claude-3-5-haiku": "Claude Haiku 3.5 (najtańszy)",
 }
-AI_MAX_TOKENS: Final = 8192
+AI_MAX_TOKENS: Final = 16384
 AI_TEMPERATURE: Final = 0.3
 AI_RATE_LIMIT_CALLS: Final = 60  # advisory calls per hour (HEMS, reports, user queries)
 AI_RATE_LIMIT_CONTROLLER: Final = 30  # controller/strategist calls per hour

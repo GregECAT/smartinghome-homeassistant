@@ -758,11 +758,38 @@ def build_action_catalog_text(
     return "\n".join(lines)
 
 
+def _format_decision_history(
+    decision_history: list[dict[str, Any]] | None = None,
+) -> str:
+    """Format recent decision log entries for AI prompt context.
+
+    Returns a compact section showing the last actions taken so the AI
+    can avoid duplicate commands and learn from its own decisions.
+    """
+    if not decision_history:
+        return ""
+
+    # Take last 10 entries
+    recent = decision_history[-10:]
+    lines = ["═══ RECENT ACTIONS (your past decisions) ═══"]
+    for entry in recent:
+        t = entry.get("time", "??:??")
+        action = entry.get("action", "?")
+        msg = entry.get("message", "")
+        # Truncate long messages
+        if len(msg) > 80:
+            msg = msg[:77] + "..."
+        lines.append(f"  {t} [{action}] {msg}")
+
+    lines.append("DO NOT repeat actions that are already in progress. Check before acting.")
+    return "\n".join(lines)
+
 def build_ai_controller_prompt(
     current_data: dict[str, Any],
     device_status_text: str = "",
     action_states: dict[str, Any] | None = None,
     active_strategy: str = "ai_full_autonomy",
+    decision_history: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build a concise prompt for AI to return structured JSON commands.
 
@@ -856,6 +883,7 @@ Respond ONLY with valid JSON.
 ═══ ACTIVE STRATEGY ═══
 {STRATEGY_AI_INSTRUCTIONS.get(active_strategy, STRATEGY_AI_INSTRUCTIONS['ai_full_autonomy'])}
 
+{_format_decision_history(decision_history)}
 ═══ KEY RULES ═══
 1. ARBITRAGE: off_peak(0.63)→afternoon_peak(1.50)=0.87 margin. Charge cheap, discharge expensive.
 2. If approaching afternoon_peak AND SOC < 90% → force_charge NOW
@@ -899,6 +927,7 @@ def build_ai_strategist_prompt(
     device_status_text: str = "",
     action_states: dict[str, Any] | None = None,
     active_strategy: str = "ai_full_autonomy",
+    decision_history: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build prompt for AI Strategist — deep 24h strategic plan.
 
@@ -1003,6 +1032,7 @@ Net savings: {estimation.get('net_savings', 0):.2f} PLN
 ═══ ACTIVE STRATEGY ═══
 {STRATEGY_AI_INSTRUCTIONS.get(active_strategy, STRATEGY_AI_INSTRUCTIONS['ai_full_autonomy'])}
 
+{_format_decision_history(decision_history)}
 ═══ STRATEGIC RULES ═══
 1. ARBITRAGE IS KING: charge battery at off_peak (0.63) → discharge at afternoon_peak (1.50) = 0.87 PLN/kWh
 2. Before EVERY peak: battery MUST be at 95-100% SOC. Plan charging accordingly.
