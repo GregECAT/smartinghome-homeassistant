@@ -147,6 +147,91 @@ class EnergyManager:
         await self._set_work_mode("eco_discharge")
         self._current_mode = HEMSMode.SELL
 
+    async def stop_force_charge(self) -> None:
+        """Stop forced charging — restore general mode.
+
+        Sequence per Instrukcja.md 3.3:
+        1. eco_mode_power = 0
+        2. eco_mode_soc = 100
+        3. select: general
+        4. charge_current = 18.5 (restore PV charging)
+        5. input_boolean OFF
+        """
+        _LOGGER.info("STOP force charge — restoring general mode")
+        await self._set_eco_mode_power(0)
+        await self._set_eco_mode_soc(100)
+        await self._set_work_mode("general")
+        await self._enable_charging()
+        # Turn off force flag
+        try:
+            await self.hass.services.async_call(
+                "input_boolean", "turn_off",
+                {"entity_id": "input_boolean.hems_force_grid_charge"},
+            )
+        except Exception:
+            _LOGGER.debug("input_boolean.hems_force_grid_charge not available")
+        self._current_mode = HEMSMode.AUTO
+
+    async def stop_force_discharge(self) -> None:
+        """Stop forced discharge — restore general mode.
+
+        Sequence per Instrukcja.md 4.3:
+        1. eco_mode_power = 0
+        2. eco_mode_soc = 100
+        3. select: general
+        4. charge_current = 18.5 (restore PV charging)
+        5. export_limit = 16000 (keep PV export enabled)
+        6. input_boolean OFF
+        """
+        _LOGGER.info("STOP force discharge — restoring general mode")
+        await self._set_eco_mode_power(0)
+        await self._set_eco_mode_soc(100)
+        await self._set_work_mode("general")
+        await self._enable_charging()
+        await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
+        # Turn off force flag
+        try:
+            await self.hass.services.async_call(
+                "input_boolean", "turn_off",
+                {"entity_id": "input_boolean.hems_force_battery_discharge"},
+            )
+        except Exception:
+            _LOGGER.debug("input_boolean.hems_force_battery_discharge not available")
+        self._current_mode = HEMSMode.AUTO
+
+    async def emergency_stop(self) -> None:
+        """Emergency stop — kill all forced operations immediately.
+
+        Sequence per Instrukcja.md sekcja 5:
+        Combined stop_charge + stop_discharge + modbus 47511=0
+        """
+        _LOGGER.warning("EMERGENCY STOP — killing all force operations")
+        await self._set_eco_mode_power(0)
+        await self._set_eco_mode_soc(100)
+        # Reset EMS mode register
+        try:
+            await self.hass.services.async_call(
+                "modbus", "write_register",
+                {"hub": "goodwe_rs485", "slave": 247, "address": 47511, "value": 0},
+            )
+        except Exception:
+            _LOGGER.debug("Modbus 47511 reset skipped")
+        await self._set_work_mode("general")
+        await self._enable_charging()
+        await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
+        # Turn off both force flags
+        for entity_id in (
+            "input_boolean.hems_force_grid_charge",
+            "input_boolean.hems_force_battery_discharge",
+        ):
+            try:
+                await self.hass.services.async_call(
+                    "input_boolean", "turn_off", {"entity_id": entity_id},
+                )
+            except Exception:
+                _LOGGER.debug("%s not available", entity_id)
+        self._current_mode = HEMSMode.AUTO
+
     async def force_custom(
         self,
         work_mode: str | None = None,

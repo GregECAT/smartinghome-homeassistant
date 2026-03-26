@@ -17,6 +17,9 @@ from .const import (
     SERVICE_FORCE_CHARGE,
     SERVICE_FORCE_DISCHARGE,
     SERVICE_FORCE_CUSTOM,
+    SERVICE_STOP_FORCE_CHARGE,
+    SERVICE_STOP_FORCE_DISCHARGE,
+    SERVICE_EMERGENCY_STOP,
     SERVICE_SET_EXPORT_LIMIT,
     SERVICE_ASK_AI,
     SERVICE_GENERATE_REPORT,
@@ -217,6 +220,18 @@ async def async_setup_services(
     async def handle_force_discharge(call: ServiceCall) -> None:
         """Handle force_discharge service."""
         await energy_mgr.force_discharge()
+
+    async def handle_stop_force_charge(call: ServiceCall) -> None:
+        """Handle stop_force_charge service."""
+        await energy_mgr.stop_force_charge()
+
+    async def handle_stop_force_discharge(call: ServiceCall) -> None:
+        """Handle stop_force_discharge service."""
+        await energy_mgr.stop_force_discharge()
+
+    async def handle_emergency_stop(call: ServiceCall) -> None:
+        """Handle emergency_stop service."""
+        await energy_mgr.emergency_stop()
 
     async def handle_force_custom(call: ServiceCall) -> None:
         """Handle force_custom service — configurable force command."""
@@ -753,6 +768,15 @@ async def async_setup_services(
         schema=FORCE_CUSTOM_SCHEMA,
     )
     hass.services.async_register(
+        DOMAIN, SERVICE_STOP_FORCE_CHARGE, handle_stop_force_charge
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_STOP_FORCE_DISCHARGE, handle_stop_force_discharge
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_EMERGENCY_STOP, handle_emergency_stop
+    )
+    hass.services.async_register(
         DOMAIN, SERVICE_SET_EXPORT_LIMIT, handle_set_export_limit,
         schema=SET_EXPORT_LIMIT_SCHEMA,
     )
@@ -822,6 +846,9 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_FORCE_CHARGE,
         SERVICE_FORCE_DISCHARGE,
         SERVICE_FORCE_CUSTOM,
+        SERVICE_STOP_FORCE_CHARGE,
+        SERVICE_STOP_FORCE_DISCHARGE,
+        SERVICE_EMERGENCY_STOP,
         SERVICE_SET_EXPORT_LIMIT,
         SERVICE_ASK_AI,
         SERVICE_GENERATE_REPORT,

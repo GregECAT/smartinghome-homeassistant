@@ -33,6 +33,24 @@ force_discharge:
     Force the battery to discharge by blocking charge current (0A).
     Battery will power the home load and export surplus to grid.
 
+stop_force_charge:
+  name: Stop Force Charge
+  description: >-
+    Stop forced charging — restore general mode.
+    Resets eco_mode_power=0, eco_mode_soc=100, restores charge current 18.5A.
+
+stop_force_discharge:
+  name: Stop Force Discharge
+  description: >-
+    Stop forced discharge — restore general mode.
+    Resets eco_mode_power=0, eco_mode_soc=100, restores charge current and export limit.
+
+emergency_stop:
+  name: Emergency Stop
+  description: >-
+    Emergency stop — kill ALL forced operations.
+    Resets all Eco Mode params, Modbus 47511=0, restores general mode.
+
 force_custom:
   name: Force Custom Command
   description: >-
