@@ -8900,6 +8900,226 @@ class SmartingHomePanel extends HTMLElement {
               </div>
             </div>
 
+            <!-- 🔌 GoodWe Configuration Guide -->
+            <div class="card" style="grid-column: 1 / -1" id="settings-goodwe-config">
+              <div class="card-title">🔌 Konfiguracja GoodWe — configuration.yaml</div>
+              <div style="font-size:11px; color:#94a3b8; margin-bottom:14px; line-height:1.5">
+                Poniżej znajdziesz <strong>wymagane</strong> wpisy w <code style="background:rgba(0,212,255,0.08); padding:2px 6px; border-radius:4px; color:#00d4ff">configuration.yaml</code>.<br>
+                Bez tych wpisów system HEMS i Autopilot <strong style="color:#e74c3c">nie zadziałają poprawnie</strong>.
+                Kliknij sekcję aby rozwinąć, użyj przycisku 📋 aby skopiować YAML.
+              </div>
+
+              <!-- Section 1: Input Boolean -->
+              <div class="gw-config-section" style="margin-bottom:8px">
+                <div class="gw-config-header" onclick="this.parentElement.classList.toggle('open')" style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; background:rgba(231,76,60,0.08); border:1px solid rgba(231,76,60,0.2); border-radius:8px; cursor:pointer; transition:all 0.2s">
+                  <div style="display:flex; align-items:center; gap:8px">
+                    <span style="font-size:16px">🔴</span>
+                    <div>
+                      <div style="font-size:12px; font-weight:700; color:#e74c3c">1. Input Boolean — Przełączniki Force (WYMAGANE!)</div>
+                      <div style="font-size:10px; color:#94a3b8">Bez nich: "Referenced entities ... are missing"</div>
+                    </div>
+                  </div>
+                  <span class="gw-chevron" style="color:#64748b; transition:transform 0.2s; font-size:10px">▼</span>
+                </div>
+                <div class="gw-config-body" style="display:none; padding:12px 14px; border:1px solid rgba(255,255,255,0.05); border-top:none; border-radius:0 0 8px 8px; background:rgba(0,0,0,0.2)">
+                  <div style="font-size:11px; color:#94a3b8; margin-bottom:8px">Dodaj w sekcji <code style="background:rgba(0,212,255,0.08); padding:1px 4px; border-radius:3px; color:#00d4ff">input_boolean:</code> pliku <code style="background:rgba(0,212,255,0.08); padding:1px 4px; border-radius:3px; color:#00d4ff">configuration.yaml</code>:</div>
+                  <div style="position:relative">
+                    <pre style="background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:10px 12px; font-size:10px; line-height:1.5; color:#e2e8f0; overflow-x:auto; white-space:pre" id="gw-yaml-input-boolean">input_boolean:
+  hems_force_grid_charge:
+    name: "Wymuś ładowanie z sieci"
+    icon: mdi:battery-charging-wireless
+
+  hems_force_battery_discharge:
+    name: "Wymuś rozładowanie do sieci"
+    icon: mdi:battery-arrow-down
+
+  hems_modbus_emergency_stop:
+    name: "Emergency STOP"
+    icon: mdi:alert-octagon
+
+  hems_battery_export_enabled:
+    name: "Eksport baterii do sieci"
+    icon: mdi:battery-arrow-up</pre>
+                    <button onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent); this.textContent='✅'; setTimeout(()=>this.textContent='📋',2000)" style="position:absolute; top:6px; right:6px; background:rgba(0,212,255,0.1); border:1px solid rgba(0,212,255,0.2); color:#00d4ff; padding:3px 8px; border-radius:4px; cursor:pointer; font-size:10px">📋</button>
+                  </div>
+                  <div style="font-size:10px; color:#f39c12; margin-top:8px">⚠️ Po dodaniu → <strong>restart Home Assistant</strong> (nie wystarczy przeładowanie konfiguracji).</div>
+                </div>
+              </div>
+
+              <!-- Section 2: Modbus RS485 -->
+              <div class="gw-config-section" style="margin-bottom:8px">
+                <div class="gw-config-header" onclick="this.parentElement.classList.toggle('open')" style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; background:rgba(0,212,255,0.05); border:1px solid rgba(0,212,255,0.15); border-radius:8px; cursor:pointer; transition:all 0.2s">
+                  <div style="display:flex; align-items:center; gap:8px">
+                    <span style="font-size:16px">🔗</span>
+                    <div>
+                      <div style="font-size:12px; font-weight:700; color:#00d4ff">2. Modbus RS485 — połączenie z falownikiem</div>
+                      <div style="font-size:10px; color:#94a3b8">Port szeregowy, slave 247, rejestry EMS/Grid/DOD</div>
+                    </div>
+                  </div>
+                  <span class="gw-chevron" style="color:#64748b; transition:transform 0.2s; font-size:10px">▼</span>
+                </div>
+                <div class="gw-config-body" style="display:none; padding:12px 14px; border:1px solid rgba(255,255,255,0.05); border-top:none; border-radius:0 0 8px 8px; background:rgba(0,0,0,0.2)">
+                  <div style="position:relative">
+                    <pre style="background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:10px 12px; font-size:10px; line-height:1.5; color:#e2e8f0; overflow-x:auto; white-space:pre" id="gw-yaml-modbus">modbus:
+  - name: goodwe_rs485
+    type: serial
+    method: rtu
+    port: /dev/serial/by-id/usb-FTDI_...
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+
+    sensors:
+      - name: GW Modbus EMS Mode
+        slave: 247
+        address: 47511
+        input_type: holding
+        data_type: uint16
+        scan_interval: 15
+
+      - name: GW Modbus EMS Power Limit
+        slave: 247
+        address: 47512
+        input_type: holding
+        data_type: uint16
+        unit_of_measurement: W
+        scan_interval: 15
+
+      - name: GW Modbus Grid Export Enabled
+        slave: 247
+        address: 47509
+        input_type: holding
+        data_type: uint16
+        scan_interval: 30
+
+      - name: GW Modbus Grid Export Limit
+        slave: 247
+        address: 47510
+        input_type: holding
+        data_type: uint16
+        unit_of_measurement: W
+        scan_interval: 30
+
+      - name: GW Modbus DOD On Grid
+        slave: 247
+        address: 47501
+        input_type: holding
+        data_type: uint16
+        scan_interval: 60</pre>
+                    <button onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent); this.textContent='✅'; setTimeout(()=>this.textContent='📋',2000)" style="position:absolute; top:6px; right:6px; background:rgba(0,212,255,0.1); border:1px solid rgba(0,212,255,0.2); color:#00d4ff; padding:3px 8px; border-radius:4px; cursor:pointer; font-size:10px">📋</button>
+                  </div>
+                  <div style="font-size:10px; color:#94a3b8; margin-top:8px">⚠️ Zmień <code style="background:rgba(0,212,255,0.08); padding:1px 4px; border-radius:3px; color:#00d4ff">port:</code> na swój adapter RS485. Sprawdź: <code style="background:rgba(0,0,0,0.3); padding:1px 4px; border-radius:3px; color:#e2e8f0">ls /dev/serial/by-id/</code></div>
+                </div>
+              </div>
+
+              <!-- Section 3: mletenay Integration -->
+              <div class="gw-config-section" style="margin-bottom:8px">
+                <div class="gw-config-header" onclick="this.parentElement.classList.toggle('open')" style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; background:rgba(46,204,113,0.05); border:1px solid rgba(46,204,113,0.15); border-radius:8px; cursor:pointer; transition:all 0.2s">
+                  <div style="display:flex; align-items:center; gap:8px">
+                    <span style="font-size:16px">📦</span>
+                    <div>
+                      <div style="font-size:12px; font-weight:700; color:#2ecc71">3. Integracja GoodWe — HACS mletenay</div>
+                      <div style="font-size:10px; color:#94a3b8">WYMAGANE: mletenay experimental, NIE natywna HA</div>
+                    </div>
+                  </div>
+                  <span class="gw-chevron" style="color:#64748b; transition:transform 0.2s; font-size:10px">▼</span>
+                </div>
+                <div class="gw-config-body" style="display:none; padding:12px 14px; border:1px solid rgba(255,255,255,0.05); border-top:none; border-radius:0 0 8px 8px; background:rgba(0,0,0,0.2)">
+                  <div style="font-size:11px; color:#94a3b8; line-height:1.6; margin-bottom:10px">
+                    <strong style="color:#fff">Instalacja:</strong><br>
+                    1. HACS → Integracje → wyszukaj "GoodWe" → <strong style="color:#2ecc71">mletenay/goodwe</strong> (experimental)<br>
+                    2. Zainstaluj i restart HA<br>
+                    3. Ustawienia → Integracje → + → GoodWe → wpisz IP falownika
+                  </div>
+                  <div style="font-size:10px; font-weight:700; color:#fff; margin-bottom:6px">Wymagane encje:</div>
+                  <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:9px">
+                    <div style="padding:4px 8px; background:rgba(46,204,113,0.06); border-radius:4px; color:#94a3b8"><code style="color:#2ecc71">select.goodwe_tryb_pracy</code> — tryb pracy</div>
+                    <div style="padding:4px 8px; background:rgba(46,204,113,0.06); border-radius:4px; color:#94a3b8"><code style="color:#2ecc71">number.goodwe_eco_mode_power</code> — moc Eco</div>
+                    <div style="padding:4px 8px; background:rgba(46,204,113,0.06); border-radius:4px; color:#94a3b8"><code style="color:#2ecc71">number.goodwe_eco_mode_soc</code> — docelowy SOC</div>
+                    <div style="padding:4px 8px; background:rgba(46,204,113,0.06); border-radius:4px; color:#94a3b8"><code style="color:#2ecc71">number.goodwe_dod_on_grid</code> — DOD</div>
+                    <div style="padding:4px 8px; background:rgba(46,204,113,0.06); border-radius:4px; color:#94a3b8"><code style="color:#2ecc71">sensor.battery_power</code> — moc baterii</div>
+                    <div style="padding:4px 8px; background:rgba(46,204,113,0.06); border-radius:4px; color:#94a3b8"><code style="color:#2ecc71">sensor.battery_state_of_charge</code> — SOC</div>
+                    <div style="padding:4px 8px; background:rgba(46,204,113,0.06); border-radius:4px; color:#94a3b8"><code style="color:#2ecc71">sensor.pv_power</code> — moc PV</div>
+                    <div style="padding:4px 8px; background:rgba(46,204,113,0.06); border-radius:4px; color:#94a3b8"><code style="color:#2ecc71">sensor.load</code> — zużycie domu</div>
+                  </div>
+                  <div style="font-size:10px; color:#f39c12; margin-top:8px">⚠️ set_parameter na BT działa TYLKO: <code style="color:#fff">battery_charge_current</code>, <code style="color:#fff">grid_export_limit</code> (jako STRING!)</div>
+                </div>
+              </div>
+
+              <!-- Section 4: Template Sensor -->
+              <div class="gw-config-section" style="margin-bottom:8px">
+                <div class="gw-config-header" onclick="this.parentElement.classList.toggle('open')" style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; background:rgba(124,58,237,0.05); border:1px solid rgba(124,58,237,0.15); border-radius:8px; cursor:pointer; transition:all 0.2s">
+                  <div style="display:flex; align-items:center; gap:8px">
+                    <span style="font-size:16px">📊</span>
+                    <div>
+                      <div style="font-size:12px; font-weight:700; color:#7c3aed">4. Template Sensor — EMS Mode (opcjonalny)</div>
+                      <div style="font-size:10px; color:#94a3b8">Dekodowanie rejestru 47511 na czytelny tekst</div>
+                    </div>
+                  </div>
+                  <span class="gw-chevron" style="color:#64748b; transition:transform 0.2s; font-size:10px">▼</span>
+                </div>
+                <div class="gw-config-body" style="display:none; padding:12px 14px; border:1px solid rgba(255,255,255,0.05); border-top:none; border-radius:0 0 8px 8px; background:rgba(0,0,0,0.2)">
+                  <div style="position:relative">
+                    <pre style="background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:10px 12px; font-size:10px; line-height:1.5; color:#e2e8f0; overflow-x:auto; white-space:pre" id="gw-yaml-template">template:
+  - sensor:
+      - name: "GoodWe EMS Mode"
+        unique_id: goodwe_ems_mode
+        state: >
+          {% set mode = states('sensor.gw_modbus_ems_mode') | int(0) %}
+          {% if mode == 0 %}Auto
+          {% elif mode == 1 %}Self-use
+          {% elif mode == 2 %}Force charge
+          {% elif mode == 4 %}Force discharge
+          {% elif mode == 8 %}Hold battery
+          {% else %}Nieznany ({{ mode }})
+          {% endif %}</pre>
+                    <button onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent); this.textContent='✅'; setTimeout(()=>this.textContent='📋',2000)" style="position:absolute; top:6px; right:6px; background:rgba(0,212,255,0.1); border:1px solid rgba(0,212,255,0.2); color:#00d4ff; padding:3px 8px; border-radius:4px; cursor:pointer; font-size:10px">📋</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Section 5: Verification Checklist -->
+              <div class="gw-config-section" style="margin-bottom:8px">
+                <div class="gw-config-header" onclick="this.parentElement.classList.toggle('open')" style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; background:rgba(247,183,49,0.05); border:1px solid rgba(247,183,49,0.15); border-radius:8px; cursor:pointer; transition:all 0.2s">
+                  <div style="display:flex; align-items:center; gap:8px">
+                    <span style="font-size:16px">✅</span>
+                    <div>
+                      <div style="font-size:12px; font-weight:700; color:#f7b731">5. Weryfikacja — Checklist po restarcie</div>
+                      <div style="font-size:10px; color:#94a3b8">Sprawdź czy wszystkie encje są dostępne</div>
+                    </div>
+                  </div>
+                  <span class="gw-chevron" style="color:#64748b; transition:transform 0.2s; font-size:10px">▼</span>
+                </div>
+                <div class="gw-config-body" style="display:none; padding:12px 14px; border:1px solid rgba(255,255,255,0.05); border-top:none; border-radius:0 0 8px 8px; background:rgba(0,0,0,0.2)">
+                  <div style="font-size:11px; color:#94a3b8; margin-bottom:10px">W <strong style="color:#fff">Narzędzia deweloperskie → Stany</strong> sprawdź:</div>
+                  <div id="gw-checklist" style="display:grid; gap:3px; font-size:10px">
+                    <div style="display:flex; align-items:center; gap:6px; padding:4px 8px; background:rgba(46,204,113,0.04); border-radius:4px"><span style="color:#2ecc71">✅</span> <code style="color:#e2e8f0">input_boolean.hems_force_grid_charge</code> → off</div>
+                    <div style="display:flex; align-items:center; gap:6px; padding:4px 8px; background:rgba(46,204,113,0.04); border-radius:4px"><span style="color:#2ecc71">✅</span> <code style="color:#e2e8f0">input_boolean.hems_force_battery_discharge</code> → off</div>
+                    <div style="display:flex; align-items:center; gap:6px; padding:4px 8px; background:rgba(46,204,113,0.04); border-radius:4px"><span style="color:#2ecc71">✅</span> <code style="color:#e2e8f0">select.goodwe_tryb_pracy_falownika</code> → general</div>
+                    <div style="display:flex; align-items:center; gap:6px; padding:4px 8px; background:rgba(46,204,113,0.04); border-radius:4px"><span style="color:#2ecc71">✅</span> <code style="color:#e2e8f0">sensor.gw_modbus_ems_mode</code> → 0 lub 1</div>
+                    <div style="display:flex; align-items:center; gap:6px; padding:4px 8px; background:rgba(46,204,113,0.04); border-radius:4px"><span style="color:#2ecc71">✅</span> <code style="color:#e2e8f0">sensor.battery_state_of_charge</code> → 0–100%</div>
+                    <div style="display:flex; align-items:center; gap:6px; padding:4px 8px; background:rgba(46,204,113,0.04); border-radius:4px"><span style="color:#2ecc71">✅</span> <code style="color:#e2e8f0">sensor.battery_power</code> → wartość W</div>
+                    <div style="display:flex; align-items:center; gap:6px; padding:4px 8px; background:rgba(46,204,113,0.04); border-radius:4px"><span style="color:#2ecc71">✅</span> <code style="color:#e2e8f0">sensor.meter_active_power_total</code> → wartość W</div>
+                  </div>
+                  <div style="font-size:10px; color:#94a3b8; margin-top:10px; line-height:1.5">
+                    <strong style="color:#e74c3c">Jeśli unavailable:</strong><br>
+                    • <code style="color:#fff">input_boolean.*</code> → nie dodano do configuration.yaml<br>
+                    • <code style="color:#fff">sensor.gw_modbus_*</code> → problem z Modbus RS485 (kabel/port/slave)<br>
+                    • <code style="color:#fff">select/number.goodwe_*</code> → integracja mletenay nie działa<br>
+                    • <code style="color:#fff">sensor.battery_*</code> → mletenay nie połączony z falownikiem
+                  </div>
+                </div>
+              </div>
+
+              <!-- CSS for accordion -->
+              <style>
+                .gw-config-section.open .gw-config-body { display:block !important; }
+                .gw-config-section.open .gw-chevron { transform:rotate(180deg); }
+                .gw-config-header:hover { filter:brightness(1.15); }
+              </style>
+            </div>
+
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
