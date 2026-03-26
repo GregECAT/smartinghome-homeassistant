@@ -1025,96 +1025,34 @@ def build_ai_strategist_prompt(
     if device_status_text:
         device_section = f"\n{device_status_text}\n"
 
-    prompt = f"""Jesteś ekspertem od strategii energetycznej AI dla domowego systemu solar+bateria w Polsce (taryfa G13).
-Odpowiadaj ZAWSZE po polsku. Wszystkie opisy, reasoning, analysis — po polsku.
+    prompt = f"""Jesteś strategiem energetycznym AI. Solar+bateria Polska G13. Odpowiadaj po polsku. TYLKO JSON.
 
-TWOJE ZADANIE: Stwórz STRATEGICZNY PLAN 24H określający jakie AKCJE aktywować w każdym bloku czasowym.
-Masz BIBLIOTEKĘ 35 nazwanych akcji (patrz KATALOG AKCJI poniżej). PREFERUJ odwoływanie się do akcji po ID.
-This plan will be executed automatically by the InverterAgent. Respond ONLY with valid JSON.
-
-═══ SYSTEM ═══
-  Battery: {bat_cap_kwh:.1f} kWh, Max charge/discharge: {bat_cap_kwh * 0.5:.1f} kW
-  Inverter: hybrid 3-phase
-  Managed Loads: boiler (3.8kW), ac, socket2
+STAN ({now.strftime('%Y-%m-%d %H:%M')} {day_names[weekday]}):
+PV:{current_data.get('pv_power',0)}W Load:{current_data.get('load',0)}W SOC:{current_data.get('battery_soc',0)}% Bat:{current_data.get('battery_power',0)}W Grid:{current_data.get('grid_power',0)}W
+Bat:{bat_cap_kwh:.1f}kWh PV jutro:{current_data.get('forecast_tomorrow',0)}kWh Pogoda:{current_data.get('weather_condition','?')},{current_data.get('weather_clouds','?')}%chmur
 {device_section}
-═══ AVAILABLE TOOLS (low-level) ═══
-{tools_desc}
 
 {action_catalog}
 
-═══ CURRENT STATE ({now.strftime('%Y-%m-%d')} {day_names[weekday]} {now.strftime('%H:%M')}) ═══
-  PV: {current_data.get('pv_power', 0)} W | Load: {current_data.get('load', 0)} W
-  Battery SOC: {current_data.get('battery_soc', 0)}% | Power: {current_data.get('battery_power', 0)} W
-  Grid: {current_data.get('grid_power', 0)} W (+=import) | Surplus: {current_data.get('pv_surplus', 0)} W
 
-═══ TARIFF G13 — SCHEDULE ═══
-{'Weekend (all off-peak 0.63 PLN/kWh)' if weekday >= 5 else chr(10).join(g13_lines)}
-  Prices: off_peak=0.63, morning_peak=0.91, afternoon_peak=1.50 PLN/kWh
-  Arbitrage potential: charge@0.63 → discharge@1.50 = 0.87 PLN/kWh × {bat_cap_kwh:.1f} kWh = {bat_cap_kwh * 0.87:.2f} PLN/cycle
+{'Weekend (all off-peak)' if weekday >= 5 else chr(10).join(g13_lines)}
+Ceny: off_peak=0.63, morning_peak=0.91, afternoon_peak=1.50 PLN/kWh
+RCE: {rce_mwh:.0f}PLN/MWh (sell:{rce_sell:.3f})
 
-═══ RCE PRICES ═══
-  Current: {rce_mwh:.1f} PLN/MWh (sell: {rce_sell:.4f} PLN/kWh)
-  +1h: {current_data.get('rce_next_hour', 'N/A')} | +2h: {current_data.get('rce_2h', 'N/A')} | +3h: {current_data.get('rce_3h', 'N/A')} PLN/MWh
-  Today avg: {current_data.get('rce_avg_today', 'N/A')} | min: {current_data.get('rce_min_today', 'N/A')} | max: {current_data.get('rce_max_today', 'N/A')} PLN/MWh
-
-═══ WEATHER ═══
-  {current_data.get('weather_condition', 'N/A')}, {current_data.get('weather_temp', 'N/A')}°C, clouds {current_data.get('weather_clouds', 'N/A')}%
-  PV remaining today: {current_data.get('forecast_remaining', 0)} kWh | Tomorrow: {current_data.get('forecast_tomorrow', 0)} kWh
-
-═══ MATHEMATICAL MODEL (current estimation) ═══
-{chr(10).join(plan_lines) if plan_lines else '  No hourly plan available'}
-
-TOTALS: Import {estimation.get('total_import_kwh', 0)} kWh ({estimation.get('total_cost', 0):.2f} PLN) | \
-Export {estimation.get('total_export_kwh', 0)} kWh ({estimation.get('total_revenue', 0):.2f} PLN) | \
-Net savings: {estimation.get('net_savings', 0):.2f} PLN
-
-═══ ACTIVE STRATEGY ═══
 {STRATEGY_AI_INSTRUCTIONS.get(active_strategy, STRATEGY_AI_INSTRUCTIONS['ai_full_autonomy'])}
 
-{_format_decision_history(decision_history)}
+ESTYMACJA (najbliższe godziny):
+{chr(10).join(plan_lines[:6]) if plan_lines else 'brak'}
 {_format_financial_context(current_data)}
-═══ STRATEGIC RULES ═══
-1. ARBITRAGE IS KING: charge battery at off_peak (0.63) → discharge at afternoon_peak (1.50) = 0.87 PLN/kWh
-2. Before EVERY peak: battery MUST be at 95-100% SOC. Plan charging accordingly.
-3. Night charge (21:00-07:00 off_peak at 0.63) is CRITICAL for morning peak coverage.
-4. During peaks: ZERO grid import. Battery + PV must cover all load.
-5. Managed loads (boiler, AC) should run ONLY during off-peak or PV surplus > 2kW.
-6. AUTO-STOP CHARGE: plan stop_force_charge when SOC reaches 95%. Include in commands.
-7. AUTO-STOP DISCHARGE: plan stop_force_discharge when SOC reaches 20%.
-8. ZONE TRADING:
-   - Tania strefa (off_peak 0.63) + zła pogoda (PV forecast < 5kWh) → force_charge z sieci
-   - Droga strefa (afternoon_peak 1.50) + SOC > 30% → force_discharge (zasil dom)
-   - Zostaw zawsze min 20% SOC na przetrwanie szczytu po rozładowaniu
-9. SELL PROFITABILITY: sprzedawaj TYLKO gdy RCE sell ({rce_sell:.4f}) > G13 buy (0.63 PLN/kWh)
-   - Jeśli RCE sell < 0.63 → nie opłaca się, zostaw w baterii  
-10. NEVER discharge below 10% SOC.
-11. Consider weather: cloudy tomorrow → charge more tonight.
-12. CHECK DEVICE STATUS — don't send commands the system is already executing.
-13. ALWAYS include stop_force commands when forced state should end (zone transition).
+REGUŁY:
+1. Arbitraż: ładuj off_peak(0.63)→rozładuj peak(1.50)=0.87PLN/kWh
+2. Przed szczytem SOC>=95%. Noc 21-07 ładuj.
+3. W szczytach ZERO import. force_discharge+SOC>30%.
+4. stop_force po zakończeniu wymuszania!
+5. Sprzedawaj TYLKO gdy RCE sell>0.63. Min SOC=10%.
 
-═══ FORMAT ODPOWIEDZI ═══
-KRYTYCZNE: Odpowiedz WYŁĄCZNIE poprawnym JSON. Bez markdown, bez tekstu przed/po.
-Pisz po POLSKU. BĄDŹ ZWIĘZŁY — max ~800 znaków w całym JSON.
-time_blocks MUSZĄ być PRZED analysis.
-PREFERUJ używanie "actions" (lista ID akcji z katalogu) zamiast surowych "commands".
-
-{{
-  "time_blocks": [
-    {{"start":"HH:MM","end":"HH:MM","zone":"off_peak","price":0.63,"strategy":"aggressive_charge","actions":["action_id"],"commands":[{{"tool":"force_charge","params":{{}}}}],"reasoning":"Krótko po polsku"}}
-  ],
-  "analysis": "1 zdanie po polsku: co robisz i dlaczego.",
-  "savings_estimate": {{"optimized_cost_pln":7.56,"net_savings_pln":8.74}},
-  "next_analysis_minutes": 15
-}}
-
-RULES FOR time_blocks:
-- Start from NOW ({now.strftime('%H:%M')}) and cover next 24h
-- Each block aligns with G13 tariff zone transitions
-- Max 4 blocks (group similar periods)
-- Max 2 commands per block
-- Order blocks chronologically
-- "reasoning": max 15 słów per block
-- "analysis": max 1 zdanie po polsku
-- KEEP TOTAL JSON UNDER 800 CHARACTERS"""
+FORMAT JSON (ZWIĘŹLE, max 600 znaków):
+{{"time_blocks":[{{"start":"HH:MM","end":"HH:MM","zone":"off_peak","price":0.63,"strategy":"charge","actions":["id"],"commands":[{{"tool":"force_charge"}}],"reasoning":"krótko"}}],"analysis":"1 zdanie","next_analysis_minutes":15}}
+Max 3 bloki. Max 1 komenda/blok. Reasoning max 10 słów."""
 
     return prompt
