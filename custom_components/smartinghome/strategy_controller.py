@@ -1380,6 +1380,15 @@ class StrategyController:
 
             device_status_text = self._inverter_agent.format_status_for_prompt()
             action_states = self._get_action_states_for_ai()
+
+            # Trim hourly_plan to next 8h to keep prompt compact
+            from datetime import datetime as _dt
+            _now_h = _dt.now().hour
+            full_plan = estimation.get("hourly_plan", [])
+            estimation["hourly_plan"] = [
+                h for h in full_plan if h.get("hour", 0) >= _now_h
+            ][:8]
+
             prompt = build_ai_strategist_prompt(ai_data, estimation, device_status_text, action_states, self._active_strategy.value, self._decision_log)
             plan = await self._ai.ask_controller(prompt, raw_json=True, max_tokens=8192)
 
