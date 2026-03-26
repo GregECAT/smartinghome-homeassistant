@@ -339,6 +339,8 @@ class InverterAgent:
                 return await self._exec_stop_force_charge()
             elif tool == "stop_force_discharge":
                 return await self._exec_stop_force_discharge()
+            elif tool == "set_general":
+                return await self._exec_set_general()
             elif tool == "emergency_stop":
                 return await self._exec_emergency_stop()
             else:
@@ -553,6 +555,39 @@ class InverterAgent:
             executed=True,
             message=f"{prefix}: stop_force_discharge → general mode restored",
             new_state="general (idle)",
+        )
+
+    async def _exec_set_general(self) -> ExecutionResult:
+        """Switch to General mode — battery powers house (self-consumption).
+
+        Unlike force_discharge (which sells to grid via eco_discharge),
+        General mode uses battery naturally to cover house load.
+        """
+        # Check if already in general mode
+        work_mode_state = self.hass.states.get(SELECT_WORK_MODE)
+        current_mode = work_mode_state.state if work_mode_state else "unknown"
+
+        if current_mode == "general" and self._is_on_cooldown("set_general"):
+            return ExecutionResult(
+                tool="set_general",
+                skipped=True,
+                reason=f"already in general mode",
+                previous_state=current_mode,
+                new_state="general",
+            )
+
+        prefix = "🧠 AI CTRL" if not self._dry_run else "🧠 AI DRY-RUN"
+        if not self._dry_run:
+            await self._em.set_general_mode()
+        self._commanded_charging = None  # General mode: let inverter decide
+        self._mark_executed("set_general")
+
+        return ExecutionResult(
+            tool="set_general",
+            executed=True,
+            message=f"{prefix}: set_general → tryb General (bateria zasila dom)",
+            previous_state=current_mode,
+            new_state="general (self-consumption)",
         )
 
     async def _exec_emergency_stop(self) -> ExecutionResult:

@@ -468,6 +468,165 @@ Awaryjne przywrócenie normalnego stanu — użyj gdy coś pójdzie nie tak:
 
 ---
 
+## 5A. AUTOPILOT — POWRÓT DO NORMALNEGO TRYBU
+
+Autopilot musi wiedzieć jaki jest "normalny tryb" — bo zależy on od **pory dnia,
+dnia tygodnia i taryfy G13**. Nie wystarczy wrócić do general + charge=18.5!
+
+### 5A.1 Jak Autopilot wykrywa że ładowanie z sieci jest aktywne
+
+```yaml
+# Sprawdź te warunki — jeśli KTÓRYKOLWIEK jest true, bateria ładuje z sieci:
+
+# Warunek 1: Force Charge aktywny (przycisk użytkownika)
+is_state('input_boolean.hems_force_grid_charge', 'on')
+
+# Warunek 2: Tryb eco_charge aktywny (nocny arbitraż lub Force)
+is_state('select.goodwe_tryb_pracy_falownika', 'eco_charge')
+
+# Warunek 3: Bateria ładuje się (BT: ujemny = ładowanie) + import z sieci
+states('sensor.battery_power') | float < -100
+  AND states('sensor.meter_active_power_total') | float > 100
+```
+
+### 5A.2 Tabela — "normalny tryb" wg pory dnia (G13)
+
+| Pora                        | Godziny (pon-pt) | Tryb    | charge_current | Co robi                          | Cel                      |
+| --------------------------- | ---------------- | ------- | -------------- | -------------------------------- | ------------------------ |
+| **Szczyt poranny**          | 07:00-13:00      | general | **"0"**        | Blokada ładowania, PV → sprzedaż | Sprzedawaj po 0.91 zł    |
+| **Off-peak (zima)**         | 13:00-16:00      | general | **"18.5"**     | Ładowanie z PV                   | Ładuj baterię na wieczór |
+| **Off-peak (lato)**         | 13:00-19:00      | general | **"18.5"**     | Ładowanie z PV                   | Ładuj baterię na wieczór |
+| **Szczyt wieczorny (zima)** | 16:00-21:00      | general | **"18.5"**     | Bateria → dom                    | Oszczędzaj 1.50 zł       |
+| **Szczyt wieczorny (lato)** | 19:00-22:00      | general | **"18.5"**     | Bateria → dom                    | Oszczędzaj 1.50 zł       |
+| **Noc**                     | 21/22:00-07:00   | general | **"18.5"**     | Bateria → dom                    | Pozaszczytowa 0.63 zł    |
+| **Weekend**                 | cała doba        | general | **"18.5"**     | Autokonsumpcja                   | Pozaszczytowa 0.63 zł    |
+
+### 5A.3 Sekwencja — Autopilot wyłącza ładowanie z sieci i wraca do normalnego trybu
+
+```yaml
+# ═══ AUTOPILOT: POWRÓT DO NORMALNEGO TRYBU ═══
+# Użyj gdy chcesz wyłączyć eco_charge / Force Charge
+# i wrócić do trybu odpowiedniego dla aktualnej pory dnia
+
+# Krok 1: Reset Eco Mode
+- action: number.set_value
+  target:
+    entity_id: number.goodwe_eco_mode_power
+  data:
+    value: 0
+- action: number.set_value
+  target:
+    entity_id: number.goodwe_eco_mode_soc
+  data:
+    value: 100
+
+# Krok 2: Wyłącz przełączniki Force (jeśli aktywne)
+- action: input_boolean.turn_off
+  target:
+    entity_id:
+      - input_boolean.hems_force_grid_charge
+      - input_boolean.hems_force_battery_discharge
+
+# Krok 3: Przywróć tryb general
+- action: select.select_option
+  target:
+    entity_id: select.goodwe_tryb_pracy_falownika
+  data:
+    option: "general"
+
+# Krok 4: Ustaw export limit
+- action: goodwe.set_parameter
+  data:
+    device_id: 02592f41265ac022d0c8b8aa99728b3e
+    parameter: grid_export_limit
+    value: "16000"
+# Krok 5: KLUCZOWY — ustaw charge_current wg pory dnia
+# ════════════════════════════════════════════════════
+# PORANNE GODZINY SPRZEDAŻY (07:00-13:00 pon-pt):
+#   charge_current = "0"  → bateria NIE ładuje, PV idzie na sprzedaż
+#
+# WSZYSTKIE INNE GODZINY:
+#   charge_current = "18.5"  → bateria ładuje z PV (lub z sieci w off-peak)
+# ════════════════════════════════════════════════════
+```
+
+### 5A.4 Implementacja — template do wyboru charge_current
+
+Autopilot powinien użyć tego template do decyzji:
+
+```yaml
+# Template — jaki charge_current ustawić teraz?
+{% set h = now().hour %}
+{% set wd = now().weekday() %}
+{% set is_weekday = wd < 5 %}
+{% set morning_sell = is_weekday and (h >= 7 and h < 13) %}
+
+{% if morning_sell %}
+  0
+{% else %}
+  18.5
+{% endif %}
+
+# Użycie w akcji:
+- action: goodwe.set_parameter
+  data:
+    device_id: 02592f41265ac022d0c8b8aa99728b3e
+    parameter: battery_charge_current
+    value: >
+      {% set h = now().hour %}
+      {% set wd = now().weekday() %}
+      {% if wd < 5 and h >= 7 and h < 13 %}"0"{% else %}"18.5"{% endif %}
+```
+
+### 5A.5 Wyjątek RCE — arbitraż
+
+Jeśli w momencie powrotu do normalnego trybu RCE < 100 PLN/MWh (eksport bezwartościowy),
+Autopilot powinien ustawić `charge_current = "18.5"` **nawet w godzinach sprzedaży 07-13**,
+bo arbitraż opłacalny (kup 0.91 → oszczędź 1.50 wieczorem = +0.59 zł/kWh).
+
+```yaml
+# Rozszerzony template z wyjątkiem RCE:
+{% set h = now().hour %}
+{% set wd = now().weekday() %}
+{% set is_weekday = wd < 5 %}
+{% set morning_sell = is_weekday and (h >= 7 and h < 13) %}
+{% set rce_low = states('sensor.rce_pse_cena') | float(250) < 100 %}
+
+{% if morning_sell and not rce_low %}
+  0
+{% else %}
+  18.5
+{% endif %}
+```
+
+### 5A.6 Scenariusze użycia Autopilota
+
+| Scenariusz                                       | Co Autopilot robi         | charge_current              |
+| ------------------------------------------------ | ------------------------- | --------------------------- |
+| Nocne ładowanie zakończone (SOC=90%, jest 05:30) | STOP eco_charge → general | "18.5" (noc)                |
+| Nocne ładowanie, przyszło 07:00                  | STOP eco_charge → general | **"0"** (sprzedaż!)         |
+| Force Charge zakończony o 10:00                  | STOP → general            | **"0"** (godziny sprzedaży) |
+| Force Charge zakończony o 14:00                  | STOP → general            | "18.5" (off-peak)           |
+| Force Discharge zakończony o 20:00               | STOP → general            | "18.5" (szczyt wieczorny)   |
+| Użytkownik kliknie "wróć do auto"                | Sekcja 5A.3               | wg pory dnia                |
+| Coś poszło nie tak                               | EMERGENCY STOP (sekcja 5) | "18.5" (bezpieczne)         |
+
+### 5A.7 Oczekiwane zachowanie po powrocie do normalnego trybu
+
+**W godzinach sprzedaży (07-13 pon-pt, charge=0):**
+
+- `sensor.battery_power` → dodatni (rozładowanie na dom, BT konwencja)
+- `sensor.meter_active_power_total` → ujemny (eksport PV do sieci)
+- PV zasila dom + eksportuje nadwyżkę, bateria nie ładuje
+
+**W godzinach off-peak / wieczór / weekend (charge=18.5):**
+
+- `sensor.battery_power` → zależy od PV (ładuje jeśli jest nadwyżka PV)
+- `sensor.meter_active_power_total` → blisko 0 (autokonsumpcja)
+- PV → bateria → dom, minimalna wymiana z siecią
+
+---
+
 ## 6. WYMAGANA KONFIGURACJA — configuration.yaml
 
 **BEZ TYCH WPISÓW SYSTEM NIE ZADZIAŁA!** Poniższe elementy MUSZĄ istnieć
@@ -861,18 +1020,25 @@ Slave: 247
 **🚨 EMERGENCY STOP (oba naraz):**
 `eco_mode_power=0` → `eco_mode_soc=100` → `47511=0` → `select: general` → `charge_current=18.5` → `export_limit=16000` → wyłącz oba input_boolean
 
+**🔄 AUTOPILOT — Powrót do normalnego trybu:**
+`eco_mode_power=0` → `eco_mode_soc=100` → oba `input_boolean: OFF` → `select: general` → `export_limit=16000` → `charge_current = wg pory dnia (0 w 07-13 pon-pt, 18.5 reszta)`
+
 **⏱ TIMEOUT:** 6 godzin → STOP awaryjny (safety net)
 
 ## 13. TABELA AKCJI DLA AGENTA — SZYBKI REFERENCE
 
-| Zdarzenie                       | Akcja               | Sekwencja               |
-| ------------------------------- | ------------------- | ----------------------- |
-| Klik "Wymuś Ładowanie"          | START Charge        | Sekcja 3.1              |
-| Klik "STOP" na ładowaniu        | STOP Charge         | Sekcja 3.3              |
-| SOC >= 95% podczas ładowania    | AUTO-STOP Charge    | Sekcja 3.3 (identyczna) |
-| Klik "Wymuś Rozładowanie"       | START Discharge     | Sekcja 4.1              |
-| Klik "STOP" na rozładowaniu     | STOP Discharge      | Sekcja 4.3              |
-| SOC <= 20% podczas rozładowania | AUTO-STOP Discharge | Sekcja 4.3 (identyczna) |
-| SOC <= 5% (krytyczny)           | EMERGENCY STOP      | Sekcja 5                |
-| Timeout 6h                      | STOP odpowiedni     | Sekcja 3.3 lub 4.3      |
-| Coś poszło nie tak              | EMERGENCY STOP      | Sekcja 5                |
+| Zdarzenie                          | Akcja                        | Sekwencja                        |
+| ---------------------------------- | ---------------------------- | -------------------------------- |
+| Klik "Wymuś Ładowanie"             | START Charge                 | Sekcja 3.1                       |
+| Klik "STOP" na ładowaniu           | STOP Charge                  | Sekcja 3.3                       |
+| SOC >= 95% podczas ładowania       | AUTO-STOP Charge             | Sekcja 3.3 (identyczna)          |
+| Klik "Wymuś Rozładowanie"          | START Discharge              | Sekcja 4.1                       |
+| Klik "STOP" na rozładowaniu        | STOP Discharge               | Sekcja 4.3                       |
+| SOC <= 20% podczas rozładowania    | AUTO-STOP Discharge          | Sekcja 4.3 (identyczna)          |
+| SOC <= 5% (krytyczny)              | EMERGENCY STOP               | Sekcja 5                         |
+| Timeout 6h                         | STOP odpowiedni              | Sekcja 3.3 lub 4.3               |
+| Coś poszło nie tak                 | EMERGENCY STOP               | Sekcja 5                         |
+| Autopilot: "wróć do normalnego"    | Powrót do trybu G13          | **Sekcja 5A.3**                  |
+| Nocne ładowanie zakończone         | STOP eco_charge + powrót G13 | **Sekcja 5A.3** (charge wg pory) |
+| Force zakończony w godz. sprzedaży | STOP + charge_current="0"    | **Sekcja 5A.6**                  |
+| Force zakończony w off-peak        | STOP + charge_current="18.5" | **Sekcja 5A.6**                  |
