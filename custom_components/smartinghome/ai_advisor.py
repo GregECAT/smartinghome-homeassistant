@@ -234,7 +234,7 @@ class AIAdvisor:
             raw_battery_f = float(raw_battery) if raw_battery is not None else 0
         except (ValueError, TypeError):
             raw_battery_f = 0
-        battery_for_ai = raw_battery_f
+        # raw_battery_f used directly below for state classification
         if raw_battery_f < -50:
             battery_state = f"ŁADOWANIE {abs(raw_battery_f):.0f}W (bateria się ładuje z sieci/PV)"
         elif raw_battery_f > 50:
