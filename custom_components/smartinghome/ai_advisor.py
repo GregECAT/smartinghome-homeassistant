@@ -221,25 +221,24 @@ class AIAdvisor:
         month_names_pl = ['', 'styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec',
                           'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień']
         season = 'zima' if now.month in (12, 1, 2) else 'wiosna' if now.month in (3, 4, 5) else 'lato' if now.month in (6, 7, 8) else 'jesień'
-        # GoodWe convention: negative=import, positive=export
-        # Negate to match our AI description: positive=import, negative=export
+        # GoodWe convention: positive=import, negative=export (grid)
+        # GoodWe convention: positive=charge, negative=discharge (battery)
+        # Values already match AI description — no sign flip needed
         raw_grid = data.get('grid_power', 0)
         try:
-            grid_for_ai = -float(raw_grid) if raw_grid is not None else 0
+            grid_for_ai = float(raw_grid) if raw_grid is not None else 0
         except (ValueError, TypeError):
             grid_for_ai = 0
-        # GoodWe convention: positive=discharge, negative=charge
-        # Negate to match our AI description: positive=charge, negative=discharge
         raw_battery = data.get('battery_power', 0)
         try:
             raw_battery_f = float(raw_battery) if raw_battery is not None else 0
         except (ValueError, TypeError):
             raw_battery_f = 0
-        battery_for_ai = -raw_battery_f  # flip sign for AI
+        battery_for_ai = raw_battery_f  # no flip needed
         if raw_battery_f > 50:
-            battery_state = "DISCHARGING (battery powers the home)"
-        elif raw_battery_f < -50:
             battery_state = "CHARGING (battery absorbs power)"
+        elif raw_battery_f < -50:
+            battery_state = "DISCHARGING (battery powers the home)"
         else:
             battery_state = "IDLE"
         lines = [

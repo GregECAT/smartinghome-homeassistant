@@ -107,13 +107,12 @@ class AICronScheduler:
             finance_data["export_revenue"] = None
             finance_data["savings"] = 0
 
-        # ── Grid power sign fix for AI context ──
-        # GoodWe: positive = export, but AI expects positive = import
+        # GoodWe: positive = import, negative = export — same as AI convention
         grid_raw = raw.get("sensor.meter_active_power_total")
         grid_for_ai = None
         if grid_raw is not None:
             try:
-                grid_for_ai = -float(grid_raw)  # Invert: positive = import for AI
+                grid_for_ai = float(grid_raw)  # No inversion needed
             except (ValueError, TypeError):
                 grid_for_ai = None
 
