@@ -5364,6 +5364,14 @@ class SmartingHomePanel extends HTMLElement {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.4; }
         }
+        @keyframes apDotPulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.4; transform: scale(0.7); }
+        }
+        @keyframes bannerGlow {
+          0%   { border-color: rgba(46,204,113,0.25); box-shadow: 0 0 0 rgba(46,204,113,0); }
+          100% { border-color: rgba(46,204,113,0.4); box-shadow: 0 0 12px rgba(46,204,113,0.08); }
+        }
 
         /* General SOC progress bars (used in tabs) */
         .soc-bar { width: 100%; height: 100%; background: rgba(255,255,255,0.05); border-radius: 4px; overflow: hidden; }
@@ -6191,6 +6199,19 @@ class SmartingHomePanel extends HTMLElement {
 
         <!-- ═══════ TAB: OVERVIEW ═══════ -->
         <div class="tab-content active" data-tab="overview">
+          <!-- Autopilot Status Banner -->
+          <div id="ov-autopilot-banner" style="display:none; margin:0 8px 6px; padding:8px 16px; border-radius:10px; background:linear-gradient(135deg, rgba(46,204,113,0.08) 0%, rgba(0,212,255,0.06) 100%); border:1px solid rgba(46,204,113,0.25); backdrop-filter:blur(8px); animation:bannerGlow 3s ease-in-out infinite alternate">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap">
+              <div style="display:flex; align-items:center; gap:10px">
+                <div style="width:8px; height:8px; border-radius:50%; background:#2ecc71; box-shadow:0 0 8px #2ecc71; animation:apDotPulse 2s ease-in-out infinite"></div>
+                <div style="font-size:11px; font-weight:700; color:#2ecc71; text-transform:uppercase; letter-spacing:1.2px">🧠 AUTOPILOT AKTYWNY</div>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px">
+                <div id="ov-ap-strategy" style="font-size:12px; font-weight:600; color:#f8fafc; background:rgba(255,255,255,0.06); padding:3px 10px; border-radius:6px">—</div>
+                <div id="ov-ap-zone" style="font-size:10px; font-weight:600; color:#94a3b8">—</div>
+              </div>
+            </div>
+          </div>
           <div class="flow-wrapper">
             <!-- ORTHOGONAL SVG OVERLAY -->
             <svg class="flow-svg-bg" viewBox="0 0 700 480">
@@ -8842,7 +8863,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.35.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.35.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -9663,6 +9684,26 @@ class SmartingHomePanel extends HTMLElement {
             if (deactBtn) deactBtn.style.display = 'none';
           }
 
+          // ── Update Overview tab Autopilot banner ──
+          const ovBanner = this.shadowRoot.getElementById('ov-autopilot-banner');
+          if (ovBanner) {
+            if (saved) {
+              ovBanner.style.display = 'block';
+              const ovStrategyLabels = {
+                max_self_consumption: '🟢 Max Autokonsumpcja',
+                max_profit: '💰 Max Zysk',
+                battery_protection: '🔋 Ochrona Baterii',
+                zero_export: '⚡ Zero Export',
+                weather_adaptive: '🌧️ Pogodowy',
+                ai_full_autonomy: '🧠 AI Pełna Autonomia',
+              };
+              const ovStrat = this.shadowRoot.getElementById('ov-ap-strategy');
+              if (ovStrat) ovStrat.textContent = ovStrategyLabels[saved] || saved;
+            } else {
+              ovBanner.style.display = 'none';
+            }
+          }
+
           // ── Live tick status bar ──
           const live = s.autopilot_live;
           if (live) {
@@ -9695,6 +9736,13 @@ class SmartingHomePanel extends HTMLElement {
               const zoneColors = { off_peak: '#2ecc71', morning_peak: '#e74c3c', afternoon_peak: '#e74c3c' };
               zoneEl.textContent = zoneMap[live.g13_zone] || live.g13_zone || '—';
               zoneEl.style.color = zoneColors[live.g13_zone] || '#f8fafc';
+            }
+
+            // Update overview banner zone
+            const ovZone = this.shadowRoot.getElementById('ov-ap-zone');
+            if (ovZone) {
+              const zoneMap2 = { off_peak: '🌙 Off-peak', morning_peak: '☀️ Szczyt poranny', afternoon_peak: '⚡ Szczyt popołudniowy' };
+              ovZone.textContent = zoneMap2[live.g13_zone] || '';
             }
 
             setText('ap-live-soc', live.soc != null ? `${Math.round(live.soc)}%` : '—');
