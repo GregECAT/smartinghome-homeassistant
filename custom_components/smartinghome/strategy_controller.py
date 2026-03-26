@@ -1359,23 +1359,26 @@ class StrategyController:
             return
 
         try:
-            from .autopilot_engine import build_ai_strategist_prompt
+            from .autopilot_engine import build_ai_strategist_prompt, AutopilotEngine
 
-            # Build estimation if available
-            estimation = data.get("estimation", {})
-            if not estimation:
-                estimation = {
-                    "hourly_plan": [],
-                    "total_import_kwh": 0, "total_export_kwh": 0,
-                    "total_cost": 0, "total_revenue": 0,
-                    "net_savings": 0, "total_self_consumption_kwh": 0,
-                    "vs_no_management": 0,
-                }
-
-            device_status_text = self._inverter_agent.format_status_for_prompt()
+            # ALWAYS compute fresh estimation for the Strategist
             ai_data = _build_ai_data(data)
             ai_data["daily_balance"] = self._daily_balance
             ai_data["rce_yesterday"] = self._rce_yesterday
+
+            bat_cap = float(data.get("battery_capacity_wh") or data.get("sensor.battery_capacity") or DEFAULT_BATTERY_CAPACITY)
+            engine = AutopilotEngine(battery_capacity_wh=bat_cap)
+            estimation = await self.hass.async_add_executor_job(
+                engine.estimate_strategy, self._active_strategy, ai_data
+            )
+            _LOGGER.info(
+                "Auto-estimation before Strategist: savings=%.2f, import=%.1fkWh, export=%.1fkWh",
+                estimation.get("net_savings", 0),
+                estimation.get("total_import_kwh", 0),
+                estimation.get("total_export_kwh", 0),
+            )
+
+            device_status_text = self._inverter_agent.format_status_for_prompt()
             action_states = self._get_action_states_for_ai()
             prompt = build_ai_strategist_prompt(ai_data, estimation, device_status_text, action_states, self._active_strategy.value, self._decision_log)
             plan = await self._ai.ask_controller(prompt, raw_json=True, max_tokens=8192)
