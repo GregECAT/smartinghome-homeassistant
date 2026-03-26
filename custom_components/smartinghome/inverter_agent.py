@@ -571,7 +571,7 @@ class InverterAgent:
             return ExecutionResult(
                 tool="set_general",
                 skipped=True,
-                reason=f"already in general mode",
+                reason="already in general mode",
                 previous_state=current_mode,
                 new_state="general",
             )
