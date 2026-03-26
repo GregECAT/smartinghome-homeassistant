@@ -777,9 +777,10 @@ Use tables for comparisons. Be concise but comprehensive. Focus on actionable in
 # Available tools the AI can call — these map to EnergyManager methods
 AI_CONTROLLER_TOOLS = {
     "force_charge": "Force battery charge from grid via Eco Mode (eco_charge, soc=100%, power=100%, current=18.5A)",
-    "force_discharge": "Force battery discharge to grid via Eco Mode (eco_discharge, soc=5%, power=100%, grid_export=ON)",
-    "stop_force_charge": "STOP forced charging — restore general mode (eco_mode_power=0, eco_mode_soc=100, general, charge=18.5A)",
-    "stop_force_discharge": "STOP forced discharge — restore general mode (eco_mode_power=0, eco_mode_soc=100, general, charge=18.5A, export=16kW)",
+    "force_discharge": "⚠️ Force battery discharge TO GRID (SPRZEDAŻ!) via eco_discharge. Użyj TYLKO gdy chcesz SPRZEDAWAĆ energię do sieci!",
+    "set_general": "Przełącz na tryb General — bateria zasila dom (AUTOKONSUMPCJA). Użyj gdy chcesz rozładować baterię przez zasilanie domu, BEZ sprzedaży do sieci.",
+    "stop_force_charge": "STOP forced charging — restore general mode",
+    "stop_force_discharge": "STOP forced discharge — restore general mode",
     "emergency_stop": "EMERGENCY STOP all force operations — reset everything to general mode immediately",
     "set_dod": "Set max depth of discharge (params: dod: int 0-95). Higher = more capacity available. Max is 95.",
     "set_export_limit": "Set grid export limit in watts (params: limit: int). 0 = no export",
@@ -801,7 +802,8 @@ STRATEGY_AI_INSTRUCTIONS: dict[str, str] = {
         "STRATEGIA: 💰 Max Zysk (Arbitraż Cenowy)\n"
         "  Priorytet: kupuj tanio, sprzedawaj drogo. Arbitraż G13 + RCE.\n"
         "  Off-peak (0.63): force_charge z sieci → naładuj baterię do 95-100%.\n"
-        "  Afternoon_peak (1.50): force_discharge → zasil dom z baterii, sprzedawaj nadwyżki.\n"
+        "  Afternoon_peak (1.50): set_general → bateria zasila dom (autokonsumpcja).\n"
+        "  Jeśli RCE sell > 0.63: force_discharge → sprzedaj nadwyżkę do sieci.\n"
         "  SPRZEDAWAJ TYLKO gdy RCE sell > 0.63 PLN/kWh (koszt zakupu). Inaczej zachowaj.\n"
         "  Zostaw min 20% SOC na przetrwanie szczytu po rozładowaniu.\n"
         "  SOC limits: min=15%, max=100%."
@@ -1065,7 +1067,7 @@ Odpowiedz WYŁĄCZNIE poprawnym JSON.
 ═══ KEY RULES ═══
 1. ARBITRAGE: off_peak(0.63)→afternoon_peak(1.50)=0.87 margin. Charge cheap, discharge expensive.
 2. If approaching afternoon_peak AND SOC < 90% → force_charge NOW
-3. During afternoon_peak → force_discharge (avoid import at 1.50)
+3. During afternoon_peak → set_general (bateria zasila dom) LUB force_discharge (sprzedaż do sieci gdy RCE > 0.63)
 4. Night 22-06: ładuj baterię ale SPRAWDŹ sekcję NOCNE ŁADOWANIE — nie ładuj do 100% jeśli jutro dobra pogoda!
 5. PV surplus > 2kW + SOC > 80% → switch_on boiler
 6. AUTO-STOP CHARGE: when SOC >= 95% → call stop_force_charge
@@ -1073,7 +1075,8 @@ Odpowiedz WYŁĄCZNIE poprawnym JSON.
 8. EMERGENCY: SOC < 5% → call emergency_stop, then force_charge
 9. ZONE TRADING:
    - Tania strefa (off_peak 0.63) + zła pogoda (PV forecast < 5kWh) → force_charge z sieci
-   - Droga strefa (afternoon_peak 1.50) + SOC > 30% → force_discharge (zasil dom)
+   - Droga strefa (afternoon_peak 1.50) + SOC > 30% → set_general (zasil dom z baterii)
+   - Droga strefa + RCE sell > 0.63 + SOC > 50% → force_discharge (sprzedaj nadwyżkę)
    - Zostaw min 20% SOC na przetrwanie szczytu
 10. SELL PROFITABILITY: sprzedawaj TYLKO gdy RCE sell ({rce_sell:.4f}) > G13 buy (0.63 PLN/kWh)
    - Jeśli RCE sell < 0.63 → nie opłaca się, zostaw w baterii
@@ -1245,7 +1248,8 @@ Net savings: {estimation.get('net_savings', 0):.2f} PLN
 7. AUTO-STOP DISCHARGE: plan stop_force_discharge when SOC reaches 20%.
 8. ZONE TRADING:
    - Tania strefa (off_peak 0.63) + zła pogoda (PV forecast < 5kWh) → force_charge z sieci
-   - Droga strefa (afternoon_peak 1.50) + SOC > 30% → force_discharge (zasil dom)
+   - Droga strefa (afternoon_peak 1.50) + SOC > 30% → set_general (zasil dom z baterii)
+   - Droga strefa + RCE sell > 0.63 + SOC > 50% → force_discharge (sprzedaj nadwyżkę do sieci)
    - Zostaw zawsze min 20% SOC na przetrwanie szczytu po rozładowaniu
 9. SELL PROFITABILITY: sprzedawaj TYLKO gdy RCE sell ({rce_sell:.4f}) > G13 buy (0.63 PLN/kWh)
    - Jeśli RCE sell < 0.63 → nie opłaca się, zostaw w baterii  

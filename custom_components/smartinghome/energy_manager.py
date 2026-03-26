@@ -201,6 +201,31 @@ class EnergyManager:
                 _LOGGER.debug("%s turn_off failed", _eid)
         self._current_mode = HEMSMode.AUTO
 
+    async def set_general_mode(self) -> None:
+        """Switch to General mode — battery powers house (self-consumption).
+
+        In General mode, GoodWe uses battery naturally to cover house load.
+        No forced export to grid, no forced charging from grid.
+        Battery charges from PV when available, discharges to cover load.
+
+        Use case: AI wants battery to gradually discharge by powering the house
+        (e.g., making room for PV tomorrow), NOT by selling to grid.
+
+        Sequence:
+        1. eco_mode_power = 0 (no forced eco operation)
+        2. eco_mode_soc = 100
+        3. select: general
+        4. charge_current = 18.5 (allow PV charging)
+        5. export_limit = 16000 (allow PV export if surplus)
+        """
+        _LOGGER.info("SET GENERAL MODE — battery self-consumption (house powered by battery)")
+        await self._set_eco_mode_power(0)
+        await self._set_eco_mode_soc(100)
+        await self._set_work_mode("general")
+        await self._enable_charging()
+        await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
+        self._current_mode = HEMSMode.AUTO
+
     async def emergency_stop(self) -> None:
         """Emergency stop — kill all forced operations immediately.
 
