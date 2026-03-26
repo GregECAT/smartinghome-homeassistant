@@ -146,6 +146,10 @@ def _build_ai_data(data: dict[str, Any]) -> dict[str, Any]:
         "forecast_today": _safe_float(data.get("pv_forecast_today_total")),
         "forecast_remaining": _safe_float(data.get("pv_forecast_remaining_today_total")),
         "forecast_tomorrow": _safe_float(data.get("pv_forecast_tomorrow_total")),
+        # Daily energy totals (actual kWh today)
+        "grid_import_today_kwh": _safe_float(data.get("grid_import_today")),
+        "grid_export_today_kwh": _safe_float(data.get("grid_export_today")),
+        "pv_today_kwh": _safe_float(data.get("pv_today")),
         # Voltage
         "voltage_l1": _safe_float(data.get(SENSOR_GRID_VOLTAGE_L1)),
     }
@@ -201,6 +205,22 @@ class StrategyController:
         # Decision log (last N actions for UI)
         self._decision_log: list[dict[str, Any]] = []
         self._max_log_entries = 50
+
+        # Daily financial balance tracker (reset at midnight)
+        self._daily_balance: dict[str, float] = {
+            "import_cost": 0.0,
+            "export_revenue": 0.0,
+            "import_kwh": 0.0,
+            "export_kwh": 0.0,
+        }
+        self._balance_date: str = ""  # YYYY-MM-DD tracking day
+        self._last_import_kwh: float = 0.0  # For delta calculation
+        self._last_export_kwh: float = 0.0
+
+        # RCE price range: yesterday's data for planning context
+        self._rce_yesterday: dict[str, float] = {
+            "min": 0.0, "avg": 0.0, "max": 0.0,
+        }
 
         # Automation manager: tracks which automations were disabled
         self._disabled_automations: set[str] = set()
@@ -567,6 +587,9 @@ class StrategyController:
 
         actions_taken: list[str] = []
         strategy = self._active_strategy
+
+        # Update financial tracker on each tick
+        self._update_daily_balance(data)
 
         # ═══════════════════════════════════════════════════════
         # SAFETY LAYERS — always active
@@ -1351,6 +1374,8 @@ class StrategyController:
 
             device_status_text = self._inverter_agent.format_status_for_prompt()
             ai_data = _build_ai_data(data)
+            ai_data["daily_balance"] = self._daily_balance
+            ai_data["rce_yesterday"] = self._rce_yesterday
             action_states = self._get_action_states_for_ai()
             prompt = build_ai_strategist_prompt(ai_data, estimation, device_status_text, action_states, self._active_strategy.value, self._decision_log)
             plan = await self._ai.ask_controller(prompt, raw_json=True, max_tokens=8192)
@@ -1435,6 +1460,8 @@ class StrategyController:
 
                 device_status_text = self._inverter_agent.format_status_for_prompt()
                 ai_data = _build_ai_data(data)
+                ai_data["daily_balance"] = self._daily_balance
+                ai_data["rce_yesterday"] = self._rce_yesterday
                 action_states = self._get_action_states_for_ai()
                 prompt = build_ai_controller_prompt(ai_data, device_status_text, action_states, self._active_strategy.value, self._decision_log)
                 ai_result = await self._ai.ask_controller(prompt)
@@ -1707,6 +1734,59 @@ class StrategyController:
         # Fire event for live frontend updates
         self.hass.bus.async_fire(f"{DOMAIN}_autopilot_action", entry)
         _LOGGER.info("Autopilot: %s", message)
+
+    def _update_daily_balance(self, data: dict[str, Any]) -> None:
+        """Track daily import cost / export revenue from sensor deltas.
+
+        Uses grid_import_today / grid_export_today sensors (cumulative kWh).
+        At day boundary: saves today's RCE range as 'yesterday' and resets.
+        """
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        # Day boundary detection — save yesterday's RCE and reset
+        if today != self._balance_date:
+            # Rotate RCE: today → yesterday
+            rce_min = _safe_float(data.get("rce_min_today"))
+            rce_avg = _safe_float(data.get("rce_average_today"))
+            rce_max = _safe_float(data.get("rce_max_today"))
+            if rce_avg > 0:
+                self._rce_yesterday = {
+                    "min": rce_min, "avg": rce_avg, "max": rce_max,
+                }
+
+            # Reset daily balance
+            self._daily_balance = {
+                "import_cost": 0.0,
+                "export_revenue": 0.0,
+                "import_kwh": 0.0,
+                "export_kwh": 0.0,
+            }
+            self._last_import_kwh = _safe_float(data.get("grid_import_today"))
+            self._last_export_kwh = _safe_float(data.get("grid_export_today"))
+            self._balance_date = today
+            return
+
+        # Calculate deltas from cumulative daily sensors
+        current_import = _safe_float(data.get("grid_import_today"))
+        current_export = _safe_float(data.get("grid_export_today"))
+
+        delta_import = max(0, current_import - self._last_import_kwh)
+        delta_export = max(0, current_export - self._last_export_kwh)
+
+        if delta_import > 0 or delta_export > 0:
+            # Get current prices for cost calculation
+            now = datetime.now()
+            g13_zone = _get_g13_zone(now.hour, now.month, now.weekday())
+            g13_price = G13_PRICES.get(g13_zone, 0.63)
+            rce_sell = _safe_float(data.get("rce_sell_price"))
+
+            self._daily_balance["import_kwh"] += delta_import
+            self._daily_balance["import_cost"] += delta_import * g13_price
+            self._daily_balance["export_kwh"] += delta_export
+            self._daily_balance["export_revenue"] += delta_export * rce_sell
+
+        self._last_import_kwh = current_import
+        self._last_export_kwh = current_export
 
     # ------------------------------------------------------------------
     #  Automation Manager

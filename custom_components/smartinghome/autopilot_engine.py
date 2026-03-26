@@ -784,6 +784,42 @@ def _format_decision_history(
     lines.append("DO NOT repeat actions that are already in progress. Check before acting.")
     return "\n".join(lines)
 
+
+def _format_financial_context(current_data: dict[str, Any]) -> str:
+    """Format daily financial balance and RCE yesterday range for AI prompt.
+
+    Shows the AI its realized P&L: how much energy was imported/exported,
+    what it cost, and yesterday's RCE range for forward planning.
+    """
+    balance = current_data.get("daily_balance")
+    rce_yday = current_data.get("rce_yesterday")
+
+    parts: list[str] = []
+
+    if balance and any(v > 0 for v in balance.values()):
+        imp_kwh = balance.get("import_kwh", 0)
+        imp_cost = balance.get("import_cost", 0)
+        exp_kwh = balance.get("export_kwh", 0)
+        exp_rev = balance.get("export_revenue", 0)
+        net = exp_rev - imp_cost
+        parts.append("═══ TODAY'S FINANCIAL BALANCE ═══")
+        parts.append(f"  Import: {imp_kwh:.1f} kWh = -{imp_cost:.2f} PLN")
+        parts.append(f"  Export: {exp_kwh:.1f} kWh = +{exp_rev:.2f} PLN")
+        parts.append(f"  NET P&L: {'+' if net >= 0 else ''}{net:.2f} PLN")
+        parts.append(f"  Daily energy: PV={current_data.get('pv_today_kwh', 0):.1f}kWh, "
+                     f"Import={current_data.get('grid_import_today_kwh', 0):.1f}kWh, "
+                     f"Export={current_data.get('grid_export_today_kwh', 0):.1f}kWh")
+        parts.append("Minimize import cost, maximize export revenue. Negative NET = losing money.")
+
+    if rce_yday and rce_yday.get("avg", 0) > 0:
+        parts.append("═══ RCE YESTERDAY (reference for today's planning) ═══")
+        parts.append(f"  Min: {rce_yday['min']:.2f} PLN/MWh → {rce_yday['min']/1000:.4f} PLN/kWh")
+        parts.append(f"  Avg: {rce_yday['avg']:.2f} PLN/MWh → {rce_yday['avg']/1000:.4f} PLN/kWh")
+        parts.append(f"  Max: {rce_yday['max']:.2f} PLN/MWh → {rce_yday['max']/1000:.4f} PLN/kWh")
+        parts.append("Use yesterday's range as reference: buy when RCE < yesterday avg, sell when RCE > yesterday avg.")
+
+    return "\n".join(parts)
+
 def build_ai_controller_prompt(
     current_data: dict[str, Any],
     device_status_text: str = "",
@@ -884,6 +920,7 @@ Respond ONLY with valid JSON.
 {STRATEGY_AI_INSTRUCTIONS.get(active_strategy, STRATEGY_AI_INSTRUCTIONS['ai_full_autonomy'])}
 
 {_format_decision_history(decision_history)}
+{_format_financial_context(current_data)}
 ═══ KEY RULES ═══
 1. ARBITRAGE: off_peak(0.63)→afternoon_peak(1.50)=0.87 margin. Charge cheap, discharge expensive.
 2. If approaching afternoon_peak AND SOC < 90% → force_charge NOW
@@ -1033,6 +1070,7 @@ Net savings: {estimation.get('net_savings', 0):.2f} PLN
 {STRATEGY_AI_INSTRUCTIONS.get(active_strategy, STRATEGY_AI_INSTRUCTIONS['ai_full_autonomy'])}
 
 {_format_decision_history(decision_history)}
+{_format_financial_context(current_data)}
 ═══ STRATEGIC RULES ═══
 1. ARBITRAGE IS KING: charge battery at off_peak (0.63) → discharge at afternoon_peak (1.50) = 0.87 PLN/kWh
 2. Before EVERY peak: battery MUST be at 95-100% SOC. Plan charging accordingly.
