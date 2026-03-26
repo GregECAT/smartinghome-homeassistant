@@ -911,36 +911,61 @@ User question: {question}"""
         """Attempt to repair truncated Strategist JSON.
 
         Extracts whatever time_blocks we can parse from the truncated text.
+        Uses brace-balanced extraction to handle nested arrays/objects.
         """
         import re
         import json as _json
 
-        # Try to extract complete time_block objects via regex
-        # Each block looks like { "start": "HH:MM", ... }
-        block_pattern = re.compile(
-            r'\{\s*"start"\s*:\s*"(\d{2}:\d{2})"\s*,\s*"end"\s*:\s*"(\d{2}:\d{2})"'
-            r'[^}]*?"strategy"\s*:\s*"([^"]*)"[^}]*?\}',
-            re.DOTALL,
-        )
+        # Find all brace-balanced objects that start with "start":
         blocks = []
-        for m in block_pattern.finditer(raw_text):
-            try:
-                # Try to parse the full block as JSON
-                block_text = m.group(0)
-                # Fix any trailing issues
-                if not block_text.endswith("}"):
-                    block_text += "}"
-                block = _json.loads(block_text)
-                blocks.append(block)
-            except Exception:
-                # Fallback: create minimal block from regex groups
-                blocks.append({
-                    "start": m.group(1),
-                    "end": m.group(2),
-                    "strategy": m.group(3),
-                    "commands": [],
-                    "reasoning": "(repaired from truncated response)",
-                })
+        i = 0
+        while i < len(raw_text):
+            # Find next block start
+            idx = raw_text.find('"start"', i)
+            if idx < 0:
+                break
+            # Walk back to find the opening brace
+            brace_start = raw_text.rfind('{', max(0, idx - 20), idx)
+            if brace_start < 0:
+                i = idx + 1
+                continue
+            # Walk forward counting braces to find matching close
+            depth = 0
+            j = brace_start
+            while j < len(raw_text):
+                if raw_text[j] == '{':
+                    depth += 1
+                elif raw_text[j] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+
+            if depth == 0 and j < len(raw_text):
+                block_text = raw_text[brace_start:j + 1]
+                try:
+                    block = _json.loads(block_text)
+                    if "start" in block and "end" in block:
+                        blocks.append(block)
+                except Exception:
+                    pass
+                i = j + 1
+            else:
+                # Truncated block — try a minimal regex extract
+                m = re.search(
+                    r'"start"\s*:\s*"(\d{2}:\d{2})".*?"end"\s*:\s*"(\d{2}:\d{2})"'
+                    r'.*?"strategy"\s*:\s*"([^"]*)"',
+                    raw_text[brace_start:], re.DOTALL,
+                )
+                if m:
+                    blocks.append({
+                        "start": m.group(1),
+                        "end": m.group(2),
+                        "strategy": m.group(3),
+                        "commands": [],
+                        "reasoning": "(naprawiony z przyciętej odpowiedzi)",
+                    })
+                break  # truncated, no more valid blocks
 
         if blocks:
             _LOGGER.info(
@@ -949,11 +974,11 @@ User question: {question}"""
             )
             # Extract analysis if present
             analysis_match = re.search(r'"analysis"\s*:\s*"([^"]*)', raw_text)
-            analysis = analysis_match.group(1)[:200] if analysis_match else "(truncated)"
+            analysis = analysis_match.group(1)[:200] if analysis_match else "(przycięte)"
             return {
                 "time_blocks": blocks,
-                "analysis": f"(repaired) {analysis}",
-                "next_analysis_minutes": 30,
+                "analysis": f"(naprawione) {analysis}",
+                "next_analysis_minutes": 15,
             }
 
         return None

@@ -1094,42 +1094,27 @@ Net savings: {estimation.get('net_savings', 0):.2f} PLN
 
 ═══ FORMAT ODPOWIEDZI ═══
 KRYTYCZNE: Odpowiedz WYŁĄCZNIE poprawnym JSON. Bez markdown, bez tekstu przed/po.
-Pisz po POLSKU. analysis = 2-3 zdania po polsku. Opisz co robisz, DLACZEGO i jakie efekty finansowe przewidujesz.
+Pisz po POLSKU. BĄDŹ ZWIĘZŁY — max ~800 znaków w całym JSON.
 time_blocks MUSZĄ być PRZED analysis.
 PREFERUJ używanie "actions" (lista ID akcji z katalogu) zamiast surowych "commands".
 
 {{
   "time_blocks": [
-    {{
-      "start": "HH:MM",
-      "end": "HH:MM",
-      "zone": "off_peak|morning_peak|afternoon_peak",
-      "price": 0.63,
-      "strategy": "aggressive_charge|discharge_self_consume|night_charge|pv_optimize|no_action",
-      "actions": ["action_id_1"],
-      "commands": [
-        {{"tool": "force_charge", "params": {{}}}}
-      ],
-      "reasoning": "1-2 zdania po polsku — dlaczego ten blok, co chcesz osiągnąć"
-    }}
+    {{"start":"HH:MM","end":"HH:MM","zone":"off_peak","price":0.63,"strategy":"aggressive_charge","actions":["action_id"],"commands":[{{"tool":"force_charge","params":{{}}}}],"reasoning":"Krótko po polsku"}}
   ],
-  "analysis": "2-3 zdania po polsku. Opisz swoją strategię, DLACZEGO tak planujesz, jakie oszczędności przewidujesz i na co zwracasz uwagę.",
-  "savings_estimate": {{
-    "optimized_cost_pln": 7.56,
-    "net_savings_pln": 8.74
-  }},
-  "next_analysis_minutes": 30
+  "analysis": "1 zdanie po polsku: co robisz i dlaczego.",
+  "savings_estimate": {{"optimized_cost_pln":7.56,"net_savings_pln":8.74}},
+  "next_analysis_minutes": 15
 }}
 
 RULES FOR time_blocks:
 - Start from NOW ({now.strftime('%H:%M')}) and cover next 24h
 - Each block aligns with G13 tariff zone transitions
-- Max 6 blocks (group similar periods)
-- Max 3 commands per block
+- Max 4 blocks (group similar periods)
+- Max 2 commands per block
 - Order blocks chronologically
-- "actions": list of action IDs from ACTION CATALOG that should be active in this block
-- "commands": can use EITHER {{"action": "id"}} or {{"tool": "name", "params": {{}}}}
-- Keep reasoning to 1-2 short sentences PER BLOCK in Polish
-- analysis MUST be in Polish and explain your overall strategy"""
+- "reasoning": max 15 słów per block
+- "analysis": max 1 zdanie po polsku
+- KEEP TOTAL JSON UNDER 800 CHARACTERS"""
 
     return prompt
