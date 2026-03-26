@@ -1324,6 +1324,41 @@ class StrategyController:
                 if reasoning:
                     self._log_decision("ai_exec", f"🧠 Block {block_key}: {reasoning}")
 
+            else:
+                # ── STATE-DRIFT DETECTION ────────────────────────
+                # Check every tick if device state matches plan expectations
+                # This catches manual overrides by user or external automations
+                drift_cooldown = getattr(self, "_drift_last_reexec", 0)
+                if now - drift_cooldown >= 120:  # Max once per 120s
+                    strategy = block.get("strategy", "")
+                    device_status = self._inverter_agent.get_device_status()
+                    work_mode = device_status.get("work_mode", "")
+                    charging = device_status.get("charging_active", False)
+                    bat_power = device_status.get("battery_power", 0)
+
+                    # Detect drift: plan says charge but inverter not charging
+                    drifted = False
+                    if strategy in ("aggressive_charge", "charge", "night_charge"):
+                        if not charging or bat_power >= -50:  # Not charging (power ~ 0 or discharging)
+                            drifted = True
+                            _LOGGER.warning(
+                                "AI Executor: STATE DRIFT — plan=%s but inverter charging=%s bat=%dW mode=%s → re-executing",
+                                strategy, charging, bat_power, work_mode,
+                            )
+                    elif strategy in ("discharge_self_consume", "discharge"):
+                        if bat_power <= 50:  # Not discharging
+                            drifted = True
+                            _LOGGER.warning(
+                                "AI Executor: STATE DRIFT — plan=%s but bat=%dW mode=%s → re-executing",
+                                strategy, bat_power, work_mode,
+                            )
+
+                    if drifted:
+                        self._drift_last_reexec = now
+                        self._block_commands_executed = False  # Force re-execution on next tick
+                        self._log_decision("drift", f"⚠️ State drift detected — re-applying block {block_key}")
+                        actions.append(f"⚠️ Drift: re-applying {block_key}")
+
             # Show current block info
             actions.append(
                 f"🧠 Plan: block {block_key} ({block.get('zone', '?')}, "
