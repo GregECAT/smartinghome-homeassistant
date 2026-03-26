@@ -693,6 +693,8 @@ SENSOR_FORECAST_TOMORROW_2: Final = "sensor.energy_production_tomorrow_2"
 SELECT_WORK_MODE: Final = "select.goodwe_tryb_pracy_falownika"
 NUMBER_EXPORT_LIMIT: Final = "number.goodwe_grid_export_limit"
 NUMBER_DOD_ON_GRID: Final = "number.goodwe_depth_of_discharge_on_grid"
+NUMBER_ECO_MODE_POWER: Final = "number.goodwe_eco_mode_power"
+NUMBER_ECO_MODE_SOC: Final = "number.goodwe_eco_mode_soc"
 
 # Binary sensors from RCE PSE
 BINARY_RCE_CHEAPEST: Final = "binary_sensor.rce_pse_aktywne_najtansze_okno_dzisiaj"

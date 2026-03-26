@@ -64,6 +64,12 @@ FORCE_CUSTOM_SCHEMA = vol.Schema(
         vol.Optional("export_limit"): vol.All(
             vol.Coerce(int), vol.Range(min=0, max=16000)
         ),
+        vol.Optional("eco_mode_power"): vol.All(
+            vol.Coerce(int), vol.Range(min=0, max=100)
+        ),
+        vol.Optional("eco_mode_soc"): vol.All(
+            vol.Coerce(int), vol.Range(min=0, max=100)
+        ),
     }
 )
 
@@ -218,12 +224,16 @@ async def async_setup_services(
         modbus_val = call.data.get("modbus_47511", -1)
         charge_current = call.data.get("charge_current")
         export_limit = call.data.get("export_limit")
+        eco_mode_power = call.data.get("eco_mode_power")
+        eco_mode_soc = call.data.get("eco_mode_soc")
 
         result = await energy_mgr.force_custom(
             work_mode=work_mode,
             modbus_47511=modbus_val if modbus_val >= 0 else None,
             charge_current=charge_current,
             export_limit=export_limit,
+            eco_mode_power=eco_mode_power,
+            eco_mode_soc=eco_mode_soc,
         )
 
         # Fire event for frontend feedback
