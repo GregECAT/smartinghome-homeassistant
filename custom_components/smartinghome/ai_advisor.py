@@ -778,6 +778,10 @@ User question: {question}"""
                     return parsed2
             except Exception as err2:
                 _LOGGER.warning("AI Strategist: JSON parse error: %s | raw: %s", err2, raw_text[:200])
+                # Attempt to repair truncated strategist JSON
+                repaired = self._repair_truncated_strategist(raw_text)
+                if repaired:
+                    return repaired
             return {}
 
         try:
@@ -898,6 +902,58 @@ User question: {question}"""
                 "reasoning": "(ultra-short truncated response)",
                 "commands": [{"tool": "no_action", "params": {"reason": "truncated"}}],
                 "next_check_minutes": 5,
+            }
+
+        return None
+
+    @staticmethod
+    def _repair_truncated_strategist(raw_text: str) -> dict | None:
+        """Attempt to repair truncated Strategist JSON.
+
+        Extracts whatever time_blocks we can parse from the truncated text.
+        """
+        import re
+        import json as _json
+
+        # Try to extract complete time_block objects via regex
+        # Each block looks like { "start": "HH:MM", ... }
+        block_pattern = re.compile(
+            r'\{\s*"start"\s*:\s*"(\d{2}:\d{2})"\s*,\s*"end"\s*:\s*"(\d{2}:\d{2})"'
+            r'[^}]*?"strategy"\s*:\s*"([^"]*)"[^}]*?\}',
+            re.DOTALL,
+        )
+        blocks = []
+        for m in block_pattern.finditer(raw_text):
+            try:
+                # Try to parse the full block as JSON
+                block_text = m.group(0)
+                # Fix any trailing issues
+                if not block_text.endswith("}"):
+                    block_text += "}"
+                block = _json.loads(block_text)
+                blocks.append(block)
+            except Exception:
+                # Fallback: create minimal block from regex groups
+                blocks.append({
+                    "start": m.group(1),
+                    "end": m.group(2),
+                    "strategy": m.group(3),
+                    "commands": [],
+                    "reasoning": "(repaired from truncated response)",
+                })
+
+        if blocks:
+            _LOGGER.info(
+                "AI Strategist: repaired truncated JSON, extracted %d time_blocks",
+                len(blocks),
+            )
+            # Extract analysis if present
+            analysis_match = re.search(r'"analysis"\s*:\s*"([^"]*)', raw_text)
+            analysis = analysis_match.group(1)[:200] if analysis_match else "(truncated)"
+            return {
+                "time_blocks": blocks,
+                "analysis": f"(repaired) {analysis}",
+                "next_analysis_minutes": 30,
             }
 
         return None
