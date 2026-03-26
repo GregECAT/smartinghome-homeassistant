@@ -590,6 +590,9 @@ class EnergyManager:
 
     async def _set_dod(self, dod: int) -> None:
         """Set depth of discharge on grid."""
+        if not self.hass.states.get(NUMBER_DOD_ON_GRID):
+            _LOGGER.debug("Entity %s not available — skipping DOD set", NUMBER_DOD_ON_GRID)
+            return
         # Safety clamp: GoodWe entity max is 95%
         dod = max(0, min(dod, DEFAULT_DOD_ON_GRID))
         await self.hass.services.async_call(
@@ -603,6 +606,9 @@ class EnergyManager:
 
     async def _set_work_mode(self, mode: str) -> None:
         """Set inverter work mode via select.select_option."""
+        if not self.hass.states.get(SELECT_WORK_MODE):
+            _LOGGER.debug("Entity %s not available — skipping work mode set", SELECT_WORK_MODE)
+            return
         await self.hass.services.async_call(
             "select",
             "select_option",
@@ -614,6 +620,9 @@ class EnergyManager:
 
     async def _set_eco_mode_power(self, value: int) -> None:
         """Set Eco Mode power percentage (0-100%)."""
+        if not self.hass.states.get(NUMBER_ECO_MODE_POWER):
+            _LOGGER.debug("Entity %s not available — skipping eco mode power set", NUMBER_ECO_MODE_POWER)
+            return
         await self.hass.services.async_call(
             "number",
             "set_value",
@@ -625,6 +634,9 @@ class EnergyManager:
 
     async def _set_eco_mode_soc(self, value: int) -> None:
         """Set Eco Mode target SOC percentage (0-100%)."""
+        if not self.hass.states.get(NUMBER_ECO_MODE_SOC):
+            _LOGGER.debug("Entity %s not available — skipping eco mode SOC set", NUMBER_ECO_MODE_SOC)
+            return
         await self.hass.services.async_call(
             "number",
             "set_value",
