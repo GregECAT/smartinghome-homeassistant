@@ -1012,11 +1012,6 @@ def build_ai_strategist_prompt(
             f"SOC:{h['soc_start']:.0f}→{h['soc_end']:.0f}% | {zone.value}"
         )
 
-    # Tools description
-    tools_desc = "\n".join(
-        f'  - "{name}": {desc}' for name, desc in AI_CONTROLLER_TOOLS.items()
-    )
-
     # Action catalog
     action_catalog = build_action_catalog_text(action_states)
 
