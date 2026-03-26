@@ -468,9 +468,250 @@ Awaryjne przywrócenie normalnego stanu — użyj gdy coś pójdzie nie tak:
 
 ---
 
-## 6. INTEGRACJA Z ISTNIEJĄCYM HEMS
+## 6. WYMAGANA KONFIGURACJA — configuration.yaml
 
-### 6.1 Przełączniki (input_boolean) — już utworzone
+**BEZ TYCH WPISÓW SYSTEM NIE ZADZIAŁA!** Poniższe elementy MUSZĄ istnieć
+w `configuration.yaml` Home Assistant zanim agent uruchomi Force Charge/Discharge.
+
+### 6.1 Input Boolean — przełączniki Force (WYMAGANE!)
+
+Dodaj w sekcji `input_boolean:` pliku `configuration.yaml`:
+
+```yaml
+input_boolean:
+  hems_force_grid_charge:
+    name: "Wymuś ładowanie z sieci"
+    icon: mdi:battery-charging-wireless
+
+  hems_force_battery_discharge:
+    name: "Wymuś rozładowanie do sieci"
+    icon: mdi:battery-arrow-down
+
+  hems_modbus_emergency_stop:
+    name: "Emergency STOP"
+    icon: mdi:alert-octagon
+
+  hems_battery_export_enabled:
+    name: "Eksport baterii do sieci"
+    icon: mdi:battery-arrow-up
+```
+
+**Bez tych helperów** agent dostanie błąd:
+`Referenced entities input_boolean.hems_force_grid_charge are missing or not currently available`
+
+Po dodaniu → **restart Home Assistant** (nie wystarczy przeładowanie konfiguracji).
+
+### 6.2 Modbus RS485 — połączenie z falownikiem GoodWe BT
+
+Dodaj w głównym pliku `configuration.yaml`:
+
+```yaml
+modbus:
+  - name: goodwe_rs485
+    type: serial
+    method: rtu
+    port: /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_BG02YUXJ-if00-port0
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+
+    sensors:
+      # ── EMS Mode (kluczowy do monitorowania trybu) ──
+      - name: GW Modbus EMS Mode
+        slave: 247
+        address: 47511
+        input_type: holding
+        data_type: uint16
+        scan_interval: 15
+
+      - name: GW Modbus EMS Power Limit
+        slave: 247
+        address: 47512
+        input_type: holding
+        data_type: uint16
+        unit_of_measurement: W
+        scan_interval: 15
+
+      # ── Grid Export (musi być = 1 dla discharge!) ──
+      - name: GW Modbus Grid Export Enabled
+        slave: 247
+        address: 47509
+        input_type: holding
+        data_type: uint16
+        scan_interval: 30
+
+      - name: GW Modbus Grid Export Limit
+        slave: 247
+        address: 47510
+        input_type: holding
+        data_type: uint16
+        unit_of_measurement: W
+        scan_interval: 30
+
+      # ── Eco Mode Slot switches (monitoring) ──
+      - name: GW Modbus Eco Mode 1 Switch
+        slave: 247
+        address: 47518
+        input_type: holding
+        data_type: uint16
+        scan_interval: 120
+
+      - name: GW Modbus Eco Mode 2 Switch
+        slave: 247
+        address: 47522
+        input_type: holding
+        data_type: uint16
+        scan_interval: 120
+
+      # ── Battery / SOC protection ──
+      - name: GW Modbus Battery SOC Protection
+        slave: 247
+        address: 47500
+        input_type: holding
+        data_type: uint16
+        unit_of_measurement: "%"
+        scan_interval: 60
+
+      - name: GW Modbus DOD On Grid
+        slave: 247
+        address: 47501
+        input_type: holding
+        data_type: uint16
+        scan_interval: 60
+
+      - name: GW Modbus DOD Off Grid
+        slave: 247
+        address: 47502
+        input_type: holding
+        data_type: uint16
+        unit_of_measurement: "%"
+        scan_interval: 60
+```
+
+**Port RS485** — adapter FTDI FT232R. Sprawdź czy istnieje:
+`ls /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_BG02YUXJ-if00-port0`
+
+### 6.3 Integracja GoodWe — HACS mletenay (WYMAGANE!)
+
+System wymaga integracji **mletenay (experimental)** z HACS, NIE natywnej integracji HA.
+
+**Instalacja:**
+
+1. HACS → Integracje → wyszukaj "GoodWe" → wybierz **mletenay/goodwe** (experimental)
+2. Zainstaluj i restart HA
+3. Dodaj integrację: Ustawienia → Integracje → + → GoodWe → wpisz IP falownika
+
+**Encje które integracja musi udostępnić (sprawdź po instalacji):**
+
+| Encja                                      | Typ    | Wymagane dla                  |
+| ------------------------------------------ | ------ | ----------------------------- |
+| `select.goodwe_tryb_pracy_falownika`       | select | START/STOP — zmiana trybu     |
+| `number.goodwe_eco_mode_power`             | number | START — ustawienie mocy Eco   |
+| `number.goodwe_eco_mode_soc`               | number | START — docelowy SOC          |
+| `number.goodwe_depth_of_discharge_on_grid` | number | DOD management                |
+| `number.goodwe_grid_export_limit`          | number | Export limit (GUI max 10000W) |
+| `sensor.battery_power`                     | sensor | Monitoring mocy baterii       |
+| `sensor.battery_state_of_charge`           | sensor | SOC — trigger auto-stop       |
+| `sensor.meter_active_power_total`          | sensor | Monitoring import/eksport     |
+| `sensor.pv_power`                          | sensor | Monitoring PV                 |
+| `sensor.load`                              | sensor | Monitoring zużycia domu       |
+| `sensor.battery_current`                   | sensor | Monitoring prądu baterii      |
+| `sensor.battery_voltage`                   | sensor | Monitoring napięcia baterii   |
+
+**Device ID falownika:** `02592f41265ac022d0c8b8aa99728b3e`
+
+Sprawdź w: Ustawienia → Urządzenia → GoodWe → kliknij falownik → URL zawiera device_id.
+
+### 6.4 Serwis goodwe.set_parameter — parametry falownika
+
+Integracja mletenay rejestruje serwis `goodwe.set_parameter`. Sprawdź dostępność:
+Narzędzia deweloperskie → Akcje → wyszukaj "goodwe.set_parameter"
+
+**Potwierdzone parametry dla GoodWe BT:**
+
+| Parameter                | Wartości          | Opis                     |
+| ------------------------ | ----------------- | ------------------------ |
+| `battery_charge_current` | `"0"` / `"18.5"`  | Prąd ładowania (STRING!) |
+| `grid_export_limit`      | `"0"` - `"16000"` | Limit eksportu (STRING!) |
+
+**NIE działające parametry na BT:**
+
+- `eco_mode_1` → zwraca "Unknown error"
+- Jakiekolwiek parametry eco slot → nie obsługiwane
+
+### 6.5 Template sensor — dekodowanie EMS Mode (opcjonalny ale przydatny)
+
+Dodaj w sekcji `template: → sensor:` w `configuration.yaml`:
+
+```yaml
+template:
+  - sensor:
+      - name: "GoodWe EMS Mode"
+        unique_id: goodwe_ems_mode
+        state: >
+          {% set mode = states('sensor.gw_modbus_ems_mode') | int(0) %}
+          {% if mode == 0 %}Auto
+          {% elif mode == 1 %}Self-use
+          {% elif mode == 2 %}Force charge
+          {% elif mode == 4 %}Force discharge
+          {% elif mode == 8 %}Hold battery
+          {% else %}Nieznany ({{ mode }})
+          {% endif %}
+        icon: >
+          {% set mode = states('sensor.gw_modbus_ems_mode') | int(0) %}
+          {% if mode == 0 %}mdi:refresh-auto
+          {% elif mode == 1 %}mdi:home-battery
+          {% elif mode == 2 %}mdi:battery-charging-high
+          {% elif mode == 4 %}mdi:battery-arrow-down-outline
+          {% elif mode == 8 %}mdi:battery-lock
+          {% else %}mdi:help-circle
+          {% endif %}
+```
+
+### 6.6 Weryfikacja konfiguracji — checklist po restarcie HA
+
+Po dodaniu wszystkich wpisów i restarcie HA, sprawdź w Narzędzia deweloperskie → Stany:
+
+```
+✅ input_boolean.hems_force_grid_charge         → off
+✅ input_boolean.hems_force_battery_discharge    → off
+✅ input_boolean.hems_modbus_emergency_stop      → off
+✅ select.goodwe_tryb_pracy_falownika            → general
+✅ number.goodwe_eco_mode_power                  → 0.0
+✅ number.goodwe_eco_mode_soc                    → 100.0
+✅ sensor.gw_modbus_ems_mode                     → 1 (Self-use)
+✅ sensor.gw_modbus_grid_export_enabled          → 0 lub 1
+✅ sensor.gw_modbus_grid_export_limit            → 16000
+✅ sensor.battery_state_of_charge                → (wartość 0-100%)
+✅ sensor.battery_power                          → (wartość W)
+✅ sensor.meter_active_power_total               → (wartość W)
+```
+
+Jeśli którakolwiek encja jest `unavailable` lub `unknown`:
+
+- `input_boolean.*` → nie dodano do configuration.yaml, restart wymagany
+- `sensor.gw_modbus_*` → problem z Modbus RS485 (kabel, port, slave ID)
+- `select.goodwe_*` / `number.goodwe_*` → integracja mletenay nie działa (sprawdź IP falownika)
+- `sensor.battery_*` / `sensor.meter_*` → integracja mletenay nie połączona
+
+### 6.7 Znane problemy konfiguracji
+
+| Problem                       | Objaw                                 | Rozwiązanie                                                   |
+| ----------------------------- | ------------------------------------- | ------------------------------------------------------------- |
+| Brak input_boolean            | `Referenced entities ... are missing` | Dodaj sekcję 6.1, restart HA                                  |
+| Modbus nie łączy              | `pymodbus returned isError True`      | Sprawdź kabel RS485, port, slave=247                          |
+| Modbus i mletenay bijią się   | Modbus write nie działa               | Nie używaj Modbus write 47511, używaj eco_mode via mletenay   |
+| set_parameter "expected str"  | Błąd typu danych                      | Wartość MUSI być string: `"0"` nie `0`                        |
+| set_parameter "Unknown error" | Parametr nie obsługiwany              | Na BT działa TYLKO: battery_charge_current, grid_export_limit |
+| eco_mode_power nie istnieje   | Encja not found                       | Zainstaluj mletenay experimental (nie stable)                 |
+| Grid export nie działa        | Bateria nie eksportuje do sieci       | Sprawdź 47509 (musi być = 1), sprawdź grid_export_limit > 0   |
+
+---
+
+## 7. INTEGRACJA Z ISTNIEJĄCYM HEMS
+
+### 7.1 Przełączniki (input_boolean) — już utworzone
 
 | Helper                                       | Opis                        |
 | -------------------------------------------- | --------------------------- |
@@ -478,7 +719,7 @@ Awaryjne przywrócenie normalnego stanu — użyj gdy coś pójdzie nie tak:
 | `input_boolean.hems_force_battery_discharge` | Wymuś rozładowanie do sieci |
 | `input_boolean.hems_modbus_emergency_stop`   | Awaryjny STOP               |
 
-### 6.2 Blokada automatyzacji HEMS
+### 7.2 Blokada automatyzacji HEMS
 
 Gdy przełącznik Force jest ON, WSZYSTKIE automatyzacje HEMS (19 sztuk) mają warunek:
 
@@ -491,7 +732,7 @@ Gdy przełącznik Force jest ON, WSZYSTKIE automatyzacje HEMS (19 sztuk) mają w
 
 Dzięki temu żadna automatyzacja HEMS nie nadpisze parametrów falownika gdy Force jest aktywny.
 
-### 6.3 Automatyzacje Force w automations.yaml
+### 7.3 Automatyzacje Force w automations.yaml
 
 ID automatyzacji:
 
@@ -508,9 +749,9 @@ Każda automatyzacja:
 
 ---
 
-## 7. KONFIGURACJA PRZYCISKÓW W DASHBOARDZIE
+## 8. KONFIGURACJA PRZYCISKÓW W DASHBOARDZIE
 
-### 7.1 Prosty przycisk ON/OFF (toggle)
+### 8.1 Prosty przycisk ON/OFF (toggle)
 
 ```yaml
 type: button
@@ -521,7 +762,7 @@ tap_action:
   action: toggle
 ```
 
-### 7.2 Zaawansowany panel (jak na screenshocie)
+### 8.2 Zaawansowany panel (jak na screenshocie)
 
 Panel powinien pokazywać:
 
@@ -531,7 +772,7 @@ Panel powinien pokazywać:
 - Export limit: `sensor.gw_modbus_grid_export_limit`
 - Przycisk WYKONAJ: toggle `input_boolean.hems_force_grid_charge`
 
-### 7.3 Weryfikacja działania (sensory do monitorowania)
+### 8.3 Weryfikacja działania (sensory do monitorowania)
 
 | Co sprawdzić | Sensor                               | Oczekiwane przy charge | Oczekiwane przy discharge |
 | ------------ | ------------------------------------ | ---------------------- | ------------------------- |
@@ -544,7 +785,7 @@ Panel powinien pokazywać:
 
 ---
 
-## 8. CZEGO NIE ROBIĆ
+## 9. CZEGO NIE ROBIĆ
 
 1. **NIE używaj `select.select_option` jednocześnie z `modbus.write_register 47511`** — bijają się nawzajem (UDP vs RS485)
 2. **NIE ustawiaj `grid_export_limit = 0`** — blokuje cały eksport, nawet PV
@@ -555,7 +796,7 @@ Panel powinien pokazywać:
 
 ---
 
-## 9. MODBUS RS485 — PARAMETRY POŁĄCZENIA
+## 10. MODBUS RS485 — PARAMETRY POŁĄCZENIA
 
 ```yaml
 modbus:
@@ -573,7 +814,7 @@ Slave: 247
 
 ---
 
-## 10. MAPA REJESTRÓW MODBUS (potwierdzone)
+## 11. MAPA REJESTRÓW MODBUS (potwierdzone)
 
 | Rejestr | Opis                    | Aktualny stan      |
 | ------- | ----------------------- | ------------------ |
@@ -599,7 +840,7 @@ Slave: 247
 
 ---
 
-## 11. PODSUMOWANIE — NAJKRÓTSZA DROGA
+## 12. PODSUMOWANIE — NAJKRÓTSZA DROGA
 
 **▶ START Wymuś Ładowanie z sieci:**
 `eco_mode_soc=100` → `eco_mode_power=100` → `charge_current=18.5` → `select: eco_charge`
@@ -622,7 +863,7 @@ Slave: 247
 
 **⏱ TIMEOUT:** 6 godzin → STOP awaryjny (safety net)
 
-## 12. TABELA AKCJI DLA AGENTA — SZYBKI REFERENCE
+## 13. TABELA AKCJI DLA AGENTA — SZYBKI REFERENCE
 
 | Zdarzenie                       | Akcja               | Sekwencja               |
 | ------------------------------- | ------------------- | ----------------------- |
