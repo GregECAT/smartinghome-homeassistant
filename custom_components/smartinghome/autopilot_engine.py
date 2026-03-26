@@ -876,11 +876,12 @@ def build_ai_controller_prompt(
     if device_status_text:
         device_section = f"\n{device_status_text}\n"
 
-    prompt = f"""You are an autonomous energy controller for a home solar+battery system in Poland (G13 tariff).
+    prompt = f"""Jesteś autonomicznym kontrolerem energii dla domowego systemu solar+bateria w Polsce (taryfa G13).
+Odpowiadaj ZAWSZE po polsku. Wszystkie opisy, reasoning, analysis — po polsku.
 
-YOUR JOB: Decide what action to take RIGHT NOW based on current system state.
-You have a LIBRARY of 35 named actions (see ACTION CATALOG below). PREFER triggering actions by ID over raw tool calls.
-Respond ONLY with valid JSON.
+TWOJE ZADANIE: Zdecyduj jaką akcję podjąć TERAZ na podstawie bieżącego stanu systemu.
+Masz BIBLIOTEKĘ 35 nazwanych akcji (patrz KATALOG AKCJI poniżej). PREFERUJ aktywowanie akcji po ID.
+Odpowiedz WYŁĄCZNIE poprawnym JSON.
 
 ═══ AVAILABLE TOOLS (low-level) ═══
 {tools_desc}
@@ -939,16 +940,16 @@ Respond ONLY with valid JSON.
 11. ALWAYS call stop_force after force operations end. NEVER leave inverter in forced state.
 12. CHECK DEVICE STATUS — if already active, use "no_action"!
 
-═══ RESPONSE FORMAT ═══
-ONLY valid JSON. No text, no markdown, no explanation outside JSON.
-FORBIDDEN keys: "analysis", "explanation", "plan". Use ONLY: "reasoning", "commands", "next_check_minutes".
-"reasoning" = MAX 10 WORDS in Polish. NOT a paragraph.
+═══ FORMAT ODPOWIEDZI ═══
+TYLKO poprawny JSON. Bez tekstu, bez markdown, bez wyjaśnień poza JSON.
+ZABRONIONE klucze: "analysis", "explanation", "plan". Używaj TYLKO: "reasoning", "commands", "next_check_minutes".
+"reasoning" = 1-2 ZDANIA po polsku. Opisz DLACZEGO podejmujesz tę decyzję i co chcesz osiągnąć.
 {{
-  "reasoning": "Szczyt, rozładuj",
+  "reasoning": "Rozpoczynam rozładowanie baterii — drogi szczyt popołudniowy (1.50 PLN/kWh), SOC 54% wystarczy na zasil domu. Unikam importu z sieci.",
   "commands": [{{"action": "evening_peak"}}],
   "next_check_minutes": 5
 }}
-Use "action" with catalog ID. Max 2 commands. If nothing needed: {{"tool":"no_action","params":{{"reason":"ok"}}}}"""
+Używaj "action" z ID katalogu. Maks 2 komendy. Jeśli nic nie trzeba: {{"tool":"no_action","params":{{"reason":"ok"}}}}"""
 
     return prompt
 
@@ -1024,10 +1025,11 @@ def build_ai_strategist_prompt(
     if device_status_text:
         device_section = f"\n{device_status_text}\n"
 
-    prompt = f"""You are an expert energy strategist AI for a home solar+battery system in Poland (G13 tariff).
+    prompt = f"""Jesteś ekspertem od strategii energetycznej AI dla domowego systemu solar+bateria w Polsce (taryfa G13).
+Odpowiadaj ZAWSZE po polsku. Wszystkie opisy, reasoning, analysis — po polsku.
 
-YOUR JOB: Create a STRATEGIC 24H PLAN specifying which ACTIONS to activate in each time block.
-You have a LIBRARY of 35 named actions (see ACTION CATALOG below). PREFER referencing actions by ID.
+TWOJE ZADANIE: Stwórz STRATEGICZNY PLAN 24H określający jakie AKCJE aktywować w każdym bloku czasowym.
+Masz BIBLIOTEKĘ 35 nazwanych akcji (patrz KATALOG AKCJI poniżej). PREFERUJ odwoływanie się do akcji po ID.
 This plan will be executed automatically by the InverterAgent. Respond ONLY with valid JSON.
 
 ═══ SYSTEM ═══
@@ -1090,10 +1092,11 @@ Net savings: {estimation.get('net_savings', 0):.2f} PLN
 12. CHECK DEVICE STATUS — don't send commands the system is already executing.
 13. ALWAYS include stop_force commands when forced state should end (zone transition).
 
-═══ RESPONSE FORMAT ═══
-CRITICAL: Respond with ONLY valid JSON. No markdown, no text before/after.
-KEEP IT SHORT: analysis max 2 sentences. time_blocks MUST come before analysis.
-PREFER using "actions" (list of action IDs from the catalog) over raw "commands".
+═══ FORMAT ODPOWIEDZI ═══
+KRYTYCZNE: Odpowiedz WYŁĄCZNIE poprawnym JSON. Bez markdown, bez tekstu przed/po.
+Pisz po POLSKU. analysis = 2-3 zdania po polsku. Opisz co robisz, DLACZEGO i jakie efekty finansowe przewidujesz.
+time_blocks MUSZĄ być PRZED analysis.
+PREFERUJ używanie "actions" (lista ID akcji z katalogu) zamiast surowych "commands".
 
 {{
   "time_blocks": [
@@ -1107,10 +1110,10 @@ PREFER using "actions" (list of action IDs from the catalog) over raw "commands"
       "commands": [
         {{"tool": "force_charge", "params": {{}}}}
       ],
-      "reasoning": "1 zdanie"
+      "reasoning": "1-2 zdania po polsku — dlaczego ten blok, co chcesz osiągnąć"
     }}
   ],
-  "analysis": "Max 2 zdania po polsku",
+  "analysis": "2-3 zdania po polsku. Opisz swoją strategię, DLACZEGO tak planujesz, jakie oszczędności przewidujesz i na co zwracasz uwagę.",
   "savings_estimate": {{
     "optimized_cost_pln": 7.56,
     "net_savings_pln": 8.74
@@ -1126,6 +1129,7 @@ RULES FOR time_blocks:
 - Order blocks chronologically
 - "actions": list of action IDs from ACTION CATALOG that should be active in this block
 - "commands": can use EITHER {{"action": "id"}} or {{"tool": "name", "params": {{}}}}
-- Keep reasoning to 1 short sentence per block"""
+- Keep reasoning to 1-2 short sentences PER BLOCK in Polish
+- analysis MUST be in Polish and explain your overall strategy"""
 
     return prompt
