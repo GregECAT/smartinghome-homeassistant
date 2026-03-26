@@ -162,14 +162,15 @@ class EnergyManager:
         await self._set_eco_mode_soc(100)
         await self._set_work_mode("general")
         await self._enable_charging()
-        # Turn off force flag
-        try:
-            await self.hass.services.async_call(
-                "input_boolean", "turn_off",
-                {"entity_id": "input_boolean.hems_force_grid_charge"},
-            )
-        except Exception:
-            _LOGGER.debug("input_boolean.hems_force_grid_charge not available")
+        # Turn off force flag (if helper exists)
+        _eid = "input_boolean.hems_force_grid_charge"
+        if self.hass.states.get(_eid):
+            try:
+                await self.hass.services.async_call(
+                    "input_boolean", "turn_off", {"entity_id": _eid},
+                )
+            except Exception:
+                _LOGGER.debug("%s turn_off failed", _eid)
         self._current_mode = HEMSMode.AUTO
 
     async def stop_force_discharge(self) -> None:
@@ -189,14 +190,15 @@ class EnergyManager:
         await self._set_work_mode("general")
         await self._enable_charging()
         await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
-        # Turn off force flag
-        try:
-            await self.hass.services.async_call(
-                "input_boolean", "turn_off",
-                {"entity_id": "input_boolean.hems_force_battery_discharge"},
-            )
-        except Exception:
-            _LOGGER.debug("input_boolean.hems_force_battery_discharge not available")
+        # Turn off force flag (if helper exists)
+        _eid = "input_boolean.hems_force_battery_discharge"
+        if self.hass.states.get(_eid):
+            try:
+                await self.hass.services.async_call(
+                    "input_boolean", "turn_off", {"entity_id": _eid},
+                )
+            except Exception:
+                _LOGGER.debug("%s turn_off failed", _eid)
         self._current_mode = HEMSMode.AUTO
 
     async def emergency_stop(self) -> None:
@@ -219,17 +221,17 @@ class EnergyManager:
         await self._set_work_mode("general")
         await self._enable_charging()
         await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
-        # Turn off both force flags
         for entity_id in (
             "input_boolean.hems_force_grid_charge",
             "input_boolean.hems_force_battery_discharge",
         ):
-            try:
-                await self.hass.services.async_call(
-                    "input_boolean", "turn_off", {"entity_id": entity_id},
-                )
-            except Exception:
-                _LOGGER.debug("%s not available", entity_id)
+            if self.hass.states.get(entity_id):
+                try:
+                    await self.hass.services.async_call(
+                        "input_boolean", "turn_off", {"entity_id": entity_id},
+                    )
+                except Exception:
+                    _LOGGER.debug("%s turn_off failed", entity_id)
         self._current_mode = HEMSMode.AUTO
 
     async def force_custom(
