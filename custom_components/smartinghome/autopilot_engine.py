@@ -863,6 +863,14 @@ def build_ai_controller_prompt(
     bat_cap = current_data.get('battery_capacity') or DEFAULT_BATTERY_CAPACITY
     bat_cap_kwh = float(bat_cap) / 1000
 
+    # Transform raw sensor values to explicit human-readable format
+    # GoodWe convention: battery_power negative=charging, positive=discharging
+    # grid_power: negative=export, positive=import
+    raw_bat = float(current_data.get('battery_power', 0))
+    raw_grid = float(current_data.get('grid_power', 0))
+    bat_state = f"ŁADOWANIE {abs(raw_bat):.0f}W (do baterii z sieci/PV)" if raw_bat < -50 else f"ROZŁADOWYWANIE {abs(raw_bat):.0f}W (z baterii do domu)" if raw_bat > 50 else "BEZCZYNNA (idle)"
+    grid_state = f"IMPORT {abs(raw_grid):.0f}W (pobór z sieci)" if raw_grid > 50 else f"EKSPORT {abs(raw_grid):.0f}W (sprzedaż do sieci)" if raw_grid < -50 else "ZERO (brak przepływu)"
+
     # Tools description
     tools_desc = "\n".join(
         f'  - "{name}": {desc}' for name, desc in AI_CONTROLLER_TOOLS.items()
@@ -894,10 +902,10 @@ Odpowiedz WYŁĄCZNIE poprawnym JSON.
 
 ═══ CURRENT STATE ({now.strftime('%Y-%m-%d')} {day_names[weekday]} {now.strftime('%H:%M')}) ═══
   PV Power: {current_data.get('pv_power', 0)} W
-  Load: {current_data.get('load', 0)} W
+  Load (zużycie domu): {current_data.get('load', 0)} W
   Battery SOC: {current_data.get('battery_soc', 0)}%
-  Battery Power: {current_data.get('battery_power', 0)} W (positive=charging)
-  Grid Power: {current_data.get('grid_power', 0)} W (positive=import)
+  Battery: {bat_state}
+  Grid (sieć): {grid_state}
   PV Surplus: {current_data.get('pv_surplus', 0)} W
   Battery Capacity: {bat_cap_kwh:.1f} kWh
 {device_section}
@@ -1002,6 +1010,14 @@ def build_ai_strategist_prompt(
     bat_cap = current_data.get('battery_capacity') or DEFAULT_BATTERY_CAPACITY
     bat_cap_kwh = float(bat_cap) / 1000
 
+    # Transform raw sensor values to explicit human-readable format
+    # GoodWe convention: battery_power negative=charging, positive=discharging
+    # grid_power: negative=export, positive=import
+    raw_bat = float(current_data.get('battery_power', 0))
+    raw_grid = float(current_data.get('grid_power', 0))
+    bat_state = f"ŁADOWANIE {abs(raw_bat):.0f}W (do baterii z sieci/PV)" if raw_bat < -50 else f"ROZŁADOWYWANIE {abs(raw_bat):.0f}W (z baterii do domu)" if raw_bat > 50 else "BEZCZYNNA (idle)"
+    grid_state = f"IMPORT {abs(raw_grid):.0f}W (pobór z sieci)" if raw_grid > 50 else f"EKSPORT {abs(raw_grid):.0f}W (sprzedaż do sieci)" if raw_grid < -50 else "ZERO (brak przepływu)"
+
     # Hourly plan from mathematical model
     plan_lines = []
     for h in estimation.get("hourly_plan", []):
@@ -1043,9 +1059,9 @@ This plan will be executed automatically by the InverterAgent. Respond ONLY with
 {action_catalog}
 
 ═══ CURRENT STATE ({now.strftime('%Y-%m-%d')} {day_names[weekday]} {now.strftime('%H:%M')}) ═══
-  PV: {current_data.get('pv_power', 0)} W | Load: {current_data.get('load', 0)} W
-  Battery SOC: {current_data.get('battery_soc', 0)}% | Power: {current_data.get('battery_power', 0)} W
-  Grid: {current_data.get('grid_power', 0)} W (+=import) | Surplus: {current_data.get('pv_surplus', 0)} W
+  PV: {current_data.get('pv_power', 0)} W | Load (zużycie domu): {current_data.get('load', 0)} W
+  Battery SOC: {current_data.get('battery_soc', 0)}% | {bat_state}
+  Siec: {grid_state} | PV Surplus: {current_data.get('pv_surplus', 0)} W
 
 ═══ TARIFF G13 — SCHEDULE ═══
 {'Weekend (all off-peak 0.63 PLN/kWh)' if weekday >= 5 else chr(10).join(g13_lines)}
