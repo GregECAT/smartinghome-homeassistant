@@ -3375,7 +3375,47 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); }
+
+
+  /* ── Overview Autopilot banner (runs every 5s via _updateAll) ── */
+  _updateOverviewBanner() {
+    const banner = this.shadowRoot.getElementById('ov-autopilot-banner');
+    if (!banner) return;
+    // Throttle: max once per 10s
+    const now = Date.now();
+    if (this._lastBannerUpdate && now - this._lastBannerUpdate < 10000) return;
+    this._lastBannerUpdate = now;
+    fetch('/local/smartinghome/settings.json?t=' + now)
+      .then(r => r.json())
+      .then(s => {
+        const saved = s.autopilot_active_strategy;
+        if (saved) {
+          banner.style.display = 'block';
+          const labels = {
+            max_self_consumption: '🟢 Max Autokonsumpcja',
+            max_profit: '💰 Max Zysk',
+            battery_protection: '🔋 Ochrona Baterii',
+            zero_export: '⚡ Zero Export',
+            weather_adaptive: '🌧️ Pogodowy',
+            ai_full_autonomy: '🧠 AI Pełna Autonomia',
+          };
+          const stEl = this.shadowRoot.getElementById('ov-ap-strategy');
+          if (stEl) stEl.textContent = labels[saved] || saved;
+          const live = s.autopilot_live;
+          if (live) {
+            const zEl = this.shadowRoot.getElementById('ov-ap-zone');
+            if (zEl) {
+              const zm = { off_peak: '🌙 Off-peak', morning_peak: '☀️ Szczyt poranny', afternoon_peak: '⚡ Szczyt popołudniowy' };
+              zEl.textContent = zm[live.g13_zone] || '';
+            }
+          }
+        } else {
+          banner.style.display = 'none';
+        }
+      })
+      .catch(() => {});
+  }
 
   /* ── Moon phase calculation ─────────────────── */
   _getMoonPhase(date) {
