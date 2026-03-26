@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
@@ -241,6 +241,11 @@ class StrategyController:
         self._current_block_key: str = ""  # "HH:MM-HH:MM" of currently executing block
         self._block_commands_executed: bool = False  # True when current block commands done
 
+        # Energy history cache (refreshed hourly for AI prompts)
+        self._energy_history_cache: list[dict[str, Any]] = []
+        self._energy_history_last_fetch: float = 0.0
+        self._energy_history_ttl: int = 3600  # cache for 1 hour
+
         # InverterAgent — state-aware command executor
         self._inverter_agent = InverterAgent(
             hass, energy_manager, dry_run=self._ai_dry_run,
@@ -263,6 +268,95 @@ class StrategyController:
         """Set inverter brand for entity discovery."""
         self._inverter_agent._inverter_brand = brand
         _LOGGER.info("InverterAgent: brand set to %s", brand)
+
+    async def _fetch_energy_history(self) -> list[dict[str, Any]]:
+        """Fetch 3-day energy history from HA Recorder (cached hourly).
+
+        Returns list of dicts: [{"date": "2026-03-26", "load_kwh": 15.2,
+        "pv_kwh": 12.3, "import_kwh": 8.1, "export_kwh": 5.2}, ...]
+        """
+        now = time.time()
+        if (
+            self._energy_history_cache
+            and (now - self._energy_history_last_fetch) < self._energy_history_ttl
+        ):
+            return self._energy_history_cache
+
+        history: list[dict[str, Any]] = []
+        try:
+            from homeassistant.components.recorder.statistics import (
+                statistics_during_period,
+            )
+            from homeassistant.components.recorder import get_instance
+
+            end = datetime.now()
+            start = end - timedelta(days=3)
+
+            # Entities to query — daily totals from Riemann sum / utility meter
+            stat_ids = [
+                "sensor.load",                    # Home consumption
+                "sensor.today_s_pv_generation",    # PV production
+                "sensor.grid_export_daily",        # Import (GoodWe naming inverted)
+                "sensor.grid_import_daily",        # Export (GoodWe naming inverted)
+            ]
+
+            stats = await get_instance(self.hass).async_add_executor_job(
+                statistics_during_period,
+                self.hass,
+                start,
+                end,
+                stat_ids,
+                "day",    # period
+                None,     # units
+                {"sum"},  # types — we want cumulative sum
+            )
+
+            # Process: group by date, compute daily max (sum resets daily)
+            daily: dict[str, dict[str, float]] = {}
+            for entity_id, entries in stats.items():
+                for entry in entries:
+                    ts = entry.get("start")
+                    if ts is None:
+                        continue
+                    if isinstance(ts, (int, float)):
+                        date_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+                    else:
+                        date_str = str(ts)[:10]
+
+                    if date_str not in daily:
+                        daily[date_str] = {
+                            "load_kwh": 0, "pv_kwh": 0,
+                            "import_kwh": 0, "export_kwh": 0,
+                        }
+
+                    val = entry.get("sum", 0) or 0
+                    if "load" in entity_id:
+                        daily[date_str]["load_kwh"] = max(daily[date_str]["load_kwh"], float(val))
+                    elif "pv_generation" in entity_id:
+                        daily[date_str]["pv_kwh"] = max(daily[date_str]["pv_kwh"], float(val))
+                    elif "grid_export" in entity_id:
+                        # GoodWe: grid_export_daily = your import
+                        daily[date_str]["import_kwh"] = max(daily[date_str]["import_kwh"], float(val))
+                    elif "grid_import" in entity_id:
+                        # GoodWe: grid_import_daily = your export
+                        daily[date_str]["export_kwh"] = max(daily[date_str]["export_kwh"], float(val))
+
+            # Sort by date descending (most recent first)
+            for date_str in sorted(daily.keys(), reverse=True):
+                d = daily[date_str]
+                d["date"] = date_str
+                history.append(d)
+
+            self._energy_history_cache = history[:3]  # Max 3 days
+            self._energy_history_last_fetch = now
+            _LOGGER.debug("Energy history fetched: %d days", len(self._energy_history_cache))
+
+        except ImportError:
+            _LOGGER.warning("HA Recorder not available — energy history will be empty")
+        except Exception as exc:
+            _LOGGER.warning("Failed to fetch energy history: %s", exc)
+
+        return self._energy_history_cache
 
     # ------------------------------------------------------------------
     # Public API
@@ -1396,10 +1490,14 @@ class StrategyController:
         try:
             from .autopilot_engine import build_ai_strategist_prompt, AutopilotEngine
 
+            # Fetch energy history (cached, max once per hour)
+            energy_history = await self._fetch_energy_history()
+
             # ALWAYS compute fresh estimation for the Strategist
             ai_data = _build_ai_data(data)
             ai_data["daily_balance"] = self._daily_balance
             ai_data["rce_yesterday"] = self._rce_yesterday
+            ai_data["energy_history_3d"] = energy_history
 
             bat_cap = float(data.get("battery_capacity_wh") or data.get("sensor.battery_capacity") or DEFAULT_BATTERY_CAPACITY)
             engine = AutopilotEngine(battery_capacity_wh=bat_cap)
