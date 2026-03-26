@@ -713,7 +713,7 @@ User question: {question}"""
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
                         url, json=payload,
-                        timeout=aiohttp.ClientTimeout(total=45),  # Shorter timeout for control loop
+                        timeout=aiohttp.ClientTimeout(total=90),  # Generous timeout for Strategist
                     ) as resp:
                         if resp.status == 200:
                             result = await resp.json()
@@ -722,6 +722,13 @@ User question: {question}"""
                                 parts = candidates[0].get("content", {}).get("parts", [])
                                 if parts:
                                     raw_text = parts[0].get("text", "")
+                                # Log finish reason for diagnostics
+                                finish_reason = candidates[0].get("finishReason", "UNKNOWN")
+                                if finish_reason != "STOP":
+                                    _LOGGER.warning(
+                                        "AI Controller: Gemini finishReason=%s (len=%d, max_tok=%s)",
+                                        finish_reason, len(raw_text), max_tokens or self._CONTROLLER_MAX_TOKENS,
+                                    )
                         else:
                             err_text = await resp.text()
                             _LOGGER.error("AI Controller Gemini HTTP %s: %s", resp.status, err_text)
