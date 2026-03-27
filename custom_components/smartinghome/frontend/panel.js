@@ -21,18 +21,25 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   set hass(hass) {
-    // Auto-reload on HA reconnect (after restart / power loss)
+    // Graceful reconnect (no page reload)
     if (this._wasDisconnected && hass.connected) {
-      console.log('[SmartingHOME] HA reconnected after disconnect — auto-reloading panel...');
-      if (!this._reloadScheduled) {
-        this._reloadScheduled = true;
-        setTimeout(() => location.reload(), 2000);
-      }
+      console.log('[SmartingHOME] HA reconnected — graceful recovery (no reload)');
+      this._wasDisconnected = false;
+      this._reloadScheduled = false;
+      this._hideReconnectBanner();
+      this._hass = hass;
+      this._ensureSubscriptions();
+      this._updateAll();
       return;
     }
     if (hass.connected === false) {
-      this._wasDisconnected = true;
-      console.log('[SmartingHOME] HA connection lost — waiting for reconnect...');
+      if (!this._wasDisconnected) {
+        this._wasDisconnected = true;
+        console.log('[SmartingHOME] HA connection lost — showing banner, keeping last data');
+        this._showReconnectBanner();
+      }
+      // Don't clear this._hass — keep last known state for cache
+      return;
     }
     this._hass = hass;
     this._ensureSubscriptions();
@@ -168,12 +175,45 @@ class SmartingHomePanel extends HTMLElement {
     return m?.[k] || SmartingHomePanel.DM[k] || "";
   }
   _s(id) { return id && this._hass?.states[id] ? this._hass.states[id].state : null; }
-  _n(id) { const v = parseFloat(this._s(id)); return isNaN(v) ? null : v; }
+  _n(id) {
+    const v = parseFloat(this._s(id));
+    if (!isNaN(v)) {
+      // Cache fresh sensor value
+      if (!this._sensorCache) this._sensorCache = {};
+      this._sensorCache[id] = { val: v, ts: Date.now() };
+      return v;
+    }
+    // Fallback: use cached value if < 60s old (prevents "—" during reconnection)
+    const cached = this._sensorCache?.[id];
+    if (cached && (Date.now() - cached.ts) < 60000) return cached.val;
+    return null;
+  }
   _f(id, d=1) { const v = this._n(id); return v === null ? "—" : v.toFixed(d); }
   _fm(k, d=1) { return this._f(this._m(k), d); }
   _nm(k) { return this._n(this._m(k)); }
   _setText(id, val) { const el = this.shadowRoot.getElementById(id); if (el) el.textContent = val; }
   _callService(domain, service, data = {}) { if (this._hass) this._hass.callService(domain, service, data); }
+
+  /* ── Reconnect Banner ─────────────────────── */
+  _showReconnectBanner() {
+    let b = this.shadowRoot.getElementById('sh-reconnect-banner');
+    if (!b) {
+      b = document.createElement('div');
+      b.id = 'sh-reconnect-banner';
+      b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:linear-gradient(90deg,rgba(245,158,11,0.95),rgba(251,191,36,0.95));color:#000;text-align:center;padding:10px 16px;font-size:13px;font-weight:600;backdrop-filter:blur(8px);box-shadow:0 2px 12px rgba(0,0,0,0.3);transition:opacity 0.3s;';
+      b.innerHTML = '⏳ Ponowne łączenie z Home Assistant… <span style="font-weight:400;opacity:0.7;margin-left:8px">(dane z cache)</span>';
+      this.shadowRoot.appendChild(b);
+    }
+    b.style.display = 'block';
+    b.style.opacity = '1';
+  }
+  _hideReconnectBanner() {
+    const b = this.shadowRoot.getElementById('sh-reconnect-banner');
+    if (b) {
+      b.style.opacity = '0';
+      setTimeout(() => { b.style.display = 'none'; }, 300);
+    }
+  }
 
   /* ── Force Charge/Discharge Buttons ────────── */
   _executeForceAction(type) {
@@ -9123,7 +9163,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.37.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.37.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -9146,17 +9186,15 @@ class SmartingHomePanel extends HTMLElement {
     // Clear any previous interval before starting a new one
     if (this._interval) clearInterval(this._interval);
     this._interval = setInterval(() => { if (this._hass) this._updateAll(); }, 5000);
-    // Connection watchdog — detect stale hass connection every 30s
+    // Connection watchdog — detect stale hass connection every 30s (soft recovery, no DOM rebuild)
     if (this._watchdog) clearInterval(this._watchdog);
     this._watchdog = setInterval(() => {
       if (!this._hass?.connection) return;
       try {
         this._hass.connection.ping().catch(() => {
-          console.warn('[SH] Connection stale, recovering...');
-          if (this._interval) clearInterval(this._interval);
-          this._render();
-          this._loadSettings();
-          this._interval = setInterval(() => { if (this._hass) this._updateAll(); }, 5000);
+          console.warn('[SH] Connection stale — soft recovery (no render)');
+          this._ensureSubscriptions();
+          if (this._hass) this._updateAll();
         });
       } catch(e) {
         console.warn('[SH] Watchdog ping error:', e);
