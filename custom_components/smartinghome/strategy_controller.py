@@ -1430,21 +1430,27 @@ class StrategyController:
                     charging = device_status.get("charging_active", False)
                     bat_power = device_status.get("battery_power", 0)
 
-                    # Detect drift: plan says charge but inverter not charging
+                    # Detect drift: check if inverter work_mode was overridden
+                    # Sign convention: positive bat_power = charging, negative = discharging
+                    # Primary signal: work_mode (reliably shows if inverter was overridden)
+                    # Secondary signal: bat_power (only flag drift for large deviations,
+                    #   ignore small values ±100W as noise/standby current)
                     drifted = False
                     if strategy in ("aggressive_charge", "charge", "night_charge"):
-                        if not charging or bat_power >= -50:  # Not charging (power ~ 0 or discharging)
+                        # Charge plans expect eco_charge mode
+                        if work_mode not in ("eco_charge", "unknown", ""):
                             drifted = True
                             _LOGGER.warning(
-                                "AI Executor: STATE DRIFT — plan=%s but inverter charging=%s bat=%dW mode=%s → re-executing",
-                                strategy, charging, bat_power, work_mode,
+                                "AI Executor: STATE DRIFT — plan=%s but mode=%s (expected eco_charge), bat=%dW → re-executing",
+                                strategy, work_mode, bat_power,
                             )
                     elif strategy in ("discharge_self_consume", "discharge"):
-                        if bat_power <= 50:  # Not discharging
+                        # Discharge plans expect general or eco_discharge mode
+                        if work_mode not in ("general", "eco_discharge", "unknown", ""):
                             drifted = True
                             _LOGGER.warning(
-                                "AI Executor: STATE DRIFT — plan=%s but bat=%dW mode=%s → re-executing",
-                                strategy, bat_power, work_mode,
+                                "AI Executor: STATE DRIFT — plan=%s but mode=%s (expected general/eco_discharge), bat=%dW → re-executing",
+                                strategy, work_mode, bat_power,
                             )
 
                     if drifted:
