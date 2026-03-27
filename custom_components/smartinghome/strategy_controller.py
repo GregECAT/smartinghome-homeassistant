@@ -1756,11 +1756,18 @@ class StrategyController:
     #  Helpers
     # ------------------------------------------------------------------
 
-    async def _throttled_action(self, action_name: str) -> bool:
-        """Return True if the action can execute (not throttled)."""
+    async def _throttled_action(self, action_name: str, cooldown: int | None = None) -> bool:
+        """Return True if the action can execute (not throttled).
+
+        Args:
+            action_name: unique key for this action (for dedup).
+            cooldown: optional per-action cooldown in seconds.
+                      Falls back to ACTION_COOLDOWN (60s) if not specified.
+        """
         now = time.time()
         last = self._last_action.get(action_name, 0)
-        if now - last < ACTION_COOLDOWN:
+        cd = cooldown if cooldown is not None else ACTION_COOLDOWN
+        if now - last < cd:
             return False
         self._last_action[action_name] = now
         return True
