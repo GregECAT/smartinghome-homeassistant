@@ -993,11 +993,11 @@ def build_ai_controller_prompt(
     bat_cap_kwh = float(bat_cap) / 1000
 
     # Transform raw sensor values to explicit human-readable format
-    # GoodWe convention: battery_power negative=charging, positive=discharging
+    # GoodWe convention: battery_power positive=charging, negative=discharging
     # grid_power: negative=export, positive=import
     raw_bat = float(current_data.get('battery_power', 0))
     raw_grid = float(current_data.get('grid_power', 0))
-    bat_state = f"ŁADOWANIE {abs(raw_bat):.0f}W (do baterii z sieci/PV)" if raw_bat < -50 else f"ROZŁADOWYWANIE {abs(raw_bat):.0f}W (z baterii do domu)" if raw_bat > 50 else "BEZCZYNNA (idle)"
+    bat_state = f"ŁADOWANIE {abs(raw_bat):.0f}W (do baterii z sieci/PV)" if raw_bat > 50 else f"ROZŁADOWYWANIE {abs(raw_bat):.0f}W (z baterii do domu)" if raw_bat < -50 else "BEZCZYNNA (idle)"
     grid_state = f"IMPORT {abs(raw_grid):.0f}W (pobór z sieci)" if raw_grid > 50 else f"EKSPORT {abs(raw_grid):.0f}W (sprzedaż do sieci)" if raw_grid < -50 else "ZERO (brak przepływu)"
 
     # Tools description
@@ -1146,11 +1146,11 @@ def build_ai_strategist_prompt(
     bat_cap_kwh = float(bat_cap) / 1000
 
     # Transform raw sensor values to explicit human-readable format
-    # GoodWe convention: battery_power negative=charging, positive=discharging
+    # GoodWe convention: battery_power positive=charging, negative=discharging
     # grid_power: negative=export, positive=import
     raw_bat = float(current_data.get('battery_power', 0))
     raw_grid = float(current_data.get('grid_power', 0))
-    bat_state = f"ŁADOWANIE {abs(raw_bat):.0f}W (do baterii z sieci/PV)" if raw_bat < -50 else f"ROZŁADOWYWANIE {abs(raw_bat):.0f}W (z baterii do domu)" if raw_bat > 50 else "BEZCZYNNA (idle)"
+    bat_state = f"ŁADOWANIE {abs(raw_bat):.0f}W (do baterii z sieci/PV)" if raw_bat > 50 else f"ROZŁADOWYWANIE {abs(raw_bat):.0f}W (z baterii do domu)" if raw_bat < -50 else "BEZCZYNNA (idle)"
     grid_state = f"IMPORT {abs(raw_grid):.0f}W (pobór z sieci)" if raw_grid > 50 else f"EKSPORT {abs(raw_grid):.0f}W (sprzedaż do sieci)" if raw_grid < -50 else "ZERO (brak przepływu)"
 
     # Hourly plan from mathematical model
@@ -1276,12 +1276,31 @@ PREFERUJ używanie "actions" (lista ID akcji z katalogu) zamiast surowych "comma
       "end": "HH:MM",
       "zone": "off_peak|morning_peak|afternoon_peak",
       "price": 0.63,
-      "strategy": "aggressive_charge|discharge_self_consume|night_charge|pv_optimize|no_action",
+      "strategy": "aggressive_charge|charge|night_charge|discharge_self_consume|discharge|pv_optimize|no_action",
       "actions": ["action_id_1"],
       "commands": [
         {{"tool": "force_charge", "params": {{}}}}
       ],
       "reasoning": "1-2 zdania po polsku — dlaczego ten blok, co chcesz osiągnąć"
+    }}
+  ],
+  "..."
+}}
+
+KRYTYCZNE — MAPOWANIE STRATEGII NA KOMENDY (strategy→tool):
+- "aggressive_charge" / "charge" / "night_charge" → {{"tool": "force_charge"}} (eco_charge mode, ładuj z sieci/PV)
+- "discharge_self_consume" → {{"tool": "set_general"}} (tryb General — bateria zasila DOM, autokonsumpcja, BEZ sprzedaży do sieci!)
+- "discharge" → {{"tool": "force_discharge"}} (eco_discharge mode — SPRZEDAŻ do sieci!)
+- "pv_optimize" / "no_action" → {{"tool": "no_action"}}
+
+⚠️ RÓŻNICA MIĘDZY set_general A force_discharge:
+- set_general = tryb General → falownik NATURALNIE używa baterii do zasilania domu. Bateria rozładowuje się powoli, zaspokajając domowe zapotrzebowanie. NIE sprzedaje do sieci.
+- force_discharge = tryb eco_discharge → falownik AGRESYWNIE rozładowuje baterię i SPRZEDAJE energię do sieci. Używaj TYLKO gdy RCE sell > 0.63 PLN/kWh.
+
+{{
+  "time_blocks": [
+    {{
+      "..."
     }}
   ],
   "analysis": "2-3 zdania po polsku. Opisz swoją strategię, DLACZEGO tak planujesz, jakie oszczędności przewidujesz.",

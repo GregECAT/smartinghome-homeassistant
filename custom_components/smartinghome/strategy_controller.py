@@ -1430,28 +1430,27 @@ class StrategyController:
                     charging = device_status.get("charging_active", False)
                     bat_power = device_status.get("battery_power", 0)
 
-                    # Detect drift: check if inverter work_mode was overridden
-                    # Sign convention: positive bat_power = charging, negative = discharging
-                    # Primary signal: work_mode (reliably shows if inverter was overridden)
-                    # Secondary signal: bat_power (only flag drift for large deviations,
-                    #   ignore small values ±100W as noise/standby current)
+                    # Detect drift: check if inverter work_mode matches plan expectations
+                    # This catches manual overrides by user or external automations
+                    # Strategy → expected work_mode mapping:
+                    #   aggressive_charge/charge/night_charge → eco_charge
+                    #   discharge_self_consume → general (battery powers house naturally)
+                    #   discharge → eco_discharge (aggressive sell to grid)
+                    _STRATEGY_EXPECTED_MODES = {
+                        "aggressive_charge": ("eco_charge",),
+                        "charge": ("eco_charge",),
+                        "night_charge": ("eco_charge",),
+                        "discharge_self_consume": ("general",),
+                        "discharge": ("eco_discharge",),
+                    }
                     drifted = False
-                    if strategy in ("aggressive_charge", "charge", "night_charge"):
-                        # Charge plans expect eco_charge mode
-                        if work_mode not in ("eco_charge", "unknown", ""):
-                            drifted = True
-                            _LOGGER.warning(
-                                "AI Executor: STATE DRIFT — plan=%s but mode=%s (expected eco_charge), bat=%dW → re-executing",
-                                strategy, work_mode, bat_power,
-                            )
-                    elif strategy in ("discharge_self_consume", "discharge"):
-                        # Discharge plans expect general or eco_discharge mode
-                        if work_mode not in ("general", "eco_discharge", "unknown", ""):
-                            drifted = True
-                            _LOGGER.warning(
-                                "AI Executor: STATE DRIFT — plan=%s but mode=%s (expected general/eco_discharge), bat=%dW → re-executing",
-                                strategy, work_mode, bat_power,
-                            )
+                    expected_modes = _STRATEGY_EXPECTED_MODES.get(strategy)
+                    if expected_modes and work_mode not in expected_modes and work_mode not in ("unknown", ""):
+                        drifted = True
+                        _LOGGER.warning(
+                            "AI Executor: STATE DRIFT — plan=%s expects mode=%s but got mode=%s, bat=%dW → re-executing",
+                            strategy, expected_modes, work_mode, bat_power,
+                        )
 
                     if drifted:
                         self._drift_last_reexec = now
