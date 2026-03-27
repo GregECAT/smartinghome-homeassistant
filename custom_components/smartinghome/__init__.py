@@ -215,14 +215,17 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
     dest_file = www_dir / PANEL_FILENAME
 
     try:
-        shutil.copy2(str(source_file), str(dest_file))
+        await hass.async_add_executor_job(
+            shutil.copy2, str(source_file), str(dest_file)
+        )
         _LOGGER.info("Copied panel.js → %s", dest_file)
     except Exception as err:
         _LOGGER.error("Failed to copy panel.js to www/: %s", err)
         return
 
     # Cache-busting: hash of file content as query param
-    file_hash = hashlib.md5(dest_file.read_bytes()).hexdigest()[:8]
+    file_bytes = await hass.async_add_executor_job(dest_file.read_bytes)
+    file_hash = hashlib.md5(file_bytes).hexdigest()[:8]
     module_url = f"/local/{PANEL_WWW_DIR}/{PANEL_FILENAME}?v={file_hash}"
 
     # Register the panel in the sidebar
