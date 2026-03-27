@@ -171,8 +171,11 @@ class SmartingHomePanel extends HTMLElement {
     weather_temp:"", weather_humidity:"", weather_cloud_cover:"",
   };
   _m(k) {
-    const m = this._hass?.states["sensor.smartinghome_sensor_map"]?.attributes;
-    return m?.[k] || SmartingHomePanel.DM[k] || "";
+    // Check local overrides from entity picker first
+    const override = this._sensorMapOverrides?.[k];
+    if (override) return override;
+    const m = this._hass?.states['sensor.smartinghome_sensor_map']?.attributes;
+    return m?.[k] || SmartingHomePanel.DM[k] || '';
   }
   _s(id) { return id && this._hass?.states[id] ? this._hass.states[id].state : null; }
   _n(id) {
@@ -193,6 +196,128 @@ class SmartingHomePanel extends HTMLElement {
   _nm(k) { return this._n(this._m(k)); }
   _setText(id, val) { const el = this.shadowRoot.getElementById(id); if (el) el.textContent = val; }
   _callService(domain, service, data = {}) { if (this._hass) this._hass.callService(domain, service, data); }
+
+  /* ── Sensor Labels (human-readable, PL) ─────────── */
+  static SENSOR_LABELS = {
+    pv_power: '☀️ Moc PV (W)', load_power: '🏠 Obciążenie domu (W)',
+    grid_power: '🔌 Moc sieci (W)', battery_power: '🔋 Moc baterii (W)',
+    battery_soc: '🔋 SOC baterii (%)',
+    pv1_power: '☀️ PV1 Moc (W)', pv1_voltage: '☀️ PV1 Napięcie (V)', pv1_current: '☀️ PV1 Prąd (A)',
+    pv2_power: '☀️ PV2 Moc (W)', pv2_voltage: '☀️ PV2 Napięcie (V)', pv2_current: '☀️ PV2 Prąd (A)',
+    pv3_power: '☀️ PV3 Moc (W)', pv4_power: '☀️ PV4 Moc (W)',
+    battery_voltage: '🔋 Napięcie baterii (V)', battery_current: '🔋 Prąd baterii (A)',
+    battery_temp: '🌡️ Temperatura baterii (°C)', battery_capacity_kwh: '🔋 Pojemność baterii (kWh)',
+    voltage_l1: '⚡ Napięcie L1 (V)', voltage_l2: '⚡ Napięcie L2 (V)', voltage_l3: '⚡ Napięcie L3 (V)',
+    current_l1: '⚡ Prąd L1 (A)', current_l2: '⚡ Prąd L2 (A)', current_l3: '⚡ Prąd L3 (A)',
+    power_l1: '⚡ Moc L1 (W)', power_l2: '⚡ Moc L2 (W)', power_l3: '⚡ Moc L3 (W)',
+    grid_frequency: '⚡ Częstotliwość sieci (Hz)',
+    pv_today: '☀️ PV dziś (kWh)', grid_import_today: '↓ Import dziś (kWh)',
+    grid_export_today: '↑ Eksport dziś (kWh)', battery_charge_today: '🔋 Ładowanie dziś (kWh)',
+    battery_discharge_today: '⚡ Rozładowanie dziś (kWh)',
+    inverter_power: '⚙️ Moc falownika (W)', inverter_temp: '🌡️ Temp. falownika (°C)',
+    weather_temp: '🌤️ Temp. zewn. (°C)', weather_humidity: '💧 Wilgotność (%)',
+    weather_cloud_cover: '☁️ Zachmurzenie (%)', weather_wind_speed: '💨 Wiatr (km/h)',
+    weather_pressure: '🌡️ Ciśnienie (hPa)', weather_uv_index: '☀️ UV Index',
+  };
+
+  /* ── Entity Picker Modal ────────────────── */
+  _openEntityPicker(sensorKey, currentEntityId) {
+    if (!this._hass || !this._hass.states) return;
+    const label = SmartingHomePanel.SENSOR_LABELS[sensorKey] || sensorKey;
+    // Save for callback
+    this._pickerSensorKey = sensorKey;
+
+    // Build list of sensor entities
+    const entities = Object.keys(this._hass.states)
+      .filter(eid => eid.startsWith('sensor.'))
+      .sort((a, b) => {
+        const na = this._hass.states[a]?.attributes?.friendly_name || a;
+        const nb = this._hass.states[b]?.attributes?.friendly_name || b;
+        return na.localeCompare(nb);
+      });
+
+    const listHtml = entities.map(eid => {
+      const fn = this._hass.states[eid]?.attributes?.friendly_name || eid;
+      const val = this._hass.states[eid]?.state || '—';
+      const unit = this._hass.states[eid]?.attributes?.unit_of_measurement || '';
+      const isCurrent = eid === currentEntityId;
+      return `<div class="ep-item${isCurrent ? ' ep-current' : ''}" data-eid="${eid}" onclick="this.getRootNode().host._selectEntity('${eid}')">
+        <div class="ep-name">${fn}</div>
+        <div class="ep-meta"><span class="ep-eid">${eid}</span><span class="ep-val">${val} ${unit}</span></div>
+      </div>`;
+    }).join('');
+
+    const html = `
+      <div class="sh-modal-title">🔌 Wybierz encję — ${label}</div>
+      <div class="ep-search-wrap">
+        <input class="ep-search" type="text" id="sh-ep-search" placeholder="🔍 Szukaj encji..." oninput="this.getRootNode().host._filterEntityList(this.value)" />
+      </div>
+      <div class="ep-list" id="sh-ep-list">
+        ${listHtml}
+      </div>
+      <div class="sh-modal-actions">
+        ${currentEntityId ? `<button class="sh-modal-btn danger" onclick="this.getRootNode().host._selectEntity('')">✕ Wyczyść</button>` : ''}
+        <button class="sh-modal-btn" onclick="this.getRootNode().host._closeModal()">Anuluj</button>
+      </div>
+    `;
+    this._showModal(html);
+    setTimeout(() => {
+      const inp = this.shadowRoot.getElementById('sh-ep-search');
+      if (inp) inp.focus();
+    }, 120);
+  }
+
+  _filterEntityList(query) {
+    const list = this.shadowRoot.getElementById('sh-ep-list');
+    if (!list) return;
+    const q = query.toLowerCase();
+    list.querySelectorAll('.ep-item').forEach(el => {
+      const text = (el.querySelector('.ep-name')?.textContent || '') + ' ' + (el.querySelector('.ep-eid')?.textContent || '');
+      el.style.display = text.toLowerCase().includes(q) ? '' : 'none';
+    });
+  }
+
+  _selectEntity(entityId) {
+    const key = this._pickerSensorKey;
+    if (!key) return;
+    // Save via service call
+    if (this._hass) {
+      this._hass.callService('smartinghome', 'update_sensor_map', {
+        sensor_key: key,
+        entity_id: entityId,
+      });
+    }
+    // Update local DM override for immediate effect
+    if (!this._sensorMapOverrides) this._sensorMapOverrides = {};
+    this._sensorMapOverrides[key] = entityId;
+    // Also persist to settings.json for frontend restart
+    this._savePanelSettings({ sensor_map_overrides: { ...(this._settings.sensor_map_overrides || {}), [key]: entityId } });
+    this._closeModal();
+    // Refresh display
+    if (this._hass) this._updateAll();
+  }
+
+  /* ── Enhanced _m() with overrides ────────── */
+  _mResolved(k) {
+    // Priority: 1) local override from entity picker, 2) HA sensor_map attribute, 3) DM defaults
+    const override = this._sensorMapOverrides?.[k];
+    if (override) return override;
+    const m = this._hass?.states['sensor.smartinghome_sensor_map']?.attributes;
+    return m?.[k] || SmartingHomePanel.DM[k] || '';
+  }
+
+  /* ── Placeholder-aware value renderer ───── */
+  _fmp(sensorKey, decimals = 1) {
+    const entityId = this._mResolved(sensorKey);
+    // Check if entity_id exists in HA states
+    if (!entityId || !this._hass?.states[entityId]) {
+      // No entity configured or entity doesn't exist → placeholder
+      const label = SmartingHomePanel.SENSOR_LABELS[sensorKey] || sensorKey;
+      return `<span class="entity-placeholder" onclick="this.getRootNode().host._openEntityPicker('${sensorKey}', '')" title="Kliknij aby wybrać encję">⚙️ ${label}</span>`;
+    }
+    const v = this._n(entityId);
+    return v === null ? '—' : v.toFixed(decimals);
+  }
 
   /* ── Reconnect Banner ─────────────────────── */
   _showReconnectBanner() {
@@ -353,6 +478,10 @@ class SmartingHomePanel extends HTMLElement {
         const ecoChk = this.shadowRoot.getElementById('chk-ecowitt-enabled');
         if (ecoChk && this._settings.ecowitt_enabled !== undefined) ecoChk.checked = this._settings.ecowitt_enabled;
         if (this._settings.ecowitt_enabled) this._detectEcowittSensors();
+        // Restore sensor map overrides from entity picker
+        if (this._settings.sensor_map_overrides) {
+          this._sensorMapOverrides = { ...this._settings.sensor_map_overrides };
+        }
         // Restore sub-meters settings
         const smChk = this.shadowRoot.getElementById('chk-submeters-enabled');
         if (smChk && this._settings.sub_meters_enabled !== undefined) smChk.checked = this._settings.sub_meters_enabled;
@@ -5728,6 +5857,35 @@ class SmartingHomePanel extends HTMLElement {
           background: rgba(231,76,60,0.15); color: #e74c3c; border-color: rgba(231,76,60,0.2);
         }
         .sh-modal-btn.danger:hover { background: rgba(231,76,60,0.25); }
+        /* Entity Picker */
+        .ep-search-wrap { margin-bottom: 10px; }
+        .ep-search {
+          width: 100%; padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1);
+          background: rgba(255,255,255,0.04); color: #e2e8f0; font-size: 13px; outline: none;
+          box-sizing: border-box;
+        }
+        .ep-search:focus { border-color: rgba(0,212,255,0.4); box-shadow: 0 0 0 2px rgba(0,212,255,0.1); }
+        .ep-list { max-height: 340px; overflow-y: auto; margin-bottom: 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.06); }
+        .ep-item {
+          padding: 10px 14px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.04);
+          transition: background 0.15s;
+        }
+        .ep-item:hover { background: rgba(0,212,255,0.08); }
+        .ep-item.ep-current { background: rgba(0,212,255,0.12); border-left: 3px solid #00d4ff; }
+        .ep-name { font-size: 12px; font-weight: 600; color: #e2e8f0; margin-bottom: 2px; }
+        .ep-meta { display: flex; justify-content: space-between; font-size: 10px; color: #64748b; }
+        .ep-eid { opacity: 0.7; }
+        .ep-val { font-weight: 600; color: #94a3b8; }
+        .entity-placeholder {
+          display: inline-block; padding: 3px 10px; border-radius: 8px; font-size: 10px;
+          background: linear-gradient(135deg, rgba(0,212,255,0.08), rgba(100,116,139,0.1));
+          border: 1px dashed rgba(0,212,255,0.3); color: #00d4ff; cursor: pointer;
+          transition: all 0.2s; white-space: nowrap;
+        }
+        .entity-placeholder:hover {
+          background: linear-gradient(135deg, rgba(0,212,255,0.15), rgba(100,116,139,0.15));
+          border-color: rgba(0,212,255,0.5); transform: scale(1.02);
+        }
         .sh-modal-divider { border: none; border-top: 1px solid rgba(255,255,255,0.06); margin: 14px 0; }
         .substring-card {
           background: rgba(247,183,49,0.06); border: 1px solid rgba(247,183,49,0.12);
@@ -9163,7 +9321,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.37.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.38.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

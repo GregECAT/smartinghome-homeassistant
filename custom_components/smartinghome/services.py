@@ -29,6 +29,7 @@ from .const import (
     CONF_GEMINI_API_KEY,
     CONF_ANTHROPIC_API_KEY,
     CONF_ECOWITT_ENABLED,
+    CONF_SENSOR_MAP,
     AUTOPILOT_PLAN_KEY,
     AUTOPILOT_SETTINGS_KEY,
 )
@@ -56,6 +57,7 @@ SERVICE_DEACTIVATE_AUTOPILOT = "deactivate_autopilot"
 SERVICE_TRIGGER_AUTOPILOT_ACTION = "trigger_autopilot_action"
 SERVICE_TOGGLE_AUTOPILOT_ACTION = "toggle_autopilot_action"
 SERVICE_SYNC_ECOWITT_STATE = "sync_ecowitt_state"
+SERVICE_UPDATE_SENSOR_MAP = "update_sensor_map"
 
 FORCE_CUSTOM_SCHEMA = vol.Schema(
     {
@@ -167,6 +169,13 @@ TOGGLE_ACTION_SCHEMA = vol.Schema(
 SYNC_ECOWITT_STATE_SCHEMA = vol.Schema(
     {
         vol.Required("enabled"): cv.boolean,
+    }
+)
+
+UPDATE_SENSOR_MAP_SCHEMA = vol.Schema(
+    {
+        vol.Required("sensor_key"): cv.string,
+        vol.Required("entity_id"): cv.string,
     }
 )
 
@@ -753,6 +762,35 @@ async def async_setup_services(
             coordinator_ref._ecowitt_enabled = enabled
         _LOGGER.info("Ecowitt state synced to config entry: %s", enabled)
 
+    async def handle_update_sensor_map(call: ServiceCall) -> None:
+        """Update a single sensor mapping in config_entry + coordinator.
+
+        Called by the frontend entity picker modal to save sensor mappings
+        without a full integration restart.
+        """
+        sensor_key = call.data["sensor_key"]
+        entity_id = call.data["entity_id"]
+
+        # Validate sensor_key is known
+        from .const import SENSOR_MAP_KEYS
+        if sensor_key not in SENSOR_MAP_KEYS:
+            _LOGGER.warning("Unknown sensor_key: %s", sensor_key)
+            return
+
+        # Update config_entry.data
+        current = entry.data
+        sensor_map = dict(current.get(CONF_SENSOR_MAP, {}))
+        sensor_map[sensor_key] = entity_id
+        new_data = {**current, CONF_SENSOR_MAP: sensor_map, "_keys_only_update": True}
+        hass.config_entries.async_update_entry(entry, data=new_data)
+
+        # Update coordinator in-memory (no restart needed)
+        coordinator_ref = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("coordinator")
+        if coordinator_ref:
+            coordinator_ref.update_sensor_map(sensor_key, entity_id)
+
+        _LOGGER.info("Sensor map updated: %s → %s", sensor_key, entity_id)
+
     # Register all services
     hass.services.async_register(
         DOMAIN, SERVICE_SET_MODE, handle_set_mode, schema=SET_MODE_SCHEMA
@@ -825,8 +863,12 @@ async def async_setup_services(
         DOMAIN, SERVICE_SYNC_ECOWITT_STATE, handle_sync_ecowitt_state,
         schema=SYNC_ECOWITT_STATE_SCHEMA,
     )
+    hass.services.async_register(
+        DOMAIN, SERVICE_UPDATE_SENSOR_MAP, handle_update_sensor_map,
+        schema=UPDATE_SENSOR_MAP_SCHEMA,
+    )
 
-    _LOGGER.info("Registered %d Smarting HOME services", 17)
+    _LOGGER.info("Registered %d Smarting HOME services", 18)
 
     # Start AI Cron Scheduler
     cron = AICronScheduler(
@@ -862,5 +904,6 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_TRIGGER_AUTOPILOT_ACTION,
         SERVICE_TOGGLE_AUTOPILOT_ACTION,
         SERVICE_SYNC_ECOWITT_STATE,
+        SERVICE_UPDATE_SENSOR_MAP,
     ]:
         hass.services.async_remove(DOMAIN, service)

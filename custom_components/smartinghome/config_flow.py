@@ -252,8 +252,30 @@ class SmartingHomeConfigFlow(
                 CONF_RCE_ENABLED, True
             )
 
-            # Next step: sensor mapping
-            return await self.async_step_sensors()
+            # Auto-fill sensor_map with brand defaults (skip manual sensor step)
+            brand = self._data.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE)
+            defaults = _get_defaults_for_brand(brand)
+            self._data[CONF_SENSOR_MAP] = defaults
+
+            # If PRO mode, show AI step; if FREE, create entry now
+            if self._license_mode == LICENSE_MODE_PRO:
+                return await self.async_step_ai()
+
+            # FREE mode — set defaults and create entry
+            self._data[CONF_AI_ENABLED] = False
+            self._data[CONF_GEMINI_API_KEY] = ""
+            self._data[CONF_ANTHROPIC_API_KEY] = ""
+            self._data[CONF_UPDATE_INTERVAL] = DEFAULT_UPDATE_INTERVAL
+
+            await self.async_set_unique_id(
+                f"smartinghome_{self._data[CONF_DEVICE_ID][:8]}"
+            )
+            self._abort_if_unique_id_configured()
+
+            return self.async_create_entry(
+                title="Smarting HOME — Energy Management",
+                data=self._data,
+            )
 
         return self.async_show_form(
             step_id="tariff",

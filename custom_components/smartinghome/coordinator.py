@@ -160,6 +160,10 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Set the strategy controller for autonomous HEMS control."""
         self._strategy_controller = controller
 
+    def update_sensor_map(self, key: str, entity_id: str) -> None:
+        """Update a single sensor mapping in-memory (no restart needed)."""
+        self._sensor_map[key] = entity_id
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from HA state machine and compute HEMS values."""
         try:
