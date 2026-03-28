@@ -114,6 +114,7 @@ class SmartingHomePanel extends HTMLElement {
     if (this._cronSub) { try { this._cronSub(); } catch(e) {} this._cronSub = null; }
     if (this._actionStateSub) { try { this._actionStateSub(); } catch(e) {} this._actionStateSub = null; }
     if (this._testSub) { try { this._testSub(); } catch(e) {} this._testSub = null; }
+    if (this._roiSub) { try { this._roiSub(); } catch(e) {} this._roiSub = null; }
   }
 
   _toggleFullscreen() {
@@ -1763,6 +1764,70 @@ class SmartingHomePanel extends HTMLElement {
         </div>`;
       }
       ct.innerHTML += summaryHtml;
+
+      // ── AI ROI Interpreter ──
+      // Collect all ROI data for AI analysis
+      const roiDataForAI = results.map(r => ({
+        tariff: r.label,
+        key: r.key,
+        avgBuy: r.yr.avgBuy,
+        avgSell: r.yr.avgSell,
+        avgPricePvHours: r.yr.avgPricePvHours,
+        effectivePvValue: r.yr.effectivePvValue,
+        pvTotal: r.yr.pvTotal,
+        import: r.yr.import,
+        export: r.yr.export,
+        load: r.yr.load,
+        selfConsumption: r.yr.selfConsumption,
+        pvSavings: r.yr.pvSavings,
+        pvExportRev: r.yr.pvExportRev || 0,
+        importCost: r.yr.importCost,
+        exportRev: r.yr.exportRev,
+        baselineCost: r.yr.baselineCost,
+        benefit: r.yr.benefit,
+        payback: r.yr.payback,
+        profit25: r.yr.profit25,
+        arbitrageProfit: r.yr.arbitrageProfit || 0,
+        gridToCharge: r.yr.gridToCharge || 0,
+        cycles: r.yr.cycles || 0,
+      }));
+      // Add system context for AI
+      roiDataForAI.push({
+        _systemContext: true,
+        investmentCost: invest,
+        yearlyConsumptionKWh: yearlyLoad || 0,
+        yearlyPvProductionKWh: yearlyPV || 0,
+        profileType: profileKey,
+        batteryCapacityKWh: (this._settings.roi_battery || 10000) / 1000,
+        pvPeakKWp: (this._settings.roi_pv_peak || 0) / 1000,
+      });
+      this._roiDataForAI = roiDataForAI;
+
+      const aiInterpretHtml = `
+        <div style="grid-column:1/-1; margin-top:12px; padding:14px; background:linear-gradient(135deg, rgba(0,212,255,0.06) 0%, rgba(168,85,247,0.06) 100%); border:1px solid rgba(0,212,255,0.15); border-radius:12px">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px">
+            <span style="font-size:20px">🧠</span>
+            <span style="font-size:12px; font-weight:700; color:#00d4ff">AI Interpreter — Wyjaśnienie wyników ROI</span>
+          </div>
+          <div style="font-size:9px; color:#64748b; margin-bottom:10px; line-height:1.5">
+            AI przeanalizuje wyniki symulacji i wyjaśni je prostym językiem — co oznaczają te liczby dla Twojego portfela i którą taryfę wybrać.
+          </div>
+          <button id="btn-roi-ai-analyze"
+            onclick="this.getRootNode().host._triggerRoiAiAnalysis()"
+            style="width:100%; padding:10px 16px; background:linear-gradient(135deg, #00d4ff 0%, #a855f7 100%); color:#fff; border:none; border-radius:8px; font-size:12px; font-weight:700; cursor:pointer; letter-spacing:0.5px; transition:all 0.2s">
+            🧠 Analizuj z AI
+          </button>
+          <div id="roi-ai-status" style="font-size:9px; color:#64748b; text-align:center; margin-top:6px"></div>
+          <div id="roi-ai-result" style="display:none; margin-top:12px; padding:12px; background:rgba(0,0,0,0.2); border-radius:8px; border:1px solid rgba(255,255,255,0.06); font-size:11px; color:#e2e8f0; line-height:1.6; overflow-wrap:break-word; word-break:break-word; min-width:0"></div>
+        </div>
+      `;
+      ct.innerHTML += aiInterpretHtml;
+
+      // Load cached analysis if available
+      const cachedAnalysis = this._settings?.ai_roi_analysis;
+      if (cachedAnalysis?.text) {
+        this._displayRoiAiResult(cachedAnalysis);
+      }
 
     } else if (ct && yearlyPV === 0) {
       ct.innerHTML = '<div style="text-align:center; padding:20px; color:#64748b; font-size:11px">Brak danych PV — zmień okres na "Miesiąc" lub "Rok" aby zobaczyć porównanie.</div>';
@@ -4565,6 +4630,79 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
 
+  /* ── AI ROI Interpreter — trigger, display and event handling ── */
+
+  _triggerRoiAiAnalysis() {
+    if (!this._roiDataForAI || !this._roiDataForAI.length) {
+      const st = this.shadowRoot.getElementById('roi-ai-status');
+      if (st) { st.textContent = '❌ Brak danych ROI — odśwież stronę'; st.style.color = '#e74c3c'; }
+      return;
+    }
+
+    const btn = this.shadowRoot.getElementById('btn-roi-ai-analyze');
+    const status = this.shadowRoot.getElementById('roi-ai-status');
+    const result = this.shadowRoot.getElementById('roi-ai-result');
+
+    if (btn) {
+      btn.disabled = true;
+      btn.style.opacity = '0.5';
+      btn.innerHTML = '<span style="animation:pulse 1s infinite">⏳</span> Analizuję...';
+    }
+    if (status) {
+      status.textContent = '🧠 AI analizuje dane ROI — to może potrwać do 30 sekund...';
+      status.style.color = '#00d4ff';
+    }
+    if (result) result.style.display = 'none';
+
+    // Send ROI data to backend AI service
+    const roiPayload = JSON.stringify(this._roiDataForAI);
+    this._hass.callService('smartinghome', 'analyze_roi', {
+      roi_data: roiPayload,
+    }).catch(err => {
+      if (status) { status.textContent = `❌ Błąd: ${err.message || err}`; status.style.color = '#e74c3c'; }
+      if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.innerHTML = '🧠 Analizuj z AI'; }
+    });
+  }
+
+  _displayRoiAiResult(data) {
+    const btn = this.shadowRoot.getElementById('btn-roi-ai-analyze');
+    const status = this.shadowRoot.getElementById('roi-ai-status');
+    const result = this.shadowRoot.getElementById('roi-ai-result');
+
+    if (data.error) {
+      if (status) { status.textContent = `❌ ${data.error}`; status.style.color = '#e74c3c'; }
+      if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.innerHTML = '🧠 Analizuj z AI'; }
+      return;
+    }
+
+    if (data.text && result) {
+      // Render markdown with existing _renderMarkdown method
+      const html = this._renderMarkdown ? this._renderMarkdown(data.text) : data.text;
+      const provIcon = data.provider === 'anthropic' ? '🟣' : '🔵';
+      const provName = data.provider === 'anthropic' ? 'Claude' : 'Gemini';
+      result.innerHTML = `
+        <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid rgba(255,255,255,0.06)">
+          <span style="font-size:14px">🧠</span>
+          <span style="font-size:10px; font-weight:700; color:#00d4ff">Interpretacja AI</span>
+          <span style="font-size:8px; color:#64748b; margin-left:auto">${provIcon} ${provName} · ${data.timestamp || ''}</span>
+        </div>
+        <div style="font-size:11px; color:#e2e8f0; line-height:1.7">${html}</div>
+      `;
+      result.style.display = 'block';
+    }
+
+    if (status) {
+      const now = new Date().toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+      status.textContent = `✅ Analiza gotowa (${now})`;
+      status.style.color = '#2ecc71';
+    }
+    if (btn) {
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      btn.innerHTML = '🔄 Analizuj ponownie';
+    }
+  }
+
   /* ── Subscription management (reconnection-safe) ── */
   _ensureSubscriptions() {
     if (!this._hass?.connection) return;
@@ -4575,6 +4713,7 @@ class SmartingHomePanel extends HTMLElement {
       if (this._cronSub) { try { this._cronSub(); } catch(e) {} this._cronSub = null; }
       if (this._actionStateSub) { try { this._actionStateSub(); } catch(e) {} this._actionStateSub = null; }
       if (this._testSub) { try { this._testSub(); } catch(e) {} this._testSub = null; }
+      if (this._roiSub) { try { this._roiSub(); } catch(e) {} this._roiSub = null; }
     }
     this._lastConnection = conn;
     // Subscribe to AI cron updates
@@ -4610,6 +4749,24 @@ class SmartingHomePanel extends HTMLElement {
           });
         }
       } catch(e) { console.warn('[SH] subscribeEvents action error:', e); this._actionStateSub = null; }
+    }
+    // Subscribe to ROI AI analysis results
+    if (!this._roiSub) {
+      try {
+        this._roiSub = conn.subscribeEvents((ev) => {
+          this._displayRoiAiResult(ev.data);
+          // Also save to settings cache
+          if (ev.data.text) {
+            this._settings.ai_roi_analysis = ev.data;
+          }
+        }, "smartinghome_roi_analysis");
+        if (this._roiSub && typeof this._roiSub.then === 'function') {
+          this._roiSub.then(unsub => { this._roiSub = unsub; }).catch(err => {
+            console.warn('[SH] Failed to subscribe to ROI analysis:', err);
+            this._roiSub = null;
+          });
+        }
+      } catch(e) { console.warn('[SH] subscribeEvents ROI error:', e); this._roiSub = null; }
     }
   }
 
@@ -10694,7 +10851,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.42.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.42.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
