@@ -843,6 +843,12 @@ WAŻNE WYTYCZNE:
 9. Użyj analogii z życia codziennego
 10. Na końcu daj 1-2 KONKRETNE rekomendacje
 
+WAŻNE OGRANICZENIA:
+- NIE omawiaj bieżącego stanu systemu (aktualna produkcja PV, stan baterii, pobór domu)
+- Skup się WYŁĄCZNIE na danych ROI i porównaniu taryf
+- To jest symulacja ROCZNA — nie analizuj danych "tu i teraz"
+- NIE spekuluj o konfiguracji HEMS ani o błędach — dane są prawidłowe
+
 DANE SYMULACJI ROI:
 {json.dumps(roi_data, indent=2, ensure_ascii=False)}
 
@@ -852,13 +858,18 @@ Długość: 300-500 słów."""
         try:
             stored = _read_settings(hass)
             provider = stored.get("default_ai_provider", "gemini")
+
+            # Direct API call without system context (no _build_context)
+            # to avoid polluting ROI analysis with live system status
+            import aiohttp
+
             if provider == "anthropic" and ai_advisor.anthropic_available:
-                response = await ai_advisor.ask_anthropic(question, {})
+                response = await ai_advisor._direct_ask_anthropic(question)
             elif ai_advisor.gemini_available:
-                response = await ai_advisor.ask_gemini(question, {})
+                response = await ai_advisor._direct_ask_gemini(question)
                 provider = "gemini"
             elif ai_advisor.anthropic_available:
-                response = await ai_advisor.ask_anthropic(question, {})
+                response = await ai_advisor._direct_ask_anthropic(question)
                 provider = "anthropic"
             else:
                 response = "Brak dostępnego dostawcy AI."

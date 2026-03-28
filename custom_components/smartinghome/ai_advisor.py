@@ -492,6 +492,81 @@ User question: {question}"""
             _LOGGER.error("Anthropic API error: %s", err)
             return f"Anthropic error: {err}"
 
+    async def _direct_ask_gemini(self, prompt: str) -> str:
+        """Send prompt directly to Gemini without system context overlay."""
+        if not self.gemini_available:
+            return "Google Gemini is not configured."
+        if not self._check_rate_limit():
+            return "Rate limit reached. Please try again later."
+        try:
+            import aiohttp
+            self._call_timestamps.append(time.time())
+            url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{self._gemini_model}:generateContent?key={self._gemini_key}"
+            )
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "maxOutputTokens": AI_MAX_TOKENS,
+                    "temperature": AI_TEMPERATURE,
+                },
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload,
+                                        timeout=aiohttp.ClientTimeout(total=120)) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        candidates = result.get("candidates", [])
+                        if candidates:
+                            parts = candidates[0].get("content", {}).get("parts", [])
+                            if parts:
+                                return parts[0].get("text", "No response text.")
+                        return "No response from Gemini."
+                    err_text = await resp.text()
+                    _LOGGER.error("Gemini direct API HTTP %s: %s", resp.status, err_text)
+                    return f"Gemini error (HTTP {resp.status})"
+        except Exception as err:
+            _LOGGER.error("Gemini direct API error: %s", err)
+            return f"Gemini error: {err}"
+
+    async def _direct_ask_anthropic(self, prompt: str) -> str:
+        """Send prompt directly to Anthropic without system context overlay."""
+        if not self.anthropic_available:
+            return "Anthropic Claude is not configured."
+        if not self._check_rate_limit():
+            return "Rate limit reached. Please try again later."
+        try:
+            import aiohttp
+            self._call_timestamps.append(time.time())
+            url = "https://api.anthropic.com/v1/messages"
+            headers = {
+                "x-api-key": self._anthropic_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            }
+            payload = {
+                "model": self._anthropic_model,
+                "max_tokens": AI_MAX_TOKENS,
+                "temperature": AI_TEMPERATURE,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, headers=headers,
+                                        timeout=aiohttp.ClientTimeout(total=120)) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        content = result.get("content", [])
+                        if content:
+                            return content[0].get("text", "No response text.")
+                        return "No response from Anthropic."
+                    err_text = await resp.text()
+                    _LOGGER.error("Anthropic direct API HTTP %s: %s", resp.status, err_text)
+                    return f"Anthropic error (HTTP {resp.status})"
+        except Exception as err:
+            _LOGGER.error("Anthropic direct API error: %s", err)
+            return f"Anthropic error: {err}"
+
     async def get_optimization_advice(
         self, data: dict[str, Any]
     ) -> str:
