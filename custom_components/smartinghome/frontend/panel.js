@@ -981,6 +981,275 @@ class SmartingHomePanel extends HTMLElement {
     return isNaN(v) ? null : v;
   }
 
+  // ═══════ ROI SIMULATION ENGINE ═══════
+
+  /**
+   * Build a typical 24h energy profile from yearly totals.
+   * PV: Gaussian bell curve peaking at 12:00.
+   * Load: bimodal pattern (morning 7-9, evening 17-21) + baseload.
+   * Returns daily kWh arrays scaled so sum × 365 ≈ yearly totals.
+   */
+  _buildDayProfile(yearlyPV, yearlyLoad) {
+    // PV bell curve: Gaussian centered at hour 12, σ=3
+    const pvRaw = Array.from({length: 24}, (_, h) => {
+      const x = (h - 12) / 3;
+      return Math.exp(-0.5 * x * x);
+    });
+    const pvSum = pvRaw.reduce((a, b) => a + b, 0);
+    const dailyPV = yearlyPV / 365;
+    const pv = pvRaw.map(v => (v / pvSum) * dailyPV);
+
+    // Load: bimodal (morning peak 7-9, evening peak 17-21) + baseload
+    const loadShape = [
+      0.25, 0.22, 0.20, 0.20, 0.22, 0.28, // 0-5: nighttime low
+      0.40, 0.65, 0.70, 0.55, 0.45, 0.40, // 6-11: morning ramp + peak
+      0.42, 0.50, 0.48, 0.50, 0.60, 0.75, // 12-17: midday + evening ramp
+      0.85, 0.80, 0.70, 0.55, 0.40, 0.30  // 18-23: evening peak + decline
+    ];
+    const loadSum = loadShape.reduce((a, b) => a + b, 0);
+    const dailyLoad = yearlyLoad / 365;
+    const load = loadShape.map(v => (v / loadSum) * dailyLoad);
+
+    return { pv, load };
+  }
+
+  /**
+   * Build tariff scenarios with hourly buy/sell prices and battery strategy.
+   * Uses live ENTSO-E prices_today when available for dynamic tariff.
+   */
+  _buildTariffScenarios() {
+    const now = new Date();
+    const month = now.getMonth();
+    const isWinter = [0,1,2,9,10,11].includes(month);
+    const isSummer = !isWinter;
+    const dow = now.getDay();
+    const isWeekend = dow === 0 || dow === 6;
+
+    // Read ENTSO-E prices_today (24h array) from sensor attributes
+    let entsoeToday = [];
+    try {
+      const st = this._hass?.states?.['sensor.entso_e_aktualna_cena_energii'];
+      if (st?.attributes?.prices_today) {
+        entsoeToday = st.attributes.prices_today.map(p =>
+          typeof p === 'object' ? (p.price || p.value || 0) : (parseFloat(p) || 0)
+        );
+      }
+    } catch(e) {}
+    const avgEntso = parseFloat(this._hass?.states?.['sensor.entso_e_srednia_dzisiaj']?.state) || 0.50;
+
+    // G13 zone + price per hour
+    const g13HourPrice = (h) => {
+      if (isWeekend) return 0.63;
+      if (h >= 7 && h < 13) return 0.91; // morning peak
+      if (isSummer) {
+        if (h >= 19 && h < 22) return 1.50; // summer afternoon peak
+        return 0.63;
+      } else {
+        if (h >= 16 && h < 21) return 1.50; // winter afternoon peak
+        return 0.63;
+      }
+    };
+
+    // RCE prosumer coefficient
+    const RCE_COEF = 1.23;
+
+    return [
+      {
+        key: 'g11',
+        label: '🔴 G11 — Stała cena',
+        desc: 'Taryfa G11: stała cena 1.10 zł/kWh, eksport po średniej RCE (0.20 zł)',
+        color: '#e74c3c',
+        border: 'rgba(231,76,60,0.2)',
+        bg: 'rgba(231,76,60,0.06)',
+        badge: '',
+        buyPrice: Array(24).fill(1.10),
+        sellPrice: Array(24).fill(0.20),
+        strategy: 'passive', // no time-based battery optimization
+        gridChargeAllowed: false,
+      },
+      {
+        key: 'g13',
+        label: '🟡 G13 — Strefowa',
+        desc: 'Taryfa G13: off-peak 0.63, poranna 0.91, szczyt 1.50 zł',
+        color: '#f7b731',
+        border: 'rgba(247,183,49,0.2)',
+        bg: 'rgba(247,183,49,0.06)',
+        badge: '',
+        buyPrice: Array.from({length: 24}, (_, h) => g13HourPrice(h)),
+        sellPrice: Array.from({length: 24}, (_, h) => g13HourPrice(h) * 0.35),
+        strategy: 'g13_active', // discharge in peak, conserve in off-peak
+        gridChargeAllowed: false,
+      },
+      {
+        key: 'dynamic',
+        label: '🟢 Dynamiczna — RCE/ENTSO-E',
+        desc: 'Cena dynamiczna RCE: ładuj w tanich godzinach, sprzedawaj w drogich — pełny arbitraż HEMS',
+        color: '#2ecc71',
+        border: 'rgba(46,204,113,0.3)',
+        bg: 'rgba(46,204,113,0.08)',
+        badge: '✅ REKOMENDOWANE',
+        buyPrice: entsoeToday.length >= 24
+          ? entsoeToday.slice(0, 24)
+          : Array.from({length: 24}, (_, h) => {
+              // Synthetic dynamic profile from avg: cheap overnight, expensive afternoon
+              const x = (h - 12) / 4;
+              return Math.max(0.05, avgEntso * (0.5 + 0.5 * (1 / (1 + Math.exp(-x * 2)))));
+            }),
+        sellPrice: entsoeToday.length >= 24
+          ? entsoeToday.slice(0, 24).map(p => Math.max(0, p * 0.85))
+          : Array.from({length: 24}, (_, h) => {
+              const x = (h - 12) / 4;
+              return Math.max(0.02, avgEntso * (0.5 + 0.5 * (1 / (1 + Math.exp(-x * 2)))) * 0.85);
+            }),
+        strategy: 'dynamic_active', // full arbitrage: grid-charge cheap, sell expensive
+        gridChargeAllowed: true,
+      },
+    ];
+  }
+
+  /**
+   * Simulate one day of battery operation given a profile and tariff scenario.
+   * Returns hourly arrays + summary KPIs.
+   */
+  _simulateBatteryDay(profile, scenario) {
+    const CAP = 10.2;         // kWh usable capacity
+    const MAX_RATE = 3.0;     // kW charge/discharge
+    const ETA = 0.96;         // one-way efficiency (round-trip ~0.92)
+    const SOC_MIN = 0.05;     // 5%
+    const SOC_MAX = 1.0;      // 100%
+
+    let soc = 0.50; // start at 50%
+    const gridImport = new Array(24).fill(0);
+    const gridExport = new Array(24).fill(0);
+    const selfCons = new Array(24).fill(0);
+    const battSOC = new Array(24).fill(0);
+    const batCharge = new Array(24).fill(0);
+    const batDischarge = new Array(24).fill(0);
+
+    // Pre-compute cheap/expensive hours for dynamic strategy
+    let cheapHours = [], expensiveHours = [];
+    if (scenario.strategy === 'dynamic_active') {
+      const indexed = scenario.buyPrice.map((p, i) => ({p, i}));
+      const sorted = [...indexed].sort((a, b) => a.p - b.p);
+      cheapHours = sorted.slice(0, 4).map(x => x.i);    // 4 cheapest
+      expensiveHours = sorted.slice(-4).map(x => x.i);   // 4 most expensive
+    }
+
+    for (let h = 0; h < 24; h++) {
+      const pvH = profile.pv[h];
+      const loadH = profile.load[h];
+
+      // Step 1: PV covers load directly
+      const pvToLoad = Math.min(pvH, loadH);
+      selfCons[h] = pvToLoad;
+      let remainingLoad = loadH - pvToLoad;
+      let pvSurplus = pvH - pvToLoad;
+
+      // Step 2: Strategy-dependent battery charging from PV surplus
+      let chargeFromPV = 0;
+      const freeCapKwh = (SOC_MAX - soc) * CAP;
+
+      if (scenario.strategy === 'g13_active') {
+        // G13: always charge from PV surplus (especially to prepare for peak)
+        chargeFromPV = Math.min(pvSurplus, MAX_RATE, freeCapKwh / ETA);
+      } else if (scenario.strategy === 'dynamic_active') {
+        // Dynamic: charge from PV unless it's an expensive hour (export instead)
+        if (expensiveHours.includes(h) && soc > 0.30) {
+          chargeFromPV = 0; // keep surplus for export
+        } else {
+          chargeFromPV = Math.min(pvSurplus, MAX_RATE, freeCapKwh / ETA);
+        }
+      } else {
+        // Passive: always charge from PV
+        chargeFromPV = Math.min(pvSurplus, MAX_RATE, freeCapKwh / ETA);
+      }
+      soc += (chargeFromPV * ETA) / CAP;
+      batCharge[h] += chargeFromPV;
+      pvSurplus -= chargeFromPV;
+
+      // Step 3: Export remaining PV surplus
+      gridExport[h] = pvSurplus;
+
+      // Step 4: Battery discharge to cover remaining load
+      let dischargeToLoad = 0;
+      const availableKwh = (soc - SOC_MIN) * CAP;
+
+      if (scenario.strategy === 'g13_active') {
+        // G13: discharge only during peak hours (expensive), conserve otherwise
+        const price = scenario.buyPrice[h];
+        if (price >= 1.20) {
+          dischargeToLoad = Math.min(remainingLoad, MAX_RATE, availableKwh * ETA);
+        } else if (price >= 0.80) {
+          dischargeToLoad = Math.min(remainingLoad * 0.5, MAX_RATE, availableKwh * ETA);
+        }
+        // off-peak: don't discharge, save for peak
+      } else if (scenario.strategy === 'dynamic_active') {
+        // Dynamic: discharge in expensive hours, hold in cheap hours
+        if (expensiveHours.includes(h)) {
+          dischargeToLoad = Math.min(remainingLoad, MAX_RATE, availableKwh * ETA);
+        } else if (!cheapHours.includes(h)) {
+          dischargeToLoad = Math.min(remainingLoad * 0.6, MAX_RATE, availableKwh * ETA);
+        }
+        // cheap hours: don't discharge
+      } else {
+        // Passive: always discharge to cover load
+        dischargeToLoad = Math.min(remainingLoad, MAX_RATE, availableKwh * ETA);
+      }
+      soc -= dischargeToLoad / (CAP * ETA);
+      batDischarge[h] += dischargeToLoad;
+      remainingLoad -= dischargeToLoad;
+      selfCons[h] += dischargeToLoad; // battery from PV counts as self-consumption
+
+      // Step 5: Grid import for remaining load
+      gridImport[h] = remainingLoad;
+
+      // Step 6: Optional grid-to-battery charging (dynamic only, cheap hours)
+      if (scenario.gridChargeAllowed && cheapHours.includes(h)) {
+        const gFree = (SOC_MAX - soc) * CAP;
+        const gridCharge = Math.min(MAX_RATE - chargeFromPV, gFree / ETA, MAX_RATE * 0.8);
+        if (gridCharge > 0.1) {
+          soc += (gridCharge * ETA) / CAP;
+          gridImport[h] += gridCharge;
+          batCharge[h] += gridCharge;
+        }
+      }
+
+      soc = Math.max(SOC_MIN, Math.min(SOC_MAX, soc));
+      battSOC[h] = soc;
+    }
+
+    // Aggregate daily results
+    const totalImport = gridImport.reduce((a, b) => a + b, 0);
+    const totalExport = gridExport.reduce((a, b) => a + b, 0);
+    const totalSelfCons = selfCons.reduce((a, b) => a + b, 0);
+    const totalCharge = batCharge.reduce((a, b) => a + b, 0);
+    const totalDischarge = batDischarge.reduce((a, b) => a + b, 0);
+
+    // Financial — weighted costs
+    let importCost = 0, exportRevenue = 0, baselineCost = 0;
+    for (let h = 0; h < 24; h++) {
+      importCost += gridImport[h] * scenario.buyPrice[h];
+      exportRevenue += gridExport[h] * scenario.sellPrice[h];
+      baselineCost += profile.load[h] * scenario.buyPrice[h];
+    }
+
+    const systemNetCost = importCost - exportRevenue;
+    const dailyBenefit = baselineCost - systemNetCost;
+
+    const avgBuyPrice = totalImport > 0 ? importCost / totalImport : 0;
+    const avgSellPrice = totalExport > 0 ? exportRevenue / totalExport : 0;
+    const cycles = totalCharge / CAP;
+
+    return {
+      gridImport, gridExport, selfCons, battSOC, batCharge, batDischarge,
+      totalImport, totalExport, totalSelfCons, totalCharge, totalDischarge,
+      importCost, exportRevenue, baselineCost, systemNetCost, dailyBenefit,
+      avgBuyPrice, avgSellPrice, cycles,
+    };
+  }
+
+  // ═══════ END ROI SIMULATION ENGINE ═══════
+
   _updateRoi() {
     if (!this._hass) return;
     const p = this._roiPeriod;
@@ -1033,7 +1302,7 @@ class SmartingHomePanel extends HTMLElement {
     if (aBar) aBar.style.width = `${autarky}%`;
     if (scBar) scBar.style.width = `${selfCons}%`;
 
-    // ROI calculation — 3 scenarios
+    // ROI calculation — per-tariff simulation
     const invest = this._settings.roi_investment || 0;
     const invInput = this.shadowRoot.getElementById("roi-invest-input");
     if (invInput && !invInput.matches(":focus") && invest) invInput.value = invest;
@@ -1049,80 +1318,79 @@ class SmartingHomePanel extends HTMLElement {
     const periodLabels = { day: "dzień", week: "tydzień", month: "miesiąc", year: "rok" };
     this._setText("roi-period-label", `Baza: ${periodLabels[p]} × ${multiplier[p]}`);
 
-    // 3 scenarios
-    const scenarios = this._winterScenarios();
-    const keys = ["none", "basic", "optimal"];
-    const colors = ["#e74c3c", "#f7b731", "#2ecc71"];
-    const borders = ["rgba(231,76,60,0.2)", "rgba(247,183,49,0.2)", "rgba(46,204,113,0.3)"];
-    const bgs = ["rgba(231,76,60,0.06)", "rgba(247,183,49,0.06)", "rgba(46,204,113,0.08)"];
-    const badges = ["", "", "✅ REKOMENDOWANE"];
-
+    // Build per-tariff simulation
+    const tariffScenarios = this._buildTariffScenarios();
+    const yearlyLoad = yearlySelfUse + yearlyImport;
     const ct = this.shadowRoot.getElementById("roi-scenario-cards");
-    // Total house consumption = self-use + import (what the house actually consumes)
-    const totalConsumption = yearlySelfUse + yearlyImport;
 
-    if (ct && yearlyPV > 0) {
-      const results = keys.map((k, i) => {
-        const s = scenarios[k];
-        // Identical energy flows for all tariff variants — only prices differ
-        const scSelfUse = yearlySelfUse;
-        const scExport = yearlyExport;
-        const scImport = yearlyImport;
-        const scSelfConsPct = yearlyPV > 0 ? Math.round((yearlySelfUse / yearlyPV) * 100) : 0;
+    if (ct && yearlyPV > 0 && yearlyLoad > 0) {
+      const profile = this._buildDayProfile(yearlyPV, yearlyLoad);
 
-        const importCost = scImport * s.importPrice;
-        const exportRev = scExport * s.exportPrice;
-        const selfSavings = scSelfUse * s.importPrice;
-
-        // yearlyBenefit = total annual value from PV (savings from self-consumption + export revenue)
-        // This is the correct basis for ROI/payback: how much you save vs having NO PV at all
-        const yearlyBenefit = selfSavings + exportRev;
-
-        // yearlyBilans = net cash flow (export revenue minus import cost) — what hits your bank account
-        const yearlyBilans = exportRev - importCost;
-
-        const payback = invest > 0 && yearlyBenefit > 0 ? invest / yearlyBenefit : null;
-        const profit25 = invest > 0 ? yearlyBenefit * 25 - invest : yearlyBenefit * 25;
-        return { key: k, label: s.label, desc: s.desc, importCost, exportRev, selfSavings, yearlyBenefit, yearlyBilans, payback, profit25, importPrice: s.importPrice, exportPrice: s.exportPrice, scSelfUse, scExport, scImport, scSelfConsPct };
+      const results = tariffScenarios.map(sc => {
+        const sim = this._simulateBatteryDay(profile, sc);
+        // Scale daily results to yearly
+        const yr = {
+          import: sim.totalImport * 365,
+          export: sim.totalExport * 365,
+          selfCons: sim.totalSelfCons * 365,
+          importCost: sim.importCost * 365,
+          exportRev: sim.exportRevenue * 365,
+          baselineCost: sim.baselineCost * 365,
+          netCost: sim.systemNetCost * 365,
+          benefit: sim.dailyBenefit * 365,
+          avgBuy: sim.avgBuyPrice,
+          avgSell: sim.avgSellPrice,
+          cycles: sim.cycles * 365,
+          selfConsPct: yearlyPV > 0 ? Math.round((sim.totalSelfCons / (yearlyPV / 365)) * 100) : 0,
+        };
+        yr.payback = invest > 0 && yr.benefit > 0 ? invest / yr.benefit : null;
+        yr.profit25 = invest > 0 ? yr.benefit * 25 - invest : yr.benefit * 25;
+        return { ...sc, yr };
       });
 
-      // Calculate savings vs worst scenario
-      const worstBenefit = results[0].yearlyBenefit;
+      // Also compute passive simulation for dynamic to get automation_gain
+      const passiveScenario = { ...tariffScenarios[2], strategy: 'passive', gridChargeAllowed: false };
+      const passiveSim = this._simulateBatteryDay(profile, passiveScenario);
+      const passiveBenefit = passiveSim.dailyBenefit * 365;
+      const automationGain = results[2].yr.benefit - passiveBenefit;
 
       ct.innerHTML = results.map((r, i) => {
-        const paybackStr = r.payback ? `~${r.payback.toFixed(1)} lat` : (invest > 0 ? "∞ (strata)" : "— (podaj koszt)");
-        const paybackPct = r.payback ? Math.min(100, (25 / r.payback) * (100 / 25)) : 0;
-        const paybackColor = r.payback ? (r.payback <= 8 ? "#2ecc71" : r.payback <= 15 ? "#f7b731" : "#e74c3c") : "#e74c3c";
-        const diffVsNone = i > 0 ? r.yearlyBenefit - worstBenefit : 0;
-        return `<div style="background:${bgs[i]}; border:1px solid ${borders[i]}; border-radius:14px; padding:16px; position:relative; overflow:hidden">
-          ${badges[i] ? `<div style="position:absolute; top:8px; right:8px; font-size:8px; color:${colors[i]}; font-weight:700; letter-spacing:0.5px">${badges[i]}</div>` : ""}
-          <div style="font-size:13px; font-weight:700; color:${colors[i]}; margin-bottom:4px">${r.label}</div>
+        const yr = r.yr;
+        const paybackStr = yr.payback ? `~${yr.payback.toFixed(1)} lat` : (invest > 0 ? "∞ (strata)" : "— (podaj koszt)");
+        const paybackColor = yr.payback ? (yr.payback <= 8 ? "#2ecc71" : yr.payback <= 15 ? "#f7b731" : "#e74c3c") : "#e74c3c";
+        const paybackPct = yr.payback ? Math.min(100, (25 / yr.payback) * 4) : 0;
+        const diffVsG11 = i > 0 ? yr.benefit - results[0].yr.benefit : 0;
+
+        return `<div style="background:${r.bg}; border:1px solid ${r.border}; border-radius:14px; padding:16px; position:relative; overflow:hidden">
+          ${r.badge ? `<div style="position:absolute; top:8px; right:8px; font-size:8px; color:${r.color}; font-weight:700; letter-spacing:0.5px">${r.badge}</div>` : ""}
+          <div style="font-size:13px; font-weight:700; color:${r.color}; margin-bottom:4px">${r.label}</div>
           <div style="font-size:9px; color:#64748b; margin-bottom:12px; line-height:1.4">${r.desc}</div>
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:10px; margin-bottom:10px">
-            <div style="color:#64748b">Import:</div><div style="color:#e74c3c; font-weight:600">${r.importPrice.toFixed(2)} zł/kWh</div>
-            <div style="color:#64748b">Eksport:</div><div style="color:#2ecc71; font-weight:600">${r.exportPrice.toFixed(2)} zł/kWh</div>
+            <div style="color:#64748b">Śr. cena zakupu:</div><div style="color:#e74c3c; font-weight:600">${yr.avgBuy.toFixed(2)} zł/kWh</div>
+            <div style="color:#64748b">Śr. cena sprzedaży:</div><div style="color:#2ecc71; font-weight:600">${yr.avgSell.toFixed(2)} zł/kWh</div>
           </div>
           <div style="background:rgba(255,255,255,0.03); border-radius:8px; padding:8px; margin-bottom:10px">
-            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">📊 Przepływy energii (identyczne)</div>
+            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">📊 Przepływy energii ${r.strategy !== 'passive' ? '<span style="color:#a855f7">(symulacja per taryfa)</span>' : ''}</div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:3px; font-size:10px">
-              <div style="color:#94a3b8">🏠 Autokonsumpcja:</div><div style="color:#00d4ff; font-weight:600">${Math.round(r.scSelfUse)} kWh <span style="color:#64748b; font-weight:400">(${r.scSelfConsPct}%)</span></div>
-              <div style="color:#94a3b8">↓ Import z sieci:</div><div style="color:#e74c3c; font-weight:600">${Math.round(r.scImport)} kWh</div>
-              <div style="color:#94a3b8">↑ Eksport do sieci:</div><div style="color:#2ecc71; font-weight:600">${Math.round(r.scExport)} kWh</div>
+              <div style="color:#94a3b8">🏠 Autokonsumpcja:</div><div style="color:#00d4ff; font-weight:600">${Math.round(yr.selfCons)} kWh <span style="color:#64748b; font-weight:400">(${yr.selfConsPct}%)</span></div>
+              <div style="color:#94a3b8">↓ Import z sieci:</div><div style="color:#e74c3c; font-weight:600">${Math.round(yr.import)} kWh</div>
+              <div style="color:#94a3b8">↑ Eksport do sieci:</div><div style="color:#2ecc71; font-weight:600">${Math.round(yr.export)} kWh</div>
+              <div style="color:#94a3b8">🔄 Cykle baterii:</div><div style="color:#a855f7; font-weight:600">${Math.round(yr.cycles)}/rok</div>
             </div>
           </div>
           <div style="border-top:1px solid rgba(255,255,255,0.06); padding-top:8px">
-            <div style="font-size:9px; color:#64748b">Oszczędności roczne (autokonsumpcja)</div>
-            <div style="font-size:16px; font-weight:700; color:#00d4ff">${r.selfSavings.toFixed(0)} zł</div>
-            <div style="font-size:9px; color:#64748b; margin-top:6px">Przychód z eksportu</div>
-            <div style="font-size:16px; font-weight:700; color:#2ecc71">+${r.exportRev.toFixed(0)} zł</div>
-            <div style="font-size:9px; color:#64748b; margin-top:6px">Koszt importu</div>
-            <div style="font-size:16px; font-weight:700; color:#e74c3c">-${r.importCost.toFixed(0)} zł</div>
+            <div style="font-size:9px; color:#64748b">Koszt energii bez PV (baseline)</div>
+            <div style="font-size:13px; font-weight:600; color:#94a3b8">${yr.baselineCost.toFixed(0)} zł/rok</div>
+            <div style="font-size:9px; color:#64748b; margin-top:4px">Koszt importu z systemem</div>
+            <div style="font-size:14px; font-weight:700; color:#e74c3c">-${yr.importCost.toFixed(0)} zł</div>
+            <div style="font-size:9px; color:#64748b; margin-top:4px">Przychód z eksportu</div>
+            <div style="font-size:14px; font-weight:700; color:#2ecc71">+${yr.exportRev.toFixed(0)} zł</div>
           </div>
           <div style="margin-top:10px; padding:10px; border-radius:10px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.06)">
-            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Korzyść roczna z PV</div>
-            <div style="font-size:24px; font-weight:900; color:${r.yearlyBenefit >= 0 ? "#2ecc71" : "#e74c3c"}">${r.yearlyBenefit >= 0 ? "+" : ""}${r.yearlyBenefit.toFixed(0)} zł</div>
-            <div style="font-size:9px; color:#94a3b8; margin-top:1px">oszczędność + przychód vs brak PV</div>
-            ${i > 0 ? `<div style="font-size:10px; color:#2ecc71; margin-top:4px">+${diffVsNone.toFixed(0)} zł vs G11</div>` : `<div style="font-size:10px; color:#e74c3c; margin-top:4px">taryfa stała</div>`}
+            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Realna korzyść roczna z PV</div>
+            <div style="font-size:24px; font-weight:900; color:${yr.benefit >= 0 ? "#2ecc71" : "#e74c3c"}">${yr.benefit >= 0 ? "+" : ""}${yr.benefit.toFixed(0)} zł</div>
+            <div style="font-size:9px; color:#94a3b8; margin-top:1px">baseline − (import − eksport)</div>
+            ${i > 0 ? `<div style="font-size:10px; color:#2ecc71; margin-top:4px">+${diffVsG11.toFixed(0)} zł vs G11</div>` : `<div style="font-size:10px; color:#e74c3c; margin-top:4px">taryfa stała</div>`}
           </div>
           ${invest > 0 ? `
           <div style="margin-top:10px">
@@ -1131,28 +1399,39 @@ class SmartingHomePanel extends HTMLElement {
               <span style="color:${paybackColor}; font-weight:700">${paybackStr}</span>
             </div>
             <div style="background:rgba(255,255,255,0.08); border-radius:6px; height:8px; overflow:hidden">
-              <div style="height:100%; width:${paybackPct}%; background:linear-gradient(90deg, ${paybackColor}, ${colors[i]}); border-radius:6px; transition:width 0.5s"></div>
+              <div style="height:100%; width:${paybackPct}%; background:linear-gradient(90deg, ${paybackColor}, ${r.color}); border-radius:6px; transition:width 0.5s"></div>
             </div>
             <div style="display:flex; justify-content:space-between; font-size:9px; color:#64748b; margin-top:6px">
               <span>Zysk w 25 lat</span>
-              <span style="color:${r.profit25 >= 0 ? "#2ecc71" : "#e74c3c"}; font-weight:700">${r.profit25 >= 0 ? "+" : ""}${Math.round(r.profit25).toLocaleString("pl-PL")} zł</span>
+              <span style="color:${yr.profit25 >= 0 ? "#2ecc71" : "#e74c3c"}; font-weight:700">${yr.profit25 >= 0 ? "+" : ""}${Math.round(yr.profit25).toLocaleString("pl-PL")} zł</span>
             </div>
           </div>` : ""}
         </div>`;
       }).join("");
 
-      // Show total HEMS savings summary below cards
-      const hemsSavings = results[2].yearlyBenefit - results[0].yearlyBenefit;
+      // HEMS automation gain summary
+      const hemsSavings = results[2].yr.benefit - results[0].yr.benefit;
+      let summaryHtml = '';
       if (hemsSavings > 0) {
-        ct.innerHTML += `<div style="grid-column:1/-1; margin-top:12px; padding:12px; background:rgba(46,204,113,0.08); border:1px solid rgba(46,204,113,0.2); border-radius:10px; text-align:center">
-          <div style="font-size:11px; color:#94a3b8">💰 Różnica cenowa: Dynamiczna RCE vs G11</div>
+        summaryHtml += `<div style="grid-column:1/-1; margin-top:12px; padding:12px; background:rgba(46,204,113,0.08); border:1px solid rgba(46,204,113,0.2); border-radius:10px; text-align:center">
+          <div style="font-size:11px; color:#94a3b8">💰 Różnica: Dynamiczna RCE vs G11</div>
           <div style="font-size:28px; font-weight:900; color:#2ecc71; margin-top:4px">+${hemsSavings.toFixed(0)} zł/rok</div>
-          <div style="font-size:10px; color:#64748b; margin-top:2px">Oszczędność dzięki taryfie dynamicznej z zarządzaniem HEMS vs stała cena G11</div>
+          <div style="font-size:10px; color:#64748b; margin-top:2px">Oszczędność dzięki taryfie dynamicznej z aktywnym zarządzaniem HEMS</div>
         </div>`;
       }
+      if (automationGain > 50) {
+        summaryHtml += `<div style="grid-column:1/-1; margin-top:8px; padding:10px; background:rgba(168,85,247,0.08); border:1px solid rgba(168,85,247,0.2); border-radius:10px; text-align:center">
+          <div style="font-size:11px; color:#a855f7">🤖 Wartość automatyki HEMS (dynamiczna)</div>
+          <div style="font-size:22px; font-weight:900; color:#a855f7; margin-top:4px">+${automationGain.toFixed(0)} zł/rok</div>
+          <div style="font-size:9px; color:#64748b; margin-top:2px">dodatkowa korzyść z aktywnego arbitrażu vs pasywna autokonsumpcja</div>
+        </div>`;
+      }
+      ct.innerHTML += summaryHtml;
+
     } else if (ct && yearlyPV === 0) {
       ct.innerHTML = '<div style="text-align:center; padding:20px; color:#64748b; font-size:11px">Brak danych PV — zmień okres na "Miesiąc" lub "Rok" aby zobaczyć porównanie.</div>';
     }
+
 
     // Summary table — all periods
     const periods = [
@@ -9918,7 +10197,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.39.8</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.40.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
