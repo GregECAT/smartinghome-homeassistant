@@ -147,6 +147,7 @@ class SmartingHomePanel extends HTMLElement {
     if (tab === 'hems') { this._updateHEMSArbitrage(); }
     if (tab === 'history') { this._updateHistoryTab(); }
     if (tab === 'autopilot') { this._updateAutopilot(); }
+    if (tab === 'energy' || tab === 'battery' || tab === 'overview') { this._updateForecastCharts(); }
   }
 
   /* ── Sensor mapping ─────────────────────── */
@@ -3495,6 +3496,368 @@ class SmartingHomePanel extends HTMLElement {
     return Math.abs(w) >= 1000 ? `${(w/1000).toFixed(1)} kW` : `${Math.round(w)} W`;
   }
 
+  /* ═══ FORECAST CHARTS — ±12h Prognoza vs Rzeczywistość ═══ */
+
+  async _fetchForecastChartData() {
+    // Cache for 5 minutes
+    if (this._fcChartCache && (Date.now() - this._fcChartCacheTs) < 300000) return this._fcChartCache;
+    if (!this._hass?.connection) return null;
+
+    const now = new Date();
+    const nowHour = now.getHours();
+    const start12h = new Date(now); start12h.setHours(start12h.getHours() - 12, 0, 0, 0);
+
+    // ── 1. Historical data from HA Recorder (last 12h) ──
+    let pvHist = {}, loadHist = {}, socHist = {}, gridHist = {}, battHist = {};
+    try {
+      const pvEntity = this._m('pv_power') || 'sensor.pv_power';
+      const loadEntity = this._m('load_power') || 'sensor.load';
+      const socEntity = this._m('battery_soc') || 'sensor.battery_state_of_charge';
+      const gridEntity = this._m('grid_power') || 'sensor.meter_active_power_total';
+      const battEntity = this._m('battery_power') || 'sensor.battery_power';
+
+      const stats = await this._hass.callWS({
+        type: 'recorder/statistics_during_period',
+        start_time: start12h.toISOString(),
+        end_time: now.toISOString(),
+        statistic_ids: [pvEntity, loadEntity, socEntity, gridEntity, battEntity],
+        period: 'hour',
+        types: ['mean'],
+      });
+
+      const parseStats = (arr) => {
+        const map = {};
+        if (!arr) return map;
+        arr.forEach(s => {
+          const d = new Date(s.start);
+          map[d.getHours()] = s.mean ?? null;
+        });
+        return map;
+      };
+
+      pvHist = parseStats(stats[pvEntity]);
+      loadHist = parseStats(stats[loadEntity]);
+      socHist = parseStats(stats[socEntity]);
+      gridHist = parseStats(stats[gridEntity]);
+      battHist = parseStats(stats[battEntity]);
+    } catch (e) {
+      console.warn('[SH] Forecast chart: Recorder query failed', e);
+    }
+
+    // ── 2. Forecast data from Forecast.Solar attributes ──
+    let pvForecast = {};
+    try {
+      // sensor.power_production_now has 'watts' attribute with hourly forecast
+      const fsEntity1 = this._hass.states['sensor.power_production_now'];
+      const fsEntity2 = this._hass.states['sensor.power_production_now_2'];
+      const parseWatts = (entity) => {
+        if (!entity?.attributes?.watts) return {};
+        const map = {};
+        Object.entries(entity.attributes.watts).forEach(([dt, w]) => {
+          const d = new Date(dt);
+          map[d.getHours()] = (map[d.getHours()] || 0) + (w || 0);
+        });
+        return map;
+      };
+      const fc1 = parseWatts(fsEntity1);
+      const fc2 = parseWatts(fsEntity2);
+      // Merge fc1 + fc2
+      const allHours = new Set([...Object.keys(fc1), ...Object.keys(fc2)]);
+      allHours.forEach(h => { pvForecast[h] = (fc1[h] || 0) + (fc2[h] || 0); });
+    } catch (e) {
+      console.warn('[SH] Forecast chart: Forecast.Solar attributes parse failed', e);
+    }
+
+    // ── 3. Load profile forecast (7-day average from today's pattern) ──
+    let loadForecast = {};
+    try {
+      // Use 7-day average from Recorder for load profile
+      const loadEntity = this._m('load_power') || 'sensor.load';
+      const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate() - 7); weekAgo.setHours(0, 0, 0, 0);
+      const loadStats = await this._hass.callWS({
+        type: 'recorder/statistics_during_period',
+        start_time: weekAgo.toISOString(),
+        end_time: now.toISOString(),
+        statistic_ids: [loadEntity],
+        period: 'hour',
+        types: ['mean'],
+      });
+      const arr = loadStats[loadEntity] || [];
+      const hourSums = {}; const hourCounts = {};
+      arr.forEach(s => {
+        const h = new Date(s.start).getHours();
+        hourSums[h] = (hourSums[h] || 0) + (s.mean || 0);
+        hourCounts[h] = (hourCounts[h] || 0) + 1;
+      });
+      for (let h = 0; h < 24; h++) {
+        if (hourCounts[h]) loadForecast[h] = Math.round(hourSums[h] / hourCounts[h]);
+      }
+    } catch (e) {
+      console.warn('[SH] Forecast chart: Load profile fetch failed', e);
+    }
+
+    // ── 4. Assemble unified timeline ──
+    const startHour = (nowHour - 12 + 24) % 24;
+    const points = [];
+    for (let i = 0; i < 25; i++) {
+      const h = (startHour + i) % 24;
+      const isPast = i < 12;
+      const isNow = i === 12;
+      const isFuture = i > 12;
+      points.push({
+        hour: h,
+        label: `${String(h).padStart(2, '0')}:00`,
+        offsetIdx: i,
+        isPast, isNow, isFuture,
+        pvActual: isPast || isNow ? (pvHist[h] ?? null) : null,
+        pvForecast: isFuture ? (pvForecast[h] ?? null) : (isPast && pvForecast[h] !== undefined ? pvForecast[h] : null),
+        loadActual: isPast || isNow ? (loadHist[h] ?? null) : null,
+        loadForecast: isFuture ? (loadForecast[h] ?? null) : null,
+        socActual: isPast || isNow ? (socHist[h] ?? null) : null,
+        gridActual: isPast || isNow ? (gridHist[h] ?? null) : null,
+        battActual: isPast || isNow ? (battHist[h] ?? null) : null,
+      });
+    }
+
+    // Inject live values at "now" point
+    const nowPoint = points[12];
+    nowPoint.pvActual = this._nm('pv_power') ?? nowPoint.pvActual;
+    nowPoint.loadActual = this._nm('load_power') ?? nowPoint.loadActual;
+    nowPoint.socActual = this._nm('battery_soc') ?? nowPoint.socActual;
+    nowPoint.gridActual = this._nm('grid_power') ?? nowPoint.gridActual;
+    nowPoint.battActual = this._nm('battery_power') ?? nowPoint.battActual;
+
+    this._fcChartCache = points;
+    this._fcChartCacheTs = Date.now();
+    return points;
+  }
+
+  _renderForecastChart(containerId, points, config) {
+    const container = this.shadowRoot.getElementById(containerId);
+    if (!container || !points || points.length === 0) return;
+
+    const { actualKey, forecastKey, actualColor, forecastColor, label, unit, yMin: cfgYMin, yMax: cfgYMax, height: cfgHeight, isMini } = config;
+    const W = isMini ? 600 : 800;
+    const H = cfgHeight || (isMini ? 100 : 200);
+    const padL = isMini ? 30 : 50, padR = 15, padT = 15, padB = isMini ? 18 : 30;
+    const chartW = W - padL - padR;
+    const chartH = H - padT - padB;
+
+    // Extract values
+    const actualVals = points.map(p => p[actualKey]);
+    const forecastVals = points.map(p => p[forecastKey]);
+    const allVals = [...actualVals, ...forecastVals].filter(v => v !== null && v !== undefined && !isNaN(v));
+    if (allVals.length === 0) {
+      container.innerHTML = `<div style="text-align:center; color:#475569; font-size:11px; padding:20px">⏳ Zbieranie danych historycznych...</div>`;
+      return;
+    }
+
+    const dataMin = Math.min(...allVals);
+    const dataMax = Math.max(...allVals);
+    const yMin = cfgYMin !== undefined ? cfgYMin : Math.max(0, dataMin - (dataMax - dataMin) * 0.1);
+    const yMax = cfgYMax !== undefined ? cfgYMax : Math.max(dataMax * 1.15, dataMax + 50);
+    const yRange = Math.max(yMax - yMin, 1);
+
+    const xStep = chartW / (points.length - 1);
+    const nowIdx = 12;
+
+    // Build SVG polylines
+    const toX = (i) => padL + i * xStep;
+    const toY = (v) => padT + chartH - ((v - yMin) / yRange) * chartH;
+
+    const buildPath = (vals) => {
+      let d = '';
+      let started = false;
+      vals.forEach((v, i) => {
+        if (v === null || v === undefined || isNaN(v)) return;
+        const x = toX(i).toFixed(1);
+        const y = toY(v).toFixed(1);
+        d += started ? ` L${x},${y}` : `M${x},${y}`;
+        started = true;
+      });
+      return d;
+    };
+
+    const buildAreaPath = (vals) => {
+      let coords = [];
+      vals.forEach((v, i) => {
+        if (v === null || v === undefined || isNaN(v)) return;
+        coords.push({ x: toX(i), y: toY(v), i });
+      });
+      if (coords.length < 2) return '';
+      let d = `M${coords[0].x.toFixed(1)},${(padT + chartH).toFixed(1)}`;
+      coords.forEach(c => { d += ` L${c.x.toFixed(1)},${c.y.toFixed(1)}`; });
+      d += ` L${coords[coords.length - 1].x.toFixed(1)},${(padT + chartH).toFixed(1)} Z`;
+      return d;
+    };
+
+    const actualPath = buildPath(actualVals);
+    const forecastPath = buildPath(forecastVals);
+    const actualArea = buildAreaPath(actualVals);
+    const forecastArea = buildAreaPath(forecastVals);
+
+    // Grid lines
+    const gridLines = [];
+    const ySteps = isMini ? 3 : 5;
+    for (let i = 0; i <= ySteps; i++) {
+      const v = yMin + (yRange / ySteps) * i;
+      const y = toY(v).toFixed(1);
+      gridLines.push(`<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="rgba(255,255,255,0.04)" stroke-width="0.5" />`);
+      if (!isMini || i % 2 === 0) {
+        const lbl = v >= 1000 ? `${(v / 1000).toFixed(1)}k` : Math.round(v);
+        gridLines.push(`<text x="${padL - 4}" y="${y}" text-anchor="end" dominant-baseline="middle" fill="#475569" font-size="8" font-family="Inter,system-ui,sans-serif">${lbl}</text>`);
+      }
+    }
+
+    // X labels (every 3h)
+    const xLabels = [];
+    points.forEach((p, i) => {
+      if (i % 3 === 0 || i === nowIdx) {
+        const x = toX(i).toFixed(1);
+        const isN = i === nowIdx;
+        xLabels.push(`<text x="${x}" y="${H - 3}" text-anchor="middle" fill="${isN ? '#00d4ff' : '#475569'}" font-size="${isN ? 9 : 7}" font-weight="${isN ? 800 : 400}" font-family="Inter,system-ui,sans-serif">${isN ? 'TERAZ' : p.label}</text>`);
+      }
+    });
+
+    // Now line
+    const nowX = toX(nowIdx).toFixed(1);
+    const nowLine = `
+      <line x1="${nowX}" y1="${padT}" x2="${nowX}" y2="${padT + chartH}" stroke="rgba(0,212,255,0.4)" stroke-width="1" stroke-dasharray="4,3" style="animation:shNowPulse 2s ease-in-out infinite" />
+      <circle cx="${nowX}" cy="${padT - 1}" r="3" fill="#00d4ff" style="filter:drop-shadow(0 0 4px #00d4ff)" />
+    `;
+
+    // Interactive overlay rects for tooltip
+    const hitAreas = points.map((p, i) => {
+      const x = toX(i) - xStep / 2;
+      return `<rect x="${Math.max(padL, x).toFixed(1)}" y="${padT}" width="${xStep.toFixed(1)}" height="${chartH}" fill="transparent" data-idx="${i}" class="sh-chart-hit" />`;
+    }).join('');
+
+    // Unique IDs
+    const uid = containerId.replace(/[^a-z0-9]/gi, '');
+
+    const svg = `
+      <svg class="sh-chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <linearGradient id="grad-a-${uid}" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="${actualColor}" stop-opacity="0.25" />
+            <stop offset="100%" stop-color="${actualColor}" stop-opacity="0.02" />
+          </linearGradient>
+          <linearGradient id="grad-f-${uid}" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="${forecastColor}" stop-opacity="0.15" />
+            <stop offset="100%" stop-color="${forecastColor}" stop-opacity="0.01" />
+          </linearGradient>
+        </defs>
+        ${gridLines.join('')}
+        ${xLabels.join('')}
+        <!-- Area fills -->
+        <path d="${actualArea}" fill="url(#grad-a-${uid})" />
+        <path d="${forecastArea}" fill="url(#grad-f-${uid})" />
+        <!-- Lines -->
+        <path d="${actualPath}" fill="none" stroke="${actualColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        <path d="${forecastPath}" fill="none" stroke="${forecastColor}" stroke-width="1.5" stroke-dasharray="6,4" stroke-linecap="round" />
+        ${nowLine}
+        <!-- Data points on actual line -->
+        ${actualVals.map((v, i) => v !== null && v !== undefined ? `<circle cx="${toX(i).toFixed(1)}" cy="${toY(v).toFixed(1)}" r="${i === nowIdx ? 4 : 2}" fill="${actualColor}" stroke="${i === nowIdx ? '#fff' : 'none'}" stroke-width="${i === nowIdx ? 1 : 0}" style="${i === nowIdx ? 'filter:drop-shadow(0 0 6px ' + actualColor + ')' : ''}" />` : '').join('')}
+        ${hitAreas}
+      </svg>
+      <div class="sh-chart-tooltip" id="tt-${uid}"></div>
+    `;
+
+    container.innerHTML = svg;
+
+    // Tooltip handlers
+    const tooltip = container.querySelector(`#tt-${uid}`);
+    container.querySelectorAll('.sh-chart-hit').forEach(rect => {
+      rect.addEventListener('mouseenter', (e) => {
+        const idx = parseInt(e.target.dataset.idx);
+        const p = points[idx];
+        if (!p) return;
+        const av = p[actualKey];
+        const fv = p[forecastKey];
+        if (av === null && fv === null) return;
+        let html = `<div style="font-weight:700; margin-bottom:3px; color:#fff">${p.label}${p.isNow ? ' (teraz)' : ''}</div>`;
+        if (av !== null && av !== undefined) {
+          const avFmt = Math.abs(av) >= 1000 ? `${(av / 1000).toFixed(1)}k` : Math.round(av);
+          html += `<div class="sh-chart-tooltip-row"><div class="sh-chart-tooltip-dot" style="background:${actualColor}"></div>Rzeczywiste: <strong>${avFmt} ${unit}</strong></div>`;
+        }
+        if (fv !== null && fv !== undefined) {
+          const fvFmt = Math.abs(fv) >= 1000 ? `${(fv / 1000).toFixed(1)}k` : Math.round(fv);
+          html += `<div class="sh-chart-tooltip-row"><div class="sh-chart-tooltip-dot" style="background:${forecastColor}"></div>Prognoza: <strong>${fvFmt} ${unit}</strong></div>`;
+        }
+        if (av !== null && fv !== null && av !== undefined && fv !== undefined && fv > 0) {
+          const diff = ((av / fv) * 100).toFixed(0);
+          html += `<div style="font-size:9px; color:#64748b; margin-top:2px">Celność: ${diff}%</div>`;
+        }
+        tooltip.innerHTML = html;
+        tooltip.style.display = 'block';
+        const rect2 = e.target.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        tooltip.style.left = `${rect2.left + rect2.width / 2 - containerRect.left}px`;
+        tooltip.style.top = `${rect2.top - containerRect.top - 10}px`;
+        tooltip.style.transform = 'translateX(-50%) translateY(-100%)';
+      });
+      rect.addEventListener('mouseleave', () => {
+        tooltip.style.display = 'none';
+      });
+    });
+  }
+
+  async _updateForecastCharts() {
+    if (!this._hass) return;
+    const tab = this._activeTab;
+
+    // Only fetch data when relevant tab is active
+    if (tab !== 'energy' && tab !== 'battery' && tab !== 'overview') return;
+
+    const points = await this._fetchForecastChartData();
+    if (!points) return;
+
+    if (tab === 'energy' || tab === 'overview') {
+      // PV Production chart
+      this._renderForecastChart('sh-chart-pv', points, {
+        actualKey: 'pvActual', forecastKey: 'pvForecast',
+        actualColor: '#f7b731', forecastColor: '#a855f7',
+        label: 'Produkcja PV', unit: 'W',
+        isMini: tab === 'overview'
+      });
+
+      // Load consumption chart
+      this._renderForecastChart('sh-chart-load', points, {
+        actualKey: 'loadActual', forecastKey: 'loadForecast',
+        actualColor: '#2ecc71', forecastColor: '#00d4ff',
+        label: 'Zużycie domu', unit: 'W',
+        isMini: tab === 'overview'
+      });
+    }
+
+    if (tab === 'battery') {
+      // SOC chart
+      this._renderForecastChart('sh-chart-soc', points, {
+        actualKey: 'socActual', forecastKey: null,
+        actualColor: '#00d4ff', forecastColor: '#475569',
+        label: 'SOC Baterii', unit: '%',
+        yMin: 0, yMax: 100,
+      });
+
+      // Battery Power chart
+      this._renderForecastChart('sh-chart-batt-power', points, {
+        actualKey: 'battActual', forecastKey: null,
+        actualColor: '#a855f7', forecastColor: '#475569',
+        label: 'Moc baterii', unit: 'W',
+      });
+    }
+
+    if (tab === 'overview') {
+      // Mini overview chart — PV only
+      this._renderForecastChart('sh-chart-ov-mini', points, {
+        actualKey: 'pvActual', forecastKey: 'pvForecast',
+        actualColor: '#f7b731', forecastColor: '#a855f7',
+        label: 'PV', unit: 'W',
+        height: 90, isMini: true,
+      });
+    }
+  }
+
   /* ── Subscription management (reconnection-safe) ── */
   _ensureSubscriptions() {
     if (!this._hass?.connection) return;
@@ -3544,7 +3907,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); this._updateForecastCharts(); }
 
 
   /* ── Overview Autopilot banner (runs every 5s via _updateAll) ── */
@@ -5699,6 +6062,91 @@ class SmartingHomePanel extends HTMLElement {
           border: 1px solid rgba(247,183,49,0.2);
         }
 
+        /* ── Forecast Charts ── */
+        .sh-chart-wrap {
+          position: relative;
+          background: rgba(10, 18, 35, 0.6);
+          border: 1px solid rgba(255,255,255,0.06);
+          border-radius: 14px;
+          padding: 16px 12px 10px;
+          overflow: hidden;
+        }
+        .sh-chart-wrap::before {
+          content: '';
+          position: absolute; top: 0; left: 0; right: 0; height: 1px;
+          background: linear-gradient(90deg, transparent, rgba(0,212,255,0.3), transparent);
+        }
+        .sh-chart-header {
+          display: flex; align-items: center; justify-content: space-between;
+          margin-bottom: 10px; padding: 0 4px;
+        }
+        .sh-chart-title {
+          font-size: 11px; font-weight: 700; color: #a0aec0;
+          text-transform: uppercase; letter-spacing: 1px;
+        }
+        .sh-chart-legend {
+          display: flex; gap: 14px; align-items: center;
+        }
+        .sh-chart-legend-item {
+          display: flex; align-items: center; gap: 5px;
+          font-size: 9px; color: #94a3b8;
+        }
+        .sh-chart-legend-dot {
+          width: 8px; height: 3px; border-radius: 2px;
+        }
+        .sh-chart-legend-dot.dashed {
+          background: repeating-linear-gradient(90deg, currentColor 0px, currentColor 3px, transparent 3px, transparent 6px);
+          width: 14px;
+        }
+        .sh-chart-svg {
+          width: 100%; height: 100%; display: block;
+        }
+        .sh-chart-tooltip {
+          position: absolute; display: none;
+          background: rgba(15, 23, 42, 0.95);
+          border: 1px solid rgba(0,212,255,0.3);
+          border-radius: 8px; padding: 8px 12px;
+          font-size: 10px; color: #e0e6ed;
+          pointer-events: none; z-index: 50;
+          backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+          box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+          white-space: nowrap;
+          transform: translateX(-50%);
+        }
+        .sh-chart-tooltip-row {
+          display: flex; align-items: center; gap: 6px; margin: 2px 0;
+        }
+        .sh-chart-tooltip-dot {
+          width: 6px; height: 6px; border-radius: 50%;
+        }
+        .sh-chart-now-label {
+          font-size: 8px; font-weight: 800; fill: #00d4ff;
+          text-transform: uppercase; letter-spacing: 1px;
+        }
+        @keyframes shChartFadeIn {
+          from { opacity: 0; transform: translateY(8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .sh-chart-wrap { animation: shChartFadeIn 0.5s ease-out; }
+        @keyframes shNowPulse {
+          0%, 100% { opacity: 0.8; }
+          50% { opacity: 0.3; }
+        }
+        .sh-mini-chart-wrap {
+          position: relative;
+          background: rgba(10, 18, 35, 0.4);
+          border: 1px solid rgba(255,255,255,0.06);
+          border-radius: 10px;
+          padding: 10px 8px 6px;
+          overflow: hidden;
+          margin-top: 10px;
+        }
+        .sh-mini-chart-wrap::before {
+          content: '';
+          position: absolute; top: 0; left: 0; right: 0; height: 1px;
+          background: linear-gradient(90deg, transparent, rgba(247,183,49,0.3), transparent);
+        }
+
         /* ── Responsive grid helpers ── */
         .g4 { display: grid; gap: 10px; grid-template-columns: repeat(4, 1fr); }
         .g3 { display: grid; gap: 10px; grid-template-columns: repeat(3, 1fr); }
@@ -6722,6 +7170,18 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
+          <!-- ±12h Mini Forecast Chart -->
+          <div class="card" style="margin-top:10px">
+            <div class="sh-chart-header" style="margin-bottom:4px">
+              <div class="sh-chart-title" style="font-size:10px">📈 PV ±12h: Prognoza vs Rzeczywistość</div>
+              <div class="sh-chart-legend">
+                <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot" style="background:#f7b731"></div>Rzecz.</div>
+                <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot dashed" style="color:#a855f7"></div>Progn.</div>
+              </div>
+            </div>
+            <div class="sh-mini-chart-wrap" id="sh-chart-ov-mini" style="height:100px"></div>
+          </div>
+
           <!-- HEMS Recommendation -->
           <div class="card" style="margin-top:10px">
             <div class="card-title">💡 Rekomendacja HEMS</div>
@@ -6987,6 +7447,29 @@ class SmartingHomePanel extends HTMLElement {
               <div class="dr"><span class="lb">🔆 UV Index</span><span class="vl" id="v-energy-uv">—</span></div>
               <div class="dr"><span class="lb">💨 Wiatr</span><span class="vl" id="v-energy-wind">—</span></div>
             </div>
+          </div>
+
+          <!-- ROW 5b: ±12h Forecast Charts -->
+          <div class="card" style="margin-bottom:14px">
+            <div class="sh-chart-header">
+              <div class="sh-chart-title">📈 Produkcja PV — Prognoza vs Rzeczywistość (±12h)</div>
+              <div class="sh-chart-legend">
+                <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot" style="background:#f7b731"></div>Rzeczywiste</div>
+                <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot dashed" style="color:#a855f7"></div>Prognoza</div>
+              </div>
+            </div>
+            <div class="sh-chart-wrap" id="sh-chart-pv" style="height:230px"></div>
+          </div>
+
+          <div class="card" style="margin-bottom:14px">
+            <div class="sh-chart-header">
+              <div class="sh-chart-title">🏠 Zużycie domu — Profil vs Rzeczywistość (±12h)</div>
+              <div class="sh-chart-legend">
+                <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot" style="background:#2ecc71"></div>Rzeczywiste</div>
+                <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot dashed" style="color:#00d4ff"></div>Profil (śr. 7 dni)</div>
+              </div>
+            </div>
+            <div class="sh-chart-wrap" id="sh-chart-load" style="height:230px"></div>
           </div>
 
           <!-- ROW 6: Ecowitt Local Weather -->
@@ -7388,6 +7871,28 @@ class SmartingHomePanel extends HTMLElement {
                 <div class="dr"><span class="lb">Zakres temp. pracy</span><span class="vl">0°C – 50°C</span></div>
                 <div class="dr"><span class="lb">Ostrzeżenia</span><span class="vl" id="v-batt-warning-tab" style="color:#2ecc71">Brak</span></div>
               </div>
+            </div>
+          </div>
+
+          <!-- ROW 3b: ±12h SOC & Battery Power Charts -->
+          <div class="grid-cards gc-2" style="margin-bottom:12px">
+            <div class="card">
+              <div class="sh-chart-header">
+                <div class="sh-chart-title">🔋 SOC Baterii (±12h)</div>
+                <div class="sh-chart-legend">
+                  <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot" style="background:#00d4ff"></div>SOC</div>
+                </div>
+              </div>
+              <div class="sh-chart-wrap" id="sh-chart-soc" style="height:200px"></div>
+            </div>
+            <div class="card">
+              <div class="sh-chart-header">
+                <div class="sh-chart-title">⚡ Moc baterii (±12h)</div>
+                <div class="sh-chart-legend">
+                  <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot" style="background:#a855f7"></div>Ładowanie/Rozładowanie</div>
+                </div>
+              </div>
+              <div class="sh-chart-wrap" id="sh-chart-batt-power" style="height:200px"></div>
             </div>
           </div>
 
@@ -9321,7 +9826,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.38.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.39.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
