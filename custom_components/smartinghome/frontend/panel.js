@@ -2684,6 +2684,35 @@ class SmartingHomePanel extends HTMLElement {
     if (g13El) g13El.style.color = tInfo.zoneColor;
     this._setText("hems-kpi-inv", invMode.replace(/_/g, " ").toUpperCase());
 
+    // ── Dynamic HEMS force button highlighting ──
+    const btnCharge = this.shadowRoot.getElementById("hems-btn-charge");
+    const btnDischarge = this.shadowRoot.getElementById("hems-btn-discharge");
+    const btnStop = this.shadowRoot.getElementById("hems-btn-stop");
+    const neutralStyle = { bg: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', color: '#94a3b8' };
+    const resetBtn = (btn) => {
+      if (!btn) return;
+      btn.style.background = neutralStyle.bg;
+      btn.style.border = neutralStyle.border;
+      btn.style.color = neutralStyle.color;
+      btn.style.boxShadow = 'none';
+    };
+    resetBtn(btnCharge); resetBtn(btnDischarge); resetBtn(btnStop);
+    if (invMode === 'eco_charge') {
+      if (btnCharge) {
+        btnCharge.style.background = 'rgba(46,204,113,0.15)';
+        btnCharge.style.border = '2px solid #2ecc71';
+        btnCharge.style.color = '#2ecc71';
+        btnCharge.style.boxShadow = '0 0 12px rgba(46,204,113,0.3)';
+      }
+    } else if (invMode === 'eco_discharge') {
+      if (btnDischarge) {
+        btnDischarge.style.background = 'rgba(231,76,60,0.15)';
+        btnDischarge.style.border = '2px solid #e74c3c';
+        btnDischarge.style.color = '#e74c3c';
+        btnDischarge.style.boxShadow = '0 0 12px rgba(231,76,60,0.3)';
+      }
+    }
+
     // License tier badge
     const tierEl = this.shadowRoot.getElementById("hems-arb-tier");
     const licTier = this._tier();
@@ -8072,9 +8101,9 @@ class SmartingHomePanel extends HTMLElement {
               <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'peak_save'})">🏠 Szczyt</button>
             </div>
             <div class="actions" style="margin-top:6px">
-              <button class="action-btn" style="background:rgba(46,204,113,0.15);border:1px solid #2ecc71;color:#2ecc71" onclick="this.getRootNode().host._executeForceAction('charge')">🔋 Wymuś Ładow.</button>
-              <button class="action-btn" style="background:rgba(231,76,60,0.15);border:1px solid #e74c3c;color:#e74c3c" onclick="this.getRootNode().host._executeForceAction('discharge')">⚡ Wymuś Rozład.</button>
-              <button class="action-btn" style="background:rgba(231,76,60,0.2);border:2px solid #e74c3c;color:#e74c3c;font-weight:900" onclick="this.getRootNode().host._executeForceAction('emergency_stop')">🚨 STOP</button>
+              <button class="action-btn hems-force-btn" id="hems-btn-charge" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);color:#94a3b8" onclick="this.getRootNode().host._executeForceAction('charge')">🔋 Wymuś Ładow.</button>
+              <button class="action-btn hems-force-btn" id="hems-btn-discharge" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);color:#94a3b8" onclick="this.getRootNode().host._executeForceAction('discharge')">⚡ Wymuś Rozład.</button>
+              <button class="action-btn hems-force-btn" id="hems-btn-stop" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);color:#94a3b8" onclick="this.getRootNode().host._executeForceAction('emergency_stop')">🚨 STOP</button>
             </div>
           </div>
 
@@ -9883,7 +9912,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.39.5</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.39.6</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
