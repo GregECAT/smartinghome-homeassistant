@@ -1022,8 +1022,6 @@ class SmartingHomePanel extends HTMLElement {
     const month = now.getMonth();
     const isWinter = [0,1,2,9,10,11].includes(month);
     const isSummer = !isWinter;
-    const dow = now.getDay();
-    const isWeekend = dow === 0 || dow === 6;
 
     // Read ENTSO-E prices_today (24h array) from sensor attributes
     let entsoeToday = [];
@@ -1037,9 +1035,9 @@ class SmartingHomePanel extends HTMLElement {
     } catch(e) {}
     const avgEntso = parseFloat(this._hass?.states?.['sensor.entso_e_srednia_dzisiaj']?.state) || 0.50;
 
-    // G13 zone + price per hour
-    const g13HourPrice = (h) => {
-      if (isWeekend) return 0.63;
+    // G13: ALWAYS compute weekday pricing for main simulation
+    // Weekend G13 = flat 0.63 (like cheap G11), so weekday is where value comes from
+    const g13WeekdayPrice = (h) => {
       if (h >= 7 && h < 13) return 0.91; // morning peak
       if (isSummer) {
         if (h >= 19 && h < 22) return 1.50; // summer afternoon peak
@@ -1049,9 +1047,7 @@ class SmartingHomePanel extends HTMLElement {
         return 0.63;
       }
     };
-
-    // RCE prosumer coefficient
-    const RCE_COEF = 1.23;
+    const g13WeekendPrice = () => 0.63; // flat off-peak
 
     return [
       {
@@ -1064,21 +1060,27 @@ class SmartingHomePanel extends HTMLElement {
         badge: '',
         buyPrice: Array(24).fill(1.10),
         sellPrice: Array(24).fill(0.20),
-        strategy: 'passive', // no time-based battery optimization
+        strategy: 'passive',
         gridChargeAllowed: false,
+        annualDays: 365, // same every day
       },
       {
         key: 'g13',
         label: '🟡 G13 — Strefowa',
-        desc: 'Taryfa G13: off-peak 0.63, poranna 0.91, szczyt 1.50 zł',
+        desc: 'Taryfa G13: off-peak 0.63, poranna 0.91, szczyt 1.50 zł (ważona: 5/7 weekday + 2/7 weekend)',
         color: '#f7b731',
         border: 'rgba(247,183,49,0.2)',
         bg: 'rgba(247,183,49,0.06)',
         badge: '',
-        buyPrice: Array.from({length: 24}, (_, h) => g13HourPrice(h)),
-        sellPrice: Array.from({length: 24}, (_, h) => g13HourPrice(h) * 0.35),
-        strategy: 'g13_active', // discharge in peak, conserve in off-peak
+        buyPrice: Array.from({length: 24}, (_, h) => g13WeekdayPrice(h)),
+        sellPrice: Array.from({length: 24}, (_, h) => g13WeekdayPrice(h) * 0.35),
+        strategy: 'g13_active',
         gridChargeAllowed: false,
+        annualDays: 261, // weekdays only
+        // Weekend variant for weighted calculation
+        weekendBuyPrice: Array(24).fill(0.63),
+        weekendSellPrice: Array(24).fill(0.63 * 0.35),
+        weekendDays: 104,
       },
       {
         key: 'dynamic',
@@ -1091,7 +1093,6 @@ class SmartingHomePanel extends HTMLElement {
         buyPrice: entsoeToday.length >= 24
           ? entsoeToday.slice(0, 24)
           : Array.from({length: 24}, (_, h) => {
-              // Synthetic dynamic profile from avg: cheap overnight, expensive afternoon
               const x = (h - 12) / 4;
               return Math.max(0.05, avgEntso * (0.5 + 0.5 * (1 / (1 + Math.exp(-x * 2)))));
             }),
@@ -1101,17 +1102,19 @@ class SmartingHomePanel extends HTMLElement {
               const x = (h - 12) / 4;
               return Math.max(0.02, avgEntso * (0.5 + 0.5 * (1 / (1 + Math.exp(-x * 2)))) * 0.85);
             }),
-        strategy: 'dynamic_active', // full arbitrage: grid-charge cheap, sell expensive
+        strategy: 'dynamic_active',
         gridChargeAllowed: true,
+        annualDays: 365,
       },
     ];
   }
 
   /**
-   * Simulate one day of battery operation given a profile and tariff scenario.
+   * Simulate battery operation given a profile and tariff scenario.
+   * Runs 2 passes (warmup + measurement) for steady-state SOC accuracy.
    * Tracks energy sources: PV self-consumption, battery-from-PV, battery-from-grid,
    * grid-direct, and battery-to-grid export (arbitrage).
-   * Returns hourly arrays + summary KPIs.
+   * Returns day-2 (steady-state) summary KPIs.
    */
   _simulateBatteryDay(profile, scenario) {
     const CAP = 10.2;         // kWh usable capacity
@@ -1120,210 +1123,202 @@ class SmartingHomePanel extends HTMLElement {
     const SOC_MIN = 0.05;     // 5%
     const SOC_MAX = 1.0;      // 100%
 
-    let soc = 0.50; // start at 50%
-    // Track PV vs grid energy in battery separately
-    let batPvEnergy = CAP * 0.50 * 0.5; // initial: assume 50% of SOC is from PV
-    let batGridEnergy = CAP * 0.50 * 0.5;
-
-    const gridImport = new Array(24).fill(0);
-    const gridExport = new Array(24).fill(0);
-    const battSOC = new Array(24).fill(0);
-    const batCharge = new Array(24).fill(0);
-    const batDischarge = new Array(24).fill(0);
-    // Detailed energy source tracking per hour
-    const pvDirectToLoad = new Array(24).fill(0);     // PV → load directly
-    const batPvToLoad = new Array(24).fill(0);         // battery(PV) → load
-    const batGridToLoad = new Array(24).fill(0);       // battery(grid) → load
-    const gridDirectToLoad = new Array(24).fill(0);    // grid → load directly
-    const batToGrid = new Array(24).fill(0);           // battery → grid (arbitrage export)
-    const pvToGrid = new Array(24).fill(0);            // PV surplus → grid
+    // Initial battery energy source: passive → assume PV origin, grid-charge → grid origin
+    let soc = 0.20;
+    let batPvEnergy = scenario.gridChargeAllowed ? 0 : CAP * soc;
+    let batGridEnergy = scenario.gridChargeAllowed ? CAP * soc : 0;
 
     // Pre-compute cheap/expensive hours for strategies
     let cheapHours = [], expensiveHours = [];
     if (scenario.strategy === 'dynamic_active') {
       const indexed = scenario.buyPrice.map((p, i) => ({p, i}));
       const sorted = [...indexed].sort((a, b) => a.p - b.p);
-      cheapHours = sorted.slice(0, 6).map(x => x.i);    // 6 cheapest (more aggressive)
-      expensiveHours = sorted.slice(-6).map(x => x.i);   // 6 most expensive
+      cheapHours = sorted.slice(0, 6).map(x => x.i);
+      expensiveHours = sorted.slice(-6).map(x => x.i);
     }
 
-    // Sell threshold for arbitrage: only sell if price is profitable vs buy price
     const avgBuy = scenario.buyPrice.reduce((a,b) => a+b, 0) / 24;
 
-    for (let h = 0; h < 24; h++) {
-      const pvH = profile.pv[h];
-      const loadH = profile.load[h];
+    // Run 2 passes: pass 1 = warmup (establishes steady-state SOC), pass 2 = measurement
+    let result = null;
+    for (let pass = 0; pass < 2; pass++) {
+      const gridImport = new Array(24).fill(0);
+      const gridExport = new Array(24).fill(0);
+      const battSOC = new Array(24).fill(0);
+      const batCharge = new Array(24).fill(0);
+      const batDischarge = new Array(24).fill(0);
+      const pvDirectToLoad = new Array(24).fill(0);
+      const batPvToLoad = new Array(24).fill(0);
+      const batGridToLoad = new Array(24).fill(0);
+      const gridDirectToLoad = new Array(24).fill(0);
+      const batToGrid = new Array(24).fill(0);
+      const pvToGrid = new Array(24).fill(0);
 
-      // Step 1: PV covers load directly
-      const pvToLoadH = Math.min(pvH, loadH);
-      pvDirectToLoad[h] = pvToLoadH;
-      let remainingLoad = loadH - pvToLoadH;
-      let pvSurplus = pvH - pvToLoadH;
+      for (let h = 0; h < 24; h++) {
+        const pvH = profile.pv[h];
+        const loadH = profile.load[h];
 
-      // Step 2: Strategy-dependent battery charging from PV surplus
-      let chargeFromPV = 0;
-      const freeCapKwh = (SOC_MAX - soc) * CAP;
+        // Step 1: PV covers load directly
+        const pvToLoadH = Math.min(pvH, loadH);
+        pvDirectToLoad[h] = pvToLoadH;
+        let remainingLoad = loadH - pvToLoadH;
+        let pvSurplus = pvH - pvToLoadH;
 
-      if (scenario.strategy === 'g13_active') {
-        chargeFromPV = Math.min(pvSurplus, MAX_RATE, freeCapKwh / ETA);
-      } else if (scenario.strategy === 'dynamic_active') {
-        // Dynamic: don't charge from PV during most expensive hours (export PV directly)
-        if (expensiveHours.includes(h) && scenario.sellPrice[h] > avgBuy * 0.8) {
-          chargeFromPV = 0; // export PV surplus instead
+        // Step 2: Battery charging from PV surplus
+        let chargeFromPV = 0;
+        const freeCapKwh = (SOC_MAX - soc) * CAP;
+
+        if (scenario.strategy === 'g13_active') {
+          chargeFromPV = Math.min(pvSurplus, MAX_RATE, freeCapKwh / ETA);
+        } else if (scenario.strategy === 'dynamic_active') {
+          if (expensiveHours.includes(h) && scenario.sellPrice[h] > avgBuy * 0.8) {
+            chargeFromPV = 0;
+          } else {
+            chargeFromPV = Math.min(pvSurplus, MAX_RATE, freeCapKwh / ETA);
+          }
         } else {
           chargeFromPV = Math.min(pvSurplus, MAX_RATE, freeCapKwh / ETA);
         }
-      } else {
-        chargeFromPV = Math.min(pvSurplus, MAX_RATE, freeCapKwh / ETA);
-      }
 
-      const actualPvCharge = chargeFromPV * ETA;
-      soc += actualPvCharge / CAP;
-      batPvEnergy += actualPvCharge;
-      batCharge[h] += chargeFromPV;
-      pvSurplus -= chargeFromPV;
+        const actualPvCharge = chargeFromPV * ETA;
+        soc += actualPvCharge / CAP;
+        batPvEnergy += actualPvCharge;
+        batCharge[h] += chargeFromPV;
+        pvSurplus -= chargeFromPV;
 
-      // Step 3: Export remaining PV surplus to grid
-      pvToGrid[h] = pvSurplus;
-      gridExport[h] = pvSurplus;
+        // Step 3: Export remaining PV surplus to grid
+        pvToGrid[h] = pvSurplus;
+        gridExport[h] = pvSurplus;
 
-      // Step 4: Battery discharge to cover remaining load
-      let dischargeToLoad = 0;
-      const availableKwh = (soc - SOC_MIN) * CAP;
+        // Step 4: Battery discharge to cover remaining load
+        let dischargeToLoad = 0;
+        const availableKwh = (soc - SOC_MIN) * CAP;
 
-      if (scenario.strategy === 'g13_active') {
-        const price = scenario.buyPrice[h];
-        if (price >= 1.20) {
+        if (scenario.strategy === 'g13_active') {
+          const price = scenario.buyPrice[h];
+          if (price >= 1.20) {
+            dischargeToLoad = Math.min(remainingLoad, MAX_RATE, availableKwh * ETA);
+          } else if (price >= 0.80) {
+            dischargeToLoad = Math.min(remainingLoad * 0.5, MAX_RATE, availableKwh * ETA);
+          }
+        } else if (scenario.strategy === 'dynamic_active') {
+          if (expensiveHours.includes(h)) {
+            dischargeToLoad = Math.min(remainingLoad, MAX_RATE, availableKwh * ETA);
+          } else if (!cheapHours.includes(h)) {
+            dischargeToLoad = Math.min(remainingLoad * 0.5, MAX_RATE, availableKwh * ETA);
+          }
+        } else {
           dischargeToLoad = Math.min(remainingLoad, MAX_RATE, availableKwh * ETA);
-        } else if (price >= 0.80) {
-          dischargeToLoad = Math.min(remainingLoad * 0.5, MAX_RATE, availableKwh * ETA);
         }
-      } else if (scenario.strategy === 'dynamic_active') {
-        if (expensiveHours.includes(h)) {
-          dischargeToLoad = Math.min(remainingLoad, MAX_RATE, availableKwh * ETA);
-        } else if (!cheapHours.includes(h)) {
-          dischargeToLoad = Math.min(remainingLoad * 0.5, MAX_RATE, availableKwh * ETA);
+
+        // Track PV vs grid portion of battery discharge
+        const batTotal = batPvEnergy + batGridEnergy;
+        const pvRatio = batTotal > 0 ? batPvEnergy / batTotal : (scenario.gridChargeAllowed ? 0 : 1);
+        const dischargePv = dischargeToLoad * pvRatio;
+        const dischargeGrid = dischargeToLoad * (1 - pvRatio);
+        batPvToLoad[h] = dischargePv;
+        batGridToLoad[h] = dischargeGrid;
+
+        soc -= dischargeToLoad / (CAP * ETA);
+        batPvEnergy = Math.max(0, batPvEnergy - dischargePv);
+        batGridEnergy = Math.max(0, batGridEnergy - dischargeGrid);
+        batDischarge[h] += dischargeToLoad;
+        remainingLoad -= dischargeToLoad;
+
+        // Step 5: Battery-to-grid export (ARBITRAGE — dynamic only)
+        if (scenario.strategy === 'dynamic_active' && expensiveHours.includes(h)) {
+          const availAfterLoad = (soc - SOC_MIN) * CAP;
+          const remainingRate = MAX_RATE - dischargeToLoad;
+          if (remainingRate > 0.1 && availAfterLoad > 0.5 && scenario.sellPrice[h] > avgBuy * 1.1) {
+            const batExport = Math.min(remainingRate, availAfterLoad * ETA, MAX_RATE * 0.7);
+            const batExpPv = batExport * pvRatio;
+            const batExpGrid = batExport * (1 - pvRatio);
+            batToGrid[h] = batExport;
+            gridExport[h] += batExport;
+            soc -= batExport / (CAP * ETA);
+            batPvEnergy = Math.max(0, batPvEnergy - batExpPv);
+            batGridEnergy = Math.max(0, batGridEnergy - batExpGrid);
+            batDischarge[h] += batExport;
+          }
         }
-      } else {
-        dischargeToLoad = Math.min(remainingLoad, MAX_RATE, availableKwh * ETA);
+
+        // Step 6: Grid import for remaining load
+        gridDirectToLoad[h] = remainingLoad;
+        gridImport[h] = remainingLoad;
+
+        // Step 7: Grid-to-battery charging (dynamic only, cheap hours)
+        if (scenario.gridChargeAllowed && cheapHours.includes(h)) {
+          const gFree = (SOC_MAX - soc) * CAP;
+          const gridCharge = Math.min(MAX_RATE - chargeFromPV, gFree / ETA, MAX_RATE * 0.9);
+          if (gridCharge > 0.1) {
+            const actualGridCharge = gridCharge * ETA;
+            soc += actualGridCharge / CAP;
+            batGridEnergy += actualGridCharge;
+            gridImport[h] += gridCharge;
+            batCharge[h] += gridCharge;
+          }
+        }
+
+        soc = Math.max(SOC_MIN, Math.min(SOC_MAX, soc));
+        battSOC[h] = soc;
       }
 
-      // Track PV vs grid portion of battery discharge
-      const batTotal = batPvEnergy + batGridEnergy;
-      const pvRatio = batTotal > 0 ? batPvEnergy / batTotal : 0.5;
-      const dischargePv = dischargeToLoad * pvRatio;
-      const dischargeGrid = dischargeToLoad * (1 - pvRatio);
-      batPvToLoad[h] = dischargePv;
-      batGridToLoad[h] = dischargeGrid;
+      // Only compute aggregates on measurement pass (pass 1)
+      if (pass === 1) {
+        const totalImport = gridImport.reduce((a, b) => a + b, 0);
+        const totalExport = gridExport.reduce((a, b) => a + b, 0);
+        const totalCharge = batCharge.reduce((a, b) => a + b, 0);
+        const totalDischarge = batDischarge.reduce((a, b) => a + b, 0);
 
-      soc -= dischargeToLoad / (CAP * ETA);
-      batPvEnergy = Math.max(0, batPvEnergy - dischargePv);
-      batGridEnergy = Math.max(0, batGridEnergy - dischargeGrid);
-      batDischarge[h] += dischargeToLoad;
-      remainingLoad -= dischargeToLoad;
+        const totalPvDirectToLoad = pvDirectToLoad.reduce((a, b) => a + b, 0);
+        const totalBatPvToLoad = batPvToLoad.reduce((a, b) => a + b, 0);
+        const totalBatGridToLoad = batGridToLoad.reduce((a, b) => a + b, 0);
+        const totalGridDirectToLoad = gridDirectToLoad.reduce((a, b) => a + b, 0);
+        const totalBatToGrid = batToGrid.reduce((a, b) => a + b, 0);
+        const totalPvToGrid = pvToGrid.reduce((a, b) => a + b, 0);
 
-      // Step 5: Battery-to-grid export (ARBITRAGE — dynamic only)
-      if (scenario.strategy === 'dynamic_active' && expensiveHours.includes(h)) {
-        const availAfterLoad = (soc - SOC_MIN) * CAP;
-        const remainingRate = MAX_RATE - dischargeToLoad;
-        // Only export if sell price makes arbitrage profitable
-        if (remainingRate > 0.1 && availAfterLoad > 0.5 && scenario.sellPrice[h] > avgBuy * 1.1) {
-          const batExport = Math.min(remainingRate, availAfterLoad * ETA, MAX_RATE * 0.7);
-          const batExpPv = batExport * pvRatio;
-          const batExpGrid = batExport * (1 - pvRatio);
-          batToGrid[h] = batExport;
-          gridExport[h] += batExport;
-          soc -= batExport / (CAP * ETA);
-          batPvEnergy = Math.max(0, batPvEnergy - batExpPv);
-          batGridEnergy = Math.max(0, batGridEnergy - batExpGrid);
-          batDischarge[h] += batExport;
+        const pvSelfConsumption = totalPvDirectToLoad + totalBatPvToLoad;
+        const totalLocalServed = pvSelfConsumption + totalBatGridToLoad;
+
+        let importCost = 0, exportRevenue = 0;
+        let arbitrageSellRevenue = 0, arbitrageBuyCost = 0;
+        for (let h = 0; h < 24; h++) {
+          importCost += gridImport[h] * scenario.buyPrice[h];
+          exportRevenue += gridExport[h] * scenario.sellPrice[h];
+          arbitrageSellRevenue += batToGrid[h] * scenario.sellPrice[h];
         }
-      }
-
-      // Step 6: Grid import for remaining load
-      gridDirectToLoad[h] = remainingLoad;
-      gridImport[h] = remainingLoad;
-
-      // Step 7: Grid-to-battery charging (dynamic only, cheap hours)
-      if (scenario.gridChargeAllowed && cheapHours.includes(h)) {
-        const gFree = (SOC_MAX - soc) * CAP;
-        const gridCharge = Math.min(MAX_RATE - chargeFromPV, gFree / ETA, MAX_RATE * 0.9);
-        if (gridCharge > 0.1) {
-          const actualGridCharge = gridCharge * ETA;
-          soc += actualGridCharge / CAP;
-          batGridEnergy += actualGridCharge;
-          gridImport[h] += gridCharge;
-          batCharge[h] += gridCharge;
+        for (let h = 0; h < 24; h++) {
+          if (scenario.gridChargeAllowed && cheapHours.includes(h)) {
+            const gc = batCharge[h] - Math.min(profile.pv[h], batCharge[h]);
+            if (gc > 0) arbitrageBuyCost += gc * scenario.buyPrice[h];
+          }
         }
-      }
+        const arbitrageProfit = arbitrageSellRevenue - arbitrageBuyCost;
 
-      soc = Math.max(SOC_MIN, Math.min(SOC_MAX, soc));
-      battSOC[h] = soc;
+        const avgTariffPrice = scenario.buyPrice.reduce((a,b) => a+b, 0) / 24;
+        const dailyLoad = profile.load.reduce((a, b) => a + b, 0);
+        const baselineCost = dailyLoad * avgTariffPrice;
+
+        const systemNetCost = importCost - exportRevenue;
+        const dailyBenefit = baselineCost - systemNetCost;
+
+        const avgBuyPrice = totalImport > 0 ? importCost / totalImport : 0;
+        const avgSellPrice = totalExport > 0 ? exportRevenue / totalExport : 0;
+        const cycles = totalCharge / CAP;
+
+        result = {
+          gridImport, gridExport, battSOC, batCharge, batDischarge,
+          totalImport, totalExport, totalCharge, totalDischarge,
+          pvSelfConsumption, totalBatPvToLoad, totalBatGridToLoad,
+          totalGridDirectToLoad, totalLocalServed,
+          totalBatToGrid, totalPvToGrid, totalPvDirectToLoad,
+          importCost, exportRevenue, baselineCost, systemNetCost, dailyBenefit,
+          avgBuyPrice, avgSellPrice, cycles,
+          arbitrageProfit, arbitrageSellRevenue, arbitrageBuyCost,
+        };
+      }
     }
-
-    // Aggregate daily results
-    const totalImport = gridImport.reduce((a, b) => a + b, 0);
-    const totalExport = gridExport.reduce((a, b) => a + b, 0);
-    const totalCharge = batCharge.reduce((a, b) => a + b, 0);
-    const totalDischarge = batDischarge.reduce((a, b) => a + b, 0);
-
-    // Energy source breakdown (daily kWh)
-    const totalPvDirectToLoad = pvDirectToLoad.reduce((a, b) => a + b, 0);
-    const totalBatPvToLoad = batPvToLoad.reduce((a, b) => a + b, 0);
-    const totalBatGridToLoad = batGridToLoad.reduce((a, b) => a + b, 0);
-    const totalGridDirectToLoad = gridDirectToLoad.reduce((a, b) => a + b, 0);
-    const totalBatToGrid = batToGrid.reduce((a, b) => a + b, 0);
-    const totalPvToGrid = pvToGrid.reduce((a, b) => a + b, 0);
-
-    // PV self-consumption = PV direct + battery(PV) to load (NOT grid-charged energy)
-    const pvSelfConsumption = totalPvDirectToLoad + totalBatPvToLoad;
-    // Total load served locally = all non-grid sources
-    const totalLocalServed = pvSelfConsumption + totalBatGridToLoad;
-
-    // Financial — weighted costs
-    let importCost = 0, exportRevenue = 0;
-    // Arbitrage P&L tracking
-    let arbitrageSellRevenue = 0, arbitrageBuyCost = 0;
-    for (let h = 0; h < 24; h++) {
-      importCost += gridImport[h] * scenario.buyPrice[h];
-      exportRevenue += gridExport[h] * scenario.sellPrice[h];
-      // Arbitrage: battery-to-grid sell revenue
-      arbitrageSellRevenue += batToGrid[h] * scenario.sellPrice[h];
-    }
-    // Estimate grid-charge buy cost (cheap hours only)
-    for (let h = 0; h < 24; h++) {
-      if (scenario.gridChargeAllowed && cheapHours.includes(h)) {
-        const gc = batCharge[h] - (h < profile.pv.length ? Math.min(profile.pv[h], batCharge[h]) : 0);
-        if (gc > 0) arbitrageBuyCost += gc * scenario.buyPrice[h];
-      }
-    }
-    const arbitrageProfit = arbitrageSellRevenue - arbitrageBuyCost;
-
-    // BASELINE: flat consumption profile × avg tariff price (NO optimization, NO battery)
-    // This ensures equal baseline comparison across tariffs
-    const avgTariffPrice = scenario.buyPrice.reduce((a,b) => a+b, 0) / 24;
-    const dailyLoad = profile.load.reduce((a, b) => a + b, 0);
-    const baselineCost = dailyLoad * avgTariffPrice;
-
-    const systemNetCost = importCost - exportRevenue;
-    const dailyBenefit = baselineCost - systemNetCost;
-
-    const avgBuyPrice = totalImport > 0 ? importCost / totalImport : 0;
-    const avgSellPrice = totalExport > 0 ? exportRevenue / totalExport : 0;
-    const cycles = totalCharge / CAP;
-
-    return {
-      gridImport, gridExport, battSOC, batCharge, batDischarge,
-      totalImport, totalExport, totalCharge, totalDischarge,
-      // Energy source breakdown
-      pvSelfConsumption, totalBatPvToLoad, totalBatGridToLoad,
-      totalGridDirectToLoad, totalLocalServed,
-      totalBatToGrid, totalPvToGrid, totalPvDirectToLoad,
-      // Financial
-      importCost, exportRevenue, baselineCost, systemNetCost, dailyBenefit,
-      avgBuyPrice, avgSellPrice, cycles,
-      arbitrageProfit, arbitrageSellRevenue, arbitrageBuyCost,
-    };
+    return result;
   }
 
   // ═══════ END ROI SIMULATION ENGINE ═══════
@@ -1406,28 +1401,46 @@ class SmartingHomePanel extends HTMLElement {
 
       const results = tariffScenarios.map(sc => {
         const sim = this._simulateBatteryDay(profile, sc);
-        // Scale daily results to yearly
+        const days = sc.annualDays || 365;
+
+        // For G13: also simulate weekend and weight results
+        let wkSim = null;
+        if (sc.weekendBuyPrice) {
+          const weekendSc = { ...sc, buyPrice: sc.weekendBuyPrice, sellPrice: sc.weekendSellPrice };
+          wkSim = this._simulateBatteryDay(profile, weekendSc);
+        }
+        const wkDays = sc.weekendDays || 0;
+        const totalDays = days + wkDays;
+
+        // Helper: weighted daily value → annual
+        const wa = (main, weekend) => wkSim
+          ? (main * days + weekend * wkDays)
+          : (main * totalDays);
+
+        // Scale daily results to yearly (weighted for G13)
         const yr = {
-          import: sim.totalImport * 365,
-          export: sim.totalExport * 365,
-          pvSelfCons: sim.pvSelfConsumption * 365,
-          pvDirect: sim.totalPvDirectToLoad * 365,
-          batPvToLoad: sim.totalBatPvToLoad * 365,
-          batGridToLoad: sim.totalBatGridToLoad * 365,
-          gridDirect: sim.totalGridDirectToLoad * 365,
-          batToGrid: sim.totalBatToGrid * 365,
-          pvToGrid: sim.totalPvToGrid * 365,
-          localServed: sim.totalLocalServed * 365,
-          importCost: sim.importCost * 365,
-          exportRev: sim.exportRevenue * 365,
-          baselineCost: sim.baselineCost * 365,
-          netCost: sim.systemNetCost * 365,
-          benefit: sim.dailyBenefit * 365,
+          import: wa(sim.totalImport, wkSim?.totalImport || 0),
+          export: wa(sim.totalExport, wkSim?.totalExport || 0),
+          pvSelfCons: wa(sim.pvSelfConsumption, wkSim?.pvSelfConsumption || 0),
+          pvDirect: wa(sim.totalPvDirectToLoad, wkSim?.totalPvDirectToLoad || 0),
+          batPvToLoad: wa(sim.totalBatPvToLoad, wkSim?.totalBatPvToLoad || 0),
+          batGridToLoad: wa(sim.totalBatGridToLoad, wkSim?.totalBatGridToLoad || 0),
+          gridDirect: wa(sim.totalGridDirectToLoad, wkSim?.totalGridDirectToLoad || 0),
+          batToGrid: wa(sim.totalBatToGrid, wkSim?.totalBatToGrid || 0),
+          pvToGrid: wa(sim.totalPvToGrid, wkSim?.totalPvToGrid || 0),
+          localServed: wa(sim.totalLocalServed, wkSim?.totalLocalServed || 0),
+          importCost: wa(sim.importCost, wkSim?.importCost || 0),
+          exportRev: wa(sim.exportRevenue, wkSim?.exportRevenue || 0),
+          baselineCost: wa(sim.baselineCost, wkSim?.baselineCost || 0),
+          netCost: wa(sim.systemNetCost, wkSim?.systemNetCost || 0),
+          benefit: wa(sim.dailyBenefit, wkSim?.dailyBenefit || 0),
           avgBuy: sim.avgBuyPrice,
           avgSell: sim.avgSellPrice,
-          cycles: sim.cycles * 365,
-          arbitrageProfit: sim.arbitrageProfit * 365,
-          pvSelfConsPct: yearlyPV > 0 ? Math.round((sim.pvSelfConsumption / (yearlyPV / 365)) * 100) : 0,
+          cycles: wa(sim.cycles, wkSim?.cycles || 0),
+          arbitrageProfit: wa(sim.arbitrageProfit, wkSim?.arbitrageProfit || 0),
+          pvSelfConsPct: yearlyPV > 0
+            ? Math.min(100, Math.round((wa(sim.pvSelfConsumption, wkSim?.pvSelfConsumption || 0) / yearlyPV) * 100))
+            : 0,
         };
         yr.payback = invest > 0 && yr.benefit > 0 ? invest / yr.benefit : null;
         yr.profit25 = invest > 0 ? yr.benefit * 25 - invest : yr.benefit * 25;
@@ -1435,7 +1448,7 @@ class SmartingHomePanel extends HTMLElement {
       });
 
       // Also compute passive simulation for dynamic to get automation_gain
-      const passiveScenario = { ...tariffScenarios[2], strategy: 'passive', gridChargeAllowed: false };
+      const passiveScenario = { ...tariffScenarios[2], strategy: 'passive', gridChargeAllowed: false, annualDays: 365 };
       const passiveSim = this._simulateBatteryDay(profile, passiveScenario);
       const passiveBenefit = passiveSim.dailyBenefit * 365;
       const automationGain = results[2].yr.benefit - passiveBenefit;
@@ -10290,7 +10303,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.40.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.40.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
