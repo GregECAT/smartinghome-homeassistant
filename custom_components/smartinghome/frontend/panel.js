@@ -3677,9 +3677,10 @@ class SmartingHomePanel extends HTMLElement {
     if (!container || !points || points.length === 0) return;
 
     const { actualKey, forecastKey, actualColor, forecastColor, label, unit, yMin: cfgYMin, yMax: cfgYMax, height: cfgHeight, isMini } = config;
-    const W = isMini ? 600 : 800;
-    const H = cfgHeight || (isMini ? 100 : 200);
-    const padL = isMini ? 30 : 50, padR = 15, padT = 15, padB = isMini ? 18 : 30;
+    const containerW = container.clientWidth || (isMini ? 700 : 900);
+    const W = Math.max(containerW, isMini ? 500 : 600);
+    const H = cfgHeight || (isMini ? 130 : 240);
+    const padL = isMini ? 30 : 55, padR = 20, padT = 18, padB = isMini ? 20 : 35;
     const chartW = W - padL - padR;
     const chartH = H - padT - padB;
 
@@ -7224,7 +7225,7 @@ class SmartingHomePanel extends HTMLElement {
                 <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot dashed" style="color:#a855f7"></div>Progn.</div>
               </div>
             </div>
-            <div class="sh-mini-chart-wrap" id="sh-chart-ov-mini" style="height:100px"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#475569;font-size:10px">⏳ Ładowanie...</div></div>
+            <div class="sh-mini-chart-wrap" id="sh-chart-ov-mini" style="height:160px"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#475569;font-size:10px">⏳ Ładowanie...</div></div>
           </div>
 
           <!-- HEMS Recommendation -->
@@ -7503,7 +7504,7 @@ class SmartingHomePanel extends HTMLElement {
                 <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot dashed" style="color:#a855f7"></div>Prognoza</div>
               </div>
             </div>
-            <div class="sh-chart-wrap" id="sh-chart-pv" style="height:230px"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#475569;font-size:11px">⏳ Ładowanie danych z Recorder...</div></div>
+            <div class="sh-chart-wrap" id="sh-chart-pv" style="height:300px"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#475569;font-size:11px">⏳ Ładowanie danych z Recorder...</div></div>
           </div>
 
           <div class="card" style="margin-bottom:14px">
@@ -7514,7 +7515,7 @@ class SmartingHomePanel extends HTMLElement {
                 <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot dashed" style="color:#00d4ff"></div>Profil (śr. 7 dni)</div>
               </div>
             </div>
-            <div class="sh-chart-wrap" id="sh-chart-load" style="height:230px"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#475569;font-size:11px">⏳ Ładowanie danych z Recorder...</div></div>
+            <div class="sh-chart-wrap" id="sh-chart-load" style="height:300px"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#475569;font-size:11px">⏳ Ładowanie danych z Recorder...</div></div>
           </div>
 
           <!-- ROW 6: Ecowitt Local Weather -->
@@ -7928,7 +7929,7 @@ class SmartingHomePanel extends HTMLElement {
                   <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot" style="background:#00d4ff"></div>SOC</div>
                 </div>
               </div>
-              <div class="sh-chart-wrap" id="sh-chart-soc" style="height:200px"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#475569;font-size:11px">⏳ Ładowanie danych SOC...</div></div>
+              <div class="sh-chart-wrap" id="sh-chart-soc" style="height:260px"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#475569;font-size:11px">⏳ Ładowanie danych SOC...</div></div>
             </div>
             <div class="card">
               <div class="sh-chart-header">
@@ -7937,7 +7938,7 @@ class SmartingHomePanel extends HTMLElement {
                   <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot" style="background:#a855f7"></div>Ładowanie/Rozładowanie</div>
                 </div>
               </div>
-              <div class="sh-chart-wrap" id="sh-chart-batt-power" style="height:200px"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#475569;font-size:11px">⏳ Ładowanie danych baterii...</div></div>
+              <div class="sh-chart-wrap" id="sh-chart-batt-power" style="height:260px"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#475569;font-size:11px">⏳ Ładowanie danych baterii...</div></div>
             </div>
           </div>
 
@@ -9871,7 +9872,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.39.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.39.4</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
