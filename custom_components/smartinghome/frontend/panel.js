@@ -3501,7 +3501,11 @@ class SmartingHomePanel extends HTMLElement {
   async _fetchForecastChartData() {
     // Cache for 5 minutes
     if (this._fcChartCache && (Date.now() - this._fcChartCacheTs) < 300000) return this._fcChartCache;
-    if (!this._hass?.connection) return null;
+    if (!this._hass?.connection) {
+      console.warn('[SH] Forecast charts: no hass connection');
+      return null;
+    }
+    console.log('[SH] Forecast charts: fetching fresh data...');
 
     const now = new Date();
     const nowHour = now.getHours();
@@ -3809,52 +3813,57 @@ class SmartingHomePanel extends HTMLElement {
     // Only fetch data when relevant tab is active
     if (tab !== 'energy' && tab !== 'battery' && tab !== 'overview') return;
 
-    const points = await this._fetchForecastChartData();
-    if (!points) return;
+    try {
+      const points = await this._fetchForecastChartData();
+      if (!points) {
+        console.warn('[SH] Forecast charts: no data returned from _fetchForecastChartData');
+        return;
+      }
 
-    if (tab === 'energy' || tab === 'overview') {
-      // PV Production chart
-      this._renderForecastChart('sh-chart-pv', points, {
-        actualKey: 'pvActual', forecastKey: 'pvForecast',
-        actualColor: '#f7b731', forecastColor: '#a855f7',
-        label: 'Produkcja PV', unit: 'W',
-        isMini: tab === 'overview'
-      });
+      if (tab === 'energy') {
+        // PV Production chart
+        this._renderForecastChart('sh-chart-pv', points, {
+          actualKey: 'pvActual', forecastKey: 'pvForecast',
+          actualColor: '#f7b731', forecastColor: '#a855f7',
+          label: 'Produkcja PV', unit: 'W',
+        });
 
-      // Load consumption chart
-      this._renderForecastChart('sh-chart-load', points, {
-        actualKey: 'loadActual', forecastKey: 'loadForecast',
-        actualColor: '#2ecc71', forecastColor: '#00d4ff',
-        label: 'Zużycie domu', unit: 'W',
-        isMini: tab === 'overview'
-      });
-    }
+        // Load consumption chart
+        this._renderForecastChart('sh-chart-load', points, {
+          actualKey: 'loadActual', forecastKey: 'loadForecast',
+          actualColor: '#2ecc71', forecastColor: '#00d4ff',
+          label: 'Zużycie domu', unit: 'W',
+        });
+      }
 
-    if (tab === 'battery') {
-      // SOC chart
-      this._renderForecastChart('sh-chart-soc', points, {
-        actualKey: 'socActual', forecastKey: null,
-        actualColor: '#00d4ff', forecastColor: '#475569',
-        label: 'SOC Baterii', unit: '%',
-        yMin: 0, yMax: 100,
-      });
+      if (tab === 'battery') {
+        // SOC chart
+        this._renderForecastChart('sh-chart-soc', points, {
+          actualKey: 'socActual', forecastKey: null,
+          actualColor: '#00d4ff', forecastColor: '#475569',
+          label: 'SOC Baterii', unit: '%',
+          yMin: 0, yMax: 100,
+        });
 
-      // Battery Power chart
-      this._renderForecastChart('sh-chart-batt-power', points, {
-        actualKey: 'battActual', forecastKey: null,
-        actualColor: '#a855f7', forecastColor: '#475569',
-        label: 'Moc baterii', unit: 'W',
-      });
-    }
+        // Battery Power chart
+        this._renderForecastChart('sh-chart-batt-power', points, {
+          actualKey: 'battActual', forecastKey: null,
+          actualColor: '#a855f7', forecastColor: '#475569',
+          label: 'Moc baterii', unit: 'W',
+        });
+      }
 
-    if (tab === 'overview') {
-      // Mini overview chart — PV only
-      this._renderForecastChart('sh-chart-ov-mini', points, {
-        actualKey: 'pvActual', forecastKey: 'pvForecast',
-        actualColor: '#f7b731', forecastColor: '#a855f7',
-        label: 'PV', unit: 'W',
-        height: 90, isMini: true,
-      });
+      if (tab === 'overview') {
+        // Mini overview chart — PV only
+        this._renderForecastChart('sh-chart-ov-mini', points, {
+          actualKey: 'pvActual', forecastKey: 'pvForecast',
+          actualColor: '#f7b731', forecastColor: '#a855f7',
+          label: 'PV', unit: 'W',
+          height: 90, isMini: true,
+        });
+      }
+    } catch (err) {
+      console.error('[SH] Forecast charts error:', err);
     }
   }
 
@@ -3907,7 +3916,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); this._updateForecastCharts(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); this._updateForecastCharts().catch(e => console.error('[SH] charts err:', e)); }
 
 
   /* ── Overview Autopilot banner (runs every 5s via _updateAll) ── */
@@ -7179,7 +7188,7 @@ class SmartingHomePanel extends HTMLElement {
                 <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot dashed" style="color:#a855f7"></div>Progn.</div>
               </div>
             </div>
-            <div class="sh-mini-chart-wrap" id="sh-chart-ov-mini" style="height:100px"></div>
+            <div class="sh-mini-chart-wrap" id="sh-chart-ov-mini" style="height:100px"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#475569;font-size:10px">⏳ Ładowanie...</div></div>
           </div>
 
           <!-- HEMS Recommendation -->
@@ -7458,7 +7467,7 @@ class SmartingHomePanel extends HTMLElement {
                 <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot dashed" style="color:#a855f7"></div>Prognoza</div>
               </div>
             </div>
-            <div class="sh-chart-wrap" id="sh-chart-pv" style="height:230px"></div>
+            <div class="sh-chart-wrap" id="sh-chart-pv" style="height:230px"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#475569;font-size:11px">⏳ Ładowanie danych z Recorder...</div></div>
           </div>
 
           <div class="card" style="margin-bottom:14px">
@@ -7469,7 +7478,7 @@ class SmartingHomePanel extends HTMLElement {
                 <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot dashed" style="color:#00d4ff"></div>Profil (śr. 7 dni)</div>
               </div>
             </div>
-            <div class="sh-chart-wrap" id="sh-chart-load" style="height:230px"></div>
+            <div class="sh-chart-wrap" id="sh-chart-load" style="height:230px"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#475569;font-size:11px">⏳ Ładowanie danych z Recorder...</div></div>
           </div>
 
           <!-- ROW 6: Ecowitt Local Weather -->
@@ -7883,7 +7892,7 @@ class SmartingHomePanel extends HTMLElement {
                   <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot" style="background:#00d4ff"></div>SOC</div>
                 </div>
               </div>
-              <div class="sh-chart-wrap" id="sh-chart-soc" style="height:200px"></div>
+              <div class="sh-chart-wrap" id="sh-chart-soc" style="height:200px"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#475569;font-size:11px">⏳ Ładowanie danych SOC...</div></div>
             </div>
             <div class="card">
               <div class="sh-chart-header">
@@ -7892,7 +7901,7 @@ class SmartingHomePanel extends HTMLElement {
                   <div class="sh-chart-legend-item"><div class="sh-chart-legend-dot" style="background:#a855f7"></div>Ładowanie/Rozładowanie</div>
                 </div>
               </div>
-              <div class="sh-chart-wrap" id="sh-chart-batt-power" style="height:200px"></div>
+              <div class="sh-chart-wrap" id="sh-chart-batt-power" style="height:200px"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#475569;font-size:11px">⏳ Ładowanie danych baterii...</div></div>
             </div>
           </div>
 
@@ -9826,7 +9835,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.39.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.39.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
