@@ -1174,36 +1174,38 @@ class SmartingHomePanel extends HTMLElement {
       {
         key: 'dynamic',
         label: '🟢 Dynamiczna — RCE/ENTSO-E',
-        desc: 'Cena dynamiczna RCE: ładuj w tanich godzinach, sprzedawaj w drogich — pełny arbitraż HEMS',
+        desc: 'Cena dynamiczna RCE: profil roczny (śr. ' + avgEntso.toFixed(2) + ' zł) — ładuj tanio, sprzedawaj drogo',
         color: '#2ecc71',
         border: 'rgba(46,204,113,0.3)',
         bg: 'rgba(46,204,113,0.08)',
         badge: '✅ REKOMENDOWANE',
-        // Realistic Polish RCE daily price shape (when no ENTSO-E data):
-        // Night (0-5): cheap, Morning (6-9): rising, Day (10-15): moderate-high,
-        // Peak (16-21): expensive, Late (22-23): declining
-        buyPrice: entsoeToday.length >= 24
-          ? entsoeToday.slice(0, 24)
-          : (() => {
-              const rceShape = [
-                0.30, 0.25, 0.20, 0.18, 0.15, 0.20, // 0-5: night (cheapest)
-                0.35, 0.55, 0.65, 0.60, 0.55, 0.50, // 6-11: morning ramp + midday
-                0.45, 0.48, 0.55, 0.65, 0.80, 0.95, // 12-17: afternoon ramp to peak
-                1.10, 1.00, 0.85, 0.70, 0.50, 0.35  // 18-23: evening peak + decline
-              ];
-              return rceShape.map(s => Math.max(0.05, s * avgEntso / 0.50));
-            })(),
-        sellPrice: entsoeToday.length >= 24
-          ? entsoeToday.slice(0, 24).map(p => Math.max(0, p * 0.85))
-          : (() => {
-              const rceShape = [
-                0.30, 0.25, 0.20, 0.18, 0.15, 0.20,
-                0.35, 0.55, 0.65, 0.60, 0.55, 0.50,
-                0.45, 0.48, 0.55, 0.65, 0.80, 0.95,
-                1.10, 1.00, 0.85, 0.70, 0.50, 0.35
-              ];
-              return rceShape.map(s => Math.max(0.02, s * avgEntso / 0.50 * 0.85));
-            })(),
+        // ROI ALWAYS uses annual-average RCE profile (never today's snapshot!)
+        // Today's prices may have duck-curve / extreme midday cheapness
+        // which is not representative of a full year.
+        buyPrice: (() => {
+          const rceShape = [
+            0.30, 0.25, 0.20, 0.18, 0.15, 0.20, // 0-5: night (cheapest)
+            0.35, 0.55, 0.65, 0.60, 0.55, 0.50, // 6-11: morning ramp + midday
+            0.45, 0.48, 0.55, 0.65, 0.80, 0.95, // 12-17: afternoon ramp to peak
+            1.10, 1.00, 0.85, 0.70, 0.50, 0.35  // 18-23: evening peak + decline
+          ];
+          const shapeAvg = rceShape.reduce((a,b) => a+b, 0) / 24;
+          return rceShape.map(s => Math.max(0.05, s * avgEntso / shapeAvg));
+        })(),
+        sellPrice: (() => {
+          const rceShape = [
+            0.30, 0.25, 0.20, 0.18, 0.15, 0.20,
+            0.35, 0.55, 0.65, 0.60, 0.55, 0.50,
+            0.45, 0.48, 0.55, 0.65, 0.80, 0.95,
+            1.10, 1.00, 0.85, 0.70, 0.50, 0.35
+          ];
+          const shapeAvg = rceShape.reduce((a,b) => a+b, 0) / 24;
+          return rceShape.map(s => Math.max(0.02, s * avgEntso / shapeAvg * 0.85));
+        })(),
+        // Store today's live prices separately (for "today vs annual" display)
+        liveBuyPrice: entsoeToday.length >= 24 ? entsoeToday.slice(0, 24) : null,
+        liveSellPrice: entsoeToday.length >= 24
+          ? entsoeToday.slice(0, 24).map(p => Math.max(0, p * 0.85)) : null,
         strategy: 'dynamic_active',
         gridChargeAllowed: true,
         annualDays: 365,
@@ -1645,6 +1647,24 @@ class SmartingHomePanel extends HTMLElement {
         const balanceOut = yr.load + yr.export + yr.batteryLosses;
         const balanceOk = Math.abs(balanceIn - balanceOut) < balanceIn * 0.05;
 
+        // Compute today's PV-hour price if live ENTSO-E data available
+        let todayPvNote = '';
+        if (r.liveBuyPrice && profile) {
+          let todayPvWeightedSum = 0, todayPvWeightedTotal = 0;
+          for (let h = 0; h < 24; h++) {
+            if (profile.pv[h] > 0) {
+              todayPvWeightedSum += profile.pv[h] * r.liveBuyPrice[h];
+              todayPvWeightedTotal += profile.pv[h];
+            }
+          }
+          const todayPvAvg = todayPvWeightedTotal > 0
+            ? todayPvWeightedSum / todayPvWeightedTotal : 0;
+          todayPvNote = `<div style="grid-column:1/-1; font-size:8px; color:#64748b; margin-top:2px; padding-top:3px; border-top:1px dashed rgba(255,255,255,0.06)">
+            ⚡ Dzisiaj ENTSO-E: PV godz. = ${todayPvAvg.toFixed(2)} zł/kWh
+            ${todayPvAvg < yr.avgPricePvHours * 0.7 ? ' <span style="color:#f7b731">⚠️ duck curve</span>' : ''}
+          </div>`;
+        }
+
         return `<div style="background:${r.bg}; border:1px solid ${r.border}; border-radius:14px; padding:16px; position:relative; overflow:hidden">
           ${r.badge ? `<div style="position:absolute; top:8px; right:8px; font-size:8px; color:${r.color}; font-weight:700; letter-spacing:0.5px">${r.badge}</div>` : ""}
           <div style="font-size:13px; font-weight:700; color:${r.color}; margin-bottom:4px">${r.label}</div>
@@ -1653,8 +1673,9 @@ class SmartingHomePanel extends HTMLElement {
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:10px; margin-bottom:10px">
             <div style="color:#64748b">Śr. cena zakupu:</div><div style="color:#e74c3c; font-weight:600">${yr.avgBuy.toFixed(2)} zł/kWh</div>
             <div style="color:#64748b">Śr. cena sprzedaży:</div><div style="color:#2ecc71; font-weight:600">${yr.avgSell.toFixed(2)} zł/kWh</div>
-            <div style="color:#f7b731">Śr. cena w godz. PV:</div><div style="color:#f7b731; font-weight:600">${yr.avgPricePvHours.toFixed(2)} zł/kWh</div>
+            <div style="color:#f7b731">Śr. cena w godz. PV:</div><div style="color:#f7b731; font-weight:600">${yr.avgPricePvHours.toFixed(2)} zł/kWh ${r.liveBuyPrice ? '<span style="color:#64748b; font-size:8px">(roczna)</span>' : ''}</div>
             <div style="color:#00d4ff; font-weight:600">💎 Wartość 1 kWh PV:</div><div style="color:#00d4ff; font-weight:700">${yr.effectivePvValue.toFixed(2)} zł</div>
+            ${todayPvNote}
           </div>
           <div style="background:rgba(255,255,255,0.03); border-radius:8px; padding:8px; margin-bottom:10px">
             <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px">⚡ Bilans energii (roczny)</div>
