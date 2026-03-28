@@ -3548,28 +3548,64 @@ class SmartingHomePanel extends HTMLElement {
       console.warn('[SH] Forecast chart: Recorder query failed', e);
     }
 
-    // ── 2. Forecast data from Forecast.Solar attributes ──
+    // ── 2. Forecast data from Forecast.Solar (via Recorder + live sensors) ──
+    // Standard HA Forecast.Solar does NOT expose 'watts' attribute.
+    // We use: (a) Recorder history of sensor.power_production_now for past forecast
+    //         (b) Remaining energy + bell curve for future hours projection
     let pvForecast = {};
     try {
-      // sensor.power_production_now has 'watts' attribute with hourly forecast
-      const fsEntity1 = this._hass.states['sensor.power_production_now'];
-      const fsEntity2 = this._hass.states['sensor.power_production_now_2'];
-      const parseWatts = (entity) => {
-        if (!entity?.attributes?.watts) return {};
-        const map = {};
-        Object.entries(entity.attributes.watts).forEach(([dt, w]) => {
-          const d = new Date(dt);
-          map[d.getHours()] = (map[d.getHours()] || 0) + (w || 0);
-        });
-        return map;
-      };
-      const fc1 = parseWatts(fsEntity1);
-      const fc2 = parseWatts(fsEntity2);
-      // Merge fc1 + fc2
-      const allHours = new Set([...Object.keys(fc1), ...Object.keys(fc2)]);
-      allHours.forEach(h => { pvForecast[h] = (fc1[h] || 0) + (fc2[h] || 0); });
+      const fsPower1 = 'sensor.power_production_now';
+      const fsPower2 = 'sensor.power_production_now_2';
+
+      // Current forecast value (predicted power right now)
+      const fsNow1 = parseFloat(this._hass.states[fsPower1]?.state) || 0;
+      const fsNow2 = parseFloat(this._hass.states[fsPower2]?.state) || 0;
+      const fsTotalNow = fsNow1 + fsNow2;
+
+      // Remaining energy today (kWh)
+      const remaining1 = parseFloat(this._hass.states['sensor.energy_production_today_remaining']?.state) || 0;
+      const remaining2 = parseFloat(this._hass.states['sensor.energy_production_today_remaining_2']?.state) || 0;
+      const totalRemainingKwh = remaining1 + remaining2;
+
+      // (a) Historical forecast from Recorder (what FS predicted at each hour)
+      const fcStart = new Date(now); fcStart.setHours(fcStart.getHours() - 24, 0, 0, 0);
+      const fcStats = await this._hass.callWS({
+        type: 'recorder/statistics_during_period',
+        start_time: fcStart.toISOString(),
+        end_time: now.toISOString(),
+        statistic_ids: [fsPower1, fsPower2],
+        period: 'hour',
+        types: ['mean'],
+      });
+      (fcStats[fsPower1] || []).forEach(s => {
+        const h = new Date(s.start).getHours();
+        pvForecast[h] = (pvForecast[h] || 0) + (s.mean ?? 0);
+      });
+      (fcStats[fsPower2] || []).forEach(s => {
+        const h = new Date(s.start).getHours();
+        pvForecast[h] = (pvForecast[h] || 0) + (s.mean ?? 0);
+      });
+
+      // (b) Future projection using remaining kWh + bell curve
+      if (totalRemainingKwh > 0.1) {
+        const sunset = 19;
+        const hoursLeft = Math.max(1, sunset - nowHour);
+        const peakHour = nowHour + Math.floor(hoursLeft / 2);
+        for (let h = nowHour + 1; h <= Math.min(sunset + 1, 23); h++) {
+          const dist = Math.abs(h - peakHour);
+          const sigma = hoursLeft / 2.5;
+          const weight = Math.exp(-0.5 * (dist * dist) / (sigma * sigma));
+          const estimatedW = Math.round((totalRemainingKwh * 1000 / hoursLeft) * weight);
+          pvForecast[h] = Math.max(pvForecast[h] || 0, estimatedW);
+        }
+      }
+
+      // Set current hour = live value
+      pvForecast[nowHour] = fsTotalNow;
+
+      console.log('[SH] Forecast.Solar: now=' + fsTotalNow + 'W, remaining=' + totalRemainingKwh.toFixed(1) + 'kWh, forecast hours:', Object.keys(pvForecast).length);
     } catch (e) {
-      console.warn('[SH] Forecast chart: Forecast.Solar attributes parse failed', e);
+      console.warn('[SH] Forecast chart: Forecast.Solar fetch failed', e);
     }
 
     // ── 3. Load profile forecast (7-day average from today's pattern) ──
@@ -9835,7 +9871,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.39.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.39.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
