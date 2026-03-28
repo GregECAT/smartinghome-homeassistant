@@ -3862,20 +3862,24 @@ class SmartingHomePanel extends HTMLElement {
         }
         tooltip.innerHTML = html;
         tooltip.style.display = 'block';
+        // Measure tooltip height first (place off-screen briefly)
+        tooltip.style.left = '-9999px'; tooltip.style.top = '0';
+        tooltip.style.transform = 'none';
+        const tooltipH = tooltip.offsetHeight || 60;
+        const tooltipW = tooltip.offsetWidth || 120;
         const rect2 = e.target.getBoundingClientRect();
         const containerRect = container.getBoundingClientRect();
         let tooltipX = rect2.left + rect2.width / 2 - containerRect.left;
         let tooltipY = rect2.top - containerRect.top - 10;
-        // Flip below if would go above container
-        if (tooltipY < 10) {
+        // Flip below if tooltip would go above container
+        if (tooltipY - tooltipH < -5) {
           tooltipY = rect2.bottom - containerRect.top + 10;
           tooltip.style.transform = 'translateX(-50%)';
         } else {
           tooltip.style.transform = 'translateX(-50%) translateY(-100%)';
         }
         // Clamp horizontal position
-        const tw = tooltip.offsetWidth || 120;
-        tooltipX = Math.max(tw / 2 + 4, Math.min(tooltipX, containerRect.width - tw / 2 - 4));
+        tooltipX = Math.max(tooltipW / 2 + 4, Math.min(tooltipX, containerRect.width - tooltipW / 2 - 4));
         tooltip.style.left = `${tooltipX}px`;
         tooltip.style.top = `${tooltipY}px`;
       });
@@ -6226,7 +6230,7 @@ class SmartingHomePanel extends HTMLElement {
           border: 1px solid rgba(255,255,255,0.06);
           border-radius: 10px;
           padding: 10px 8px 6px;
-          overflow: hidden;
+          overflow: visible;
           margin-top: 10px;
         }
         .sh-mini-chart-wrap::before {
@@ -9914,7 +9918,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.39.7</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.39.8</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
