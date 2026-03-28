@@ -983,6 +983,88 @@ class SmartingHomePanel extends HTMLElement {
 
   // ═══════ ROI SIMULATION ENGINE ═══════
 
+  // Installation presets for ROI estimation
+  static get INSTALLATION_PRESETS() {
+    return {
+      real: {
+        key: 'real', label: '📊 Moja instalacja',
+        desc: 'Realne dane z czujników Home Assistant',
+        yearlyPvKwh: null, batCapKwh: null, batMaxRate: null, investZl: null,
+      },
+      '5kw': {
+        key: '5kw', label: '☀️ 5 kW PV + 5 kWh bat',
+        desc: 'Mała instalacja domowa — typowy dom 80-120 m², zużycie ~4000 kWh/rok',
+        yearlyPvKwh: 5000, batCapKwh: 5.0, batMaxRate: 2.5, investZl: 35000,
+      },
+      '10kw': {
+        key: '10kw', label: '☀️ 10 kW PV + 10 kWh bat',
+        desc: 'Średnia instalacja — dom 120-200 m², pompa ciepła, zużycie ~6500 kWh/rok',
+        yearlyPvKwh: 10000, batCapKwh: 10.2, batMaxRate: 3.0, investZl: 55000,
+      },
+      '15kw': {
+        key: '15kw', label: '☀️ 15 kW PV + 15 kWh bat',
+        desc: 'Duża instalacja z pełnym HEMS — dom z klimatyzacją + EV, zużycie ~10000 kWh/rok',
+        yearlyPvKwh: 15000, batCapKwh: 15.0, batMaxRate: 5.0, investZl: 75000,
+      },
+      custom: {
+        key: 'custom', label: '🔧 Niestandardowa',
+        desc: 'Własne parametry PV, magazynu i mocy',
+        yearlyPvKwh: null, batCapKwh: null, batMaxRate: null, investZl: null,
+      },
+    };
+  }
+
+  _onRoiProfileChange(key) {
+    this._roiProfile = key;
+    this._savePanelSettings({ roi_profile: key });
+
+    // Show/hide custom panel
+    const panel = this.shadowRoot.getElementById('roi-custom-panel');
+    if (panel) panel.style.display = key === 'custom' ? 'block' : 'none';
+
+    // Auto-fill investment from preset
+    const preset = this.constructor.INSTALLATION_PRESETS[key];
+    if (preset?.investZl) {
+      const inp = this.shadowRoot.getElementById('roi-invest-input');
+      if (inp) inp.value = preset.investZl;
+      this._saveRoiInvestment(preset.investZl);
+    }
+
+    // Update description
+    const desc = this.shadowRoot.getElementById('roi-profile-desc');
+    if (desc && preset) desc.textContent = preset.desc;
+
+    // Re-run ROI calculation
+    this._updateRoi();
+  }
+
+  _onRoiCustomChange() {
+    this._roiProfile = 'custom';
+    this._updateRoi();
+  }
+
+  _getRoiProfileParams() {
+    const key = this._roiProfile || 'real';
+    const presets = this.constructor.INSTALLATION_PRESETS;
+    const preset = presets[key] || presets.real;
+
+    if (key === 'custom') {
+      const pvKwp = parseFloat(this.shadowRoot.getElementById('roi-custom-pv')?.value) || 10;
+      const yieldKwh = parseFloat(this.shadowRoot.getElementById('roi-custom-yield')?.value) || 1000;
+      return {
+        yearlyPvKwh: pvKwp * yieldKwh,
+        batCapKwh: parseFloat(this.shadowRoot.getElementById('roi-custom-bat')?.value) || 10,
+        batMaxRate: parseFloat(this.shadowRoot.getElementById('roi-custom-rate')?.value) || 3,
+      };
+    }
+
+    return {
+      yearlyPvKwh: preset.yearlyPvKwh,
+      batCapKwh: preset.batCapKwh,
+      batMaxRate: preset.batMaxRate,
+    };
+  }
+
   /**
    * Build a typical 24h energy profile from yearly totals.
    * PV: Gaussian bell curve peaking at 12:00.
@@ -1116,9 +1198,9 @@ class SmartingHomePanel extends HTMLElement {
    * grid-direct, and battery-to-grid export (arbitrage).
    * Returns day-2 (steady-state) summary KPIs.
    */
-  _simulateBatteryDay(profile, scenario) {
-    const CAP = 10.2;         // kWh usable capacity
-    const MAX_RATE = 3.0;     // kW charge/discharge
+  _simulateBatteryDay(profile, scenario, batParams = {}) {
+    const CAP = batParams.capKwh || 10.2;
+    const MAX_RATE = batParams.maxRate || 3.0;
     const ETA = 0.96;         // one-way efficiency (round-trip ~0.92)
     const SOC_MIN = 0.05;     // 5%
     const SOC_MAX = 1.0;      // 100%
@@ -1376,20 +1458,45 @@ class SmartingHomePanel extends HTMLElement {
     if (scBar) scBar.style.width = `${selfCons}%`;
 
     // ROI calculation — per-tariff simulation
-    const invest = this._settings.roi_investment || 0;
+    let invest = this._settings.roi_investment || 0;
     const invInput = this.shadowRoot.getElementById("roi-invest-input");
     if (invInput && !invInput.matches(":focus") && invest) invInput.value = invest;
 
+    // Restore profile selector state
+    const profileKey = this._roiProfile || this._settings.roi_profile || 'real';
+    this._roiProfile = profileKey;
+    const profileSelect = this.shadowRoot.getElementById('roi-profile-select');
+    if (profileSelect && profileSelect.value !== profileKey) profileSelect.value = profileKey;
+    const customPanel = this.shadowRoot.getElementById('roi-custom-panel');
+    if (customPanel) customPanel.style.display = profileKey === 'custom' ? 'block' : 'none';
+    const profileDesc = this.shadowRoot.getElementById('roi-profile-desc');
+    const presetObj = this.constructor.INSTALLATION_PRESETS[profileKey];
+    if (profileDesc && presetObj) profileDesc.textContent = presetObj.desc;
+
+    // Get profile parameters (may override PV + battery)
+    const profileParams = this._getRoiProfileParams();
+
     // Estimate yearly energy values from current period
     const multiplier = { day: 365, week: 52, month: 12, year: 1 };
-    const yearlyPV = pvVal * multiplier[p];
+    const sensorYearlyPV = pvVal * multiplier[p];
     const yearlyImport = impVal * multiplier[p];
     const yearlyExport = expVal * multiplier[p];
     const yearlySelfUse = selfUse * multiplier[p];
 
-    // Label
+    // Use profile PV if preset, otherwise sensor data
+    const yearlyPV = profileParams.yearlyPvKwh || sensorYearlyPV;
+
+    // Build battery params from profile
+    const batParams = {};
+    if (profileParams.batCapKwh) batParams.capKwh = profileParams.batCapKwh;
+    if (profileParams.batMaxRate) batParams.maxRate = profileParams.batMaxRate;
+
+    // Label — show source
     const periodLabels = { day: "dzień", week: "tydzień", month: "miesiąc", year: "rok" };
-    this._setText("roi-period-label", `Baza: ${periodLabels[p]} × ${multiplier[p]}`);
+    const srcLabel = profileKey === 'real'
+      ? `Baza: ${periodLabels[p]} × ${multiplier[p]}`
+      : `Baza: profil ${presetObj?.label || profileKey}`;
+    this._setText("roi-period-label", srcLabel);
 
     // Build per-tariff simulation
     const tariffScenarios = this._buildTariffScenarios();
@@ -1400,14 +1507,14 @@ class SmartingHomePanel extends HTMLElement {
       const profile = this._buildDayProfile(yearlyPV, yearlyLoad);
 
       const results = tariffScenarios.map(sc => {
-        const sim = this._simulateBatteryDay(profile, sc);
+        const sim = this._simulateBatteryDay(profile, sc, batParams);
         const days = sc.annualDays || 365;
 
         // For G13: also simulate weekend and weight results
         let wkSim = null;
         if (sc.weekendBuyPrice) {
           const weekendSc = { ...sc, buyPrice: sc.weekendBuyPrice, sellPrice: sc.weekendSellPrice };
-          wkSim = this._simulateBatteryDay(profile, weekendSc);
+          wkSim = this._simulateBatteryDay(profile, weekendSc, batParams);
         }
         const wkDays = sc.weekendDays || 0;
         const totalDays = days + wkDays;
@@ -1449,7 +1556,7 @@ class SmartingHomePanel extends HTMLElement {
 
       // Also compute passive simulation for dynamic to get automation_gain
       const passiveScenario = { ...tariffScenarios[2], strategy: 'passive', gridChargeAllowed: false, annualDays: 365 };
-      const passiveSim = this._simulateBatteryDay(profile, passiveScenario);
+      const passiveSim = this._simulateBatteryDay(profile, passiveScenario, batParams);
       const passiveBenefit = passiveSim.dailyBenefit * 365;
       const automationGain = results[2].yr.benefit - passiveBenefit;
 
@@ -1464,7 +1571,8 @@ class SmartingHomePanel extends HTMLElement {
         return `<div style="background:${r.bg}; border:1px solid ${r.border}; border-radius:14px; padding:16px; position:relative; overflow:hidden">
           ${r.badge ? `<div style="position:absolute; top:8px; right:8px; font-size:8px; color:${r.color}; font-weight:700; letter-spacing:0.5px">${r.badge}</div>` : ""}
           <div style="font-size:13px; font-weight:700; color:${r.color}; margin-bottom:4px">${r.label}</div>
-          <div style="font-size:9px; color:#64748b; margin-bottom:12px; line-height:1.4">${r.desc}</div>
+          <div style="font-size:9px; color:#64748b; margin-bottom:${profileKey !== 'real' ? '4' : '12'}px; line-height:1.4">${r.desc}</div>
+          ${profileKey !== 'real' ? `<div style="font-size:9px; color:#a855f7; margin-bottom:10px">⚡ ${Math.round(yearlyPV/1000)} MWh PV · 🔋 ${(batParams.capKwh || 10.2).toFixed(1)} kWh bat · ⚙️ ${(batParams.maxRate || 3).toFixed(1)} kW</div>` : ""}
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:10px; margin-bottom:10px">
             <div style="color:#64748b">Śr. cena zakupu:</div><div style="color:#e74c3c; font-weight:600">${yr.avgBuy.toFixed(2)} zł/kWh</div>
             <div style="color:#64748b">Śr. cena sprzedaży:</div><div style="color:#2ecc71; font-weight:600">${yr.avgSell.toFixed(2)} zł/kWh</div>
@@ -9009,12 +9117,37 @@ class SmartingHomePanel extends HTMLElement {
           <div class="card" style="margin-bottom:12px">
             <div class="card-title">🏗️ Zwrot inwestycji (ROI) — Porównanie taryf</div>
             <div style="font-size:10px; color:#94a3b8; margin-bottom:10px">Pełna symulacja pracy instalacji: produkcja PV, profil zużycia, praca magazynu, import/eksport i strategia automatyki — osobna per taryfa.</div>
-            <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px; padding:10px; background:rgba(255,255,255,0.03); border-radius:8px; border:1px solid rgba(255,255,255,0.06)">
+            <div style="display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-bottom:14px; padding:10px; background:rgba(255,255,255,0.03); border-radius:8px; border:1px solid rgba(255,255,255,0.06)">
               <span style="font-size:11px; color:#94a3b8; white-space:nowrap">💰 Koszt instalacji</span>
               <input id="roi-invest-input" type="number" value="" placeholder="np. 45000" style="width:100px; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); border-radius:6px; color:#fff; padding:6px 10px; font-size:13px; text-align:right" onchange="this.getRootNode().host._saveRoiInvestment(this.value)">
               <span style="font-size:12px; color:#94a3b8">zł</span>
               <div style="flex:1"></div>
               <span style="font-size:10px; color:#64748b" id="roi-period-label">Baza: —</span>
+            </div>
+            <div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:14px; padding:8px 10px; background:rgba(255,255,255,0.03); border-radius:8px; border:1px solid rgba(255,255,255,0.06)">
+              <span style="font-size:11px; color:#94a3b8; white-space:nowrap">⚡ Profil instalacji</span>
+              <select id="roi-profile-select" style="flex:1; min-width:180px; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); border-radius:6px; color:#fff; padding:6px 10px; font-size:12px; cursor:pointer" onchange="this.getRootNode().host._onRoiProfileChange(this.value)">
+                <option value="real" style="background:#1e293b">📊 Moja instalacja (realne dane)</option>
+                <option value="5kw" style="background:#1e293b">☀️ 5 kW PV + 5 kWh bat (~35 000 zł)</option>
+                <option value="10kw" style="background:#1e293b">☀️ 10 kW PV + 10 kWh bat (~55 000 zł)</option>
+                <option value="15kw" style="background:#1e293b">☀️ 15 kW PV + 15 kWh bat (~75 000 zł)</option>
+                <option value="custom" style="background:#1e293b">🔧 Niestandardowa...</option>
+              </select>
+              <span id="roi-profile-desc" style="font-size:9px; color:#64748b; width:100%"></span>
+            </div>
+            <div id="roi-custom-panel" style="display:none; margin-bottom:14px; padding:10px; background:rgba(255,255,255,0.03); border-radius:8px; border:1px solid rgba(168,85,247,0.2)">
+              <div style="font-size:10px; color:#a855f7; font-weight:600; margin-bottom:8px">🔧 Parametry niestandardowe</div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:11px">
+                <label style="color:#94a3b8">Moc PV (kWp):</label>
+                <input id="roi-custom-pv" type="number" value="10" min="1" max="50" step="0.5" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); border-radius:4px; color:#fff; padding:4px 8px; font-size:12px; text-align:right" onchange="this.getRootNode().host._onRoiCustomChange()">
+                <label style="color:#94a3b8">Magazyn (kWh):</label>
+                <input id="roi-custom-bat" type="number" value="10" min="0" max="50" step="0.5" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); border-radius:4px; color:#fff; padding:4px 8px; font-size:12px; text-align:right" onchange="this.getRootNode().host._onRoiCustomChange()">
+                <label style="color:#94a3b8">Moc ładowania (kW):</label>
+                <input id="roi-custom-rate" type="number" value="3" min="1" max="10" step="0.5" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); border-radius:4px; color:#fff; padding:4px 8px; font-size:12px; text-align:right" onchange="this.getRootNode().host._onRoiCustomChange()">
+                <label style="color:#94a3b8">Roczna prod. (kWh/kWp):</label>
+                <input id="roi-custom-yield" type="number" value="1000" min="500" max="1500" step="50" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); border-radius:4px; color:#fff; padding:4px 8px; font-size:12px; text-align:right" onchange="this.getRootNode().host._onRoiCustomChange()">
+              </div>
+              <div style="font-size:9px; color:#64748b; margin-top:6px">💡 Zużycie roczne pobierane z Twoich czujników HA</div>
             </div>
             <div class="g3" id="roi-scenario-cards">
               <div style="text-align:center; padding:20px; color:#64748b; font-size:11px">Podaj koszt instalacji aby zobaczyć porównanie scenariuszy.</div>
@@ -10303,7 +10436,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.40.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.41.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
