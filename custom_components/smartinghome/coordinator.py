@@ -600,7 +600,6 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Compute the next recommended arbitrage action."""
         hour = now.hour
         is_weekend = now.weekday() >= 5
-        is_winter = now.month in WINTER_MONTHS
 
         if is_weekend:
             if soc < 50:
