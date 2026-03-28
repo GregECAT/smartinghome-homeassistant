@@ -38,10 +38,12 @@ from .const import (
     DEFAULT_SENSOR_MAP,
     DEFAULT_SENSOR_MAP_DEYE,
     DEFAULT_SENSOR_MAP_GROWATT,
+    DEFAULT_SENSOR_MAP_SOFAR,
     SENSOR_MAP_KEYS,
     INVERTER_BRAND_GOODWE,
     INVERTER_BRAND_DEYE,
     INVERTER_BRAND_GROWATT,
+    INVERTER_BRAND_SOFAR,
     INVERTER_BRAND_OTHER,
     DEFAULT_ECOWITT_SENSOR_MAP,
     LICENSE_MODE_FREE,
@@ -60,6 +62,8 @@ def _get_defaults_for_brand(brand: str) -> dict:
         return DEFAULT_SENSOR_MAP_DEYE
     if brand == INVERTER_BRAND_GROWATT:
         return DEFAULT_SENSOR_MAP_GROWATT
+    if brand == INVERTER_BRAND_SOFAR:
+        return DEFAULT_SENSOR_MAP_SOFAR
     return DEFAULT_SENSOR_MAP
 
 
@@ -183,6 +187,7 @@ class SmartingHomeConfigFlow(
                             INVERTER_BRAND_GOODWE: "GoodWe",
                             INVERTER_BRAND_DEYE: "Deye",
                             INVERTER_BRAND_GROWATT: "Growatt",
+                            INVERTER_BRAND_SOFAR: "Sofar Solar",
                             INVERTER_BRAND_OTHER: "Inny / Other",
                         }
                     ),
@@ -659,6 +664,7 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
                             INVERTER_BRAND_GOODWE: "GoodWe",
                             INVERTER_BRAND_DEYE: "Deye",
                             INVERTER_BRAND_GROWATT: "Growatt",
+                            INVERTER_BRAND_SOFAR: "Sofar Solar",
                             INVERTER_BRAND_OTHER: "Inny / Other",
                         }
                     ),

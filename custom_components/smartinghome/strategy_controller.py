@@ -90,6 +90,7 @@ _SOC_LIMITS: dict[AutopilotStrategy, dict[str, float]] = {
 # Services that indicate an automation conflicts with StrategyController
 HEMS_CONFLICT_SERVICES = {
     "goodwe.set_parameter",
+    "modbus.write_register",       # Sofar (and other Modbus-based inverters)
     "smartinghome.force_charge",
     "smartinghome.force_discharge",
     "smartinghome.set_mode",

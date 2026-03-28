@@ -28,7 +28,7 @@ from .license import LicenseManager
 from .services import async_setup_services, async_unload_services
 from .strategy_controller import StrategyController
 from .energy_manager import EnergyManager
-from .const import AutopilotStrategy as AutopilotStrategy, CONF_DEVICE_ID, DEFAULT_GOODWE_DEVICE_ID
+from .const import AutopilotStrategy as AutopilotStrategy, CONF_DEVICE_ID, DEFAULT_GOODWE_DEVICE_ID, CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -159,9 +159,18 @@ async def async_setup_entry(
 
     # Create Strategy Controller for autonomous HEMS
     device_id_for_ems = entry.data.get(CONF_DEVICE_ID, "") or entry.data.get("device_id", DEFAULT_GOODWE_DEVICE_ID)
-    energy_mgr = EnergyManager(hass, device_id_for_ems)
+    inverter_brand = entry.data.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE)
+    energy_mgr = EnergyManager(hass, device_id_for_ems, inverter_brand=inverter_brand)
     strategy_ctrl = StrategyController(hass, energy_mgr)
+    strategy_ctrl.set_inverter_brand(inverter_brand)
     coordinator.set_strategy_controller(strategy_ctrl)
+
+    # Persist inverter_brand to settings.json for panel.js image detection
+    try:
+        from .settings_io import write_async
+        await write_async(hass, {"inverter_brand": inverter_brand})
+    except Exception:
+        pass
 
     # Register services (returns AI cron scheduler)
     cron_scheduler = await async_setup_services(

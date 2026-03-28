@@ -40,6 +40,7 @@ LICENSE_MODE_PRO: Final = "pro"
 INVERTER_BRAND_GOODWE: Final = "goodwe"
 INVERTER_BRAND_DEYE: Final = "deye"
 INVERTER_BRAND_GROWATT: Final = "growatt"
+INVERTER_BRAND_SOFAR: Final = "sofar"
 INVERTER_BRAND_OTHER: Final = "other"
 
 # =============================================================================
@@ -315,6 +316,71 @@ DEFAULT_SENSOR_MAP_GROWATT: Final = {
     # Inverter
     "inverter_power": "sensor.growatt_active_power",
     "inverter_temp": "sensor.growatt_inverter_temperature",
+    # Weather — cloud (user fills in)
+    "weather_temp": "",
+    "weather_humidity": "",
+    "weather_cloud_cover": "",
+    "weather_wind_speed": "",
+    "weather_pressure": "",
+    "weather_uv_index": "",
+    # Weather — local station (user fills in)
+    "local_temp": "",
+    "local_humidity": "",
+    "local_wind_speed": "",
+    "local_rain_rate": "",
+    "local_solar_radiation": "",
+    "local_dewpoint": "",
+    "local_uv_index": "",
+    "local_solar_lux": "",
+    "local_pressure": "",
+    "local_daily_rain": "",
+    "local_wind_direction": "",
+    "local_wind_gust": "",
+    "local_feels_like": "",
+}
+
+# ── Sofar defaults ──
+DEFAULT_SENSOR_MAP_SOFAR: Final = {
+    # Core
+    "pv_power": "sensor.sofar_pv_power",
+    "load_power": "sensor.sofar_load_power",
+    "grid_power": "sensor.sofar_grid_power",
+    "battery_power": "sensor.sofar_battery_power",
+    "battery_soc": "sensor.sofar_battery_soc",
+    # PV Strings
+    "pv1_power": "sensor.sofar_pv1_power",
+    "pv1_voltage": "sensor.sofar_pv1_voltage",
+    "pv1_current": "sensor.sofar_pv1_current",
+    "pv2_power": "sensor.sofar_pv2_power",
+    "pv2_voltage": "sensor.sofar_pv2_voltage",
+    "pv2_current": "sensor.sofar_pv2_current",
+    "pv3_power": "",
+    "pv4_power": "",
+    # Battery extended
+    "battery_voltage": "sensor.sofar_battery_voltage",
+    "battery_current": "sensor.sofar_battery_current",
+    "battery_temp": "sensor.sofar_battery_temperature",
+    "battery_capacity_kwh": "",
+    # Grid extended
+    "voltage_l1": "sensor.sofar_grid_voltage_r",
+    "voltage_l2": "sensor.sofar_grid_voltage_s",
+    "voltage_l3": "sensor.sofar_grid_voltage_t",
+    "current_l1": "sensor.sofar_grid_current_r",
+    "current_l2": "sensor.sofar_grid_current_s",
+    "current_l3": "sensor.sofar_grid_current_t",
+    "power_l1": "",
+    "power_l2": "",
+    "power_l3": "",
+    "grid_frequency": "sensor.sofar_grid_frequency",
+    # Daily totals
+    "pv_today": "sensor.sofar_today_generation",
+    "grid_import_today": "sensor.sofar_today_import",
+    "grid_export_today": "sensor.sofar_today_export",
+    "battery_charge_today": "sensor.sofar_today_battery_charge",
+    "battery_discharge_today": "sensor.sofar_today_battery_discharge",
+    # Inverter
+    "inverter_power": "sensor.sofar_inverter_power",
+    "inverter_temp": "sensor.sofar_inverter_temperature",
     # Weather — cloud (user fills in)
     "weather_temp": "",
     "weather_humidity": "",
@@ -695,6 +761,13 @@ NUMBER_EXPORT_LIMIT: Final = "number.goodwe_grid_export_limit"
 NUMBER_DOD_ON_GRID: Final = "number.goodwe_depth_of_discharge_on_grid"
 NUMBER_ECO_MODE_POWER: Final = "number.goodwe_eco_mode_power"
 NUMBER_ECO_MODE_SOC: Final = "number.goodwe_eco_mode_soc"
+
+# Sofar Solar control entities
+SELECT_SOFAR_WORK_MODE: Final = "select.sofar_energy_storage_mode"
+NUMBER_SOFAR_DOD: Final = "number.sofar_depth_of_discharge"
+NUMBER_SOFAR_EXPORT_LIMIT: Final = "number.sofar_grid_export_limit"
+NUMBER_SOFAR_CHARGE_POWER: Final = "number.sofar_charge_power_limit"
+NUMBER_SOFAR_DISCHARGE_POWER: Final = "number.sofar_discharge_power_limit"
 
 # Binary sensors from RCE PSE
 BINARY_RCE_CHEAPEST: Final = "binary_sensor.rce_pse_aktywne_najtansze_okno_dzisiaj"

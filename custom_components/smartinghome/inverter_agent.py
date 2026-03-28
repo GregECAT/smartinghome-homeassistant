@@ -33,6 +33,7 @@ from .const import (
     INVERTER_BRAND_GOODWE,
     INVERTER_BRAND_DEYE,
     INVERTER_BRAND_GROWATT,
+    INVERTER_BRAND_SOFAR,
     NUMBER_DOD_ON_GRID,
     SELECT_WORK_MODE,
     SWITCH_BOILER,
@@ -55,6 +56,7 @@ _BRAND_PATTERNS: dict[str, list[str]] = {
     INVERTER_BRAND_GOODWE: ["goodwe", "gw_"],
     INVERTER_BRAND_DEYE: ["deye", "sun_", "sunsynk"],
     INVERTER_BRAND_GROWATT: ["growatt", "grw_"],
+    INVERTER_BRAND_SOFAR: ["sofar", "sfr_", "solarman"],
 }
 
 # Well-known capability mappings (entity pattern → capability name)
@@ -295,7 +297,7 @@ class InverterAgent:
             "work_mode": work_mode,
             "dod_on_grid": int(dod),
             "switches": switches,
-            "inverter_brand": "goodwe",
+            "inverter_brand": self._inverter_brand,
             "dry_run": self._dry_run,
         }
 
