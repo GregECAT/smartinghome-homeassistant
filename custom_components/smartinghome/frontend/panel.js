@@ -3650,9 +3650,9 @@ class SmartingHomePanel extends HTMLElement {
         offsetIdx: i,
         isPast, isNow, isFuture,
         pvActual: isPast || isNow ? (pvHist[h] ?? null) : null,
-        pvForecast: isFuture ? (pvForecast[h] ?? null) : (isPast && pvForecast[h] !== undefined ? pvForecast[h] : null),
+        pvForecast: isFuture || isNow ? (pvForecast[h] ?? null) : (isPast && pvForecast[h] !== undefined ? pvForecast[h] : null),
         loadActual: isPast || isNow ? (loadHist[h] ?? null) : null,
-        loadForecast: isFuture ? (loadForecast[h] ?? null) : null,
+        loadForecast: isFuture || isNow ? (loadForecast[h] ?? null) : null,
         socActual: isPast || isNow ? (socHist[h] ?? null) : null,
         gridActual: isPast || isNow ? (gridHist[h] ?? null) : null,
         battActual: isPast || isNow ? (battHist[h] ?? null) : null,
@@ -3833,9 +3833,20 @@ class SmartingHomePanel extends HTMLElement {
         tooltip.style.display = 'block';
         const rect2 = e.target.getBoundingClientRect();
         const containerRect = container.getBoundingClientRect();
-        tooltip.style.left = `${rect2.left + rect2.width / 2 - containerRect.left}px`;
-        tooltip.style.top = `${rect2.top - containerRect.top - 10}px`;
-        tooltip.style.transform = 'translateX(-50%) translateY(-100%)';
+        let tooltipX = rect2.left + rect2.width / 2 - containerRect.left;
+        let tooltipY = rect2.top - containerRect.top - 10;
+        // Flip below if would go above container
+        if (tooltipY < 10) {
+          tooltipY = rect2.bottom - containerRect.top + 10;
+          tooltip.style.transform = 'translateX(-50%)';
+        } else {
+          tooltip.style.transform = 'translateX(-50%) translateY(-100%)';
+        }
+        // Clamp horizontal position
+        const tw = tooltip.offsetWidth || 120;
+        tooltipX = Math.max(tw / 2 + 4, Math.min(tooltipX, containerRect.width - tw / 2 - 4));
+        tooltip.style.left = `${tooltipX}px`;
+        tooltip.style.top = `${tooltipY}px`;
       });
       rect.addEventListener('mouseleave', () => {
         tooltip.style.display = 'none';
@@ -6115,7 +6126,7 @@ class SmartingHomePanel extends HTMLElement {
           border: 1px solid rgba(255,255,255,0.06);
           border-radius: 14px;
           padding: 16px 12px 10px;
-          overflow: hidden;
+          overflow: visible;
         }
         .sh-chart-wrap::before {
           content: '';
@@ -9872,7 +9883,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.39.4</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.39.5</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
