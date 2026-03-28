@@ -1379,6 +1379,7 @@ class SmartingHomePanel extends HTMLElement {
 
         const avgTariffPrice = scenario.buyPrice.reduce((a,b) => a+b, 0) / 24;
         const dailyLoad = profile.load.reduce((a, b) => a + b, 0);
+        const dailyPV = profile.pv.reduce((a, b) => a + b, 0);
         const baselineCost = dailyLoad * avgTariffPrice;
 
         const systemNetCost = importCost - exportRevenue;
@@ -1388,12 +1389,23 @@ class SmartingHomePanel extends HTMLElement {
         const avgSellPrice = totalExport > 0 ? exportRevenue / totalExport : 0;
         const cycles = totalCharge / CAP;
 
+        // Breakdown: import to home vs import to battery (arbitrage)
+        const gridToCharge = totalImport - totalGridDirectToLoad;
+        const gridToLoad = totalGridDirectToLoad;
+
+        // Battery losses = energy charged - energy discharged usable
+        // Charge loss: input * (1-ETA), Discharge loss: output * (1-ETA)/ETA
+        const batteryLosses = totalCharge > 0
+          ? totalCharge * (1 - ETA) + totalDischarge * (1 - ETA) / ETA
+          : 0;
+
         result = {
           gridImport, gridExport, battSOC, batCharge, batDischarge,
           totalImport, totalExport, totalCharge, totalDischarge,
           pvSelfConsumption, totalBatPvToLoad, totalBatGridToLoad,
           totalGridDirectToLoad, totalLocalServed,
           totalBatToGrid, totalPvToGrid, totalPvDirectToLoad,
+          gridToCharge, gridToLoad, batteryLosses, dailyPV, dailyLoad,
           importCost, exportRevenue, baselineCost, systemNetCost, dailyBenefit,
           avgBuyPrice, avgSellPrice, cycles,
           arbitrageProfit, arbitrageSellRevenue, arbitrageBuyCost,
@@ -1536,6 +1548,11 @@ class SmartingHomePanel extends HTMLElement {
           batToGrid: wa(sim.totalBatToGrid, wkSim?.totalBatToGrid || 0),
           pvToGrid: wa(sim.totalPvToGrid, wkSim?.totalPvToGrid || 0),
           localServed: wa(sim.totalLocalServed, wkSim?.totalLocalServed || 0),
+          gridToCharge: wa(sim.gridToCharge, wkSim?.gridToCharge || 0),
+          gridToLoad: wa(sim.gridToLoad, wkSim?.gridToLoad || 0),
+          batteryLosses: wa(sim.batteryLosses, wkSim?.batteryLosses || 0),
+          load: wa(sim.dailyLoad, wkSim?.dailyLoad || 0),
+          pvTotal: wa(sim.dailyPV, wkSim?.dailyPV || 0),
           importCost: wa(sim.importCost, wkSim?.importCost || 0),
           exportRev: wa(sim.exportRevenue, wkSim?.exportRevenue || 0),
           baselineCost: wa(sim.baselineCost, wkSim?.baselineCost || 0),
@@ -1546,7 +1563,7 @@ class SmartingHomePanel extends HTMLElement {
           cycles: wa(sim.cycles, wkSim?.cycles || 0),
           arbitrageProfit: wa(sim.arbitrageProfit, wkSim?.arbitrageProfit || 0),
           pvSelfConsPct: yearlyPV > 0
-            ? Math.min(100, Math.round((wa(sim.pvSelfConsumption, wkSim?.pvSelfConsumption || 0) / yearlyPV) * 100))
+            ? Math.round((wa(sim.pvSelfConsumption, wkSim?.pvSelfConsumption || 0) / yearlyPV) * 100)
             : 0,
         };
         yr.payback = invest > 0 && yr.benefit > 0 ? invest / yr.benefit : null;
@@ -1567,6 +1584,12 @@ class SmartingHomePanel extends HTMLElement {
         const paybackPct = yr.payback ? Math.min(100, (25 / yr.payback) * 4) : 0;
         const diffVsG11 = i > 0 ? yr.benefit - results[0].yr.benefit : 0;
         const hasArbitrage = yr.arbitrageProfit > 50 && r.strategy === 'dynamic_active';
+        const hasGridCharge = yr.gridToCharge > 10;
+
+        // Energy balance check
+        const balanceIn = yr.pvTotal + yr.import;
+        const balanceOut = yr.load + yr.export + yr.batteryLosses;
+        const balanceOk = Math.abs(balanceIn - balanceOut) < balanceIn * 0.05;
 
         return `<div style="background:${r.bg}; border:1px solid ${r.border}; border-radius:14px; padding:16px; position:relative; overflow:hidden">
           ${r.badge ? `<div style="position:absolute; top:8px; right:8px; font-size:8px; color:${r.color}; font-weight:700; letter-spacing:0.5px">${r.badge}</div>` : ""}
@@ -1578,17 +1601,21 @@ class SmartingHomePanel extends HTMLElement {
             <div style="color:#64748b">Śr. cena sprzedaży:</div><div style="color:#2ecc71; font-weight:600">${yr.avgSell.toFixed(2)} zł/kWh</div>
           </div>
           <div style="background:rgba(255,255,255,0.03); border-radius:8px; padding:8px; margin-bottom:10px">
-            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">📊 Przepływy energii ${r.strategy !== 'passive' ? '<span style="color:#a855f7">(symulacja per taryfa)</span>' : ''}</div>
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:3px; font-size:10px">
-              <div style="color:#94a3b8">☀️ Autokonsumpcja PV:</div><div style="color:#f59e0b; font-weight:600">${Math.round(yr.pvSelfCons)} kWh <span style="color:#64748b; font-weight:400">(${yr.pvSelfConsPct}%)</span></div>
-              <div style="color:#94a3b8; padding-left:8px">↳ bezpośrednio:</div><div style="color:#94a3b8; font-weight:400">${Math.round(yr.pvDirect)} kWh</div>
-              <div style="color:#94a3b8; padding-left:8px">↳ przez baterię:</div><div style="color:#94a3b8; font-weight:400">${Math.round(yr.batPvToLoad)} kWh</div>
-              ${yr.batGridToLoad > 10 ? `<div style="color:#94a3b8">🔋 Z baterii (sieć):</div><div style="color:#a855f7; font-weight:600">${Math.round(yr.batGridToLoad)} kWh</div>` : ''}
-              <div style="color:#94a3b8">↓ Import z sieci:</div><div style="color:#e74c3c; font-weight:600">${Math.round(yr.import)} kWh</div>
-              <div style="color:#94a3b8">↑ Eksport do sieci:</div><div style="color:#2ecc71; font-weight:600">${Math.round(yr.export)} kWh</div>
-              ${yr.batToGrid > 10 ? `<div style="color:#94a3b8; padding-left:8px">↳ arbitraż bat→sieć:</div><div style="color:#2ecc71; font-weight:400">${Math.round(yr.batToGrid)} kWh</div>` : ''}
-              <div style="color:#94a3b8">🔄 Cykle baterii:</div><div style="color:#a855f7; font-weight:600">${Math.round(yr.cycles)}/rok</div>
+            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px">⚡ Bilans energii (roczny)</div>
+            <div style="display:grid; grid-template-columns:1fr auto; gap:2px 8px; font-size:10px">
+              <div style="color:#f7b731">☀️ Produkcja PV:</div><div style="color:#f7b731; font-weight:600; text-align:right">${Math.round(yr.pvTotal)} kWh</div>
+              <div style="color:#94a3b8; padding-left:8px">↳ autokonsumpcja:</div><div style="color:#2ecc71; font-weight:600; text-align:right">${Math.round(yr.pvSelfCons)} kWh (${yr.pvSelfConsPct}%)</div>
+              ${yr.pvToGrid > 5 ? `<div style="color:#94a3b8; padding-left:8px">↳ eksport PV→sieć:</div><div style="color:#94a3b8; text-align:right">${Math.round(yr.pvToGrid)} kWh</div>` : ''}
+              <div style="color:#e74c3c; margin-top:4px">🔌 Import z sieci:</div><div style="color:#e74c3c; font-weight:600; text-align:right; margin-top:4px">${Math.round(yr.import)} kWh</div>
+              <div style="color:#94a3b8; padding-left:8px">↳ do domu:</div><div style="color:#94a3b8; text-align:right">${Math.round(yr.gridToLoad)} kWh</div>
+              ${hasGridCharge ? `<div style="color:#a855f7; padding-left:8px">↳ do baterii (arb.):</div><div style="color:#a855f7; text-align:right">${Math.round(yr.gridToCharge)} kWh</div>` : ''}
+              <div style="color:#2ecc71; margin-top:4px">↑ Eksport do sieci:</div><div style="color:#2ecc71; font-weight:600; text-align:right; margin-top:4px">${Math.round(yr.export)} kWh</div>
+              ${yr.batToGrid > 10 ? `<div style="color:#a855f7; padding-left:8px">↳ bat→sieć (arb.):</div><div style="color:#a855f7; text-align:right">${Math.round(yr.batToGrid)} kWh</div>` : ''}
+              <div style="color:#64748b; margin-top:4px; border-top:1px solid rgba(255,255,255,0.06); padding-top:4px">🏠 Zużycie domu:</div><div style="color:#fff; font-weight:700; text-align:right; margin-top:4px; border-top:1px solid rgba(255,255,255,0.06); padding-top:4px">${Math.round(yr.load)} kWh</div>
+              ${yr.batteryLosses > 5 ? `<div style="color:#64748b">⚡ Straty baterii:</div><div style="color:#64748b; text-align:right">${Math.round(yr.batteryLosses)} kWh</div>` : ''}
+              <div style="color:#94a3b8">🔋 Cykle baterii:</div><div style="color:#a855f7; font-weight:600; text-align:right">${Math.round(yr.cycles)}/rok</div>
             </div>
+            <div style="font-size:8px; color:${balanceOk ? '#2ecc71' : '#e74c3c'}; margin-top:4px; text-align:right">bilans: ${balanceOk ? '✅' : '⚠️'} wejście ${Math.round(balanceIn)} = wyjście ${Math.round(balanceOut)} kWh</div>
           </div>
           <div style="border-top:1px solid rgba(255,255,255,0.06); padding-top:8px">
             <div style="font-size:9px; color:#64748b">Koszt energii bez PV (baseline)</div>
@@ -1597,7 +1624,7 @@ class SmartingHomePanel extends HTMLElement {
             <div style="font-size:14px; font-weight:700; color:#e74c3c">-${yr.importCost.toFixed(0)} zł</div>
             <div style="font-size:9px; color:#64748b; margin-top:4px">Przychód z eksportu</div>
             <div style="font-size:14px; font-weight:700; color:#2ecc71">+${yr.exportRev.toFixed(0)} zł</div>
-            ${hasArbitrage ? `<div style="font-size:9px; color:#64748b; margin-top:4px">Zysk z arbitrażu cenowego</div>
+            ${hasArbitrage ? `<div style="font-size:9px; color:#64748b; margin-top:4px">🔋 P&L baterii (arbitraż)</div>
             <div style="font-size:13px; font-weight:700; color:#a855f7">+${yr.arbitrageProfit.toFixed(0)} zł</div>` : ''}
           </div>
           <div style="margin-top:10px; padding:10px; border-radius:10px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.06)">
@@ -10436,7 +10463,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.41.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.41.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
