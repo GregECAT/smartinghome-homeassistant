@@ -1406,6 +1406,26 @@ class SmartingHomePanel extends HTMLElement {
           ? totalCharge * (1 - ETA) + totalDischarge * (1 - ETA) / ETA
           : 0;
 
+        // PV-weighted average price: what price would you pay for energy
+        // during the hours PV actually produces (production-weighted)
+        let pvWeightedPriceSum = 0;
+        let pvWeightedPriceTotal = 0;
+        for (let h = 0; h < 24; h++) {
+          if (profile.pv[h] > 0) {
+            pvWeightedPriceSum += profile.pv[h] * scenario.buyPrice[h];
+            pvWeightedPriceTotal += profile.pv[h];
+          }
+        }
+        const avgPricePvHours = pvWeightedPriceTotal > 0
+          ? pvWeightedPriceSum / pvWeightedPriceTotal
+          : avgTariffPrice;
+
+        // Proper PV savings = self-consumed PV × price during PV hours
+        const pvSavings = pvSelfConsumption * avgPricePvHours;
+
+        // Effective value of 1 kWh PV = total benefit / total PV produced
+        const effectivePvValue = dailyPV > 0 ? dailyBenefit / dailyPV : 0;
+
         result = {
           gridImport, gridExport, battSOC, batCharge, batDischarge,
           totalImport, totalExport, totalCharge, totalDischarge,
@@ -1413,6 +1433,7 @@ class SmartingHomePanel extends HTMLElement {
           totalGridDirectToLoad, totalLocalServed,
           totalBatToGrid, totalPvToGrid, totalPvDirectToLoad,
           gridToCharge, gridToLoad, batteryLosses, dailyPV, dailyLoad,
+          avgPricePvHours, pvSavings, effectivePvValue,
           importCost, exportRevenue, baselineCost, systemNetCost, dailyBenefit,
           avgBuyPrice, avgSellPrice, cycles,
           arbitrageProfit, arbitrageSellRevenue, arbitrageBuyCost,
@@ -1567,6 +1588,9 @@ class SmartingHomePanel extends HTMLElement {
           benefit: wa(sim.dailyBenefit, wkSim?.dailyBenefit || 0),
           avgBuy: sim.avgBuyPrice,
           avgSell: sim.avgSellPrice,
+          avgPricePvHours: sim.avgPricePvHours,
+          pvSavings: wa(sim.pvSavings, wkSim?.pvSavings || 0),
+          effectivePvValue: sim.effectivePvValue,
           cycles: wa(sim.cycles, wkSim?.cycles || 0),
           arbitrageProfit: wa(sim.arbitrageProfit, wkSim?.arbitrageProfit || 0),
           pvSelfConsPct: yearlyPV > 0
@@ -1606,6 +1630,8 @@ class SmartingHomePanel extends HTMLElement {
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:10px; margin-bottom:10px">
             <div style="color:#64748b">Śr. cena zakupu:</div><div style="color:#e74c3c; font-weight:600">${yr.avgBuy.toFixed(2)} zł/kWh</div>
             <div style="color:#64748b">Śr. cena sprzedaży:</div><div style="color:#2ecc71; font-weight:600">${yr.avgSell.toFixed(2)} zł/kWh</div>
+            <div style="color:#f7b731">Śr. cena w godz. PV:</div><div style="color:#f7b731; font-weight:600">${yr.avgPricePvHours.toFixed(2)} zł/kWh</div>
+            <div style="color:#00d4ff; font-weight:600">💎 Wartość 1 kWh PV:</div><div style="color:#00d4ff; font-weight:700">${yr.effectivePvValue.toFixed(2)} zł</div>
           </div>
           <div style="background:rgba(255,255,255,0.03); border-radius:8px; padding:8px; margin-bottom:10px">
             <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px">⚡ Bilans energii (roczny)</div>
@@ -1638,11 +1664,11 @@ class SmartingHomePanel extends HTMLElement {
             <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Łączna roczna korzyść systemu</div>
             <div style="font-size:24px; font-weight:900; color:${yr.benefit >= 0 ? "#2ecc71" : "#e74c3c"}">${yr.benefit >= 0 ? "+" : ""}${yr.benefit.toFixed(0)} zł</div>
             <div style="font-size:9px; color:#94a3b8; margin-top:1px">baseline − (import − eksport)</div>
-            ${hasArbitrage ? `<div style="display:grid; grid-template-columns:1fr auto; gap:1px 6px; font-size:9px; margin-top:6px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.06)">
-              <div style="color:#f7b731">☀️ Oszczędność z PV:</div><div style="color:#f7b731; text-align:right">+${Math.round(yr.pvSelfCons * yr.avgBuy)} zł</div>
-              <div style="color:#a855f7">🔋 Zysk z baterii:</div><div style="color:#a855f7; text-align:right">+${yr.arbitrageProfit.toFixed(0)} zł</div>
-              <div style="color:#2ecc71">↑ Przychód z eksportu:</div><div style="color:#2ecc71; text-align:right">+${yr.exportRev.toFixed(0)} zł</div>
-            </div>` : ''}
+            <div style="display:grid; grid-template-columns:1fr auto; gap:1px 6px; font-size:9px; margin-top:6px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.06)">
+              <div style="color:#f7b731">☀️ Oszczędność z PV:</div><div style="color:#f7b731; text-align:right">+${Math.round(yr.pvSavings)} zł <span style="color:#64748b">(${yr.avgPricePvHours.toFixed(2)}/kWh)</span></div>
+              ${yr.exportRev > 5 ? `<div style="color:#2ecc71">↑ Przychód z eksportu:</div><div style="color:#2ecc71; text-align:right">+${yr.exportRev.toFixed(0)} zł</div>` : ''}
+              ${hasArbitrage ? `<div style="color:#a855f7">🔋 Zysk z baterii:</div><div style="color:#a855f7; text-align:right">+${yr.arbitrageProfit.toFixed(0)} zł</div>` : ''}
+            </div>
             ${i > 0 ? `<div style="font-size:10px; color:#2ecc71; margin-top:4px">+${diffVsG11.toFixed(0)} zł vs G11</div>` : `<div style="font-size:10px; color:#e74c3c; margin-top:4px">taryfa stała</div>`}
           </div>
           ${invest > 0 ? `
@@ -1671,6 +1697,7 @@ class SmartingHomePanel extends HTMLElement {
         ${ranked.map((t, idx) => `<div style="display:flex; align-items:center; gap:8px; padding:4px 0; ${idx === 0 ? 'font-weight:700' : ''}">
           <span style="font-size:16px">${rankEmoji[idx]}</span>
           <span style="flex:1; font-size:12px; color:${t.color}">${t.label}</span>
+          <span style="font-size:10px; color:#00d4ff; margin-right:6px">💎 ${t.yr.effectivePvValue.toFixed(2)} zł/kWh</span>
           <span style="font-size:13px; font-weight:700; color:${rankColors[idx]}">${t.yr.benefit >= 0 ? '+' : ''}${t.yr.benefit.toFixed(0)} zł/rok</span>
         </div>`).join('')}
       </div>`;
@@ -10501,7 +10528,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.41.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.41.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
