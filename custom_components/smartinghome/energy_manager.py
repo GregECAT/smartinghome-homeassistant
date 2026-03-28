@@ -40,6 +40,14 @@ from .const import (
     NUMBER_DOD_ON_GRID,
     NUMBER_ECO_MODE_POWER,
     NUMBER_ECO_MODE_SOC,
+    # Sofar Solar control entities
+    INVERTER_BRAND_GOODWE,
+    INVERTER_BRAND_SOFAR,
+    SELECT_SOFAR_WORK_MODE,
+    NUMBER_SOFAR_DOD,
+    NUMBER_SOFAR_EXPORT_LIMIT,
+    NUMBER_SOFAR_CHARGE_POWER,
+    NUMBER_SOFAR_DISCHARGE_POWER,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -59,14 +67,21 @@ class EnergyManager:
         hass: HomeAssistant,
         device_id: str = DEFAULT_GOODWE_DEVICE_ID,
         strategy: HEMSStrategy = HEMSStrategy.BALANCED,
+        inverter_brand: str = INVERTER_BRAND_GOODWE,
     ) -> None:
         """Initialize the energy manager."""
         self.hass = hass
         self._device_id = device_id
         self._strategy = strategy
+        self._inverter_brand = inverter_brand
         self._current_mode = HEMSMode.AUTO
         self._voltage_cascade_active = False
         self._surplus_cascade_active = False
+
+    @property
+    def inverter_brand(self) -> str:
+        """Return configured inverter brand."""
+        return self._inverter_brand
 
     @property
     def current_mode(self) -> HEMSMode:
@@ -102,66 +117,69 @@ class EnergyManager:
             pass  # No automatic actions
 
     async def force_charge(self) -> None:
-        """Force battery charging via Eco Mode (eco_charge).
+        """Force battery charging.
 
-        Sequence per Instrukcja.md:
-        1. eco_mode_soc = 100
-        2. eco_mode_power = 100 (full power ~2-3kW from grid)
-        3. charge_current = 18.5A
-        4. select: eco_charge
+        GoodWe: Eco Mode (eco_charge) — soc=100, power=100, charge_current=max.
+        Sofar: Self Use — charge_power=max, discharge_power=0.
         """
-        _LOGGER.info("Forcing battery charge (eco_charge, soc=100, power=100)")
-        await self._set_eco_mode_soc(100)
-        await self._set_eco_mode_power(100)
-        await self._enable_charging()
-        await self._set_work_mode("eco_charge")
+        if self._inverter_brand == INVERTER_BRAND_SOFAR:
+            _LOGGER.info("[Sofar] Forcing battery charge (Self Use, max charge, zero discharge)")
+            await self._sofar_set_charge_power(6000)  # Max charge power
+            await self._sofar_set_discharge_power(0)   # Block discharge
+            await self._set_work_mode("Self Use")
+        else:
+            _LOGGER.info("Forcing battery charge (eco_charge, soc=100, power=100)")
+            await self._set_eco_mode_soc(100)
+            await self._set_eco_mode_power(100)
+            await self._enable_charging()
+            await self._set_work_mode("eco_charge")
         self._current_mode = HEMSMode.CHARGE
 
     async def force_discharge(self) -> None:
-        """Force battery discharge to grid via Eco Mode (eco_discharge).
+        """Force battery discharge to grid.
 
-        Sequence per Instrukcja.md:
-        1. Modbus 47509 = 1 (enable grid export — disabled by default on BT!)
-        2. export_limit = 16000W
-        3. charge_current = 0 (block charging)
-        4. eco_mode_soc = 5 (discharge target)
-        5. eco_mode_power = 100 (full power)
-        6. select: eco_discharge
+        GoodWe: Eco Mode (eco_discharge) — grid export ON, charge_current=0.
+        Sofar: Self Use — charge_power=0, discharge_power=max, export_limit=max.
         """
-        _LOGGER.info("Forcing battery discharge (eco_discharge, soc=5, power=100, grid_export=ON)")
-        # Enable grid export (47509=1) — critical for BT!
-        await self.hass.services.async_call(
-            "modbus",
-            "write_register",
-            {
-                "hub": "goodwe_rs485",
-                "slave": 247,
-                "address": 47509,
-                "value": 1,
-            },
-        )
-        await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
-        await self._block_charging()
-        await self._set_eco_mode_soc(5)
-        await self._set_eco_mode_power(100)
-        await self._set_work_mode("eco_discharge")
+        if self._inverter_brand == INVERTER_BRAND_SOFAR:
+            _LOGGER.info("[Sofar] Forcing battery discharge (Self Use, max discharge, zero charge)")
+            await self._sofar_set_charge_power(0)       # Block charge
+            await self._sofar_set_discharge_power(6000)  # Max discharge
+            await self._sofar_set_export_limit(16000)    # Allow grid export
+            await self._set_work_mode("Self Use")
+        else:
+            _LOGGER.info("Forcing battery discharge (eco_discharge, soc=5, power=100, grid_export=ON)")
+            # Enable grid export (47509=1) — critical for BT!
+            await self.hass.services.async_call(
+                "modbus",
+                "write_register",
+                {
+                    "hub": "goodwe_rs485",
+                    "slave": 247,
+                    "address": 47509,
+                    "value": 1,
+                },
+            )
+            await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
+            await self._block_charging()
+            await self._set_eco_mode_soc(5)
+            await self._set_eco_mode_power(100)
+            await self._set_work_mode("eco_discharge")
         self._current_mode = HEMSMode.SELL
 
     async def stop_force_charge(self) -> None:
-        """Stop forced charging — restore general mode.
-
-        Sequence per Instrukcja.md 3.3:
-        1. eco_mode_power = 0
-        2. eco_mode_soc = 100
-        3. select: general
-        4. charge_current = 18.5 (restore PV charging)
-        5. input_boolean OFF
-        """
-        _LOGGER.info("STOP force charge — restoring general mode")
-        await self._set_eco_mode_power(0)
-        await self._set_eco_mode_soc(100)
-        await self._set_work_mode("general")
-        await self._enable_charging()
+        """Stop forced charging — restore general/self-use mode."""
+        if self._inverter_brand == INVERTER_BRAND_SOFAR:
+            _LOGGER.info("[Sofar] STOP force charge — restoring Self Use auto mode")
+            await self._sofar_set_charge_power(3000)     # Restore auto charge
+            await self._sofar_set_discharge_power(3000)   # Restore auto discharge
+            await self._set_work_mode("Self Use")
+        else:
+            _LOGGER.info("STOP force charge — restoring general mode")
+            await self._set_eco_mode_power(0)
+            await self._set_eco_mode_soc(100)
+            await self._set_work_mode("general")
+            await self._enable_charging()
         # Turn off force flag (if helper exists)
         _eid = "input_boolean.hems_force_grid_charge"
         if self.hass.states.get(_eid):
@@ -174,22 +192,20 @@ class EnergyManager:
         self._current_mode = HEMSMode.AUTO
 
     async def stop_force_discharge(self) -> None:
-        """Stop forced discharge — restore general mode.
-
-        Sequence per Instrukcja.md 4.3:
-        1. eco_mode_power = 0
-        2. eco_mode_soc = 100
-        3. select: general
-        4. charge_current = 18.5 (restore PV charging)
-        5. export_limit = 16000 (keep PV export enabled)
-        6. input_boolean OFF
-        """
-        _LOGGER.info("STOP force discharge — restoring general mode")
-        await self._set_eco_mode_power(0)
-        await self._set_eco_mode_soc(100)
-        await self._set_work_mode("general")
-        await self._enable_charging()
-        await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
+        """Stop forced discharge — restore general/self-use mode."""
+        if self._inverter_brand == INVERTER_BRAND_SOFAR:
+            _LOGGER.info("[Sofar] STOP force discharge — restoring Self Use auto mode")
+            await self._sofar_set_charge_power(3000)
+            await self._sofar_set_discharge_power(3000)
+            await self._sofar_set_export_limit(16000)
+            await self._set_work_mode("Self Use")
+        else:
+            _LOGGER.info("STOP force discharge — restoring general mode")
+            await self._set_eco_mode_power(0)
+            await self._set_eco_mode_soc(100)
+            await self._set_work_mode("general")
+            await self._enable_charging()
+            await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
         # Turn off force flag (if helper exists)
         _eid = "input_boolean.hems_force_battery_discharge"
         if self.hass.states.get(_eid):
@@ -202,50 +218,44 @@ class EnergyManager:
         self._current_mode = HEMSMode.AUTO
 
     async def set_general_mode(self) -> None:
-        """Switch to General mode — battery powers house (self-consumption).
-
-        In General mode, GoodWe uses battery naturally to cover house load.
-        No forced export to grid, no forced charging from grid.
-        Battery charges from PV when available, discharges to cover load.
-
-        Use case: AI wants battery to gradually discharge by powering the house
-        (e.g., making room for PV tomorrow), NOT by selling to grid.
-
-        Sequence:
-        1. eco_mode_power = 0 (no forced eco operation)
-        2. eco_mode_soc = 100
-        3. select: general
-        4. charge_current = 18.5 (allow PV charging)
-        5. export_limit = 16000 (allow PV export if surplus)
-        """
-        _LOGGER.info("SET GENERAL MODE — battery self-consumption (house powered by battery)")
-        await self._set_eco_mode_power(0)
-        await self._set_eco_mode_soc(100)
-        await self._set_work_mode("general")
-        await self._enable_charging()
-        await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
+        """Switch to General/Self Use mode — battery self-consumption."""
+        if self._inverter_brand == INVERTER_BRAND_SOFAR:
+            _LOGGER.info("[Sofar] SET Self Use MODE — battery self-consumption")
+            await self._sofar_set_charge_power(3000)
+            await self._sofar_set_discharge_power(3000)
+            await self._sofar_set_export_limit(16000)
+            await self._set_work_mode("Self Use")
+        else:
+            _LOGGER.info("SET GENERAL MODE — battery self-consumption (house powered by battery)")
+            await self._set_eco_mode_power(0)
+            await self._set_eco_mode_soc(100)
+            await self._set_work_mode("general")
+            await self._enable_charging()
+            await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
         self._current_mode = HEMSMode.AUTO
 
     async def emergency_stop(self) -> None:
-        """Emergency stop — kill all forced operations immediately.
-
-        Sequence per Instrukcja.md sekcja 5:
-        Combined stop_charge + stop_discharge + modbus 47511=0
-        """
+        """Emergency stop — kill all forced operations immediately."""
         _LOGGER.warning("EMERGENCY STOP — killing all force operations")
-        await self._set_eco_mode_power(0)
-        await self._set_eco_mode_soc(100)
-        # Reset EMS mode register
-        try:
-            await self.hass.services.async_call(
-                "modbus", "write_register",
-                {"hub": "goodwe_rs485", "slave": 247, "address": 47511, "value": 0},
-            )
-        except Exception:
-            _LOGGER.debug("Modbus 47511 reset skipped")
-        await self._set_work_mode("general")
-        await self._enable_charging()
-        await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
+        if self._inverter_brand == INVERTER_BRAND_SOFAR:
+            await self._sofar_set_charge_power(3000)
+            await self._sofar_set_discharge_power(3000)
+            await self._sofar_set_export_limit(16000)
+            await self._set_work_mode("Self Use")
+        else:
+            await self._set_eco_mode_power(0)
+            await self._set_eco_mode_soc(100)
+            # Reset EMS mode register
+            try:
+                await self.hass.services.async_call(
+                    "modbus", "write_register",
+                    {"hub": "goodwe_rs485", "slave": 247, "address": 47511, "value": 0},
+                )
+            except Exception:
+                _LOGGER.debug("Modbus 47511 reset skipped")
+            await self._set_work_mode("general")
+            await self._enable_charging()
+            await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
         for entity_id in (
             "input_boolean.hems_force_grid_charge",
             "input_boolean.hems_force_battery_discharge",
@@ -564,83 +574,113 @@ class EnergyManager:
         return actions
 
     # =========================================================================
-    # Private helpers — GoodWe control
+    # Private helpers — Brand-aware inverter control
     # =========================================================================
 
+    @property
+    def _is_sofar(self) -> bool:
+        """Return True if configured for Sofar Solar."""
+        return self._inverter_brand == INVERTER_BRAND_SOFAR
+
     async def _enable_charging(self) -> None:
-        """Enable battery charging (set current to max)."""
-        await self.hass.services.async_call(
-            "goodwe",
-            "set_parameter",
-            {
-                "device_id": self._device_id,
-                "parameter": "battery_charge_current",
-                "value": DEFAULT_BATTERY_CHARGE_CURRENT_MAX,
-            },
-        )
+        """Enable battery charging."""
+        if self._is_sofar:
+            await self._sofar_set_charge_power(3000)  # Default auto charge
+        else:
+            await self.hass.services.async_call(
+                "goodwe",
+                "set_parameter",
+                {
+                    "device_id": self._device_id,
+                    "parameter": "battery_charge_current",
+                    "value": DEFAULT_BATTERY_CHARGE_CURRENT_MAX,
+                },
+            )
 
     async def _block_charging(self) -> None:
-        """Block battery charging (set current to 0)."""
-        await self.hass.services.async_call(
-            "goodwe",
-            "set_parameter",
-            {
-                "device_id": self._device_id,
-                "parameter": "battery_charge_current",
-                "value": DEFAULT_BATTERY_CHARGE_CURRENT_BLOCK,
-            },
-        )
+        """Block battery charging."""
+        if self._is_sofar:
+            await self._sofar_set_charge_power(0)
+        else:
+            await self.hass.services.async_call(
+                "goodwe",
+                "set_parameter",
+                {
+                    "device_id": self._device_id,
+                    "parameter": "battery_charge_current",
+                    "value": DEFAULT_BATTERY_CHARGE_CURRENT_BLOCK,
+                },
+            )
 
     async def _set_charge_current(self, value: str) -> None:
-        """Set battery charge current to an arbitrary value (string)."""
-        await self.hass.services.async_call(
-            "goodwe",
-            "set_parameter",
-            {
-                "device_id": self._device_id,
-                "parameter": "battery_charge_current",
-                "value": value,
-            },
-        )
+        """Set battery charge current (GoodWe only, Sofar uses power limits)."""
+        if self._is_sofar:
+            # Sofar doesn't use current — convert to approximate power
+            try:
+                current_val = float(value)
+                power_approx = int(current_val * 52)  # ~52V battery
+                await self._sofar_set_charge_power(power_approx)
+            except (ValueError, TypeError):
+                _LOGGER.debug("Cannot parse charge current for Sofar: %s", value)
+        else:
+            await self.hass.services.async_call(
+                "goodwe",
+                "set_parameter",
+                {
+                    "device_id": self._device_id,
+                    "parameter": "battery_charge_current",
+                    "value": value,
+                },
+            )
 
     async def _set_export_limit(self, limit: int) -> None:
         """Set grid export limit."""
-        await self.hass.services.async_call(
-            "goodwe",
-            "set_parameter",
-            {
-                "device_id": self._device_id,
-                "parameter": "grid_export_limit",
-                "value": str(limit),
-            },
-        )
+        if self._is_sofar:
+            await self._sofar_set_export_limit(limit)
+        else:
+            await self.hass.services.async_call(
+                "goodwe",
+                "set_parameter",
+                {
+                    "device_id": self._device_id,
+                    "parameter": "grid_export_limit",
+                    "value": str(limit),
+                },
+            )
 
     async def _set_dod(self, dod: int) -> None:
         """Set depth of discharge on grid."""
-        if not self.hass.states.get(NUMBER_DOD_ON_GRID):
-            _LOGGER.debug("Entity %s not available — skipping DOD set", NUMBER_DOD_ON_GRID)
+        if self._is_sofar:
+            entity = NUMBER_SOFAR_DOD
+        else:
+            entity = NUMBER_DOD_ON_GRID
+        if not self.hass.states.get(entity):
+            _LOGGER.debug("Entity %s not available — skipping DOD set", entity)
             return
-        # Safety clamp: GoodWe entity max is 95%
         dod = max(0, min(dod, DEFAULT_DOD_ON_GRID))
         await self.hass.services.async_call(
             "number",
             "set_value",
             {
-                "entity_id": NUMBER_DOD_ON_GRID,
+                "entity_id": entity,
                 "value": dod,
             },
         )
 
     async def _set_work_mode(self, mode: str) -> None:
-        """Set inverter work mode via select.select_option."""
-        if not self.hass.states.get(SELECT_WORK_MODE):
-            _LOGGER.debug("Entity %s not available — skipping work mode set", SELECT_WORK_MODE)
+        """Set inverter work mode via select entity."""
+        if self._is_sofar:
+            entity = SELECT_SOFAR_WORK_MODE
+        else:
+            entity = SELECT_WORK_MODE
+        if not self.hass.states.get(entity):
+            _LOGGER.debug("Entity %s not available — skipping work mode set", entity)
             return
         await self.hass.services.async_call(
             "select",
             "select_option",
             {
-                "entity_id": SELECT_WORK_MODE,
+                "entity_id": entity,
                 "option": mode,
             },
         )
@@ -688,3 +728,75 @@ class EnergyManager:
             "turn_off",
             {"entity_id": entity_id},
         )
+
+    # =========================================================================
+    # Sofar Solar — specific control helpers
+    # =========================================================================
+
+    async def _sofar_set_charge_power(self, power_w: int) -> None:
+        """Set Sofar battery charge power limit (W).
+
+        Uses number.set_value on the Sofar charge power limit entity.
+        Typical range: 0–6000W depending on model.
+        """
+        if not self.hass.states.get(NUMBER_SOFAR_CHARGE_POWER):
+            _LOGGER.debug(
+                "[Sofar] Entity %s not available — skipping charge power set",
+                NUMBER_SOFAR_CHARGE_POWER,
+            )
+            return
+        power_w = max(0, min(power_w, 6000))
+        await self.hass.services.async_call(
+            "number",
+            "set_value",
+            {
+                "entity_id": NUMBER_SOFAR_CHARGE_POWER,
+                "value": power_w,
+            },
+        )
+        _LOGGER.debug("[Sofar] Charge power set to %dW", power_w)
+
+    async def _sofar_set_discharge_power(self, power_w: int) -> None:
+        """Set Sofar battery discharge power limit (W).
+
+        Uses number.set_value on the Sofar discharge power limit entity.
+        Typical range: 0–6000W depending on model.
+        """
+        if not self.hass.states.get(NUMBER_SOFAR_DISCHARGE_POWER):
+            _LOGGER.debug(
+                "[Sofar] Entity %s not available — skipping discharge power set",
+                NUMBER_SOFAR_DISCHARGE_POWER,
+            )
+            return
+        power_w = max(0, min(power_w, 6000))
+        await self.hass.services.async_call(
+            "number",
+            "set_value",
+            {
+                "entity_id": NUMBER_SOFAR_DISCHARGE_POWER,
+                "value": power_w,
+            },
+        )
+        _LOGGER.debug("[Sofar] Discharge power set to %dW", power_w)
+
+    async def _sofar_set_export_limit(self, limit_w: int) -> None:
+        """Set Sofar grid export limit (W).
+
+        Uses number.set_value on the Sofar export limit entity.
+        """
+        if not self.hass.states.get(NUMBER_SOFAR_EXPORT_LIMIT):
+            _LOGGER.debug(
+                "[Sofar] Entity %s not available — skipping export limit set",
+                NUMBER_SOFAR_EXPORT_LIMIT,
+            )
+            return
+        limit_w = max(0, min(limit_w, 16000))
+        await self.hass.services.async_call(
+            "number",
+            "set_value",
+            {
+                "entity_id": NUMBER_SOFAR_EXPORT_LIMIT,
+                "value": limit_w,
+            },
+        )
+        _LOGGER.debug("[Sofar] Export limit set to %dW", limit_w)

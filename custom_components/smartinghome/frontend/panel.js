@@ -1118,18 +1118,25 @@ class SmartingHomePanel extends HTMLElement {
     const avgEntso = parseFloat(this._hass?.states?.['sensor.entso_e_srednia_dzisiaj']?.state) || 0.50;
 
     // G13: ALWAYS compute weekday pricing for main simulation
-    // Weekend G13 = flat 0.63 (like cheap G11), so weekday is where value comes from
+    // Base price: 0.63 zł brutto (off-peak), morning: 0.85, peak: 1.20
+    // Weighted avg weekday: ~0.80 zł (zimowe miesiące podnoszą średnią)
+    // Weekend: flat 0.63 zł (like off-peak)
     const g13WeekdayPrice = (h) => {
-      if (h >= 7 && h < 13) return 0.91; // morning peak
+      if (h >= 7 && h < 13) return 0.85; // morning semi-peak (6h)
       if (isSummer) {
-        if (h >= 19 && h < 22) return 1.50; // summer afternoon peak
-        return 0.63;
+        if (h >= 19 && h < 22) return 1.20; // summer afternoon peak (3h)
+        return 0.63; // off-peak (15h)
       } else {
-        if (h >= 16 && h < 21) return 1.50; // winter afternoon peak
-        return 0.63;
+        if (h >= 16 && h < 21) return 1.20; // winter afternoon peak (5h)
+        return 0.63; // off-peak (13h)
       }
     };
     const g13WeekendPrice = () => 0.63; // flat off-peak
+
+    // Calculate G13 weighted average for description
+    const g13wdPrices = Array.from({length: 24}, (_, h) => g13WeekdayPrice(h));
+    const g13wdAvg = (g13wdPrices.reduce((a,b) => a+b, 0) / 24).toFixed(2);
+    const g13totalAvg = ((g13wdPrices.reduce((a,b) => a+b, 0) / 24 * 261 + 0.63 * 104) / 365).toFixed(2);
 
     return [
       {
@@ -1149,13 +1156,13 @@ class SmartingHomePanel extends HTMLElement {
       {
         key: 'g13',
         label: '🟡 G13 — Strefowa',
-        desc: 'Taryfa G13: off-peak 0.63, poranna 0.91, szczyt 1.50 zł (ważona: 5/7 weekday + 2/7 weekend)',
+        desc: `Taryfa G13: off-peak 0.63, poranna 0.85, szczyt 1.20 zł · śr. weekday ${g13wdAvg} zł · śr. rok ${g13totalAvg} zł (261 dn. rob. + 104 dn. week.)`,
         color: '#f7b731',
         border: 'rgba(247,183,49,0.2)',
         bg: 'rgba(247,183,49,0.06)',
         badge: '',
-        buyPrice: Array.from({length: 24}, (_, h) => g13WeekdayPrice(h)),
-        sellPrice: Array.from({length: 24}, (_, h) => g13WeekdayPrice(h) * 0.35),
+        buyPrice: g13wdPrices,
+        sellPrice: g13wdPrices.map(p => p * 0.35),
         strategy: 'g13_active',
         gridChargeAllowed: false,
         annualDays: 261, // weekdays only
@@ -1628,9 +1635,14 @@ class SmartingHomePanel extends HTMLElement {
             <div style="font-size:13px; font-weight:700; color:#a855f7">+${yr.arbitrageProfit.toFixed(0)} zł</div>` : ''}
           </div>
           <div style="margin-top:10px; padding:10px; border-radius:10px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.06)">
-            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Realna korzyść roczna z PV</div>
+            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Łączna roczna korzyść systemu</div>
             <div style="font-size:24px; font-weight:900; color:${yr.benefit >= 0 ? "#2ecc71" : "#e74c3c"}">${yr.benefit >= 0 ? "+" : ""}${yr.benefit.toFixed(0)} zł</div>
             <div style="font-size:9px; color:#94a3b8; margin-top:1px">baseline − (import − eksport)</div>
+            ${hasArbitrage ? `<div style="display:grid; grid-template-columns:1fr auto; gap:1px 6px; font-size:9px; margin-top:6px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.06)">
+              <div style="color:#f7b731">☀️ Oszczędność z PV:</div><div style="color:#f7b731; text-align:right">+${Math.round(yr.pvSelfCons * yr.avgBuy)} zł</div>
+              <div style="color:#a855f7">🔋 Zysk z baterii:</div><div style="color:#a855f7; text-align:right">+${yr.arbitrageProfit.toFixed(0)} zł</div>
+              <div style="color:#2ecc71">↑ Przychód z eksportu:</div><div style="color:#2ecc71; text-align:right">+${yr.exportRev.toFixed(0)} zł</div>
+            </div>` : ''}
             ${i > 0 ? `<div style="font-size:10px; color:#2ecc71; margin-top:4px">+${diffVsG11.toFixed(0)} zł vs G11</div>` : `<div style="font-size:10px; color:#e74c3c; margin-top:4px">taryfa stała</div>`}
           </div>
           ${invest > 0 ? `
@@ -1650,11 +1662,22 @@ class SmartingHomePanel extends HTMLElement {
         </div>`;
       }).join("");
 
-      // HEMS automation gain summary
+      // Ranking + HEMS summary
+      const ranked = [...results].sort((a, b) => b.yr.benefit - a.yr.benefit);
+      const rankColors = ['#2ecc71', '#f7b731', '#e74c3c'];
+      const rankEmoji = ['🥇', '🥈', '🥉'];
+      let summaryHtml = `<div style="grid-column:1/-1; margin-top:12px; padding:12px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:10px">
+        <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; text-align:center">🏆 Ranking opłacalności</div>
+        ${ranked.map((t, idx) => `<div style="display:flex; align-items:center; gap:8px; padding:4px 0; ${idx === 0 ? 'font-weight:700' : ''}">
+          <span style="font-size:16px">${rankEmoji[idx]}</span>
+          <span style="flex:1; font-size:12px; color:${t.color}">${t.label}</span>
+          <span style="font-size:13px; font-weight:700; color:${rankColors[idx]}">${t.yr.benefit >= 0 ? '+' : ''}${t.yr.benefit.toFixed(0)} zł/rok</span>
+        </div>`).join('')}
+      </div>`;
+
       const hemsSavings = results[2].yr.benefit - results[0].yr.benefit;
-      let summaryHtml = '';
       if (hemsSavings > 0) {
-        summaryHtml += `<div style="grid-column:1/-1; margin-top:12px; padding:12px; background:rgba(46,204,113,0.08); border:1px solid rgba(46,204,113,0.2); border-radius:10px; text-align:center">
+        summaryHtml += `<div style="grid-column:1/-1; margin-top:8px; padding:12px; background:rgba(46,204,113,0.08); border:1px solid rgba(46,204,113,0.2); border-radius:10px; text-align:center">
           <div style="font-size:11px; color:#94a3b8">💰 Różnica: Dynamiczna RCE vs G11</div>
           <div style="font-size:28px; font-weight:900; color:#2ecc71; margin-top:4px">+${hemsSavings.toFixed(0)} zł/rok</div>
           <div style="font-size:10px; color:#64748b; margin-top:2px">Oszczędność dzięki taryfie dynamicznej z aktywnym zarządzaniem HEMS</div>
@@ -5102,12 +5125,15 @@ class SmartingHomePanel extends HTMLElement {
     let imgName = "goodwe"; // domyślnie GoodWe
     const invModel = (this._s(this._m("inverter_model")) || "").toLowerCase();
     const userChoice = (this._s("input_select.smartinghome_inverter_model") || "").toLowerCase();
+    const configBrand = (this._settings.inverter_brand || "").toLowerCase();
 
-    if (invModel.includes("deye") || userChoice.includes("deye")) {
+    if (invModel.includes("deye") || userChoice.includes("deye") || configBrand === "deye") {
       imgName = "deye";
-    } else if (invModel.includes("growatt") || userChoice.includes("growatt")) {
+    } else if (invModel.includes("growatt") || userChoice.includes("growatt") || configBrand === "growatt") {
       imgName = "growatt";
-    } else if (invModel.includes("goodwe") || userChoice.includes("goodwe")) {
+    } else if (invModel.includes("sofar") || userChoice.includes("sofar") || invModel.includes("solarman") || configBrand === "sofar") {
+      imgName = "sofar";
+    } else if (invModel.includes("goodwe") || userChoice.includes("goodwe") || configBrand === "goodwe") {
       imgName = "goodwe";
     }
 
@@ -5119,6 +5145,7 @@ class SmartingHomePanel extends HTMLElement {
         deye: 'https://smartinghome.pl/wp-content/uploads/2026/03/Deye-1.png',
         growatt: 'https://smartinghome.pl/wp-content/uploads/2026/03/Growatt.png',
         goodwe: 'https://smartinghome.pl/wp-content/uploads/2026/03/GoodWe-1.png',
+        sofar: 'https://smartinghome.pl/wp-content/uploads/2026/03/sofar.png',
       };
       const remoteFallback = remoteFallbackMap[imgName] || remoteFallbackMap.goodwe;
       // Only try local paths if user has uploaded a custom image
@@ -6583,6 +6610,7 @@ class SmartingHomePanel extends HTMLElement {
           border-radius: 16px; padding: 18px;
           box-shadow: 0 4px 16px rgba(0,0,0,0.2);
           transition: all 0.3s ease;
+          overflow: hidden; min-width: 0;
         }
         .card:hover { border-color: rgba(0,212,255,0.3); box-shadow: 0 8px 32px rgba(0, 212, 255, 0.1); }
         .card.glow-card { border-color: rgba(46, 204, 113, 0.4); box-shadow: 0 0 20px rgba(46, 204, 113, 0.15); }
@@ -6608,6 +6636,8 @@ class SmartingHomePanel extends HTMLElement {
           border-radius: 0 12px 12px 12px;
           padding: 14px; font-size: 13px; line-height: 1.6;
           color: #e2e8f0; margin-top: 5px; position: relative;
+          overflow-wrap: break-word; word-break: break-word;
+          min-width: 0; overflow: hidden;
         }
         
         /* Dynamic badgets for Taryfa & RCE */
@@ -6857,7 +6887,7 @@ class SmartingHomePanel extends HTMLElement {
           .dr { padding: 6px 0; }
           .dr .lb { font-size: 10px; }
           .dr .vl { font-size: 11px; }
-          .recommendation { padding: 8px; font-size: 11px; line-height: 1.5; }
+          .recommendation { padding: 8px; font-size: 11px; line-height: 1.5; overflow-wrap: break-word; word-break: break-word; }
           .fullscreen-btn { display: none; }
           .settings-field input { font-size: 12px; padding: 8px 10px; }
           .save-btn { font-size: 12px; padding: 8px 18px; }
@@ -7214,13 +7244,16 @@ class SmartingHomePanel extends HTMLElement {
           background: rgba(124,58,237,0.05); border: 1px solid rgba(124,58,237,0.15);
           font-size: 13px; color: #cbd5e1; line-height: 1.6;
           max-height: 800px; overflow-y: auto;
+          overflow-wrap: break-word; word-break: break-word;
+          min-width: 0;
         }
         .ap-ai-analysis h2 { font-size: 16px; color: #fff; margin: 12px 0 6px; }
         .ap-ai-analysis h3 { font-size: 14px; color: #a78bfa; margin: 8px 0 4px; }
         .ap-ai-analysis strong { color: #fff; }
-        .ap-ai-analysis table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; }
+        .ap-ai-analysis table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
         .ap-ai-analysis th, .ap-ai-analysis td {
           padding: 4px 8px; border: 1px solid rgba(255,255,255,0.08); text-align: left;
+          white-space: nowrap;
         }
         .ap-ai-analysis th { background: rgba(255,255,255,0.04); color: #94a3b8; }
 
@@ -7233,6 +7266,11 @@ class SmartingHomePanel extends HTMLElement {
           .ap-strategies { grid-template-columns: 1fr; }
           .ap-estimation { grid-template-columns: 1fr 1fr; }
           .ap-timeline { height: 45px; }
+          .ap-ai-analysis { padding: 10px; font-size: 11px; line-height: 1.5; }
+          .ap-ai-analysis h2 { font-size: 14px; }
+          .ap-ai-analysis h3 { font-size: 12px; }
+          .ap-ai-analysis table { font-size: 10px; }
+          .ap-ai-analysis th, .ap-ai-analysis td { padding: 3px 5px; font-size: 10px; }
         }
 
         /* ── History Tab ── */
@@ -8297,11 +8335,11 @@ class SmartingHomePanel extends HTMLElement {
 
           <!-- ROW 5: HEMS Recommendation -->
           <div class="card" style="margin-bottom:14px; border-left:3px solid #f7b731; padding:14px">
-            <div style="display:flex; align-items:center; gap:8px">
-              <div style="font-size:20px">⚡</div>
-              <div>
+            <div style="display:flex; align-items:center; gap:8px; min-width:0">
+              <div style="font-size:20px; flex-shrink:0">⚡</div>
+              <div style="min-width:0; overflow:hidden">
                 <div style="font-size:10px; color:#f7b731; text-transform:uppercase; font-weight:700">Rekomendacja HEMS</div>
-                <div style="font-size:14px; font-weight:600; color:#fff; margin-top:2px" id="v-hems-rec-tariff">—</div>
+                <div style="font-size:14px; font-weight:600; color:#fff; margin-top:2px; overflow-wrap:break-word; word-break:break-word" id="v-hems-rec-tariff">—</div>
               </div>
             </div>
           </div>
@@ -8636,9 +8674,9 @@ class SmartingHomePanel extends HTMLElement {
           <!-- ═══ AI ADVISOR ═══ -->
           <div class="card" style="margin-bottom:14px">
             <div class="card-title">🤖 AI Energy Advisor</div>
-            <div style="display:flex; gap:10px; align-items:flex-start;">
-              <div style="font-size:28px; filter:drop-shadow(0 0 5px rgba(0,212,255,0.5));">🤖</div>
-              <div class="recommendation" style="flex:1" id="v-hems-rec-hems">Ładowanie porady z asystenta...</div>
+            <div style="display:flex; gap:10px; align-items:flex-start; min-width:0">
+              <div style="font-size:28px; filter:drop-shadow(0 0 5px rgba(0,212,255,0.5)); flex-shrink:0">🤖</div>
+              <div class="recommendation" style="flex:1; min-width:0" id="v-hems-rec-hems">Ładowanie porady z asystenta...</div>
             </div>
           </div>
 
@@ -10130,10 +10168,10 @@ class SmartingHomePanel extends HTMLElement {
               <div style="margin-top:12px; padding:10px; border-radius:8px; background:rgba(0,212,255,0.04); border:1px solid rgba(0,212,255,0.1)">
                 <div style="font-size:11px; font-weight:700; color:#00d4ff; margin-bottom:6px">💡 Zalecenia</div>
                 <div style="font-size:10px; color:#94a3b8; line-height:1.6">
-                  • <strong>Domyślne zdjęcia:</strong> GoodWe, Deye i Growatt wczytywane automatycznie z smartinghome.pl<br>
+                  • <strong>Domyślne zdjęcia:</strong> GoodWe, Deye, Growatt i Sofar Solar wczytywane automatycznie z smartinghome.pl<br>
                   • <strong>Format:</strong> PNG z przezroczystym tłem (transparent) — najlepszy efekt<br>
                   • <strong>Rozmiar:</strong> 500–800px szerokości, proporcjonalne<br>
-                  • <strong>Nazwa pliku:</strong> <code style="color:#f39c12">goodwe.png</code> lub <code style="color:#f39c12">deye.png</code> lub <code style="color:#f39c12">growatt.png</code> (nadpisuje domyślne) lub <code style="color:#f39c12">inverter.png</code><br>
+                  • <strong>Nazwa pliku:</strong> <code style="color:#f39c12">goodwe.png</code> lub <code style="color:#f39c12">deye.png</code> lub <code style="color:#f39c12">growatt.png</code> lub <code style="color:#f39c12">sofar.png</code> (nadpisuje domyślne) lub <code style="color:#f39c12">inverter.png</code><br>
                   • <strong>Ścieżka:</strong> <code style="color:#00d4ff">/config/www/smartinghome/</code>
                 </div>
               </div>
@@ -10463,7 +10501,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.41.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.41.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

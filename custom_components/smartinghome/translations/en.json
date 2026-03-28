@@ -51,7 +51,7 @@
       },
       "sensors": {
         "title": "Mapowanie sensorów",
-        "description": "Przypisz encje sensorów falownika. Domyślne ustawienia działają z falownikami GoodWe.",
+        "description": "Przypisz encje sensorów falownika. Domyślne ustawienia wypełniają się na podstawie wybranej marki (GoodWe, Deye, Growatt, Sofar Solar).",
         "data": {
           "pv_power": "☀️ Moc PV (W)",
           "load_power": "🏠 Zużycie domu (W)",
