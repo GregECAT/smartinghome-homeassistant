@@ -1823,10 +1823,19 @@ class SmartingHomePanel extends HTMLElement {
       `;
       ct.innerHTML += aiInterpretHtml;
 
-      // Load cached analysis if available
-      const cachedAnalysis = this._settings?.ai_roi_analysis;
-      if (cachedAnalysis?.text) {
-        this._displayRoiAiResult(cachedAnalysis);
+      // Restore AI state after re-render (button/status/result are destroyed each cycle)
+      if (this._roiAiLoading) {
+        // Analysis in progress — restore loading state
+        const btn = this.shadowRoot.getElementById('btn-roi-ai-analyze');
+        const status = this.shadowRoot.getElementById('roi-ai-status');
+        if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; btn.innerHTML = '<span style="animation:pulse 1s infinite">⏳</span> Analizuję...'; }
+        if (status) { status.textContent = '🧠 AI analizuje dane ROI — to może potrwać do 30 sekund...'; status.style.color = '#00d4ff'; }
+      } else {
+        // Not loading — show cached result if available
+        const cachedAnalysis = this._roiAiCachedResult || this._settings?.ai_roi_analysis;
+        if (cachedAnalysis?.text) {
+          this._displayRoiAiResult(cachedAnalysis);
+        }
       }
 
     } else if (ct && yearlyPV === 0) {
@@ -4639,6 +4648,9 @@ class SmartingHomePanel extends HTMLElement {
       return;
     }
 
+    // Set loading flag — survives re-renders
+    this._roiAiLoading = true;
+
     const btn = this.shadowRoot.getElementById('btn-roi-ai-analyze');
     const status = this.shadowRoot.getElementById('roi-ai-status');
     const result = this.shadowRoot.getElementById('roi-ai-result');
@@ -4659,12 +4671,16 @@ class SmartingHomePanel extends HTMLElement {
     this._hass.callService('smartinghome', 'analyze_roi', {
       roi_data: roiPayload,
     }).catch(err => {
+      this._roiAiLoading = false;
       if (status) { status.textContent = `❌ Błąd: ${err.message || err}`; status.style.color = '#e74c3c'; }
       if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.innerHTML = '🧠 Analizuj z AI'; }
     });
   }
 
   _displayRoiAiResult(data) {
+    // Clear loading flag
+    this._roiAiLoading = false;
+
     const btn = this.shadowRoot.getElementById('btn-roi-ai-analyze');
     const status = this.shadowRoot.getElementById('roi-ai-status');
     const result = this.shadowRoot.getElementById('roi-ai-result');
@@ -4675,20 +4691,40 @@ class SmartingHomePanel extends HTMLElement {
       return;
     }
 
-    if (data.text && result) {
-      // Render markdown with existing _renderMarkdown method
-      const html = this._renderMarkdown ? this._renderMarkdown(data.text) : data.text;
-      const provIcon = data.provider === 'anthropic' ? '🟣' : '🔵';
-      const provName = data.provider === 'anthropic' ? 'Claude' : 'Gemini';
-      result.innerHTML = `
-        <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid rgba(255,255,255,0.06)">
-          <span style="font-size:14px">🧠</span>
-          <span style="font-size:10px; font-weight:700; color:#00d4ff">Interpretacja AI</span>
-          <span style="font-size:8px; color:#64748b; margin-left:auto">${provIcon} ${provName} · ${data.timestamp || ''}</span>
-        </div>
-        <div style="font-size:11px; color:#e2e8f0; line-height:1.7">${html}</div>
-      `;
-      result.style.display = 'block';
+    if (data.text) {
+      // Cache result for re-render survival
+      this._roiAiCachedResult = data;
+      this._roiAiRawMarkdown = data.text;
+
+      if (result) {
+        // Render markdown with existing _renderMarkdown method
+        const html = this._renderMarkdown ? this._renderMarkdown(data.text) : data.text;
+        const provIcon = data.provider === 'anthropic' ? '🟣' : '🔵';
+        const provName = data.provider === 'anthropic' ? 'Claude' : 'Gemini';
+        result.innerHTML = `
+          <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid rgba(255,255,255,0.06)">
+            <span style="font-size:14px">🧠</span>
+            <span style="font-size:10px; font-weight:700; color:#00d4ff">Interpretacja AI</span>
+            <span style="font-size:8px; color:#64748b; margin-left:auto">${provIcon} ${provName} · ${data.timestamp || ''}</span>
+          </div>
+          <div style="font-size:11px; color:#e2e8f0; line-height:1.7">${html}</div>
+          <div style="display:flex; gap:6px; margin-top:10px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.06)">
+            <button onclick="this.getRootNode().host._copyRoiAiResult('text')"
+              style="flex:1; padding:6px 10px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#94a3b8; font-size:9px; cursor:pointer; transition:all 0.2s"
+              onmouseover="this.style.background='rgba(0,212,255,0.1)'; this.style.color='#00d4ff'; this.style.borderColor='rgba(0,212,255,0.3)'"
+              onmouseout="this.style.background='rgba(255,255,255,0.06)'; this.style.color='#94a3b8'; this.style.borderColor='rgba(255,255,255,0.1)'">
+              📋 Kopiuj tekst
+            </button>
+            <button onclick="this.getRootNode().host._copyRoiAiResult('markdown')"
+              style="flex:1; padding:6px 10px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#94a3b8; font-size:9px; cursor:pointer; transition:all 0.2s"
+              onmouseover="this.style.background='rgba(168,85,247,0.1)'; this.style.color='#a855f7'; this.style.borderColor='rgba(168,85,247,0.3)'"
+              onmouseout="this.style.background='rgba(255,255,255,0.06)'; this.style.color='#94a3b8'; this.style.borderColor='rgba(255,255,255,0.1)'">
+              📝 Kopiuj markdown
+            </button>
+          </div>
+        `;
+        result.style.display = 'block';
+      }
     }
 
     if (status) {
@@ -4701,6 +4737,44 @@ class SmartingHomePanel extends HTMLElement {
       btn.style.opacity = '1';
       btn.innerHTML = '🔄 Analizuj ponownie';
     }
+  }
+
+  _copyRoiAiResult(format) {
+    if (!this._roiAiRawMarkdown) return;
+
+    let textToCopy;
+    if (format === 'markdown') {
+      textToCopy = this._roiAiRawMarkdown;
+    } else {
+      // Convert markdown to clean plain text
+      textToCopy = this._roiAiRawMarkdown
+        .replace(/#{1,6}\s*/g, '')       // remove headers
+        .replace(/\*\*(.*?)\*\*/g, '$1') // remove bold
+        .replace(/\*(.*?)\*/g, '$1')     // remove italic
+        .replace(/`(.*?)`/g, '$1')       // remove code
+        .replace(/^\s*[-●•]\s*/gm, '• ') // normalize bullets
+        .replace(/^\s*>\s*/gm, '')       // remove blockquotes
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links → text
+        .replace(/---/g, '—————')        // horizontal rules
+        .replace(/\n{3,}/g, '\n\n')      // collapse blank lines
+        .trim();
+    }
+
+    navigator.clipboard.writeText(textToCopy).then(() => {
+      const status = this.shadowRoot.getElementById('roi-ai-status');
+      if (status) {
+        const label = format === 'markdown' ? 'Markdown' : 'Tekst';
+        status.textContent = `📋 ${label} skopiowany do schowka!`;
+        status.style.color = '#00d4ff';
+        setTimeout(() => {
+          const now = new Date().toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+          status.textContent = `✅ Analiza gotowa (${now})`;
+          status.style.color = '#2ecc71';
+        }, 2000);
+      }
+    }).catch(err => {
+      console.error('[SH] Copy failed:', err);
+    });
   }
 
   /* ── Subscription management (reconnection-safe) ── */
