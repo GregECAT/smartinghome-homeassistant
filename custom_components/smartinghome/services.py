@@ -791,6 +791,99 @@ async def async_setup_services(
 
         _LOGGER.info("Sensor map updated: %s → %s", sensor_key, entity_id)
 
+    # ── Analyze ROI — AI Interpreter for tariff comparison ──
+
+    SERVICE_ANALYZE_ROI = "analyze_roi"
+    ANALYZE_ROI_SCHEMA = vol.Schema({
+        vol.Required("roi_data"): cv.string,  # JSON string with ROI results
+    })
+
+    async def handle_analyze_roi(call: ServiceCall) -> None:
+        """Handle analyze_roi — AI explains ROI simulation results in plain language."""
+        if not license_mgr.is_pro:
+            _LOGGER.warning("ROI AI Analysis requires PRO license")
+            hass.bus.async_fire(
+                f"{DOMAIN}_roi_analysis",
+                {"error": "Analiza AI wymaga licencji PRO."},
+            )
+            return
+
+        if not ai_advisor.any_available:
+            hass.bus.async_fire(
+                f"{DOMAIN}_roi_analysis",
+                {"error": "Brak skonfigurowanego dostawcy AI. Dodaj klucz API Gemini lub Anthropic w ustawieniach."},
+            )
+            return
+
+        try:
+            roi_data = json.loads(call.data["roi_data"])
+        except Exception as err:
+            _LOGGER.error("Invalid ROI data JSON: %s", err)
+            hass.bus.async_fire(
+                f"{DOMAIN}_roi_analysis",
+                {"error": f"Błąd danych: {err}"},
+            )
+            return
+
+        question = f"""Jesteś ekspertem od fotowoltaiki i zarządzania energią w domu.
+Użytkownik ma system PV + bateria z Home Assistant i integrację Smarting HOME.
+
+Poniżej są wyniki symulacji ROI (zwrotu z inwestycji) porównujące 3 taryfy energetyczne.
+Wytłumacz te dane PROSTYM JĘZYKIEM dla osoby, która nie ma wiedzy technicznej o fotowoltaice.
+
+WAŻNE WYTYCZNE:
+1. Pisz po polsku, prostym językiem — jak tłumaczysz sąsiadowi
+2. Unikaj żargonu technicznego — zamiast "autokonsumpcja" pisz "energia zużyta na własne potrzeby"
+3. Podaj KONKRETNE liczby i kwoty w złotówkach
+4. Wyjaśnij CO TO ZNACZY dla portfela użytkownika
+5. Porównaj taryfy i jasno powiedz KTÓRĄ wybrać i DLACZEGO
+6. Wyjaśnij co robi bateria i automatyka HEMS (po co to jest)
+7. Podaj zwrot z inwestycji — kiedy się "zwróci" i ile zarobi
+8. Jeśli dynamiczna wygrywa — wyjaśnij SKĄD bierze się przewaga
+9. Użyj analogii z życia codziennego
+10. Na końcu daj 1-2 KONKRETNE rekomendacje
+
+DANE SYMULACJI ROI:
+{json.dumps(roi_data, indent=2, ensure_ascii=False)}
+
+Odpowiedz w formacie markdown z sekcjami (##), listami i bold (**) dla kluczowych wartości.
+Długość: 300-500 słów."""
+
+        try:
+            stored = _read_settings(hass)
+            provider = stored.get("default_ai_provider", "gemini")
+            if provider == "anthropic" and ai_advisor.anthropic_available:
+                response = await ai_advisor.ask_anthropic(question, {})
+            elif ai_advisor.gemini_available:
+                response = await ai_advisor.ask_gemini(question, {})
+                provider = "gemini"
+            elif ai_advisor.anthropic_available:
+                response = await ai_advisor.ask_anthropic(question, {})
+                provider = "anthropic"
+            else:
+                response = "Brak dostępnego dostawcy AI."
+                provider = "none"
+
+            from datetime import datetime
+            now_str = datetime.now().strftime("%H:%M")
+            result = {
+                "text": response,
+                "provider": provider,
+                "timestamp": now_str,
+            }
+            # Save to settings for persistence
+            await _update_settings_file(hass, {"ai_roi_analysis": result})
+            # Fire event for live frontend update
+            hass.bus.async_fire(f"{DOMAIN}_roi_analysis", result)
+            _LOGGER.info("ROI AI analysis complete (%s, %d chars)", provider, len(response))
+
+        except Exception as err:
+            _LOGGER.error("ROI AI analysis error: %s", err)
+            hass.bus.async_fire(
+                f"{DOMAIN}_roi_analysis",
+                {"error": f"Błąd analizy AI: {err}"},
+            )
+
     # Register all services
     hass.services.async_register(
         DOMAIN, SERVICE_SET_MODE, handle_set_mode, schema=SET_MODE_SCHEMA
@@ -867,8 +960,12 @@ async def async_setup_services(
         DOMAIN, SERVICE_UPDATE_SENSOR_MAP, handle_update_sensor_map,
         schema=UPDATE_SENSOR_MAP_SCHEMA,
     )
+    hass.services.async_register(
+        DOMAIN, SERVICE_ANALYZE_ROI, handle_analyze_roi,
+        schema=ANALYZE_ROI_SCHEMA,
+    )
 
-    _LOGGER.info("Registered %d Smarting HOME services", 18)
+    _LOGGER.info("Registered %d Smarting HOME services", 19)
 
     # Start AI Cron Scheduler
     cron = AICronScheduler(
@@ -905,5 +1002,6 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_TOGGLE_AUTOPILOT_ACTION,
         SERVICE_SYNC_ECOWITT_STATE,
         SERVICE_UPDATE_SENSOR_MAP,
+        "analyze_roi",
     ]:
         hass.services.async_remove(DOMAIN, service)

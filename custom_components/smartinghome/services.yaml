@@ -258,3 +258,17 @@ sync_ecowitt_state:
       required: true
       selector:
         boolean:
+
+analyze_roi:
+  name: Analyze ROI with AI
+  description: >-
+    Send ROI simulation results to AI for plain-language interpretation.
+    Requires PRO license and configured AI provider.
+    Results are fired as a smartinghome_roi_analysis event and saved to settings.
+  fields:
+    roi_data:
+      name: ROI Data
+      description: "JSON string with ROI simulation results for all tariffs"
+      required: true
+      selector:
+        text:
