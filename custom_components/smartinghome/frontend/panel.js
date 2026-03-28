@@ -1235,11 +1235,51 @@ class SmartingHomePanel extends HTMLElement {
 
     // Pre-compute cheap/expensive hours for strategies
     let cheapHours = [], expensiveHours = [];
+    let avgCheapBuy = 0, avgExpensiveSell = 0;
     if (scenario.strategy === 'dynamic_active') {
       const indexed = scenario.buyPrice.map((p, i) => ({p, i}));
       const sorted = [...indexed].sort((a, b) => a.p - b.p);
-      cheapHours = sorted.slice(0, 6).map(x => x.i);
-      expensiveHours = sorted.slice(-6).map(x => x.i);
+      const candidateCheap = sorted.slice(0, 8);
+      const candidateExpensive = sorted.slice(-8);
+
+      // Calculate potential sell prices for expensive hours
+      const expSellPrices = candidateExpensive.map(x => scenario.sellPrice[x.i]);
+      const avgExpSell = expSellPrices.reduce((a, b) => a + b, 0) / expSellPrices.length;
+
+      // Profitability filter: only charge if buy_price / efficiency < avg_expensive_sell * threshold
+      // Round-trip efficiency ≈ 90% → need sell > buy / 0.9
+      // Add margin of 0.05 PLN to cover degradation and real-world losses
+      const RT_EFF = ETA * ETA; // round-trip = charge_eff * discharge_eff
+      const MIN_SPREAD = 0.08; // minimum spread in PLN/kWh to justify a cycle
+      
+      for (const c of candidateCheap) {
+        const breakEvenSell = c.p / RT_EFF + MIN_SPREAD;
+        if (breakEvenSell < avgExpSell) {
+          cheapHours.push(c.i);
+        }
+      }
+      for (const e of candidateExpensive) {
+        const breakEvenBuy = e.p * RT_EFF - MIN_SPREAD;
+        // Only sell if there exist cheap hours that make this profitable
+        if (cheapHours.length > 0) {
+          const avgCheapPrice = candidateCheap.filter(c => cheapHours.includes(c.i))
+            .reduce((a, c) => a + c.p, 0) / Math.max(1, cheapHours.length);
+          if (scenario.sellPrice[e.i] > avgCheapPrice / RT_EFF + MIN_SPREAD) {
+            expensiveHours.push(e.i);
+          }
+        }
+      }
+
+      // Limit to max 5 charge/discharge hours (≈200 cycles/year max)
+      cheapHours = cheapHours.slice(0, 5);
+      expensiveHours = expensiveHours.slice(0, 5);
+
+      avgCheapBuy = cheapHours.length > 0
+        ? cheapHours.reduce((a, h) => a + scenario.buyPrice[h], 0) / cheapHours.length
+        : 0;
+      avgExpensiveSell = expensiveHours.length > 0
+        ? expensiveHours.reduce((a, h) => a + scenario.sellPrice[h], 0) / expensiveHours.length
+        : 0;
     }
 
     const avgBuy = scenario.buyPrice.reduce((a,b) => a+b, 0) / 24;
@@ -1334,7 +1374,9 @@ class SmartingHomePanel extends HTMLElement {
         if (scenario.strategy === 'dynamic_active' && expensiveHours.includes(h)) {
           const availAfterLoad = (soc - SOC_MIN) * CAP;
           const remainingRate = MAX_RATE - dischargeToLoad;
-          if (remainingRate > 0.1 && availAfterLoad > 0.5 && scenario.sellPrice[h] > avgBuy * 1.1) {
+          // Profitability check: sell price must cover buy cost / RT efficiency + spread margin
+          const minSellForProfit = avgCheapBuy > 0 ? avgCheapBuy / (ETA * ETA) + 0.08 : avgBuy * 1.3;
+          if (remainingRate > 0.1 && availAfterLoad > 0.5 && scenario.sellPrice[h] > minSellForProfit) {
             const batExport = Math.min(remainingRate, availAfterLoad * ETA, MAX_RATE * 0.7);
             const batExpPv = batExport * pvRatio;
             const batExpGrid = batExport * (1 - pvRatio);
@@ -10925,7 +10967,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.42.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.42.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
