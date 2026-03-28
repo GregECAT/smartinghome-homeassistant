@@ -3724,8 +3724,9 @@ class SmartingHomePanel extends HTMLElement {
 
     const dataMin = Math.min(...allVals);
     const dataMax = Math.max(...allVals);
-    const yMin = cfgYMin !== undefined ? cfgYMin : Math.max(0, dataMin - (dataMax - dataMin) * 0.1);
-    const yMax = cfgYMax !== undefined ? cfgYMax : Math.max(dataMax * 1.15, dataMax + 50);
+    const dataRange = dataMax - dataMin;
+    const yMin = cfgYMin !== undefined ? cfgYMin : (dataMin < 0 ? dataMin - dataRange * 0.1 : Math.max(0, dataMin - dataRange * 0.1));
+    const yMax = cfgYMax !== undefined ? cfgYMax : Math.max(dataMax + dataRange * 0.15, dataMax + 50);
     const yRange = Math.max(yMax - yMin, 1);
 
     const xStep = chartW / (points.length - 1);
@@ -3825,6 +3826,7 @@ class SmartingHomePanel extends HTMLElement {
         <!-- Lines -->
         <path d="${actualPath}" fill="none" stroke="${actualColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
         <path d="${forecastPath}" fill="none" stroke="${forecastColor}" stroke-width="1.5" stroke-dasharray="6,4" stroke-linecap="round" />
+        ${yMin < 0 ? `<line x1="${padL}" y1="${toY(0).toFixed(1)}" x2="${padL + chartW}" y2="${toY(0).toFixed(1)}" stroke="rgba(255,255,255,0.2)" stroke-width="1" stroke-dasharray="3,3" /><text x="${padL - 5}" y="${toY(0).toFixed(1)}" fill="rgba(255,255,255,0.35)" font-size="9" text-anchor="end" dominant-baseline="middle">0</text>` : ''}
         ${nowLine}
         <!-- Data points on actual line -->
         ${actualVals.map((v, i) => v !== null && v !== undefined ? `<circle cx="${toX(i).toFixed(1)}" cy="${toY(v).toFixed(1)}" r="${i === nowIdx ? 4 : 2}" fill="${actualColor}" stroke="${i === nowIdx ? '#fff' : 'none'}" stroke-width="${i === nowIdx ? 1 : 0}" style="${i === nowIdx ? 'filter:drop-shadow(0 0 6px ' + actualColor + ')' : ''}" />` : '').join('')}
@@ -9912,7 +9914,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.39.6</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.39.7</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
