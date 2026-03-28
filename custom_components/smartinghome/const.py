@@ -10,7 +10,7 @@ from typing import Final
 DOMAIN: Final = "smartinghome"
 MANUFACTURER: Final = "Smarting HOME"
 INTEGRATION_NAME: Final = "Smarting HOME — Energy Management"
-VERSION: Final = "1.1.0"
+VERSION: Final = "1.42.0"
 
 # =============================================================================
 # Config Entry Keys
