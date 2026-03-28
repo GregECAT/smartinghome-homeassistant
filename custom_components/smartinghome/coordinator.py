@@ -539,15 +539,98 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             data["rce_good_sell"] = RCEPriceLevel.TERRIBLE
 
-        # Arbitrage potential
+        # Arbitrage potential — dynamic, SOC-aware
         peak_price = G13_PRICES[G13Zone.AFTERNOON_PEAK]
         off_peak_price = G13_PRICES[G13Zone.OFF_PEAK]
         capacity_kwh = DEFAULT_BATTERY_CAPACITY / 1000
+        soc_val = _safe_float(raw.get(SENSOR_BATTERY_SOC))
+        min_soc_pct = DEFAULT_BATTERY_MIN_SOC
+        rt_efficiency = 0.92  # round-trip efficiency
+
+        # Static potential (full cycle) — backward compat
         data["g13_battery_arbitrage_potential"] = round(
             capacity_kwh * (peak_price - off_peak_price), 2
         )
 
+        # Dynamic potential — available RIGHT NOW based on SOC
+        available_kwh = max(0, (soc_val - min_soc_pct) / 100 * capacity_kwh)
+        arbitrage_margin = peak_price - off_peak_price
+        data["arbitrage_potential_now"] = round(
+            available_kwh * arbitrage_margin * rt_efficiency, 2
+        )
+        data["arbitrage_margin_per_kwh"] = round(arbitrage_margin, 4)
+        data["arbitrage_buy_price"] = off_peak_price
+        data["arbitrage_sell_price"] = peak_price
+        data["arbitrage_available_kwh"] = round(available_kwh, 2)
+
+        # If dynamic tariff — override with actual ENTSO-E prices
+        if self._tariff == TariffType.DYNAMIC:
+            entsoe_min = _safe_float(raw.get(SENSOR_ENTSOE_ALLIN_MIN))
+            entsoe_max = _safe_float(raw.get(SENSOR_ENTSOE_ALLIN_MAX))
+            if entsoe_min > 0 and entsoe_max > 0:
+                dyn_margin = entsoe_max - entsoe_min
+                data["arbitrage_margin_per_kwh"] = round(dyn_margin, 4)
+                data["arbitrage_buy_price"] = round(entsoe_min, 4)
+                data["arbitrage_sell_price"] = round(entsoe_max, 4)
+                data["arbitrage_potential_now"] = round(
+                    available_kwh * dyn_margin * rt_efficiency, 2
+                )
+
+        # Arbitrage profit today — estimated from battery throughput
+        charge_today = _safe_float(raw.get(SENSOR_BATTERY_CHARGE_TODAY))
+        discharge_today = _safe_float(raw.get(SENSOR_BATTERY_DISCHARGE_TODAY))
+        # Estimated arbitrage profit: min(charge, discharge) × margin × efficiency
+        arb_cycles_kwh = min(charge_today, discharge_today)
+        data["arbitrage_profit_today"] = round(
+            arb_cycles_kwh * data["arbitrage_margin_per_kwh"] * rt_efficiency, 2
+        )
+
+        # Next arbitrage action — context-aware recommendation
+        g13_zone = g13_data.get("g13_current_zone", G13Zone.OFF_PEAK)
+        now = datetime.now()
+        data["arbitrage_next_action"] = self._compute_next_arb_action(
+            g13_zone, soc_val, now
+        )
+
         return data
+
+    def _compute_next_arb_action(
+        self, zone: str, soc: float, now: datetime
+    ) -> str:
+        """Compute the next recommended arbitrage action."""
+        hour = now.hour
+        is_weekend = now.weekday() >= 5
+        is_winter = now.month in WINTER_MONTHS
+
+        if is_weekend:
+            if soc < 50:
+                return "🔋 Weekend off-peak — ładuj baterię (0.63 zł/kWh)"
+            return "✅ Weekend — autokonsumpcja, bateria w standby"
+
+        if zone == G13Zone.OFF_PEAK:
+            if soc < 80:
+                return "🔋 Off-peak — ładuj baterię tanio (0.63 zł/kWh)"
+            return "✅ Off-peak — bateria naładowana, czekaj na szczyt"
+
+        if zone == G13Zone.MORNING_PEAK:
+            if soc > 30:
+                return "💰 Szczyt poranny — bateria zasila dom (0.91 zł/kWh)"
+            return "⚠️ Szczyt poranny — SOC niski, oszczędzaj na popołudnie"
+
+        if zone == G13Zone.AFTERNOON_PEAK:
+            if soc > 20:
+                return "🔥 Szczyt popołudniowy — MAX rozładowanie! (1.50 zł/kWh)"
+            return "⚠️ Bateria wyczerpana — import z sieci w szczycie"
+
+        # Dynamic tariff
+        if self._tariff == TariffType.DYNAMIC:
+            if hour < 6:
+                return "🌙 Noc — tanio, ładuj baterię z sieci"
+            if 16 <= hour <= 21:
+                return "🔥 Peak wieczorny — rozładowuj baterię"
+            return "📊 Dynamiczna — AI analizuje ceny RCE"
+
+        return "✅ System w trybie auto"
 
     def _compute_system_status(
         self, raw: dict[str, Any], soc: float
@@ -619,6 +702,16 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Persist live autopilot tick data into settings.json for frontend polling."""
         from .settings_io import write_sync
 
+        # Include current arbitrage data from coordinator
+        arb_data = {}
+        if self.data:
+            arb_data = {
+                "arbitrage_potential_now": self.data.get("arbitrage_potential_now", 0),
+                "arbitrage_margin": self.data.get("arbitrage_margin_per_kwh", 0),
+                "arbitrage_profit_today": self.data.get("arbitrage_profit_today", 0),
+                "arbitrage_next_action": self.data.get("arbitrage_next_action", ""),
+            }
+
         updates: dict[str, Any] = {
             "autopilot_live": {
                 "enabled": ctrl_result.get("enabled", False),
@@ -634,6 +727,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "rce_price_mwh": ctrl_result.get("rce_price_mwh"),
                 "ai_reasoning": ctrl_result.get("ai_reasoning", ""),
                 "timestamp": ctrl_result.get("timestamp"),
+                **arb_data,
             },
         }
 

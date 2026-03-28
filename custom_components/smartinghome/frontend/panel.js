@@ -5554,20 +5554,14 @@ class SmartingHomePanel extends HTMLElement {
       this._setText("v-battery-runtime-tab", loadKwOv === 0 ? "∞" : "—");
     }
     
-    const arbitrage = this._n("sensor.smartinghome_battery_arbitrage_potential") || 0;
-    this._setText("v-arbitrage-tab", `${arbitrage.toFixed(2)} PLN`);
-    const arbCard = this.shadowRoot.getElementById("arbitrage-card");
-    if (arbCard) {
-      if (arbitrage > 0) arbCard.classList.add("glow-card");
-      else arbCard.classList.remove("glow-card");
-    }
-    
-    const soc = this._nm("battery_soc") || 0;
-    this._setText("v-soc-tab", `${Math.round(soc)}%`);
+    const socForArb = this._nm("battery_soc") || 0;
+
+    // SOC display
+    this._setText("v-soc-tab", `${Math.round(socForArb)}%`);
     const socBarTab = this.shadowRoot.getElementById("soc-fill-tab");
     if (socBarTab) {
-      socBarTab.style.width = `${Math.min(100, Math.max(0, soc))}%`;
-      socBarTab.style.background = soc > 50 ? "#2ecc71" : soc > 20 ? "#f39c12" : "#e74c3c";
+      socBarTab.style.width = `${Math.min(100, Math.max(0, socForArb))}%`;
+      socBarTab.style.background = socForArb > 50 ? "#2ecc71" : socForArb > 20 ? "#f39c12" : "#e74c3c";
     }
 
     // Battery Tab: Live parameters
@@ -5638,22 +5632,149 @@ class SmartingHomePanel extends HTMLElement {
       else { warnEl.textContent = `Kod: ${warning}`; warnEl.style.color = "#e74c3c"; }
     }
 
-    // Arbitrage: RCE spread & prices
-    const arbRceMin = this._n("sensor.rce_pse_min_today") ?? this._n("sensor.smartinghome_rce_min_today");
-    const arbRceMax = this._n("sensor.rce_pse_max_today") ?? this._n("sensor.smartinghome_rce_max_today");
-    if (arbRceMin !== null && arbRceMax !== null) {
-      this._setText("v-arb-spread", `${(arbRceMax - arbRceMin).toFixed(2)} zł`);
-      this._setText("v-arb-buy-price", `${(arbRceMin / 1000).toFixed(4)} zł`);
-      this._setText("v-arb-sell-price", `${(arbRceMax / 1000).toFixed(4)} zł`);
+    // ── Arbitrage KPIs — dynamic, SOC-aware ──
+    const batCapKwh = this._settings.battery_capacity_kwh || 10.2;
+    const minSocPct = 5;
+    const rtEfficiency = 0.92;
+    const availableKwh = Math.max(0, (socForArb - minSocPct) / 100 * batCapKwh);
+
+    // Determine prices based on tariff type
+    const tariffType = this._settings.tariff || 'g13';
+    let arbBuyPrice, arbSellPrice;
+    if (tariffType === 'dynamic') {
+      // Dynamic tariff: use ENTSO-E min/max
+      const entsoeMin = this._n("sensor.entso_e_koszt_all_in_min_dzisiaj");
+      const entsoeMax = this._n("sensor.entso_e_koszt_all_in_max_dzisiaj");
+      arbBuyPrice = entsoeMin != null && entsoeMin > 0 ? entsoeMin : 0.20;
+      arbSellPrice = entsoeMax != null && entsoeMax > 0 ? entsoeMax : 0.80;
+    } else {
+      // G13: fixed prices
+      arbBuyPrice = 0.63;  // off-peak
+      arbSellPrice = 1.50; // afternoon peak
     }
 
-    // Premium/Free tier detection for arbitrage
+    const arbMargin = arbSellPrice - arbBuyPrice;
+    const arbPotentialNow = availableKwh * arbMargin * rtEfficiency;
+    const arbPotentialFull = batCapKwh * arbMargin * rtEfficiency;
+
+    // Update KPI cards
+    this._setText("v-arbitrage-tab", `${arbPotentialNow.toFixed(2)} zł`);
+    this._setText("v-arb-spread", `${arbMargin.toFixed(2)} zł`);
+    this._setText("v-arb-buy-price", `${arbBuyPrice.toFixed(2)} zł`);
+    this._setText("v-arb-sell-price", `${arbSellPrice.toFixed(2)} zł`);
+
+    // Glow card when potential > 1 PLN
+    const arbCard = this.shadowRoot.getElementById("arbitrage-card");
+    if (arbCard) {
+      if (arbPotentialNow > 1) arbCard.classList.add("glow-card");
+      else arbCard.classList.remove("glow-card");
+    }
+
+    // ── Arbitrage strategy text — tariff-aware ──
+    const arbStrategyTitle = this.shadowRoot.getElementById("arb-strategy-title");
+    const arbStrategyBody = this.shadowRoot.getElementById("arb-strategy-body");
+    if (arbStrategyTitle && arbStrategyBody) {
+      if (tariffType === 'dynamic') {
+        arbStrategyTitle.textContent = "📋 Strategia Dynamiczna ENTSO-E + HEMS";
+        const entsoeNow = this._n("sensor.entso_e_koszt_all_in_teraz");
+        const entsoeAvg = this._n("sensor.entso_e_srednia_dzisiaj");
+        const nowPrice = entsoeNow != null ? entsoeNow.toFixed(2) : '—';
+        const avgPrice = entsoeAvg != null ? entsoeAvg.toFixed(2) : '—';
+        arbStrategyBody.innerHTML = `
+          <strong style="color:#2ecc71">⏰ Tanie godziny</strong> — Ładuj baterię (cena < średnia ${avgPrice} zł)<br>
+          <strong style="color:#e74c3c">⏰ Drogie godziny</strong> — Rozładowuj / sprzedawaj (cena > średnia)<br>
+          <strong style="color:#f7b731">📊 Teraz:</strong> ${nowPrice} zł/kWh · Średnia: ${avgPrice} zł/kWh<br>
+          <strong style="color:#00d4ff">💎 Marża/cykl:</strong> ${arbMargin.toFixed(2)} zł/kWh × ${batCapKwh.toFixed(1)} kWh = ${arbPotentialFull.toFixed(2)} zł
+        `;
+      } else {
+        arbStrategyTitle.textContent = `📋 Strategia ${tariffType.toUpperCase()} + RCE`;
+        const now = new Date();
+        const hour = now.getHours();
+        const isWinter = [0,1,2,9,10,11].includes(now.getMonth());
+        const peakStart = isWinter ? 16 : 19;
+        const peakEnd = isWinter ? 21 : 22;
+        arbStrategyBody.innerHTML = `
+          <strong style="color:#2ecc71">⏰ 22:00–06:00</strong> — Ładuj baterię (off-peak, ${arbBuyPrice.toFixed(2)} zł/kWh)<br>
+          <strong style="color:#e67e22">⏰ 07:00–13:00</strong> — Rozładowuj na dom (szczyt poranny 0.91 zł/kWh)<br>
+          <strong style="color:#f7b731">⏰ 13:00–${peakStart}:00</strong> — PV ładuje baterię + eksport nadwyżki<br>
+          <strong style="color:#e74c3c">⏰ ${peakStart}:00–${peakEnd}:00</strong> — MAX rozładowanie! (${arbSellPrice.toFixed(2)} zł/kWh)<br>
+          <div style="margin-top:4px; font-size:9px; color:#a855f7">💎 Marża/cykl: ${arbMargin.toFixed(2)} zł/kWh × ${batCapKwh.toFixed(1)} kWh × η${(rtEfficiency*100).toFixed(0)}% = ${arbPotentialFull.toFixed(2)} zł</div>
+        `;
+      }
+    }
+
+    // ── Arbitrage profit today — from battery throughput ──
+    const arbChargeToday = this._nm("battery_charge_today") || 0;
+    const arbDischargeToday = this._nm("battery_discharge_today") || 0;
+    const arbCyclesKwh = Math.min(arbChargeToday, arbDischargeToday);
+    const arbProfitToday = arbCyclesKwh * arbMargin * rtEfficiency;
+
+    // ── Arbitrage next action — context-aware ──
+    const nowH = new Date().getHours();
+    const isWeekend = [0, 6].includes(new Date().getDay());
+    let arbNextAction = "✅ System w trybie auto";
+    if (tariffType === 'dynamic') {
+      const eNow = this._n("sensor.entso_e_koszt_all_in_teraz");
+      const eAvg = this._n("sensor.entso_e_srednia_dzisiaj");
+      if (eNow != null && eAvg != null) {
+        if (eNow < eAvg * 0.7) arbNextAction = "🔋 Cena niska — ładuj baterię z sieci";
+        else if (eNow > eAvg * 1.3) arbNextAction = "🔥 Cena wysoka — rozładowuj / sprzedawaj";
+        else arbNextAction = "📊 Cena neutralna — autokonsumpcja";
+      }
+    } else {
+      if (isWeekend) {
+        arbNextAction = socForArb < 50 ? "🔋 Weekend off-peak — ładuj (0.63 zł)" : "✅ Weekend — autokonsumpcja";
+      } else if (nowH >= 22 || nowH < 7) {
+        arbNextAction = socForArb < 80 ? "🔋 Off-peak noc — ładuj tanio (0.63 zł)" : "✅ Off-peak — bat. naładowana";
+      } else if (nowH >= 7 && nowH < 13) {
+        arbNextAction = socForArb > 30 ? "💰 Szczyt poranny — bat. zasila dom (0.91 zł)" : "⚠️ SOC niski — oszczędzaj na popołudnie";
+      } else if (nowH >= 13 && nowH < 16) {
+        arbNextAction = "🔋 Off-peak — ładuj z PV + sieci (0.63 zł)";
+      } else {
+        arbNextAction = socForArb > 20 ? "🔥 Szczyt popołudniowy — MAX rozładowanie! (1.50 zł)" : "⚠️ Bat. wyczerpana — import w szczycie";
+      }
+    }
+
+    // ── Premium/Free tier detection for arbitrage ──
     const arbCta = this.shadowRoot.getElementById("arb-premium-cta");
     const arbActive = this.shadowRoot.getElementById("arb-premium-active");
     if (arbCta && arbActive) {
       if (tier === "PRO" || tier === "ENTERPRISE") {
         arbCta.style.display = "none";
         arbActive.style.display = "block";
+
+        // ── Populate PRO section with real data ──
+        // Auto-status
+        const arbAutoStatus = this.shadowRoot.getElementById("v-arb-auto-status");
+        if (arbAutoStatus) {
+          const apLive = this._settings.autopilot_live;
+          if (apLive && apLive.enabled) {
+            const stratLabels = {
+              max_self_consumption: '🟢 Autokonsumpcja',
+              max_profit: '💰 Max Zysk',
+              battery_protection: '🔋 Ochrona Bat.',
+              zero_export: '⚡ Zero Export',
+              weather_adaptive: '🌧️ Pogodowy',
+              ai_full_autonomy: '🧠 AI Autonomia',
+            };
+            const stratLabel = stratLabels[apLive.strategy] || apLive.strategy || '';
+            arbAutoStatus.textContent = `Aktywny ✅ ${stratLabel}`;
+            arbAutoStatus.style.color = "#2ecc71";
+          } else {
+            arbAutoStatus.textContent = "Gotowy (uruchom Autopilota)";
+            arbAutoStatus.style.color = "#f7b731";
+          }
+        }
+
+        // Next action
+        this._setText("v-arb-next-action", arbNextAction);
+
+        // Profit today
+        const arbProfitEl = this.shadowRoot.getElementById("v-arb-profit-today");
+        if (arbProfitEl) {
+          arbProfitEl.textContent = `${arbProfitToday.toFixed(2)} zł`;
+          arbProfitEl.style.color = arbProfitToday > 0 ? "#2ecc71" : "#94a3b8";
+        }
       } else {
         arbCta.style.display = "block";
         arbActive.style.display = "none";
@@ -10552,7 +10673,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.41.4</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.42.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
