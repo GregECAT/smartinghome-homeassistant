@@ -1427,7 +1427,6 @@ class StrategyController:
                     strategy = block.get("strategy", "")
                     device_status = self._inverter_agent.get_device_status()
                     work_mode = device_status.get("work_mode", "")
-                    charging = device_status.get("charging_active", False)
                     bat_power = device_status.get("battery_power", 0)
 
                     # Detect drift: check if inverter work_mode matches plan expectations
