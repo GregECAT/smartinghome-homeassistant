@@ -1670,6 +1670,16 @@ class SmartingHomePanel extends HTMLElement {
         return { ...sc, yr };
       });
 
+      // CROSS-TARIFF ROI: Use G11 baseline as universal reference
+      // because most Polish households are on G11
+      const g11Baseline = results[0].yr.baselineCost; // what you pay on G11 WITHOUT PV
+      results.forEach(r => {
+        const systemCost = r.yr.importCost - r.yr.exportRev; // actual cost WITH PV
+        r.yr.realSaving = g11Baseline - systemCost; // real yearly saving vs G11 without PV
+        r.yr.realPayback = invest > 0 && r.yr.realSaving > 0 ? invest / r.yr.realSaving : null;
+        r.yr.realProfit25 = invest > 0 ? r.yr.realSaving * 25 - invest : r.yr.realSaving * 25;
+      });
+
       // Also compute passive simulation for dynamic to get automation_gain
       const passiveScenario = { ...tariffScenarios[2], strategy: 'passive', gridChargeAllowed: false, annualDays: 365 };
       const passiveSim = this._simulateBatteryDay(profile, passiveScenario, batParams);
@@ -1678,9 +1688,9 @@ class SmartingHomePanel extends HTMLElement {
 
       ct.innerHTML = results.map((r, i) => {
         const yr = r.yr;
-        const paybackStr = yr.payback ? `~${yr.payback.toFixed(1)} lat` : (invest > 0 ? "∞ (strata)" : "— (podaj koszt)");
-        const paybackColor = yr.payback ? (yr.payback <= 8 ? "#2ecc71" : yr.payback <= 15 ? "#f7b731" : "#e74c3c") : "#e74c3c";
-        const paybackPct = yr.payback ? Math.min(100, (25 / yr.payback) * 4) : 0;
+        const realPaybackStr = yr.realPayback ? `~${yr.realPayback.toFixed(1)} lat` : (invest > 0 ? "∞ (strata)" : "— (podaj koszt)");
+        const realPaybackColor = yr.realPayback ? (yr.realPayback <= 8 ? "#2ecc71" : yr.realPayback <= 15 ? "#f7b731" : "#e74c3c") : "#e74c3c";
+        const realPaybackPct = yr.realPayback ? Math.min(100, (25 / yr.realPayback) * 4) : 0;
         const diffVsG11 = i > 0 ? yr.benefit - results[0].yr.benefit : 0;
         const hasArbitrage = yr.arbitrageProfit > 50 && r.strategy === 'dynamic_active';
         const hasGridCharge = yr.gridToCharge > 10;
@@ -1743,52 +1753,58 @@ class SmartingHomePanel extends HTMLElement {
             <div style="font-size:9px; color:#94a3b8; margin-top:1px">import ${yr.importCost.toFixed(0)} zł − eksport ${yr.exportRev.toFixed(0)} zł</div>
           </div>
           <div style="border-top:1px solid rgba(255,255,255,0.06); padding-top:8px; margin-top:8px">
-            <div style="font-size:9px; color:#64748b">Koszt energii bez PV (baseline)</div>
-            <div style="font-size:13px; font-weight:600; color:#94a3b8">${yr.baselineCost.toFixed(0)} zł/rok</div>
-            <div style="font-size:9px; color:#64748b; margin-top:4px">Koszt importu z systemem</div>
-            <div style="font-size:14px; font-weight:700; color:#e74c3c">-${yr.importCost.toFixed(0)} zł</div>
-            <div style="font-size:9px; color:#64748b; margin-top:4px">Przychód z eksportu</div>
-            <div style="font-size:14px; font-weight:700; color:#2ecc71">+${yr.exportRev.toFixed(0)} zł</div>
-            ${hasArbitrage ? `<div style="font-size:9px; color:#64748b; margin-top:4px">🔋 P&L baterii (arbitraż)</div>
-            <div style="font-size:13px; font-weight:700; color:#a855f7">+${yr.arbitrageProfit.toFixed(0)} zł</div>` : ''}
+            <div style="font-size:9px; color:#64748b">Koszt energii bez PV (baseline G11)</div>
+            <div style="font-size:13px; font-weight:600; color:#94a3b8">${Math.round(g11Baseline).toLocaleString('pl-PL')} zł/rok</div>
           </div>
-          <div style="margin-top:10px; padding:10px; border-radius:10px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.06)">
-            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">📈 Łączna roczna korzyść systemu</div>
-            <div style="font-size:24px; font-weight:900; color:${yr.benefit >= 0 ? "#2ecc71" : "#e74c3c"}">${yr.benefit >= 0 ? "+" : ""}${yr.benefit.toFixed(0)} zł</div>
-            <div style="font-size:9px; color:#94a3b8; margin-top:1px">baseline − (import − eksport)</div>
+          <div style="margin-top:10px; padding:10px; border-radius:10px; background:rgba(46,204,113,0.06); border:1px solid rgba(46,204,113,0.15)">
+            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">🚀 Realna roczna oszczędność</div>
+            <div style="font-size:9px; color:#94a3b8; margin-bottom:2px">G11 bez PV (${Math.round(g11Baseline).toLocaleString('pl-PL')} zł) → ta taryfa z PV (${Math.round(yr.importCost - yr.exportRev).toLocaleString('pl-PL')} zł)</div>
+            <div style="font-size:24px; font-weight:900; color:${yr.realSaving >= 0 ? "#2ecc71" : "#e74c3c"}">${yr.realSaving >= 0 ? "+" : ""}${Math.round(yr.realSaving).toLocaleString('pl-PL')} zł/rok</div>
             <div style="display:grid; grid-template-columns:1fr auto; gap:1px 6px; font-size:9px; margin-top:6px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.06)">
               <div style="color:#f7b731">☀️ Oszcz. PV (autokon.):</div><div style="color:#f7b731; text-align:right">+${Math.round(yr.pvSavings)} zł <span style="color:#64748b">(${yr.avgPricePvHours.toFixed(2)}/kWh)</span></div>
+              ${i > 0 ? `<div style="color:#00d4ff">💰 Tańsza taryfa vs G11:</div><div style="color:#00d4ff; text-align:right">+${Math.round(yr.realSaving - yr.benefit)} zł</div>` : ''}
               ${yr.pvExportRev > 5 ? `<div style="color:#2ecc71">↑ Eksport PV→sieć:</div><div style="color:#2ecc71; text-align:right">+${yr.pvExportRev.toFixed(0)} zł</div>` : ''}
               ${hasArbitrage ? `<div style="color:#a855f7">🔋 Arbitraż baterii:</div><div style="color:#a855f7; text-align:right">+${yr.arbitrageProfit.toFixed(0)} zł</div>` : ''}
               ${yr.exportRev - (yr.pvExportRev || 0) > 10 ? `<div style="color:#10b981">↑ Eksport bat→sieć:</div><div style="color:#10b981; text-align:right">+${(yr.exportRev - (yr.pvExportRev || 0)).toFixed(0)} zł</div>` : ''}
             </div>
-            ${i > 0 ? `<div style="font-size:10px; color:#94a3b8; margin-top:4px">+${diffVsG11.toFixed(0)} zł vs G11</div>` : `<div style="font-size:10px; color:#e74c3c; margin-top:4px">taryfa stała</div>`}
           </div>
           ${invest > 0 ? `
           <div style="margin-top:10px">
             <div style="display:flex; justify-content:space-between; font-size:9px; color:#64748b; margin-bottom:4px">
-              <span>Zwrot inwestycji</span>
-              <span style="color:${paybackColor}; font-weight:700">${paybackStr}</span>
+              <span>Zwrot inwestycji (vs G11 bez PV)</span>
+              <span style="color:${realPaybackColor}; font-weight:700">${realPaybackStr}</span>
             </div>
             <div style="background:rgba(255,255,255,0.08); border-radius:6px; height:8px; overflow:hidden">
-              <div style="height:100%; width:${paybackPct}%; background:linear-gradient(90deg, ${paybackColor}, ${r.color}); border-radius:6px; transition:width 0.5s"></div>
+              <div style="height:100%; width:${realPaybackPct}%; background:linear-gradient(90deg, ${realPaybackColor}, ${r.color}); border-radius:6px; transition:width 0.5s"></div>
             </div>
             <div style="display:flex; justify-content:space-between; font-size:9px; color:#64748b; margin-top:6px">
               <span>Zysk w 25 lat</span>
-              <span style="color:${yr.profit25 >= 0 ? "#2ecc71" : "#e74c3c"}; font-weight:700">${yr.profit25 >= 0 ? "+" : ""}${Math.round(yr.profit25).toLocaleString("pl-PL")} zł</span>
+              <span style="color:${yr.realProfit25 >= 0 ? "#2ecc71" : "#e74c3c"}; font-weight:700">${yr.realProfit25 >= 0 ? "+" : ""}${Math.round(yr.realProfit25).toLocaleString("pl-PL")} zł</span>
             </div>
           </div>` : ""}
         </div>`;
       }).join("");
 
       // ── 3 RANKINGS + HEMS summary ──
+      const rankedByRealSaving = [...results].sort((a, b) => b.yr.realSaving - a.yr.realSaving);
       const rankedByCost = [...results].sort((a, b) => (a.yr.importCost - a.yr.exportRev) - (b.yr.importCost - b.yr.exportRev));
       const rankedByBenefit = [...results].sort((a, b) => b.yr.benefit - a.yr.benefit);
       const rankColors = ['#2ecc71', '#f7b731', '#e74c3c'];
       const rankEmoji = ['🥇', '🥈', '🥉'];
 
-      // Ranking 1: Najniższy roczny koszt
-      let summaryHtml = `<div style="grid-column:1/-1; margin-top:12px; padding:12px; background:rgba(0,212,255,0.04); border:1px solid rgba(0,212,255,0.12); border-radius:10px">
+      // Ranking 1 (PRIMARY): Realna roczna oszczędność (vs G11 bez PV)
+      let summaryHtml = `<div style="grid-column:1/-1; margin-top:12px; padding:12px; background:rgba(46,204,113,0.06); border:1px solid rgba(46,204,113,0.15); border-radius:10px">
+        <div style="font-size:10px; color:#2ecc71; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; text-align:center">🚀 Ranking — Realna roczna oszczędność (vs G11 bez PV)</div>
+        ${rankedByRealSaving.map((t, idx) => `<div style="display:flex; align-items:center; gap:8px; padding:4px 0; ${idx === 0 ? 'font-weight:700' : ''}">
+          <span style="font-size:16px">${rankEmoji[idx]}</span>
+          <span style="flex:1; font-size:12px; color:${t.color}">${t.label}</span>
+          <span style="font-size:10px; color:#64748b; margin-right:4px">${t.yr.realPayback ? '~' + t.yr.realPayback.toFixed(1) + ' lat' : '—'}</span>
+          <span style="font-size:13px; font-weight:700; color:${rankColors[idx]}">+${Math.round(t.yr.realSaving).toLocaleString('pl-PL')} zł/rok</span>
+        </div>`).join('')}
+      </div>`;
+
+      // Ranking 2: Najniższy roczny koszt
+      summaryHtml += `<div style="grid-column:1/-1; margin-top:8px; padding:12px; background:rgba(0,212,255,0.04); border:1px solid rgba(0,212,255,0.12); border-radius:10px">
         <div style="font-size:10px; color:#00d4ff; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; text-align:center">💰 Ranking — Najniższy roczny koszt energii</div>
         ${rankedByCost.map((t, idx) => {
           const cost = t.yr.importCost - t.yr.exportRev;
@@ -1800,18 +1816,8 @@ class SmartingHomePanel extends HTMLElement {
         }).join('')}
       </div>`;
 
-      // Ranking 2: Największa korzyść systemu
-      summaryHtml += `<div style="grid-column:1/-1; margin-top:8px; padding:12px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:10px">
-        <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; text-align:center">📈 Ranking — Największa korzyść systemu (vs brak PV)</div>
-        ${rankedByBenefit.map((t, idx) => `<div style="display:flex; align-items:center; gap:8px; padding:4px 0; ${idx === 0 ? 'font-weight:700' : ''}">
-          <span style="font-size:16px">${rankEmoji[idx]}</span>
-          <span style="flex:1; font-size:12px; color:${t.color}">${t.label}</span>
-          <span style="font-size:10px; color:#00d4ff; margin-right:6px">💎 ${t.yr.effectivePvValue.toFixed(2)} zł/kWh</span>
-          <span style="font-size:13px; font-weight:700; color:${rankColors[idx]}">${t.yr.benefit >= 0 ? '+' : ''}${t.yr.benefit.toFixed(0)} zł/rok</span>
-        </div>`).join('')}
-      </div>`;
-
-      // Ranking 3: Tabela podsumowująca 4 kryteria
+      // Ranking 3: Tabela podsumowująca
+      const bestReal = rankedByRealSaving[0];
       const bestCost = rankedByCost[0];
       const bestBenefit = rankedByBenefit[0];
       const bestPvValue = [...results].sort((a, b) => b.yr.effectivePvValue - a.yr.effectivePvValue)[0];
@@ -1819,10 +1825,10 @@ class SmartingHomePanel extends HTMLElement {
       summaryHtml += `<div style="grid-column:1/-1; margin-top:8px; padding:12px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:10px">
         <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; text-align:center">📊 Podsumowanie — Która taryfa wygrywa w czym?</div>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:10px">
+          <div style="color:#2ecc71; font-weight:600">🚀 Realna oszczędność (ROI):</div>
+          <div style="color:${bestReal.color}; font-weight:700; text-align:right">${bestReal.label.split(' — ')[0]} (+${Math.round(bestReal.yr.realSaving).toLocaleString('pl-PL')} zł, ~${bestReal.yr.realPayback?.toFixed(1) || '∞'} lat)</div>
           <div style="color:#94a3b8">💰 Najniższy roczny koszt:</div>
           <div style="color:${bestCost.color}; font-weight:700; text-align:right">${bestCost.label.split(' — ')[0]} (${Math.round(bestCost.yr.importCost - bestCost.yr.exportRev).toLocaleString('pl-PL')} zł)</div>
-          <div style="color:#94a3b8">📈 Największa korzyść systemu:</div>
-          <div style="color:${bestBenefit.color}; font-weight:700; text-align:right">${bestBenefit.label.split(' — ')[0]} (+${bestBenefit.yr.benefit.toFixed(0)} zł)</div>
           <div style="color:#94a3b8">💎 Najwyższa wartość PV/kWh:</div>
           <div style="color:${bestPvValue.color}; font-weight:700; text-align:right">${bestPvValue.label.split(' — ')[0]} (${bestPvValue.yr.effectivePvValue.toFixed(2)} zł)</div>
           <div style="color:#94a3b8">🤖 Automatyka HEMS:</div>
@@ -1861,8 +1867,9 @@ class SmartingHomePanel extends HTMLElement {
         annualEnergyCost: r.yr.importCost - r.yr.exportRev,
         baselineCost: r.yr.baselineCost,
         benefit: r.yr.benefit,
-        payback: r.yr.payback,
-        profit25: r.yr.profit25,
+        realSaving: r.yr.realSaving,
+        realPayback: r.yr.realPayback,
+        realProfit25: r.yr.realProfit25,
         arbitrageProfit: r.yr.arbitrageProfit || 0,
         gridToCharge: r.yr.gridToCharge || 0,
         cycles: r.yr.cycles || 0,
@@ -1871,6 +1878,7 @@ class SmartingHomePanel extends HTMLElement {
       roiDataForAI.push({
         _systemContext: true,
         investmentCost: invest,
+        g11BaselineCost: g11Baseline,
         yearlyConsumptionKWh: yearlyLoad || 0,
         yearlyPvProductionKWh: yearlyPV || 0,
         profileType: profileKey,
@@ -11016,7 +11024,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.42.5</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.42.6</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
