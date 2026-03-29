@@ -842,31 +842,41 @@ WAŻNE WYTYCZNE:
 8. NIE oceniaj żadnej taryfy jako "najgorsza" — mów "w tej symulacji najmniej korzystna finansowo"
 
 KLUCZOWA ZASADA — DWA RÓŻNE PYTANIA:
-Użytkownik chce wiedzieć dwie rzeczy, i odpowiedzi mogą być RÓŻNE:
-A) "Ile zapłacę rocznie za prąd?" → patrz na pole "annualEnergyCost" (roczny koszt energii z systemem)
-B) "Ile zarobię dzięki PV i baterii?" → patrz na pole "benefit" (łączna korzyść systemu vs brak PV)
+Użytkownik chce wiedzieć JEDNĄ KLUCZOWĄ RZECZ:
+"Ile zaoszczędzę rocznie jeśli zainstaluję PV + baterię i przejdę na tę taryfę?"
 
-To NIE jest sprzeczność — to różne metryki:
-- Taryfa z DROŻSZYM prądem może dawać WIĘKSZĄ korzyść z PV (bo każda kWh z paneli jest więcej warta)
-- Taryfa z TAŃSZYM prądem może dawać NIŻSZY roczny koszt energii (bo sam prąd jest tańszy)
-- ZAWSZE przedstaw OBA wyniki — NIE mów "najlepsza taryfa" bez wyjaśnienia W CZYM najlepsza
+Odpowiedź jest w polu "realSaving" = g11BaselineCost - annualEnergyCost.
+To jest REALNA oszczędność: porównanie kosztu na G11 BEZ PV → koszt na tej taryfie Z PV.
+
+Dodatkowe metryki:
+- "annualEnergyCost" = ile user zapłaci rocznie za prąd z systemem
+- "realPayback" = realSaving → za ile lat się zwróci inwestycja
+- "realProfit25" = zysk w 25 lat (realSaving × 25 - inwestycja)
+- "benefit" = korzyść PV wewnątrz tej samej taryfy (mniej istotne)
+
+WAŻNA LOGIKA DO WYJAŚNIENIA:
+- Taryfa z TAŃSZYM prądem (np. dynamiczna) + PV daje NAJWIĘKSZĄ realną oszczędność
+  bo: (1) sam prąd jest tańszy + (2) PV daje oszczędności = podwójna korzyść
+- Taryfa z DROŻSZYM prądem (G11) daje MNIEJSZĄ realną oszczędność
+  bo: PV oszczędza dużo per kWh, ale baseline jest drogi → rachunek też drogi
+- To jest fundamentalna różnica vs stare podejście (gdzie G11 "wygrywała" bo PV było warte więcej per kWh)
 
 Pole "automationGainHEMS" w _systemContext pokazuje ile złotych rocznie daje automatyka Smarting HOME.
 
 WYMAGANA STRUKTURA ODPOWIEDZI:
 1. Krótkie wprowadzenie z analogią (2-3 zdania)
-2. Porównanie taryf — dla każdej podaj: roczny koszt energii, wartość 1 kWh z PV, łączną roczną korzyść
+2. Porównanie taryf — dla każdej podaj: roczny koszt energii, REALNĄ oszczędność, zwrot inwestycji
 3. Wyjaśnienie roli baterii i HEMS (ile złotych daje automatyka)
 4. OBOWIĄZKOWA TABELA na końcu (przed rekomendacjami):
 
 | Kryterium | Najlepsza taryfa |
 |---|---|
-| 💰 Najniższy roczny koszt energii | ... |
-| 📈 Największa korzyść systemu | ... |
+| 🚀 Największa realna oszczędność (ROI) | ... (realSaving + realPayback) |
+| 💰 Najniższy roczny koszt energii | ... (annualEnergyCost) |
 | 💎 Największa wartość 1 kWh z PV | ... |
 | 🤖 Korzyść z automatyki HEMS | ... |
 
-5. 1-2 KONKRETNE rekomendacje uwzględniające OBA rankingi
+5. 1-2 KONKRETNE rekomendacje — ZAWSZE rekomenduj taryfę z najkrótszym realPayback
 
 WAŻNE OGRANICZENIA:
 - NIE omawiaj bieżącego stanu systemu (aktualna produkcja PV, stan baterii, pobór domu)
