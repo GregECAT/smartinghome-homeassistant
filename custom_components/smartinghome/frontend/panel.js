@@ -149,6 +149,7 @@ class SmartingHomePanel extends HTMLElement {
     if (tab === 'history') { this._updateHistoryTab(); }
     if (tab === 'autopilot') { this._updateAutopilot(); }
     if (tab === 'energy' || tab === 'battery' || tab === 'overview') { this._updateForecastCharts(); }
+    if (tab === 'forecast') { this._initForecastTab(); }
   }
 
   /* ── Sensor mapping ─────────────────────── */
@@ -7990,6 +7991,70 @@ class SmartingHomePanel extends HTMLElement {
           .submeter-card { min-width: 110px; }
           .submeter-power { font-size: 16px; }
         }
+
+        /* ═══════ FORECAST TAB STYLES ═══════ */
+        .fc-hero { position: relative; overflow: hidden; }
+        .fc-hero::before { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: linear-gradient(135deg, rgba(247,183,49,0.06) 0%, rgba(0,212,255,0.04) 100%); pointer-events: none; }
+        .fc-kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; position: relative; }
+        .fc-kpi { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 16px; text-align: center; transition: all 0.3s; }
+        .fc-kpi:hover { border-color: rgba(247,183,49,0.3); box-shadow: 0 0 20px rgba(247,183,49,0.1); }
+        .fc-kpi-label { font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 0.8px; }
+        .fc-kpi-value { font-size: 28px; font-weight: 900; margin-top: 6px; line-height: 1; }
+        .fc-kpi-sub { font-size: 10px; color: #94a3b8; margin-top: 4px; }
+        .fc-week-bars { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; height: 180px; padding: 10px 0; }
+        .fc-week-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+        .fc-week-bar { width: 100%; border-radius: 8px 8px 4px 4px; transition: height 0.6s ease, background 0.3s; min-height: 4px; cursor: pointer; }
+        .fc-week-bar:hover { filter: brightness(1.2); }
+        .fc-week-val { font-size: 11px; font-weight: 700; }
+        .fc-week-day { font-size: 10px; color: #94a3b8; font-weight: 600; }
+        .fc-week-date { font-size: 8px; color: #475569; }
+        .fc-hourly-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,0.04); transition: background 0.2s; }
+        .fc-hourly-row:hover { background: rgba(255,255,255,0.03); }
+        .fc-hourly-hour { font-size: 13px; font-weight: 700; color: #fff; min-width: 42px; }
+        .fc-hourly-bar-wrap { flex: 1; height: 10px; background: rgba(255,255,255,0.06); border-radius: 5px; overflow: hidden; }
+        .fc-hourly-bar { height: 100%; border-radius: 5px; transition: width 0.5s ease; }
+        .fc-hourly-kw { font-size: 12px; font-weight: 700; min-width: 55px; text-align: right; }
+        .fc-hourly-temp { font-size: 11px; color: #94a3b8; min-width: 35px; text-align: right; }
+        .fc-decision { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 14px 16px; margin-bottom: 8px; display: flex; align-items: flex-start; gap: 12px; transition: all 0.3s; }
+        .fc-decision:hover { border-color: rgba(46,204,113,0.3); transform: translateX(4px); }
+        .fc-decision-icon { font-size: 24px; flex-shrink: 0; }
+        .fc-decision-body { flex: 1; min-width: 0; }
+        .fc-decision-title { font-size: 13px; font-weight: 700; color: #fff; }
+        .fc-decision-desc { font-size: 11px; color: #94a3b8; margin-top: 2px; overflow-wrap: break-word; word-break: break-word; }
+        .fc-decision-badge { padding: 2px 8px; border-radius: 20px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; align-self: center; }
+        .fc-badge-zysk { background: rgba(46,204,113,0.15); color: #2ecc71; border: 1px solid rgba(46,204,113,0.3); }
+        .fc-badge-auto { background: rgba(0,212,255,0.15); color: #00d4ff; border: 1px solid rgba(0,212,255,0.3); }
+        .fc-badge-load { background: rgba(247,183,49,0.15); color: #f7b731; border: 1px solid rgba(247,183,49,0.3); }
+        .fc-strategy-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+        .fc-strategy-btn { background: rgba(255,255,255,0.03); border: 2px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 16px 12px; text-align: center; cursor: pointer; transition: all 0.3s; }
+        .fc-strategy-btn:hover { border-color: rgba(255,255,255,0.2); }
+        .fc-strategy-btn.active { border-color: rgba(0,212,255,0.6); background: rgba(0,212,255,0.08); box-shadow: 0 0 20px rgba(0,212,255,0.15); }
+        .fc-strategy-icon { font-size: 28px; margin-bottom: 6px; }
+        .fc-strategy-name { font-size: 12px; font-weight: 700; color: #fff; }
+        .fc-strategy-desc { font-size: 10px; color: #64748b; margin-top: 4px; }
+        .fc-integ-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+        .fc-integ-item { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 12px; text-align: center; }
+        .fc-integ-icon { font-size: 22px; }
+        .fc-integ-name { font-size: 10px; font-weight: 700; color: #fff; margin-top: 4px; }
+        .fc-integ-status { font-size: 9px; margin-top: 2px; }
+        .fc-curve-svg { width: 100%; overflow: visible; }
+        .fc-now-line { stroke: #f7b731; stroke-width: 1.5; stroke-dasharray: 4,3; }
+        .fc-calib-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-top: 6px; }
+        .fc-calib-label { font-size: 11px; color: #94a3b8; flex: 1; }
+        .fc-calib-value { font-size: 13px; font-weight: 700; color: #2ecc71; }
+        @media (max-width: 768px) {
+          .fc-kpi-grid { grid-template-columns: 1fr; gap: 8px; }
+          .fc-kpi-value { font-size: 22px; }
+          .fc-strategy-grid { grid-template-columns: 1fr; }
+          .fc-week-bars { height: 140px; }
+          .fc-decision { flex-wrap: wrap; }
+        }
+        @media (max-width: 480px) {
+          .fc-kpi-grid { grid-template-columns: 1fr; }
+          .fc-hourly-row { padding: 4px 6px; gap: 6px; }
+          .fc-hourly-hour { font-size: 11px; min-width: 36px; }
+          .fc-integ-grid { grid-template-columns: repeat(2, 1fr); }
+        }
       </style>
 
       <div class="panel-container">
@@ -8016,6 +8081,7 @@ class SmartingHomePanel extends HTMLElement {
               <button class="tab-btn" data-tab="winter" onclick="this.getRootNode().host._switchTab('winter')">❄️ Zima na plusie</button>
               <button class="tab-btn" data-tab="wind" onclick="this.getRootNode().host._switchTab('wind')">🌬️ Wiatr</button>
               <button class="tab-btn" data-tab="history" onclick="this.getRootNode().host._switchTab('history')">📅 Historia</button>
+              <button class="tab-btn" data-tab="forecast" onclick="this.getRootNode().host._switchTab('forecast')">☀️ Prognoza</button>
               <button class="tab-btn" data-tab="autopilot" onclick="this.getRootNode().host._switchTab('autopilot')" id="tab-btn-autopilot" style="display:none">🧠 Autopilot</button>
             </div>
           </div>
@@ -10490,6 +10556,157 @@ class SmartingHomePanel extends HTMLElement {
 
 
 
+
+        <!-- ═══════ TAB: FORECAST (Prognoza Solarna AI) ═══════ -->
+        <div class="tab-content" data-tab="forecast">
+
+          <!-- §1 HERO + KPI -->
+          <div class="card fc-hero" style="margin-bottom:12px">
+            <div style="position:absolute; top:0; left:0; right:0; bottom:0; opacity:0.03; font-size:120px; display:flex; align-items:center; justify-content:center">☀️</div>
+            <div style="position:relative">
+              <div class="card-title">☀️ Prognoza Solarna AI — Smarting HOME</div>
+              <div style="font-size:11px; color:#94a3b8; margin-bottom:4px">Dokładna prognoza produkcji PV + inteligentne rekomendacje sterowania energią</div>
+              <div style="font-size:10px; color:#475569">Dane: Open-Meteo Solar Radiation • Kalibracja Kalman • Silnik Decyzji</div>
+            </div>
+            <div class="fc-kpi-grid">
+              <div class="fc-kpi">
+                <div class="fc-kpi-label">☀️ Prognoza na dziś</div>
+                <div class="fc-kpi-value" style="color:#f7b731" id="fc-kpi-today">— <span style="font-size:14px; font-weight:400">kWh</span></div>
+                <div class="fc-kpi-sub" id="fc-kpi-today-sub">ładowanie danych...</div>
+              </div>
+              <div class="fc-kpi">
+                <div class="fc-kpi-label">⚡ Peak PV</div>
+                <div class="fc-kpi-value" style="color:#2ecc71" id="fc-kpi-peak">—</div>
+                <div class="fc-kpi-sub" id="fc-kpi-peak-sub">okno szczytowej produkcji</div>
+              </div>
+              <div class="fc-kpi">
+                <div class="fc-kpi-label">🎯 Tryb strategii</div>
+                <div class="fc-kpi-value" style="color:#00d4ff; font-size:18px" id="fc-kpi-strategy">AUTARKIA</div>
+                <div class="fc-kpi-sub">optymalizacja energii</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- §2 WEEKLY CHART -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">📊 Prognoza Dzienna — 7 Dni</div>
+            <div style="font-size:10px; color:#64748b; margin-bottom:4px">
+              Tydzień: <span id="fc-week-total" style="color:#f7b731; font-weight:700">—</span> kWh ·
+              Średnia: <span id="fc-week-avg" style="color:#2ecc71; font-weight:700">—</span> kWh/dzień
+            </div>
+            <div class="fc-week-bars" id="fc-week-bars">
+              <div style="text-align:center; color:#64748b; padding:40px; width:100%">⏳ Pobieranie prognozy...</div>
+            </div>
+          </div>
+
+          <!-- §3 HOURLY CURVE + TIMELINE -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">📈 Prognoza Godzinowa — Dziś</div>
+            <div style="font-size:10px; color:#64748b; margin-bottom:8px">Prognoza vs rzeczywista produkcja • Marker „teraz" • Adnotacje decyzji</div>
+            <div id="fc-hourly-curve" style="margin-bottom:12px"></div>
+            <div style="display:flex; justify-content:space-between; padding:0 4px; margin-bottom:6px">
+              <span style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Godz.</span>
+              <span style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Moc</span>
+              <span style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px" style="min-width:55px; text-align:right">kW</span>
+              <span style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">°C</span>
+            </div>
+            <div id="fc-hourly-list" style="max-height:400px; overflow-y:auto; border-radius:8px">
+              <div style="text-align:center; color:#64748b; padding:20px">⏳ Ładowanie...</div>
+            </div>
+          </div>
+
+          <!-- §4 DECISION ENGINE -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">🧠 Silnik Decyzji — Smarting HOME</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:12px">Inteligentne rekomendacje na bazie prognozy PV, cen energii i stanu baterii</div>
+            <div id="fc-decisions">
+              <div style="text-align:center; color:#64748b; padding:20px">⏳ Generowanie rekomendacji...</div>
+            </div>
+          </div>
+
+          <!-- §5 STRATEGY MODES -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">🎯 Tryb Strategii Energetycznej</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:12px">Wybierz tryb optymalizacji — wpływa na rekomendacje silnika decyzji i logikę Autopilota</div>
+            <div class="fc-strategy-grid">
+              <div class="fc-strategy-btn" id="fc-str-zysk" onclick="this.getRootNode().host._setForecastStrategy('MAX_ZYSK')">
+                <div class="fc-strategy-icon">💰</div>
+                <div class="fc-strategy-name">MAX ZYSK</div>
+                <div class="fc-strategy-desc">Priorytet sprzedaży energii w godzinach szczytowych cen</div>
+              </div>
+              <div class="fc-strategy-btn active" id="fc-str-autarkia" onclick="this.getRootNode().host._setForecastStrategy('AUTARKIA')">
+                <div class="fc-strategy-icon">🏠</div>
+                <div class="fc-strategy-name">AUTARKIA</div>
+                <div class="fc-strategy-desc">Maksymalizacja samodzielnego zużycia i niezależności</div>
+              </div>
+              <div class="fc-strategy-btn" id="fc-str-eco" onclick="this.getRootNode().host._setForecastStrategy('ECO')">
+                <div class="fc-strategy-icon">🌱</div>
+                <div class="fc-strategy-name">ECO DOM</div>
+                <div class="fc-strategy-desc">Balans domowego komfortu i oszczędności</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- §6 AUTO-CALIBRATION -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">🔧 Autokalibracja — Filtr Kalman</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:8px">System uczy się Twojej instalacji porównując prognozy z rzeczywistą produkcją</div>
+            <div id="fc-calibration">
+              <div class="fc-calib-bar">
+                <span class="fc-calib-label">Współczynnik korekcji</span>
+                <span class="fc-calib-value" id="fc-calib-factor">1.00</span>
+              </div>
+              <div class="fc-calib-bar">
+                <span class="fc-calib-label">Próbki kalibracji</span>
+                <span class="fc-calib-value" id="fc-calib-samples" style="color:#00d4ff">0</span>
+              </div>
+              <div class="fc-calib-bar">
+                <span class="fc-calib-label">Dokładność (MAPE)</span>
+                <span class="fc-calib-value" id="fc-calib-mape" style="color:#f7b731">—%</span>
+              </div>
+              <div style="margin-top:8px; display:flex; gap:8px">
+                <div style="flex:1; background:rgba(255,255,255,0.04); border-radius:8px; height:60px; position:relative; overflow:hidden" id="fc-calib-chart"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- §7 INTEGRATIONS STATUS -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">🔗 Podłączone Integracje</div>
+            <div class="fc-integ-grid" id="fc-integrations">
+              <div class="fc-integ-item">
+                <div class="fc-integ-icon">⚡</div>
+                <div class="fc-integ-name">Falownik</div>
+                <div class="fc-integ-status" id="fc-integ-inverter" style="color:#64748b">wykrywanie...</div>
+              </div>
+              <div class="fc-integ-item">
+                <div class="fc-integ-icon">🏠</div>
+                <div class="fc-integ-name">Home Assistant</div>
+                <div class="fc-integ-status" style="color:#2ecc71">✅ Połączono</div>
+              </div>
+              <div class="fc-integ-item">
+                <div class="fc-integ-icon">🔋</div>
+                <div class="fc-integ-name">Bateria</div>
+                <div class="fc-integ-status" id="fc-integ-battery" style="color:#64748b">wykrywanie...</div>
+              </div>
+              <div class="fc-integ-item">
+                <div class="fc-integ-icon">💰</div>
+                <div class="fc-integ-name">Ceny Energii</div>
+                <div class="fc-integ-status" id="fc-integ-prices" style="color:#64748b">wykrywanie...</div>
+              </div>
+              <div class="fc-integ-item">
+                <div class="fc-integ-icon">🌤️</div>
+                <div class="fc-integ-name">Open-Meteo</div>
+                <div class="fc-integ-status" id="fc-integ-meteo" style="color:#64748b">—</div>
+              </div>
+              <div class="fc-integ-item">
+                <div class="fc-integ-icon">📡</div>
+                <div class="fc-integ-name">Forecast.Solar</div>
+                <div class="fc-integ-status" id="fc-integ-fcsolar" style="color:#64748b">wykrywanie...</div>
+              </div>
+            </div>
+          </div>
+
         </div>
 
         <!-- ═══════ TAB: SETTINGS ═══════ -->
@@ -11024,7 +11241,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.42.6</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.43.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -11962,6 +12179,450 @@ class SmartingHomePanel extends HTMLElement {
         })
         .catch(() => {});
     } catch (e) {}
+  }
+
+  /* ═══════════════════════════════════════════════ */
+  /* ═══  FORECAST TAB — Prognoza Solarna AI  ═══ */
+  /* ═══════════════════════════════════════════════ */
+
+  async _initForecastTab() {
+    // Restore strategy from settings
+    const mode = this._settings.forecast_strategy || 'AUTARKIA';
+    this._setForecastStrategy(mode, true);
+
+    // Fetch solar forecast
+    try {
+      await this._fetchSolarForecast();
+    } catch (e) {
+      console.warn('[SH] Forecast tab init error:', e);
+    }
+
+    // Update integration status
+    this._updateIntegrationStatus();
+
+    // Load calibration data
+    this._updateCalibration();
+  }
+
+  async _fetchSolarForecast() {
+    if (!this._hass) return;
+
+    // Get location from zone.home
+    const zone = this._hass.states['zone.home'];
+    const lat = zone?.attributes?.latitude;
+    const lon = zone?.attributes?.longitude;
+    if (!lat || !lon) {
+      console.warn('[SH] Forecast: No zone.home lat/lon found');
+      this._setText('fc-kpi-today-sub', '⚠️ Brak lokalizacji (zone.home)');
+      return;
+    }
+
+    // Get PV system config
+    const cfg = this._settings.pv_string_config || {};
+    let totalWp = 0;
+    let avgTilt = 35;
+    let avgAzimuth = 180; // South
+    let stringCount = 0;
+
+    for (let i = 1; i <= 4; i++) {
+      const sc = cfg[`pv${i}`];
+      if (sc && sc.substrings) {
+        sc.substrings.forEach(sub => {
+          const wp = (sub.panel_count || 0) * (sub.panel_power || 405);
+          totalWp += wp;
+          avgTilt += (sub.tilt || 35);
+          const dirMap = { 'N': 0, 'NE': 45, 'E': 90, 'SE': 135, 'S': 180, 'SW': 225, 'W': 270, 'NW': 315 };
+          avgAzimuth += (dirMap[sub.direction] || 180);
+          stringCount++;
+        });
+      }
+    }
+    if (stringCount > 0) { avgTilt /= (stringCount + 1); avgAzimuth /= (stringCount + 1); }
+    if (totalWp === 0) totalWp = 5000; // Default 5 kWp
+
+    // Fetch Open-Meteo Solar Radiation
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=shortwave_radiation,temperature_2m,cloud_cover,direct_radiation,diffuse_radiation&daily=shortwave_radiation_sum&timezone=auto&forecast_days=7`;
+
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`Open-Meteo HTTP ${resp.status}`);
+    const data = await resp.json();
+
+    this._setText('fc-integ-meteo', '✅ Połączono');
+    const meteoEl = this.shadowRoot.getElementById('fc-integ-meteo');
+    if (meteoEl) meteoEl.style.color = '#2ecc71';
+
+    // Process hourly data for today
+    const now = new Date();
+    const todayStr = now.toISOString().slice(0, 10);
+    const hourlyData = [];
+    const hourlyTimes = data.hourly?.time || [];
+    const hourlyGHI = data.hourly?.shortwave_radiation || [];
+    const hourlyTemp = data.hourly?.temperature_2m || [];
+    const hourlyCloud = data.hourly?.cloud_cover || [];
+
+    let todayTotalKwh = 0;
+    let peakKw = 0;
+    let peakHourStart = 0;
+    let peakHourEnd = 0;
+    const cf = this._settings.forecast_calibration_factor || 1.0;
+
+    for (let i = 0; i < hourlyTimes.length; i++) {
+      const t = hourlyTimes[i];
+      if (!t.startsWith(todayStr)) continue;
+      const hour = parseInt(t.slice(11, 13));
+      const ghi = hourlyGHI[i] || 0;
+      const temp = hourlyTemp[i];
+      const cloud = hourlyCloud[i];
+      const kw = this._calcPVProduction(ghi, temp, totalWp, avgTilt, avgAzimuth) * cf;
+      todayTotalKwh += kw;
+
+      hourlyData.push({ hour, kw, temp, cloud, ghi });
+
+      if (kw > peakKw) { peakKw = kw; peakHourStart = hour; }
+    }
+
+    // Determine peak window (hours with > 70% of peak)
+    const peakThreshold = peakKw * 0.7;
+    const peakHours = hourlyData.filter(h => h.kw >= peakThreshold).map(h => h.hour);
+    if (peakHours.length > 0) {
+      peakHourStart = Math.min(...peakHours);
+      peakHourEnd = Math.max(...peakHours);
+    }
+
+    // Store for decision engine
+    this._fcHourlyData = hourlyData;
+    this._fcTodayKwh = todayTotalKwh;
+    this._fcPeakWindow = { start: peakHourStart, end: peakHourEnd, kw: peakKw };
+    this._fcTotalWp = totalWp;
+
+    // Process daily data
+    const dailyData = [];
+    const dailyTimes = data.daily?.time || [];
+    const dailyRad = data.daily?.shortwave_radiation_sum || [];
+    const dayNames = ['NIEDZ.', 'PON.', 'WT.', 'ŚR.', 'CZW.', 'PT.', 'SOB.'];
+
+    for (let i = 0; i < dailyTimes.length && i < 7; i++) {
+      const d = new Date(dailyTimes[i]);
+      const radSum = dailyRad[i] || 0;
+      // Convert MJ/m² to average W/m² then to kWh
+      const avgGhi = (radSum * 1e6) / (3600 * 12); // rough 12 daylight hours
+      const kwh = this._calcPVProduction(avgGhi, 15, totalWp, avgTilt, avgAzimuth) * 12 * cf;
+      dailyData.push({
+        date: dailyTimes[i],
+        dayName: dayNames[d.getDay()],
+        dayNum: `${d.getDate()}.${d.getMonth() + 1}`,
+        kwh: kwh,
+        isToday: dailyTimes[i] === todayStr
+      });
+    }
+    this._fcDailyData = dailyData;
+
+    // Render all sections
+    this._updateForecastKPI(todayTotalKwh, peakHourStart, peakHourEnd, peakKw);
+    this._renderWeeklyChart(dailyData);
+    this._renderHourlyCurve(hourlyData);
+    this._renderHourlyList(hourlyData);
+    this._generateDecisions();
+    this._updateCalibrationFromProduction(todayTotalKwh);
+  }
+
+  _calcPVProduction(ghi, temp, totalWp, tilt, azimuth) {
+    // Simple POA conversion with tilt/azimuth correction
+    if (ghi <= 0) return 0;
+    const radians = Math.PI / 180;
+    const tiltFactor = Math.cos((tilt - 35) * radians * 0.5); // optimal ~35° in Poland
+    const azFactor = 1 - Math.abs(azimuth - 180) / 360 * 0.3; // South=180 optimal
+    // Temperature correction: -0.4%/°C above 25°C
+    const tempCoeff = 1 - Math.max(0, (temp || 25) - 25) * 0.004;
+    // System efficiency: panels + inverter + wiring ~ 0.85
+    const eta = 0.85;
+    // P = GHI * area_effective * eta
+    const area = totalWp / 200; // ~200 Wp/m² for modern panels
+    const pKw = (ghi * area * eta * tiltFactor * azFactor * tempCoeff) / 1000;
+    return Math.max(0, pKw);
+  }
+
+  _updateForecastKPI(todayKwh, peakStart, peakEnd, peakKw) {
+    const el = this.shadowRoot.getElementById('fc-kpi-today');
+    if (el) el.innerHTML = `${todayKwh.toFixed(1)} <span style="font-size:14px; font-weight:400">kWh</span>`;
+
+    const realPv = this._nm('pv_today') || 0;
+    const sub = this.shadowRoot.getElementById('fc-kpi-today-sub');
+    if (sub) sub.textContent = realPv > 0 ? `Rzeczywista: ${realPv.toFixed(1)} kWh` : 'prognoza Open-Meteo';
+
+    const peak = this.shadowRoot.getElementById('fc-kpi-peak');
+    if (peak) peak.textContent = `${String(peakStart).padStart(2,'0')}:00–${String(peakEnd + 1).padStart(2,'0')}:00`;
+    const peakSub = this.shadowRoot.getElementById('fc-kpi-peak-sub');
+    if (peakSub) peakSub.textContent = `max ${peakKw.toFixed(1)} kW`;
+
+    const mode = this._settings.forecast_strategy || 'AUTARKIA';
+    this._setText('fc-kpi-strategy', mode.replace('_', ' '));
+  }
+
+  _renderWeeklyChart(dailyData) {
+    const container = this.shadowRoot.getElementById('fc-week-bars');
+    if (!container || !dailyData.length) return;
+    const maxKwh = Math.max(...dailyData.map(d => d.kwh), 1);
+    const totalKwh = dailyData.reduce((s, d) => s + d.kwh, 0);
+
+    this._setText('fc-week-total', totalKwh.toFixed(1));
+    this._setText('fc-week-avg', (totalKwh / dailyData.length).toFixed(1));
+
+    container.innerHTML = dailyData.map(d => {
+      const pct = (d.kwh / maxKwh * 100).toFixed(0);
+      const color = d.kwh > 20 ? '#2ecc71' : d.kwh > 10 ? '#00d4ff' : '#475569';
+      const todayMark = d.isToday ? 'border:2px solid #f7b731;' : '';
+      const valColor = d.isToday ? '#f7b731' : '#fff';
+      return `<div class="fc-week-col">
+        <div class="fc-week-val" style="color:${valColor}">${d.kwh.toFixed(1)}</div>
+        <div class="fc-week-bar" style="height:${Math.max(8, pct)}%; background:${color}; ${todayMark}"></div>
+        <div class="fc-week-day" style="${d.isToday ? 'color:#f7b731; font-weight:800' : ''}">${d.isToday ? 'DZIŚ' : d.dayName}</div>
+        <div class="fc-week-date">${d.dayNum}</div>
+      </div>`;
+    }).join('');
+  }
+
+  _renderHourlyCurve(hourlyData) {
+    const el = this.shadowRoot.getElementById('fc-hourly-curve');
+    if (!el || !hourlyData.length) return;
+    const nowHour = new Date().getHours() + new Date().getMinutes() / 60;
+    const sunHours = hourlyData.filter(h => h.hour >= 5 && h.hour <= 20);
+    if (sunHours.length === 0) { el.innerHTML = ''; return; }
+    const maxKw = Math.max(...sunHours.map(h => h.kw), 0.1);
+    const W = 800, H = 200, padX = 40, padY = 20;
+    const chartW = W - padX * 2, chartH = H - padY * 2;
+
+    // Build forecast curve points
+    const pts = sunHours.map(h => {
+      const x = padX + ((h.hour - 5) / 15) * chartW;
+      const y = padY + chartH - (h.kw / maxKw) * chartH;
+      return { x, y, h };
+    });
+
+    // Smooth path
+    let path = `M ${pts[0].x} ${pts[0].y}`;
+    for (let i = 1; i < pts.length; i++) {
+      const cx = (pts[i - 1].x + pts[i].x) / 2;
+      path += ` C ${cx} ${pts[i - 1].y}, ${cx} ${pts[i].y}, ${pts[i].x} ${pts[i].y}`;
+    }
+    const areaPath = path + ` L ${pts[pts.length - 1].x} ${padY + chartH} L ${pts[0].x} ${padY + chartH} Z`;
+
+    // Now marker
+    const nowX = padX + ((nowHour - 5) / 15) * chartW;
+    const realPv = (this._nm('pv_power') || 0) / 1000;
+    const realY = padY + chartH - (Math.min(realPv, maxKw) / maxKw) * chartH;
+
+    // Grid lines + labels
+    let gridLines = '';
+    for (let h = 6; h <= 20; h += 2) {
+      const x = padX + ((h - 5) / 15) * chartW;
+      gridLines += `<line x1="${x}" y1="${padY}" x2="${x}" y2="${padY + chartH}" stroke="rgba(255,255,255,0.04)" stroke-width="0.5"/>`;
+      gridLines += `<text x="${x}" y="${H - 2}" text-anchor="middle" fill="#475569" font-size="9">${h}:00</text>`;
+    }
+    for (let v = 0; v <= maxKw; v += Math.max(0.5, Math.ceil(maxKw / 4))) {
+      const y = padY + chartH - (v / maxKw) * chartH;
+      gridLines += `<line x1="${padX}" y1="${y}" x2="${W - padX}" y2="${y}" stroke="rgba(255,255,255,0.04)" stroke-width="0.5"/>`;
+      gridLines += `<text x="${padX - 4}" y="${y + 3}" text-anchor="end" fill="#475569" font-size="8">${v.toFixed(1)}</text>`;
+    }
+
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="fc-curve-svg" style="height:200px">
+      <defs>
+        <linearGradient id="fc-grad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#2ecc71" stop-opacity="0.25"/>
+          <stop offset="100%" stop-color="#2ecc71" stop-opacity="0.02"/>
+        </linearGradient>
+      </defs>
+      ${gridLines}
+      <path d="${areaPath}" fill="url(#fc-grad)"/>
+      <path d="${path}" fill="none" stroke="#2ecc71" stroke-width="2.5" stroke-linecap="round"/>
+      ${nowHour >= 5 && nowHour <= 20 ? `
+        <line x1="${nowX}" y1="${padY}" x2="${nowX}" y2="${padY + chartH}" class="fc-now-line"/>
+        <circle cx="${nowX}" cy="${realY}" r="5" fill="#f7b731" style="filter:drop-shadow(0 0 6px #f7b731)"/>
+        <text x="${nowX}" y="${realY - 10}" text-anchor="middle" fill="#f7b731" font-size="10" font-weight="700">${realPv.toFixed(1)} kW</text>
+        <text x="${nowX}" y="${padY - 4}" text-anchor="middle" fill="#f7b731" font-size="8">teraz</text>
+      ` : ''}
+    </svg>`;
+  }
+
+  _renderHourlyList(hourlyData) {
+    const el = this.shadowRoot.getElementById('fc-hourly-list');
+    if (!el) return;
+    const maxKw = Math.max(...hourlyData.map(h => h.kw), 0.1);
+    const nowHour = new Date().getHours();
+
+    el.innerHTML = hourlyData.filter(h => h.hour >= 5 && h.hour <= 20).map(h => {
+      const pct = (h.kw / maxKw * 100).toFixed(0);
+      const color = h.kw > maxKw * 0.7 ? '#2ecc71' : h.kw > maxKw * 0.3 ? '#f39c12' : '#475569';
+      const isNow = h.hour === nowHour;
+      const bg = isNow ? 'background:rgba(247,183,49,0.08); border-left:3px solid #f7b731;' : '';
+      return `<div class="fc-hourly-row" style="${bg}">
+        <span class="fc-hourly-hour" style="${isNow ? 'color:#f7b731' : ''}">${String(h.hour).padStart(2,'0')}:00</span>
+        <div class="fc-hourly-bar-wrap">
+          <div class="fc-hourly-bar" style="width:${pct}%; background:${color}"></div>
+        </div>
+        <span class="fc-hourly-kw" style="color:${color}">${h.kw.toFixed(2)}</span>
+        <span class="fc-hourly-temp">${h.temp != null ? h.temp.toFixed(0) + '°' : '—'}</span>
+      </div>`;
+    }).join('');
+  }
+
+  _generateDecisions() {
+    const el = this.shadowRoot.getElementById('fc-decisions');
+    if (!el) return;
+    const mode = this._settings.forecast_strategy || 'AUTARKIA';
+    const soc = this._nm('battery_soc') || 0;
+    const peak = this._fcPeakWindow || { start: 11, end: 14, kw: 3 };
+    const todayKwh = this._fcTodayKwh || 0;
+    const nowHour = new Date().getHours();
+    const price = parseFloat(this._hass?.states?.['sensor.entso_e_koszt_all_in_teraz']?.state) || 0;
+    const avgPrice = parseFloat(this._hass?.states?.['sensor.entso_e_srednia_dzisiaj']?.state) || 0.50;
+    const cards = [];
+
+    // Decision: Battery charge
+    if (soc < 50 && todayKwh > 10) {
+      cards.push({ icon: '🔋', title: `Ładuj baterię ${peak.start}:00–${peak.end}:00`, desc: `SOC=${soc.toFixed(0)}% — wykorzystaj szczyt PV (${peak.kw.toFixed(1)} kW) do naładowania`, badge: 'AUTOMAT', badgeClass: 'fc-badge-auto' });
+    } else if (soc > 80) {
+      cards.push({ icon: '✅', title: 'Bateria naładowana', desc: `SOC=${soc.toFixed(0)}% — gotowa do wieczornego użycia`, badge: 'OK', badgeClass: 'fc-badge-auto' });
+    }
+
+    // Decision: Grid export
+    if (price > avgPrice * 1.2 && nowHour >= 8 && nowHour <= 16) {
+      cards.push({ icon: '💰', title: `Sprzedawaj energię TERAZ`, desc: `Cena ${price.toFixed(2)} zł/kWh > średnia ${avgPrice.toFixed(2)} — opłacalny eksport`, badge: 'MAX ZYSK', badgeClass: 'fc-badge-zysk' });
+    } else if (mode === 'MAX_ZYSK' && peak.kw > 2) {
+      cards.push({ icon: '⚡', title: `Eksportuj ${peak.start}:00–${peak.end + 1}:00`, desc: `Peak ${peak.kw.toFixed(1)} kW — najlepsze godziny sprzedaży`, badge: 'MAX ZYSK', badgeClass: 'fc-badge-zysk' });
+    }
+
+    // Decision: Heavy devices
+    if (todayKwh > 15 && peak.kw > 2) {
+      cards.push({ icon: '🔌', title: `Uruchom energochłonne urządzenia ${peak.start}:00–${peak.end}:00`, desc: 'Pranie, zmywarka, pompę ciepła — najwyższa produkcja PV', badge: 'SMART LOAD', badgeClass: 'fc-badge-load' });
+    }
+
+    // Decision: Low production warning
+    if (todayKwh < 5) {
+      cards.push({ icon: '⚠️', title: 'Słaby dzień solarny', desc: `Prognoza: ${todayKwh.toFixed(1)} kWh — ogranicz zużycie lub kup taniej w nocy`, badge: 'UWAGA', badgeClass: 'fc-badge-load' });
+    }
+
+    // Decision: Strategy-specific
+    if (mode === 'AUTARKIA' && soc < 30 && price < avgPrice * 0.8) {
+      cards.push({ icon: '🌙', title: 'Ładuj baterię z sieci (niska cena)', desc: `Cena ${price.toFixed(2)} zł — poniżej średniej, warto doładować na wieczór`, badge: 'AUTARKIA', badgeClass: 'fc-badge-auto' });
+    }
+
+    if (cards.length === 0) {
+      cards.push({ icon: '✅', title: 'System pracuje optymalnie', desc: 'Brak specjalnych rekomendacji — Autopilot zarządza energią automatycznie', badge: 'OK', badgeClass: 'fc-badge-auto' });
+    }
+
+    el.innerHTML = cards.map(c => `<div class="fc-decision">
+      <div class="fc-decision-icon">${c.icon}</div>
+      <div class="fc-decision-body">
+        <div class="fc-decision-title">${c.title}</div>
+        <div class="fc-decision-desc">${c.desc}</div>
+      </div>
+      <span class="fc-decision-badge ${c.badgeClass}">${c.badge}</span>
+    </div>`).join('');
+  }
+
+  _setForecastStrategy(mode, noSave) {
+    ['zysk', 'autarkia', 'eco'].forEach(k => {
+      const btn = this.shadowRoot.getElementById(`fc-str-${k}`);
+      if (btn) btn.classList.toggle('active', mode === { zysk: 'MAX_ZYSK', autarkia: 'AUTARKIA', eco: 'ECO' }[k]);
+    });
+    this._setText('fc-kpi-strategy', mode.replace('_', ' '));
+    if (!noSave) {
+      this._savePanelSettings({ forecast_strategy: mode });
+      // Regenerate decisions with new mode
+      if (this._fcHourlyData) this._generateDecisions();
+    }
+  }
+
+  _updateIntegrationStatus() {
+    // Inverter
+    const inv = this._nm('pv_power');
+    const invEl = this.shadowRoot.getElementById('fc-integ-inverter');
+    if (invEl) {
+      if (inv !== null) { invEl.textContent = '✅ Aktywny'; invEl.style.color = '#2ecc71'; }
+      else { invEl.textContent = '⚠️ Brak danych'; invEl.style.color = '#f39c12'; }
+    }
+    // Battery
+    const soc = this._nm('battery_soc');
+    const batEl = this.shadowRoot.getElementById('fc-integ-battery');
+    if (batEl) {
+      if (soc !== null) { batEl.textContent = `✅ SOC: ${soc.toFixed(0)}%`; batEl.style.color = '#2ecc71'; }
+      else { batEl.textContent = '❌ Brak'; batEl.style.color = '#e74c3c'; }
+    }
+    // Energy prices
+    const priceEl = this.shadowRoot.getElementById('fc-integ-prices');
+    const hasEntso = this._hass?.states?.['sensor.entso_e_aktualna_cena_energii'];
+    if (priceEl) {
+      if (hasEntso) { priceEl.textContent = '✅ ENTSO-E'; priceEl.style.color = '#2ecc71'; }
+      else { priceEl.textContent = '⚠️ Brak'; priceEl.style.color = '#f39c12'; }
+    }
+    // Forecast.Solar
+    const fcEl = this.shadowRoot.getElementById('fc-integ-fcsolar');
+    const hasFS = this._hass?.states?.['sensor.power_production_now'];
+    if (fcEl) {
+      if (hasFS) { fcEl.textContent = '✅ Aktywny'; fcEl.style.color = '#2ecc71'; }
+      else { fcEl.textContent = '— nieaktywny'; fcEl.style.color = '#64748b'; }
+    }
+  }
+
+  _updateCalibration() {
+    const factor = this._settings.forecast_calibration_factor || 1.0;
+    const samples = this._settings.forecast_calibration_samples || 0;
+    const mape = this._settings.forecast_calibration_mape;
+    this._setText('fc-calib-factor', factor.toFixed(3));
+    this._setText('fc-calib-samples', String(samples));
+    this._setText('fc-calib-mape', mape != null ? `${mape.toFixed(1)}%` : '—%');
+
+    // Mini calibration chart
+    const chartEl = this.shadowRoot.getElementById('fc-calib-chart');
+    if (chartEl && samples > 0) {
+      const history = this._settings.forecast_calibration_history || [];
+      if (history.length > 1) {
+        const maxV = Math.max(...history.map(h => Math.max(h.real || 0, h.pred || 0)), 1);
+        const w = 100, h2 = 60;
+        const step = w / (history.length - 1);
+        const realPath = history.map((p, i) => `${i === 0 ? 'M' : 'L'} ${(i * step).toFixed(1)} ${(h2 - (p.real / maxV) * h2 * 0.9).toFixed(1)}`).join(' ');
+        const predPath = history.map((p, i) => `${i === 0 ? 'M' : 'L'} ${(i * step).toFixed(1)} ${(h2 - (p.pred / maxV) * h2 * 0.9).toFixed(1)}`).join(' ');
+        chartEl.innerHTML = `<svg viewBox="0 0 ${w} ${h2}" style="width:100%;height:100%">
+          <path d="${predPath}" fill="none" stroke="#475569" stroke-width="1" stroke-dasharray="3,2"/>
+          <path d="${realPath}" fill="none" stroke="#2ecc71" stroke-width="1.5"/>
+        </svg>`;
+      } else {
+        chartEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:10px;color:#475569">Zbyt mało próbek</div>';
+      }
+    }
+  }
+
+  _updateCalibrationFromProduction(predictedKwh) {
+    const realPv = this._nm('pv_today') || 0;
+    if (realPv < 1 || predictedKwh < 1) return; // Not enough data
+
+    const nowHour = new Date().getHours();
+    if (nowHour < 15) return; // Wait until afternoon for meaningful comparison
+
+    const factor = this._settings.forecast_calibration_factor || 1.0;
+    const samples = this._settings.forecast_calibration_samples || 0;
+    const alpha = 0.1; // Learning rate
+    const error = (realPv - predictedKwh) / predictedKwh;
+    const newFactor = factor + alpha * error;
+    const clampedFactor = Math.max(0.5, Math.min(1.5, newFactor));
+
+    const history = this._settings.forecast_calibration_history || [];
+    history.push({ date: new Date().toISOString().slice(0, 10), real: realPv, pred: predictedKwh });
+    if (history.length > 30) history.shift();
+
+    const mape = history.length > 0
+      ? history.reduce((s, h) => s + Math.abs(h.real - h.pred) / Math.max(h.real, 0.1), 0) / history.length * 100
+      : null;
+
+    this._savePanelSettings({
+      forecast_calibration_factor: clampedFactor,
+      forecast_calibration_samples: samples + 1,
+      forecast_calibration_mape: mape,
+      forecast_calibration_history: history,
+    });
+
+    this._updateCalibration();
   }
 
   _markdownToHtml(md) {
