@@ -836,32 +836,37 @@ WAŻNE WYTYCZNE:
 2. Unikaj żargonu — zamiast "autokonsumpcja" → "energia zużyta na własne potrzeby"
 3. Podaj KONKRETNE kwoty w złotówkach
 4. Wyjaśnij CO TO ZNACZY dla portfela użytkownika
-5. NIE mów "rachunek za prąd" — mów "roczny koszt energii z systemem" lub "łączna roczna korzyść systemu"
-6. Wyjaśnij co robi bateria i automatyka HEMS i ILE złotych to daje
-7. Podaj zwrot z inwestycji — kiedy się "zwróci" i ile zarobi po 25 latach
-8. Użyj analogii z życia codziennego
-9. NIE oceniaj żadnej taryfy jako "najgorsza" — mów "w tej symulacji najmniej korzystna finansowo"
+5. Wyjaśnij co robi bateria i automatyka HEMS i ILE złotych to daje
+6. Podaj zwrot z inwestycji — kiedy się "zwróci" i ile zarobi po 25 latach
+7. Użyj analogii z życia codziennego
+8. NIE oceniaj żadnej taryfy jako "najgorsza" — mów "w tej symulacji najmniej korzystna finansowo"
 
-WAŻNA LOGIKA DO WYJAŚNIENIA:
-- Jeśli taryfa z DROŻSZYM prądem wygrywa — wyjaśnij DLACZEGO: bo każda kWh z paneli jest więcej warta, więc oszczędności z PV są wyższe
-- Taryfa z TAŃSZYM prądem ma niższy roczny koszt energii, ale PV daje mniejszą oszczędność per kWh
-- To NIE jest sprzeczność — to różne metryki
-- Jeśli dynamiczna ma dodatkowy zysk z arbitrażu baterii — wyjaśnij co to jest (kupowanie tanio w nocy, sprzedawanie drogo wieczorem)
+KLUCZOWA ZASADA — DWA RÓŻNE PYTANIA:
+Użytkownik chce wiedzieć dwie rzeczy, i odpowiedzi mogą być RÓŻNE:
+A) "Ile zapłacę rocznie za prąd?" → patrz na pole "annualEnergyCost" (roczny koszt energii z systemem)
+B) "Ile zarobię dzięki PV i baterii?" → patrz na pole "benefit" (łączna korzyść systemu vs brak PV)
+
+To NIE jest sprzeczność — to różne metryki:
+- Taryfa z DROŻSZYM prądem może dawać WIĘKSZĄ korzyść z PV (bo każda kWh z paneli jest więcej warta)
+- Taryfa z TAŃSZYM prądem może dawać NIŻSZY roczny koszt energii (bo sam prąd jest tańszy)
+- ZAWSZE przedstaw OBA wyniki — NIE mów "najlepsza taryfa" bez wyjaśnienia W CZYM najlepsza
+
+Pole "automationGainHEMS" w _systemContext pokazuje ile złotych rocznie daje automatyka Smarting HOME.
 
 WYMAGANA STRUKTURA ODPOWIEDZI:
 1. Krótkie wprowadzenie z analogią (2-3 zdania)
-2. Porównanie taryf — dla każdej podaj: wartość 1 kWh z PV, łączną roczną korzyść, zwrot inwestycji
-3. Wyjaśnienie roli baterii i HEMS
+2. Porównanie taryf — dla każdej podaj: roczny koszt energii, wartość 1 kWh z PV, łączną roczną korzyść
+3. Wyjaśnienie roli baterii i HEMS (ile złotych daje automatyka)
 4. OBOWIĄZKOWA TABELA na końcu (przed rekomendacjami):
 
 | Kryterium | Najlepsza taryfa |
 |---|---|
-| 🏆 Największa łączna korzyść roczna | ... |
-| 💎 Największa wartość 1 kWh z PV | ... |
-| 🤖 Największa korzyść z automatyki HEMS | ... |
 | 💰 Najniższy roczny koszt energii | ... |
+| 📈 Największa korzyść systemu | ... |
+| 💎 Największa wartość 1 kWh z PV | ... |
+| 🤖 Korzyść z automatyki HEMS | ... |
 
-5. 1-2 KONKRETNE rekomendacje
+5. 1-2 KONKRETNE rekomendacje uwzględniające OBA rankingi
 
 WAŻNE OGRANICZENIA:
 - NIE omawiaj bieżącego stanu systemu (aktualna produkcja PV, stan baterii, pobór domu)
