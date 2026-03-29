@@ -4751,16 +4751,12 @@ class SmartingHomePanel extends HTMLElement {
           </div>
           <div style="font-size:11px; color:#e2e8f0; line-height:1.7">${html}</div>
           <div style="display:flex; gap:6px; margin-top:10px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.06)">
-            <button onclick="this.getRootNode().host._copyRoiAiResult('text')"
-              style="flex:1; padding:6px 10px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#94a3b8; font-size:9px; cursor:pointer; transition:all 0.2s"
-              onmouseover="this.style.background='rgba(0,212,255,0.1)'; this.style.color='#00d4ff'; this.style.borderColor='rgba(0,212,255,0.3)'"
-              onmouseout="this.style.background='rgba(255,255,255,0.06)'; this.style.color='#94a3b8'; this.style.borderColor='rgba(255,255,255,0.1)'">
+            <button id="btn-roi-copy-text" onclick="this.getRootNode().host._copyRoiAiResult('text', this)"
+              style="flex:1; padding:6px 10px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#94a3b8; font-size:9px; cursor:pointer; transition:all 0.3s">
               📋 Kopiuj tekst
             </button>
-            <button onclick="this.getRootNode().host._copyRoiAiResult('markdown')"
-              style="flex:1; padding:6px 10px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#94a3b8; font-size:9px; cursor:pointer; transition:all 0.2s"
-              onmouseover="this.style.background='rgba(168,85,247,0.1)'; this.style.color='#a855f7'; this.style.borderColor='rgba(168,85,247,0.3)'"
-              onmouseout="this.style.background='rgba(255,255,255,0.06)'; this.style.color='#94a3b8'; this.style.borderColor='rgba(255,255,255,0.1)'">
+            <button id="btn-roi-copy-md" onclick="this.getRootNode().host._copyRoiAiResult('markdown', this)"
+              style="flex:1; padding:6px 10px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#94a3b8; font-size:9px; cursor:pointer; transition:all 0.3s">
               📝 Kopiuj markdown
             </button>
           </div>
@@ -4781,7 +4777,7 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
 
-  _copyRoiAiResult(format) {
+  _copyRoiAiResult(format, btnEl) {
     if (!this._roiAiRawMarkdown) return;
 
     let textToCopy;
@@ -4802,20 +4798,38 @@ class SmartingHomePanel extends HTMLElement {
         .trim();
     }
 
+    const origText = btnEl ? btnEl.innerHTML : '';
+    const origBg = btnEl ? btnEl.style.background : '';
+    const origColor = btnEl ? btnEl.style.color : '';
+    const origBorder = btnEl ? btnEl.style.borderColor : '';
+
     navigator.clipboard.writeText(textToCopy).then(() => {
-      const status = this.shadowRoot.getElementById('roi-ai-status');
-      if (status) {
-        const label = format === 'markdown' ? 'Markdown' : 'Tekst';
-        status.textContent = `📋 ${label} skopiowany do schowka!`;
-        status.style.color = '#00d4ff';
+      // Visual feedback directly on the button
+      if (btnEl) {
+        btnEl.innerHTML = '✅ Skopiowano!';
+        btnEl.style.background = 'rgba(46,204,113,0.15)';
+        btnEl.style.color = '#2ecc71';
+        btnEl.style.borderColor = 'rgba(46,204,113,0.4)';
         setTimeout(() => {
-          const now = new Date().toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
-          status.textContent = `✅ Analiza gotowa (${now})`;
-          status.style.color = '#2ecc71';
+          btnEl.innerHTML = origText;
+          btnEl.style.background = origBg;
+          btnEl.style.color = origColor;
+          btnEl.style.borderColor = origBorder;
         }, 2000);
       }
     }).catch(err => {
       console.error('[SH] Copy failed:', err);
+      if (btnEl) {
+        btnEl.innerHTML = '❌ Błąd kopiowania';
+        btnEl.style.background = 'rgba(231,76,60,0.15)';
+        btnEl.style.color = '#e74c3c';
+        setTimeout(() => {
+          btnEl.innerHTML = origText;
+          btnEl.style.background = origBg;
+          btnEl.style.color = origColor;
+          btnEl.style.borderColor = origBorder;
+        }, 2000);
+      }
     });
   }
 
@@ -10967,7 +10981,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.42.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.42.4</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
