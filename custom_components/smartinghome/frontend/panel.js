@@ -1179,7 +1179,7 @@ class SmartingHomePanel extends HTMLElement {
         color: '#2ecc71',
         border: 'rgba(46,204,113,0.3)',
         bg: 'rgba(46,204,113,0.08)',
-        badge: '✅ REKOMENDOWANE',
+        badge: '',
         // ROI ALWAYS uses annual-average RCE profile (never today's snapshot!)
         // Today's prices may have duck-curve / extreme midday cheapness
         // which is not representative of a full year.
@@ -1737,7 +1737,12 @@ class SmartingHomePanel extends HTMLElement {
             </div>
             <div style="font-size:8px; color:${balanceOk ? '#2ecc71' : '#e74c3c'}; margin-top:4px; text-align:right">bilans: ${balanceOk ? '✅' : '⚠️'} wejście ${Math.round(balanceIn)} = wyjście ${Math.round(balanceOut)} kWh</div>
           </div>
-          <div style="border-top:1px solid rgba(255,255,255,0.06); padding-top:8px">
+          <div style="margin-top:10px; padding:10px; border-radius:10px; background:rgba(0,212,255,0.06); border:1px solid rgba(0,212,255,0.15)">
+            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">💰 Roczny koszt energii z systemem</div>
+            <div style="font-size:26px; font-weight:900; color:#00d4ff">${Math.round(yr.importCost - yr.exportRev).toLocaleString('pl-PL')} zł</div>
+            <div style="font-size:9px; color:#94a3b8; margin-top:1px">import ${yr.importCost.toFixed(0)} zł − eksport ${yr.exportRev.toFixed(0)} zł</div>
+          </div>
+          <div style="border-top:1px solid rgba(255,255,255,0.06); padding-top:8px; margin-top:8px">
             <div style="font-size:9px; color:#64748b">Koszt energii bez PV (baseline)</div>
             <div style="font-size:13px; font-weight:600; color:#94a3b8">${yr.baselineCost.toFixed(0)} zł/rok</div>
             <div style="font-size:9px; color:#64748b; margin-top:4px">Koszt importu z systemem</div>
@@ -1748,7 +1753,7 @@ class SmartingHomePanel extends HTMLElement {
             <div style="font-size:13px; font-weight:700; color:#a855f7">+${yr.arbitrageProfit.toFixed(0)} zł</div>` : ''}
           </div>
           <div style="margin-top:10px; padding:10px; border-radius:10px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.06)">
-            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Łączna roczna korzyść systemu</div>
+            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">📈 Łączna roczna korzyść systemu</div>
             <div style="font-size:24px; font-weight:900; color:${yr.benefit >= 0 ? "#2ecc71" : "#e74c3c"}">${yr.benefit >= 0 ? "+" : ""}${yr.benefit.toFixed(0)} zł</div>
             <div style="font-size:9px; color:#94a3b8; margin-top:1px">baseline − (import − eksport)</div>
             <div style="display:grid; grid-template-columns:1fr auto; gap:1px 6px; font-size:9px; margin-top:6px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.06)">
@@ -1757,7 +1762,7 @@ class SmartingHomePanel extends HTMLElement {
               ${hasArbitrage ? `<div style="color:#a855f7">🔋 Arbitraż baterii:</div><div style="color:#a855f7; text-align:right">+${yr.arbitrageProfit.toFixed(0)} zł</div>` : ''}
               ${yr.exportRev - (yr.pvExportRev || 0) > 10 ? `<div style="color:#10b981">↑ Eksport bat→sieć:</div><div style="color:#10b981; text-align:right">+${(yr.exportRev - (yr.pvExportRev || 0)).toFixed(0)} zł</div>` : ''}
             </div>
-            ${i > 0 ? `<div style="font-size:10px; color:#2ecc71; margin-top:4px">+${diffVsG11.toFixed(0)} zł vs G11</div>` : `<div style="font-size:10px; color:#e74c3c; margin-top:4px">taryfa stała</div>`}
+            ${i > 0 ? `<div style="font-size:10px; color:#94a3b8; margin-top:4px">+${diffVsG11.toFixed(0)} zł vs G11</div>` : `<div style="font-size:10px; color:#e74c3c; margin-top:4px">taryfa stała</div>`}
           </div>
           ${invest > 0 ? `
           <div style="margin-top:10px">
@@ -1776,13 +1781,29 @@ class SmartingHomePanel extends HTMLElement {
         </div>`;
       }).join("");
 
-      // Ranking + HEMS summary
-      const ranked = [...results].sort((a, b) => b.yr.benefit - a.yr.benefit);
+      // ── 3 RANKINGS + HEMS summary ──
+      const rankedByCost = [...results].sort((a, b) => (a.yr.importCost - a.yr.exportRev) - (b.yr.importCost - b.yr.exportRev));
+      const rankedByBenefit = [...results].sort((a, b) => b.yr.benefit - a.yr.benefit);
       const rankColors = ['#2ecc71', '#f7b731', '#e74c3c'];
       const rankEmoji = ['🥇', '🥈', '🥉'];
-      let summaryHtml = `<div style="grid-column:1/-1; margin-top:12px; padding:12px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:10px">
-        <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; text-align:center">🏆 Ranking opłacalności</div>
-        ${ranked.map((t, idx) => `<div style="display:flex; align-items:center; gap:8px; padding:4px 0; ${idx === 0 ? 'font-weight:700' : ''}">
+
+      // Ranking 1: Najniższy roczny koszt
+      let summaryHtml = `<div style="grid-column:1/-1; margin-top:12px; padding:12px; background:rgba(0,212,255,0.04); border:1px solid rgba(0,212,255,0.12); border-radius:10px">
+        <div style="font-size:10px; color:#00d4ff; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; text-align:center">💰 Ranking — Najniższy roczny koszt energii</div>
+        ${rankedByCost.map((t, idx) => {
+          const cost = t.yr.importCost - t.yr.exportRev;
+          return `<div style="display:flex; align-items:center; gap:8px; padding:4px 0; ${idx === 0 ? 'font-weight:700' : ''}">
+            <span style="font-size:16px">${rankEmoji[idx]}</span>
+            <span style="flex:1; font-size:12px; color:${t.color}">${t.label}</span>
+            <span style="font-size:13px; font-weight:700; color:${rankColors[idx]}">${Math.round(cost).toLocaleString('pl-PL')} zł/rok</span>
+          </div>`;
+        }).join('')}
+      </div>`;
+
+      // Ranking 2: Największa korzyść systemu
+      summaryHtml += `<div style="grid-column:1/-1; margin-top:8px; padding:12px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:10px">
+        <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; text-align:center">📈 Ranking — Największa korzyść systemu (vs brak PV)</div>
+        ${rankedByBenefit.map((t, idx) => `<div style="display:flex; align-items:center; gap:8px; padding:4px 0; ${idx === 0 ? 'font-weight:700' : ''}">
           <span style="font-size:16px">${rankEmoji[idx]}</span>
           <span style="flex:1; font-size:12px; color:${t.color}">${t.label}</span>
           <span style="font-size:10px; color:#00d4ff; margin-right:6px">💎 ${t.yr.effectivePvValue.toFixed(2)} zł/kWh</span>
@@ -1790,14 +1811,26 @@ class SmartingHomePanel extends HTMLElement {
         </div>`).join('')}
       </div>`;
 
-      const hemsSavings = results[2].yr.benefit - results[0].yr.benefit;
-      if (hemsSavings > 0) {
-        summaryHtml += `<div style="grid-column:1/-1; margin-top:8px; padding:12px; background:rgba(46,204,113,0.08); border:1px solid rgba(46,204,113,0.2); border-radius:10px; text-align:center">
-          <div style="font-size:11px; color:#94a3b8">💰 Różnica: Dynamiczna RCE vs G11</div>
-          <div style="font-size:28px; font-weight:900; color:#2ecc71; margin-top:4px">+${hemsSavings.toFixed(0)} zł/rok</div>
-          <div style="font-size:10px; color:#64748b; margin-top:2px">Oszczędność dzięki taryfie dynamicznej z aktywnym zarządzaniem HEMS</div>
-        </div>`;
-      }
+      // Ranking 3: Tabela podsumowująca 4 kryteria
+      const bestCost = rankedByCost[0];
+      const bestBenefit = rankedByBenefit[0];
+      const bestPvValue = [...results].sort((a, b) => b.yr.effectivePvValue - a.yr.effectivePvValue)[0];
+      const bestHems = results[2]; // dynamic always has HEMS
+      summaryHtml += `<div style="grid-column:1/-1; margin-top:8px; padding:12px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:10px">
+        <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; text-align:center">📊 Podsumowanie — Która taryfa wygrywa w czym?</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:10px">
+          <div style="color:#94a3b8">💰 Najniższy roczny koszt:</div>
+          <div style="color:${bestCost.color}; font-weight:700; text-align:right">${bestCost.label.split(' — ')[0]} (${Math.round(bestCost.yr.importCost - bestCost.yr.exportRev).toLocaleString('pl-PL')} zł)</div>
+          <div style="color:#94a3b8">📈 Największa korzyść systemu:</div>
+          <div style="color:${bestBenefit.color}; font-weight:700; text-align:right">${bestBenefit.label.split(' — ')[0]} (+${bestBenefit.yr.benefit.toFixed(0)} zł)</div>
+          <div style="color:#94a3b8">💎 Najwyższa wartość PV/kWh:</div>
+          <div style="color:${bestPvValue.color}; font-weight:700; text-align:right">${bestPvValue.label.split(' — ')[0]} (${bestPvValue.yr.effectivePvValue.toFixed(2)} zł)</div>
+          <div style="color:#94a3b8">🤖 Automatyka HEMS:</div>
+          <div style="color:${bestHems.color}; font-weight:700; text-align:right">${bestHems.label.split(' — ')[0]} (+${automationGain.toFixed(0)} zł/rok)</div>
+        </div>
+      </div>`;
+
+      // HEMS value card
       if (automationGain > 50) {
         summaryHtml += `<div style="grid-column:1/-1; margin-top:8px; padding:10px; background:rgba(168,85,247,0.08); border:1px solid rgba(168,85,247,0.2); border-radius:10px; text-align:center">
           <div style="font-size:11px; color:#a855f7">🤖 Wartość automatyki HEMS (dynamiczna)</div>
@@ -1820,11 +1853,12 @@ class SmartingHomePanel extends HTMLElement {
         import: r.yr.import,
         export: r.yr.export,
         load: r.yr.load,
-        selfConsumption: r.yr.selfConsumption,
+        selfConsumption: r.yr.pvSelfCons,
         pvSavings: r.yr.pvSavings,
         pvExportRev: r.yr.pvExportRev || 0,
         importCost: r.yr.importCost,
         exportRev: r.yr.exportRev,
+        annualEnergyCost: r.yr.importCost - r.yr.exportRev,
         baselineCost: r.yr.baselineCost,
         benefit: r.yr.benefit,
         payback: r.yr.payback,
@@ -1842,6 +1876,7 @@ class SmartingHomePanel extends HTMLElement {
         profileType: profileKey,
         batteryCapacityKWh: (this._settings.roi_battery || 10000) / 1000,
         pvPeakKWp: (this._settings.roi_pv_peak || 0) / 1000,
+        automationGainHEMS: automationGain || 0,
       });
       this._roiDataForAI = roiDataForAI;
 
@@ -10981,7 +11016,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.42.4</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.42.5</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
