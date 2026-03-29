@@ -829,19 +829,39 @@ async def async_setup_services(
 Użytkownik ma system PV + bateria z Home Assistant i integrację Smarting HOME.
 
 Poniżej są wyniki symulacji ROI (zwrotu z inwestycji) porównujące 3 taryfy energetyczne.
-Wytłumacz te dane PROSTYM JĘZYKIEM dla osoby, która nie ma wiedzy technicznej o fotowoltaice.
+Wytłumacz te dane PROSTYM JĘZYKIEM dla osoby bez wiedzy technicznej o fotowoltaice.
 
 WAŻNE WYTYCZNE:
 1. Pisz po polsku, prostym językiem — jak tłumaczysz sąsiadowi
-2. Unikaj żargonu technicznego — zamiast "autokonsumpcja" pisz "energia zużyta na własne potrzeby"
-3. Podaj KONKRETNE liczby i kwoty w złotówkach
+2. Unikaj żargonu — zamiast "autokonsumpcja" → "energia zużyta na własne potrzeby"
+3. Podaj KONKRETNE kwoty w złotówkach
 4. Wyjaśnij CO TO ZNACZY dla portfela użytkownika
-5. Porównaj taryfy i jasno powiedz KTÓRĄ wybrać i DLACZEGO
-6. Wyjaśnij co robi bateria i automatyka HEMS (po co to jest)
-7. Podaj zwrot z inwestycji — kiedy się "zwróci" i ile zarobi
-8. Jeśli dynamiczna wygrywa — wyjaśnij SKĄD bierze się przewaga
-9. Użyj analogii z życia codziennego
-10. Na końcu daj 1-2 KONKRETNE rekomendacje
+5. NIE mów "rachunek za prąd" — mów "roczny koszt energii z systemem" lub "łączna roczna korzyść systemu"
+6. Wyjaśnij co robi bateria i automatyka HEMS i ILE złotych to daje
+7. Podaj zwrot z inwestycji — kiedy się "zwróci" i ile zarobi po 25 latach
+8. Użyj analogii z życia codziennego
+9. NIE oceniaj żadnej taryfy jako "najgorsza" — mów "w tej symulacji najmniej korzystna finansowo"
+
+WAŻNA LOGIKA DO WYJAŚNIENIA:
+- Jeśli taryfa z DROŻSZYM prądem wygrywa — wyjaśnij DLACZEGO: bo każda kWh z paneli jest więcej warta, więc oszczędności z PV są wyższe
+- Taryfa z TAŃSZYM prądem ma niższy roczny koszt energii, ale PV daje mniejszą oszczędność per kWh
+- To NIE jest sprzeczność — to różne metryki
+- Jeśli dynamiczna ma dodatkowy zysk z arbitrażu baterii — wyjaśnij co to jest (kupowanie tanio w nocy, sprzedawanie drogo wieczorem)
+
+WYMAGANA STRUKTURA ODPOWIEDZI:
+1. Krótkie wprowadzenie z analogią (2-3 zdania)
+2. Porównanie taryf — dla każdej podaj: wartość 1 kWh z PV, łączną roczną korzyść, zwrot inwestycji
+3. Wyjaśnienie roli baterii i HEMS
+4. OBOWIĄZKOWA TABELA na końcu (przed rekomendacjami):
+
+| Kryterium | Najlepsza taryfa |
+|---|---|
+| 🏆 Największa łączna korzyść roczna | ... |
+| 💎 Największa wartość 1 kWh z PV | ... |
+| 🤖 Największa korzyść z automatyki HEMS | ... |
+| 💰 Najniższy roczny koszt energii | ... |
+
+5. 1-2 KONKRETNE rekomendacje
 
 WAŻNE OGRANICZENIA:
 - NIE omawiaj bieżącego stanu systemu (aktualna produkcja PV, stan baterii, pobór domu)
@@ -852,8 +872,8 @@ WAŻNE OGRANICZENIA:
 DANE SYMULACJI ROI:
 {json.dumps(roi_data, indent=2, ensure_ascii=False)}
 
-Odpowiedz w formacie markdown z sekcjami (##), listami i bold (**) dla kluczowych wartości.
-Długość: 300-500 słów."""
+Odpowiedz w formacie markdown z sekcjami (##), listami, **bold** i tabelą |...|.
+Długość: 400-600 słów."""
 
         try:
             stored = _read_settings(hass)
