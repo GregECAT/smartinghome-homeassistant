@@ -896,8 +896,6 @@ Długość: 400-600 słów."""
 
             # Direct API call without system context (no _build_context)
             # to avoid polluting ROI analysis with live system status
-            import aiohttp
-
             if provider == "anthropic" and ai_advisor.anthropic_available:
                 response = await ai_advisor._direct_ask_anthropic(question)
             elif ai_advisor.gemini_available:
