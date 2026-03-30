@@ -8001,8 +8001,8 @@ class SmartingHomePanel extends HTMLElement {
         .fc-kpi-label { font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 0.8px; }
         .fc-kpi-value { font-size: 28px; font-weight: 900; margin-top: 6px; line-height: 1; }
         .fc-kpi-sub { font-size: 10px; color: #94a3b8; margin-top: 4px; }
-        .fc-week-bars { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; height: 180px; padding: 10px 0; }
-        .fc-week-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+        .fc-week-bars { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; height: 200px; padding: 10px 0; }
+        .fc-week-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; height: 100%; }
         .fc-week-bar { width: 100%; border-radius: 8px 8px 4px 4px; transition: height 0.6s ease, background 0.3s; min-height: 4px; cursor: pointer; }
         .fc-week-bar:hover { filter: brightness(1.2); }
         .fc-week-val { font-size: 11px; font-weight: 700; }
@@ -11241,7 +11241,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.43.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.43.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -12369,13 +12369,14 @@ class SmartingHomePanel extends HTMLElement {
     this._setText('fc-week-avg', (totalKwh / dailyData.length).toFixed(1));
 
     container.innerHTML = dailyData.map(d => {
-      const pct = (d.kwh / maxKwh * 100).toFixed(0);
+      const barMaxH = 140; // px available for bars
+      const barH = Math.max(6, (d.kwh / maxKwh) * barMaxH);
       const color = d.kwh > 20 ? '#2ecc71' : d.kwh > 10 ? '#00d4ff' : '#475569';
       const todayMark = d.isToday ? 'border:2px solid #f7b731;' : '';
       const valColor = d.isToday ? '#f7b731' : '#fff';
       return `<div class="fc-week-col">
         <div class="fc-week-val" style="color:${valColor}">${d.kwh.toFixed(1)}</div>
-        <div class="fc-week-bar" style="height:${Math.max(8, pct)}%; background:${color}; ${todayMark}"></div>
+        <div class="fc-week-bar" style="height:${barH.toFixed(0)}px; background:${color}; ${todayMark}"></div>
         <div class="fc-week-day" style="${d.isToday ? 'color:#f7b731; font-weight:800' : ''}">${d.isToday ? 'DZIŚ' : d.dayName}</div>
         <div class="fc-week-date">${d.dayNum}</div>
       </div>`;
