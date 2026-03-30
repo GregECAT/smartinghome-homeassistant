@@ -4951,6 +4951,9 @@ class SmartingHomePanel extends HTMLElement {
 
   _updateAlertsTab() {
     if (!this._hass) return;
+    // Tier gate — alerts only for PRO/ENTERPRISE
+    const tier = this._tier();
+    if (tier !== 'PRO' && tier !== 'ENTERPRISE') return;
     // Initialize alert state
     if (!this._alertState) {
       this._alertState = { alerts: [], history: [], lastSensorTs: {}, acknowledgedIds: new Set() };
@@ -6096,7 +6099,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); this._updateAlertsTab(); this._updateForecastCharts().catch(e => console.error('[SH] charts err:', e)); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateAlertsVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); this._updateAlertsTab(); this._updateForecastCharts().catch(e => console.error('[SH] charts err:', e)); }
 
 
   /* ── Overview Autopilot banner (runs every 5s via _updateAll) ── */
@@ -9391,7 +9394,7 @@ class SmartingHomePanel extends HTMLElement {
               <button class="tab-btn" data-tab="wind" onclick="this.getRootNode().host._switchTab('wind')">🌬️ Wiatr</button>
               <button class="tab-btn" data-tab="history" onclick="this.getRootNode().host._switchTab('history')">📅 Historia</button>
               <button class="tab-btn" data-tab="forecast" onclick="this.getRootNode().host._switchTab('forecast')">☀️ Prognoza</button>
-              <button class="tab-btn" data-tab="alerts" onclick="this.getRootNode().host._switchTab('alerts')">⚠️ Awarie</button>
+              <button class="tab-btn" data-tab="alerts" onclick="this.getRootNode().host._switchTab('alerts')" id="tab-btn-alerts" style="display:none">⚠️ Awarie</button>
               <button class="tab-btn" data-tab="autopilot" onclick="this.getRootNode().host._switchTab('autopilot')" id="tab-btn-autopilot" style="display:none">🧠 Autopilot</button>
             </div>
           </div>
@@ -12906,7 +12909,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.47.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.47.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -12943,6 +12946,22 @@ class SmartingHomePanel extends HTMLElement {
         console.warn('[SH] Watchdog ping error:', e);
       }
     }, 30000);
+  }
+
+  /* ═══════════════════════════════════════════════════
+     ALERTS TAB — Tier Visibility
+     ═══════════════════════════════════════════════════ */
+
+  _updateAlertsVisibility() {
+    const btn = this.shadowRoot.getElementById('tab-btn-alerts');
+    if (!btn) return;
+    const tier = this._tier();
+    const show = (tier === 'PRO' || tier === 'ENTERPRISE');
+    btn.style.display = show ? 'inline-block' : 'none';
+    if (show && !this._alertsTabLogged) {
+      console.log('[SH] Alerts tab visible (tier=' + tier + ')');
+      this._alertsTabLogged = true;
+    }
   }
 
   /* ═══════════════════════════════════════════════════
