@@ -5808,6 +5808,97 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
 
+  // ── Multi-device Push Helpers ──
+
+  _buildPushDeviceOptions() {
+    const notifyServices = Object.keys(this._hass?.services?.notify || {});
+    const mobileApps = notifyServices.filter(s => s.startsWith('mobile_app_'));
+    const list = mobileApps.length > 0 ? mobileApps : notifyServices;
+    return list.map(svc => {
+      const entity = `notify.${svc}`;
+      const isMobile = svc.startsWith('mobile_app_');
+      const label = isMobile ? svc.replace('mobile_app_', '').replace(/_/g, ' ') : svc;
+      const displayLabel = label.charAt(0).toUpperCase() + label.slice(1);
+      return { value: entity, label: isMobile ? `📱 ${displayLabel}` : displayLabel };
+    });
+  }
+
+  _renderPushDeviceRow(container, selectedValue, idx) {
+    const options = this._pushDeviceOptions || [];
+    const row = document.createElement('div');
+    row.className = 'push-device-row';
+    row.style.cssText = 'display:flex; align-items:center; gap:6px; margin-bottom:5px;';
+    row.dataset.pushIdx = idx;
+
+    const select = document.createElement('select');
+    select.className = 'notif-push-device-select';
+    select.style.cssText = 'flex:1; padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#e2e8f0; font-size:11px; outline:none; cursor:pointer;';
+    select.innerHTML = '<option value="">— Wybierz urządzenie —</option>';
+    options.forEach(opt => {
+      const selected = opt.value === selectedValue ? ' selected' : '';
+      select.innerHTML += `<option value="${opt.value}"${selected}>${opt.label}</option>`;
+    });
+    row.appendChild(select);
+
+    // Show remove button only if more than 1 row
+    const removeBtn = document.createElement('button');
+    removeBtn.textContent = '✕';
+    removeBtn.title = 'Usuń urządzenie';
+    removeBtn.style.cssText = 'width:28px; height:28px; flex-shrink:0; background:rgba(231,76,60,0.12); border:1px solid rgba(231,76,60,0.3); border-radius:6px; color:#e74c3c; font-size:12px; cursor:pointer; transition:background 0.2s; display:flex; align-items:center; justify-content:center;';
+    removeBtn.onmouseover = () => removeBtn.style.background = 'rgba(231,76,60,0.25)';
+    removeBtn.onmouseout = () => removeBtn.style.background = 'rgba(231,76,60,0.12)';
+    removeBtn.onclick = () => this._removePushDevice(idx);
+    row.appendChild(removeBtn);
+
+    container.appendChild(row);
+  }
+
+  _addPushDevice() {
+    const container = this.shadowRoot.getElementById('notif-push-devices-list');
+    if (!container) return;
+    const currentCount = container.querySelectorAll('.push-device-row').length;
+    if (currentCount >= 5) {
+      // Max 5 devices
+      return;
+    }
+    this._renderPushDeviceRow(container, '', currentCount);
+    this._updateRemoveButtons();
+  }
+
+  _removePushDevice(idx) {
+    const container = this.shadowRoot.getElementById('notif-push-devices-list');
+    if (!container) return;
+    const rows = container.querySelectorAll('.push-device-row');
+    if (rows.length <= 1) return;  // Don't remove last one
+    const row = container.querySelector(`.push-device-row[data-push-idx="${idx}"]`);
+    if (row) row.remove();
+    // Re-index remaining rows
+    container.querySelectorAll('.push-device-row').forEach((r, i) => r.dataset.pushIdx = i);
+    this._updateRemoveButtons();
+  }
+
+  _updateRemoveButtons() {
+    const container = this.shadowRoot.getElementById('notif-push-devices-list');
+    if (!container) return;
+    const rows = container.querySelectorAll('.push-device-row');
+    rows.forEach(row => {
+      const btn = row.querySelector('button');
+      if (btn) btn.style.visibility = rows.length > 1 ? 'visible' : 'hidden';
+    });
+  }
+
+  _collectPushDevices() {
+    const container = this.shadowRoot.getElementById('notif-push-devices-list');
+    if (!container) return [];
+    const selects = container.querySelectorAll('.notif-push-device-select');
+    const entities = [];
+    selects.forEach(sel => {
+      const v = (sel.value || '').trim();
+      if (v) entities.push(v);
+    });
+    return entities;
+  }
+
   _onNotifToggle() {
     const master = this.shadowRoot.getElementById('notif-master')?.checked;
     const wrap = this.shadowRoot.getElementById('notif-channels-wrap');
@@ -5843,28 +5934,22 @@ class SmartingHomePanel extends HTMLElement {
     if (el('notif-ch-sms')) el('notif-ch-sms').checked = !!ch.sms;
     if (el('notif-ch-email')) el('notif-ch-email').checked = !!ch.email;
 
-    // Inputs — populate push entity dropdown
-    const pushSelect = el('notif-push-entity');
-    if (pushSelect && this._hass?.services?.notify) {
-      const savedEntity = cfg.ha_push_entity || '';
-      const notifyServices = Object.keys(this._hass.services.notify);
-      const mobileApps = notifyServices.filter(s => s.startsWith('mobile_app_'));
-      pushSelect.innerHTML = '<option value="">\u2014 Wybierz urz\u0105dzenie \u2014</option>';
-      mobileApps.forEach(svc => {
-        const entity = `notify.${svc}`;
-        const label = svc.replace('mobile_app_', '').replace(/_/g, ' ');
-        const displayLabel = label.charAt(0).toUpperCase() + label.slice(1);
-        const selected = entity === savedEntity ? ' selected' : '';
-        pushSelect.innerHTML += `<option value="${entity}"${selected}>\ud83d\udcf1 ${displayLabel}</option>`;
-      });
-      // If no mobile apps found, add all notify services
-      if (mobileApps.length === 0) {
-        notifyServices.forEach(svc => {
-          const entity = `notify.${svc}`;
-          const selected = entity === savedEntity ? ' selected' : '';
-          pushSelect.innerHTML += `<option value="${entity}"${selected}>${svc}</option>`;
-        });
+    // Inputs — populate push devices list (multi-device support)
+    const devicesList = el('notif-push-devices-list');
+    if (devicesList && this._hass?.services?.notify) {
+      // Backward compat: old ha_push_entity (string) → new ha_push_entities (array)
+      let savedEntities = cfg.ha_push_entities || [];
+      if (savedEntities.length === 0 && cfg.ha_push_entity) {
+        savedEntities = [cfg.ha_push_entity];
       }
+      if (savedEntities.length === 0) savedEntities = [''];  // At least one empty row
+
+      this._pushDeviceOptions = this._buildPushDeviceOptions();
+      devicesList.innerHTML = '';
+      savedEntities.forEach((entity, idx) => {
+        this._renderPushDeviceRow(devicesList, entity, idx);
+      });
+      this._updateRemoveButtons();
     }
     if (el('notif-phone')) el('notif-phone').value = cfg.phone || '';
     if (el('notif-email')) el('notif-email').value = cfg.email || '';
@@ -5902,7 +5987,8 @@ class SmartingHomePanel extends HTMLElement {
         sms: !!el('notif-ch-sms')?.checked,
         email: !!el('notif-ch-email')?.checked,
       },
-      ha_push_entity: (el('notif-push-entity')?.value || '').trim(),
+      ha_push_entity: this._collectPushDevices()[0] || '',  // backward compat
+      ha_push_entities: this._collectPushDevices(),
       phone: (el('notif-phone')?.value || '').trim(),
       email: (el('notif-email')?.value || '').trim(),
       levels,
@@ -12288,10 +12374,9 @@ class SmartingHomePanel extends HTMLElement {
                   <label class="toggle-switch sm"><input type="checkbox" id="notif-ch-push" onchange="this.getRootNode().host._onNotifToggle()"><span class="toggle-slider"></span></label>
                 </div>
                 <div id="notif-push-entity-wrap" style="display:none">
-                  <select id="notif-push-entity" style="width:100%; padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#e2e8f0; font-size:11px; outline:none; cursor:pointer">
-                    <option value="">— Wybierz urządzenie —</option>
-                  </select>
-                  <div style="font-size:9px; color:#64748b; margin-top:3px">Wybierz urządzenie z aplikacji HA Companion</div>
+                  <div id="notif-push-devices-list"></div>
+                  <button onclick="this.getRootNode().host._addPushDevice()" style="width:100%; padding:6px 10px; background:rgba(0,212,255,0.08); border:1px dashed rgba(0,212,255,0.3); border-radius:6px; color:#00d4ff; font-size:11px; cursor:pointer; margin-top:6px; transition:background 0.2s" onmouseover="this.style.background='rgba(0,212,255,0.15)'" onmouseout="this.style.background='rgba(0,212,255,0.08)'">+ Dodaj urządzenie</button>
+                  <div style="font-size:9px; color:#64748b; margin-top:3px">Wybierz urządzenia z aplikacji HA Companion</div>
                 </div>
               </div>
 
@@ -12909,7 +12994,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.47.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.47.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
