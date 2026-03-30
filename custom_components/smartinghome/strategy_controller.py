@@ -1446,7 +1446,7 @@ class StrategyController:
                     drifted = False
                     drift_reason = ""
                     expected_modes = _STRATEGY_EXPECTED_MODES.get(strategy)
-                    if expected_modes and work_mode not in expected_modes and work_mode not in ("unknown", ""):
+                    if expected_modes and work_mode not in expected_modes and work_mode not in ("unknown", "", "unavailable"):
                         drifted = True
                         drift_reason = f"mode mismatch: expected={expected_modes}, got={work_mode}"
                         _LOGGER.warning(
