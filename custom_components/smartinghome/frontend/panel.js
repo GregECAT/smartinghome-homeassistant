@@ -150,6 +150,7 @@ class SmartingHomePanel extends HTMLElement {
     if (tab === 'autopilot') { this._updateAutopilot(); }
     if (tab === 'energy' || tab === 'battery' || tab === 'overview') { this._updateForecastCharts(); }
     if (tab === 'forecast') { this._initForecastTab(); }
+    if (tab === 'alerts') { this._updateAlertsTab(); }
   }
 
   /* ── Sensor mapping ─────────────────────── */
@@ -4944,8 +4945,857 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
 
+  /* ═══════════════════════════════════════════════════════════ */
+  /* ═══  ALERTS & ANOMALIES ENGINE                        ═══ */
+  /* ═══════════════════════════════════════════════════════════ */
+
+  _updateAlertsTab() {
+    if (!this._hass) return;
+    // Initialize alert state
+    if (!this._alertState) {
+      this._alertState = { alerts: [], history: [], lastSensorTs: {}, acknowledgedIds: new Set() };
+      // Restore history from settings
+      if (this._settings.alert_history) {
+        this._alertState.history = this._settings.alert_history.slice(-50);
+      }
+    }
+
+    // Run anomaly engine
+    const alerts = this._runAnomalyEngine();
+    this._alertState.alerts = alerts;
+
+    // Persist new alerts to history (dedup by id + 5min window)
+    const now = Date.now();
+    alerts.forEach(a => {
+      const isDup = this._alertState.history.some(h =>
+        h.id === a.id && (now - h.ts) < 300000
+      );
+      if (!isDup) {
+        this._alertState.history.push({ ...a, ts: now });
+      }
+    });
+    // Trim history to last 50
+    if (this._alertState.history.length > 50) {
+      this._alertState.history = this._alertState.history.slice(-50);
+    }
+
+    // Calculate health score
+    const health = this._calcHealthScore(alerts);
+
+    // Render all sections
+    this._renderAlertStatusBar(alerts, health);
+    this._renderAlertTiles();
+    this._renderActiveAlerts(alerts);
+    this._renderHealthBreakdown(health);
+    this._renderAlertHistory();
+
+    // Save history periodically (every 60s)
+    if (!this._lastAlertHistorySave || (now - this._lastAlertHistorySave) > 60000) {
+      this._lastAlertHistorySave = now;
+      const last24h = this._alertState.history.filter(h => (now - h.ts) < 86400000);
+      this._savePanelSettings({ alert_history: last24h.slice(-50) });
+    }
+  }
+
+  _runAnomalyEngine() {
+    const alerts = [];
+    const hour = new Date().getHours();
+    const isDaytime = hour >= 6 && hour <= 21;
+    const isSolarHours = hour >= 8 && hour <= 17;
+
+    // ─── Layer 1: Hard Alerts (device data) ───
+    this._checkHardAlerts(alerts, isDaytime, isSolarHours);
+
+    // ─── Layer 2: Soft Anomalies (behavioral) ───
+    this._checkSoftAnomalies(alerts, isDaytime, isSolarHours);
+
+    // ─── Layer 3: Risk Predictions ───
+    this._checkRiskPredictions(alerts, isDaytime);
+
+    return alerts;
+  }
+
+  _checkHardAlerts(alerts, isDaytime, isSolarHours) {
+    // Inverter offline (daytime only)
+    const pvPower = this._nm('pv_power');
+    const invTemp = this._nm('inverter_temp');
+    const loadPower = this._nm('load_power');
+    const batSoc = this._nm('battery_soc');
+
+    if (isDaytime && pvPower === null && loadPower === null) {
+      alerts.push({
+        id: 'INV_OFFLINE', level: 'critical', source: 'Falownik',
+        title: 'Falownik offline',
+        desc: 'Brak odczytu danych z falownika — sprawdź zasilanie i komunikację',
+        diag: {
+          detected: 'Brak danych z sensorów PV i Load',
+          reason: 'Falownik nie odpowiada na zapytania Modbus/LAN',
+          causes: ['Brak zasilania falownika', 'Awaria komunikacji RS485/LAN', 'Restart falownika', 'Uszkodzenie loggera WiFi'],
+          action: 'Sprawdź zasilanie falownika, kabel RS485, status loggera WiFi',
+          severity: 'Wymaga natychmiastowej interwencji'
+        }
+      });
+    }
+
+    // Inverter overtemperature
+    if (invTemp !== null) {
+      if (invTemp > 75) {
+        alerts.push({
+          id: 'INV_OVERTEMP_CRIT', level: 'critical', source: 'Falownik',
+          title: `Przegrzanie falownika: ${invTemp.toFixed(1)}°C`,
+          desc: 'Temperatura krytyczna — falownik może się wyłączyć automatycznie',
+          diag: {
+            detected: `Temperatura falownika: ${invTemp.toFixed(1)}°C (próg: 75°C)`,
+            reason: 'Przegrzanie wewnętrzne falownika',
+            causes: ['Zablokowana wentylacja', 'Wysoka temp. otoczenia', 'Przeciążenie', 'Uszkodzony wentylator'],
+            action: 'Sprawdź wentylację falownika, wyczyść filtry, zmniejsz obciążenie',
+            severity: 'Krytyczne — ryzyko wyłączenia'
+          }
+        });
+      } else if (invTemp > 65) {
+        alerts.push({
+          id: 'INV_OVERTEMP', level: 'warning', source: 'Falownik',
+          title: `Wysoka temperatura falownika: ${invTemp.toFixed(1)}°C`,
+          desc: 'Temperatura powyżej normy — monitoruj sytuację',
+          diag: {
+            detected: `Temperatura: ${invTemp.toFixed(1)}°C (próg ostrzegawczy: 65°C)`,
+            reason: 'Podwyższona temperatura pracy',
+            causes: ['Słaba wentylacja', 'Duże obciążenie', 'Wysoka temp. otoczenia (lato)'],
+            action: 'Zapewnij lepszą wentylację, sprawdź filtry powietrza',
+            severity: 'Ostrzeżenie — obserwuj trend'
+          }
+        });
+      }
+    }
+
+    // Battery BMS offline
+    if (batSoc === null) {
+      alerts.push({
+        id: 'BAT_BMS_OFFLINE', level: 'critical', source: 'Bateria',
+        title: 'Brak danych baterii / BMS offline',
+        desc: 'Brak odczytu SOC — możliwa utrata komunikacji z BMS',
+        diag: {
+          detected: 'Sensor battery_soc zwraca null',
+          reason: 'Brak komunikacji z systemem zarządzania baterią (BMS)',
+          causes: ['Awaria CAN/RS485 baterii', 'Restart BMS', 'Luźny kabel komunikacyjny', 'Bateria wyłączona'],
+          action: 'Sprawdź kabel komunikacyjny baterii, napięcie baterii, status falownika',
+          severity: 'Krytyczne — brak kontroli nad baterią'
+        }
+      });
+    }
+
+    // Grid overvoltage
+    const vl1 = this._nm('voltage_l1');
+    const vl2 = this._nm('voltage_l2');
+    const vl3 = this._nm('voltage_l3');
+    const voltages = [vl1, vl2, vl3].filter(v => v !== null);
+
+    voltages.forEach((v, i) => {
+      const phase = `L${i + 1}`;
+      if (v > 253) {
+        alerts.push({
+          id: `GRID_OVERVOLT_${phase}`, level: 'critical', source: 'Sieć',
+          title: `Napięcie ${phase} krytycznie wysokie: ${v.toFixed(1)}V`,
+          desc: 'Przekroczone dopuszczalne napięcie sieci — falownik może się wyłączyć',
+          diag: {
+            detected: `${phase}: ${v.toFixed(1)}V (próg: 253V)`,
+            reason: 'Napięcie sieci przekracza normę',
+            causes: ['Problemy z siecią energetyczną', 'Zbyt dużo eksportu PV w okolicy', 'Słaby transformator'],
+            action: 'Ogranicz eksport do sieci, włącz zero-export, zgłoś do operatora',
+            severity: 'Krytyczne — ryzyko odstawienia falownika'
+          }
+        });
+      } else if (v > 245) {
+        alerts.push({
+          id: `GRID_HIGHVOLT_${phase}`, level: 'warning', source: 'Sieć',
+          title: `Wysokie napięcie ${phase}: ${v.toFixed(1)}V`,
+          desc: 'Napięcie bliskie limitu — monitoruj',
+          diag: {
+            detected: `${phase}: ${v.toFixed(1)}V (próg ostrzegawczy: 245V)`,
+            reason: 'Napięcie sieci powyżej komfortowej normy',
+            causes: ['Duży eksport PV w regionie', 'Niska konsumpcja w sieci', 'Problemy po stronie operatora'],
+            action: 'Rozważ ograniczenie eksportu, obserwuj trend',
+            severity: 'Ostrzeżenie'
+          }
+        });
+      }
+    });
+
+    // Grid frequency drift
+    const gridFreq = this._nm('grid_frequency');
+    if (gridFreq !== null && (gridFreq < 49.5 || gridFreq > 50.5)) {
+      alerts.push({
+        id: 'GRID_FREQ_DRIFT', level: 'warning', source: 'Sieć',
+        title: `Częstotliwość sieci: ${gridFreq.toFixed(2)} Hz`,
+        desc: `Poza normą 49.5-50.5 Hz — niestabilność sieci`,
+        diag: {
+          detected: `Częstotliwość: ${gridFreq.toFixed(2)} Hz`,
+          reason: 'Częstotliwość sieci odbiega od normy 50 Hz',
+          causes: ['Niestabilność sieci energetycznej', 'Przeciążenie sieci', 'Awaria regionalna'],
+          action: 'Obserwuj, jeśli utrzymuje się — zgłoś operatorowi',
+          severity: 'Ostrzeżenie'
+        }
+      });
+    }
+  }
+
+  _checkSoftAnomalies(alerts, isDaytime, isSolarHours) {
+    const pvPower = this._nm('pv_power') || 0;
+    const pv1 = this._nm('pv1_power');
+    const pv2 = this._nm('pv2_power');
+    const batPower = this._nm('battery_power') || 0;
+    const batSoc = this._nm('battery_soc');
+    const gridPower = this._nm('grid_power') || 0;
+    const loadPower = this._nm('load_power') || 0;
+
+    // PV underperformance (solar hours only, needs irradiance or forecast)
+    if (isSolarHours && pvPower !== null) {
+      // Use forecast as expected if available
+      const forecastState = this._hass?.states?.['sensor.smartinghome_pv_forecast_power_now_total'];
+      const expectedPv = forecastState ? parseFloat(forecastState.state) : null;
+
+      if (expectedPv && expectedPv > 500 && pvPower < expectedPv * 0.65) {
+        const deficit = Math.round((1 - pvPower / expectedPv) * 100);
+        alerts.push({
+          id: 'PV_UNDERPERFORM', level: 'warning', source: 'PV',
+          title: `PV poniżej oczekiwań: -${deficit}%`,
+          desc: `Aktualna: ${this._pw(pvPower)}, oczekiwana: ${this._pw(expectedPv)}`,
+          diag: {
+            detected: `Produkcja PV ${deficit}% poniżej prognozy`,
+            reason: 'Rzeczywista produkcja znacząco niższa od oczekiwanej',
+            causes: ['Zabrudzenie paneli', 'Częściowe zacienienie', 'Uszkodzony string', 'Degradacja paneli', 'Zachmurzenie (jeśli prognoza niedokładna)'],
+            action: 'Sprawdź panele wizualnie, porównaj stringi, wyczyść panele',
+            severity: 'Ważne — potencjalna utrata produkcji'
+          }
+        });
+      }
+    }
+
+    // PV string delta
+    if (isSolarHours && pv1 !== null && pv2 !== null && (pv1 > 200 || pv2 > 200)) {
+      const maxPv = Math.max(pv1, pv2);
+      const delta = Math.abs(pv1 - pv2);
+      if (maxPv > 0 && delta > maxPv * 0.25) {
+        const deltaPct = Math.round(delta / maxPv * 100);
+        const weaker = pv1 < pv2 ? 'PV1' : 'PV2';
+        alerts.push({
+          id: 'PV_STRING_DELTA', level: 'warning', source: 'PV',
+          title: `Różnica stringów: ${deltaPct}% (${weaker} słabszy)`,
+          desc: `PV1: ${this._pw(pv1)}, PV2: ${this._pw(pv2)}`,
+          diag: {
+            detected: `Różnica między stringami: ${deltaPct}% (próg: 25%)`,
+            reason: `String ${weaker} produkuje znacząco mniej`,
+            causes: ['Cień na jednym ze stringów', 'Zabrudzenie paneli', 'Uszkodzony panel', 'Różne kierunki (celowe)', 'Problem z MPPT'],
+            action: `Sprawdź string ${weaker} — szukaj cienia, brudu, uszkodzeń`,
+            severity: 'Ważne — możliwa utrata produkcji'
+          }
+        });
+      }
+    }
+
+    // Battery no charge despite surplus
+    if (isSolarHours && pvPower > 1500 && loadPower > 0) {
+      const surplus = pvPower - loadPower;
+      if (surplus > 500 && batSoc !== null && batSoc < 95 && Math.abs(batPower) < 100) {
+        alerts.push({
+          id: 'BAT_NO_CHARGE', level: 'warning', source: 'Bateria',
+          title: 'Brak ładowania mimo nadwyżki PV',
+          desc: `Nadwyżka: ${this._pw(surplus)}, bateria: ${batSoc.toFixed(0)}%, brak ładowania`,
+          diag: {
+            detected: `Nadwyżka PV ${this._pw(surplus)} przy SOC ${batSoc.toFixed(0)}%, battery_power ≈ 0`,
+            reason: 'Bateria nie ładuje się mimo dostępnej energii',
+            causes: ['Tryb falownika blokuje ładowanie', 'Bateria w hold mode', 'Limit DOD', 'Awaria BMS', 'Ręczny override HEMS'],
+            action: 'Sprawdź tryb pracy falownika, ustawienia DOD, status BMS',
+            severity: 'Ważne — marnowanie nadwyżki PV'
+          }
+        });
+      }
+    }
+
+    // Grid import with significant PV (CT wiring issue?)
+    if (isSolarHours && pvPower > 1000 && gridPower > 500 && batSoc !== null && batSoc < 95) {
+      alerts.push({
+        id: 'GRID_IMPORT_WITH_PV', level: 'info', source: 'Meter/CT',
+        title: 'Import z sieci przy dużej produkcji PV',
+        desc: `PV: ${this._pw(pvPower)}, import: ${this._pw(gridPower)}`,
+        diag: {
+          detected: `Import ${this._pw(gridPower)} mimo produkcji PV ${this._pw(pvPower)}`,
+          reason: 'Import z sieci w sytuacji gdy PV powinno pokrywać zapotrzebowanie',
+          causes: ['Duże obciążenie domu > PV', 'Niewłaściwy kierunek CT', 'Problem z konfiguracją metera', 'Chwilowy peak zużycia'],
+          action: 'Sprawdź obciążenie domu, kierunek przekładników CT',
+          severity: 'Informacyjne — sprawdź CT jeśli się powtarza'
+        }
+      });
+    }
+
+    // Export without PV (possible CT error)
+    if (pvPower < 100 && gridPower < -200) {
+      alerts.push({
+        id: 'EXPORT_NO_PV', level: 'warning', source: 'Meter/CT',
+        title: 'Eksport do sieci bez produkcji PV',
+        desc: `PV: ${this._pw(pvPower)}, eksport: ${this._pw(Math.abs(gridPower))}`,
+        diag: {
+          detected: `Eksport ${this._pw(Math.abs(gridPower))} przy PV ${this._pw(pvPower)}`,
+          reason: 'System raportuje eksport mimo braku produkcji PV — prawdopodobny błąd pomiaru',
+          causes: ['Odwrócony kierunek CT', 'Uszkodzony przekładnik prądowy', 'Błąd kalibracji metera'],
+          action: 'Sprawdź kierunek montażu przekładników CT, zamień fazy',
+          severity: 'Ważne — błędny pomiar = złe decyzje HEMS'
+        }
+      });
+    }
+
+    // Phase imbalance
+    const pl1 = this._nm('power_l1') || 0;
+    const pl2 = this._nm('power_l2') || 0;
+    const pl3 = this._nm('power_l3') || 0;
+    const phases = [Math.abs(pl1), Math.abs(pl2), Math.abs(pl3)].filter(v => v > 0);
+    if (phases.length >= 2) {
+      const phaseDelta = Math.max(...phases) - Math.min(...phases);
+      if (phaseDelta > 3000) {
+        alerts.push({
+          id: 'PHASE_IMBALANCE', level: 'warning', source: 'Sieć',
+          title: `Nierównomierność faz: Δ ${this._pw(phaseDelta)}`,
+          desc: `L1: ${this._pw(pl1)}, L2: ${this._pw(pl2)}, L3: ${this._pw(pl3)}`,
+          diag: {
+            detected: `Różnica obciążenia faz: ${this._pw(phaseDelta)} (próg: 3000W)`,
+            reason: 'Duża asymetria obciążeń między fazami',
+            causes: ['Duże odbiorniki na jednej fazie', 'Niewłaściwy podział obwodów', 'Uruchomienie dużego odbiornika 1-fazowego'],
+            action: 'Rozważ przeniesienie odbiorników na mniej obciążone fazy',
+            severity: 'Informacyjne'
+          }
+        });
+      }
+    }
+
+    // PV zero during solar hours (with positive irradiance)
+    if (isSolarHours && pvPower === 0) {
+      // Check if we have irradiance data
+      const irradiance = this._hass?.states?.[this._m('local_solar_radiation')];
+      const irrVal = irradiance ? parseFloat(irradiance.state) : null;
+      if (irrVal !== null && irrVal > 100) {
+        alerts.push({
+          id: 'PV_MIDDAY_ZERO', level: 'critical', source: 'PV',
+          title: 'Brak produkcji PV w dzień',
+          desc: `PV = 0W przy nasłonecznieniu ${irrVal.toFixed(0)} W/m²`,
+          diag: {
+            detected: `Produkcja PV = 0W, nasłonecznienie = ${irrVal.toFixed(0)} W/m²`,
+            reason: 'Panele nie produkują energii mimo dobrego nasłonecznienia',
+            causes: ['Falownik w trybie standby', 'Wyłącznik DC wyłączony', 'Awaria falownika', 'Izolacja / ground fault', 'Uszkodzenie okablowania DC'],
+            action: 'Sprawdź wyłącznik DC, status falownika, logi błędów',
+            severity: 'Krytyczne — pełna utrata produkcji'
+          }
+        });
+      }
+    }
+  }
+
+  _checkRiskPredictions(alerts, isDaytime) {
+    const invTemp = this._nm('inverter_temp');
+    const batSoc = this._nm('battery_soc');
+    const hour = new Date().getHours();
+
+    // Risk: overheating trend
+    if (invTemp !== null && invTemp > 55 && isDaytime) {
+      // Store temp history for trend
+      if (!this._invTempHistory) this._invTempHistory = [];
+      this._invTempHistory.push({ t: Date.now(), v: invTemp });
+      // Keep last 10 readings
+      if (this._invTempHistory.length > 10) this._invTempHistory.shift();
+      // Check trend (last 5 readings rising)
+      if (this._invTempHistory.length >= 5) {
+        const last5 = this._invTempHistory.slice(-5);
+        const rising = last5.every((p, i) => i === 0 || p.v >= last5[i - 1].v - 0.5);
+        if (rising && invTemp > 58) {
+          alerts.push({
+            id: 'RISK_OVERHEAT', level: 'info', source: 'Falownik',
+            title: `Ryzyko przegrzania: ${invTemp.toFixed(1)}°C ↑`,
+            desc: 'Temperatura falownika stale rośnie — monitoruj',
+            diag: {
+              detected: `Temp. ${invTemp.toFixed(1)}°C, trend rosnący w ostatnich 5 odczytach`,
+              reason: 'Temperatura falownika rośnie ciągle — może przekroczyć próg',
+              causes: ['Duże obciążenie w ciepły dzień', 'Słaba wentylacja', 'Ekspozycja na słońce'],
+              action: 'Zapewnij lepszą wentylację, ogranicz eksport jeśli to możliwe',
+              severity: 'Predykcja ryzyka'
+            }
+          });
+        }
+      }
+    }
+
+    // Risk: grid curtailment
+    const voltages = [this._nm('voltage_l1'), this._nm('voltage_l2'), this._nm('voltage_l3')].filter(v => v !== null);
+    const gridPower = this._nm('grid_power') || 0;
+    if (voltages.some(v => v > 248) && gridPower < -500) {
+      alerts.push({
+        id: 'RISK_CURTAILMENT', level: 'info', source: 'Sieć',
+        title: 'Ryzyko odstawienia — wysokie napięcie + eksport',
+        desc: 'Napięcie bliskie limitu przy aktywnym eksporcie',
+        diag: {
+          detected: `Napięcie > 248V, eksport: ${this._pw(Math.abs(gridPower))}`,
+          reason: 'Falownik może zostać odstawiony przez ochronę napięciową',
+          causes: ['Duży eksport PV podnosi napięcie', 'Słaba sieć lokalna', 'Wielu prosumentów w okolicy'],
+          action: 'Włącz ograniczenie eksportu, ładuj baterię zamiast eksportować',
+          severity: 'Predykcja ryzyka'
+        }
+      });
+    }
+
+    // Risk: low SOC before evening
+    if (hour >= 14 && hour <= 17 && batSoc !== null && batSoc < 30) {
+      const batPower = this._nm('battery_power') || 0;
+      if (batPower <= 0) { // not charging
+        alerts.push({
+          id: 'RISK_LOW_SOC_EVENING', level: 'info', source: 'Bateria',
+          title: `Niski SOC przed wieczorem: ${batSoc.toFixed(0)}%`,
+          desc: 'Bateria może nie wystarczyć na wieczorny szczyt',
+          diag: {
+            detected: `SOC: ${batSoc.toFixed(0)}% o ${hour}:00, brak ładowania`,
+            reason: 'SOC niski, a wieczorny szczyt taryfowy się zbliża',
+            causes: ['Mała produkcja PV', 'Duże zużycie w ciągu dnia', 'Brak automatycznego ładowania'],
+            action: 'Rozważ doładowanie z sieci lub PV przed szczytem',
+            severity: 'Predykcja ryzyka'
+          }
+        });
+      }
+    }
+  }
+
+  _calcHealthScore(alerts) {
+    const scores = { data: 100, inv: 100, pv: 100, bat: 100, grid: 100, alarms: 100 };
+
+    // Data availability
+    const coreSensors = ['pv_power', 'load_power', 'grid_power', 'battery_power', 'battery_soc'];
+    let available = 0;
+    coreSensors.forEach(k => { if (this._nm(k) !== null) available++; });
+    scores.data = Math.round((available / coreSensors.length) * 100);
+
+    // Inverter
+    const invTemp = this._nm('inverter_temp');
+    if (invTemp === null) { scores.inv = 50; }
+    else if (invTemp > 75) { scores.inv = 10; }
+    else if (invTemp > 65) { scores.inv = 60; }
+    else if (invTemp > 55) { scores.inv = 80; }
+
+    // PV — based on anomalies
+    const pvAlerts = alerts.filter(a => a.source === 'PV');
+    if (pvAlerts.some(a => a.level === 'critical')) scores.pv = 20;
+    else if (pvAlerts.some(a => a.level === 'warning')) scores.pv = 60;
+    else {
+      // Night: PV is OK by default
+      const hour = new Date().getHours();
+      if (hour < 6 || hour > 21) scores.pv = 100;
+    }
+
+    // Battery
+    const batSoc = this._nm('battery_soc');
+    if (batSoc === null) { scores.bat = 30; }
+    else {
+      const batAlerts = alerts.filter(a => a.source === 'Bateria');
+      if (batAlerts.some(a => a.level === 'critical')) scores.bat = 20;
+      else if (batAlerts.some(a => a.level === 'warning')) scores.bat = 60;
+    }
+
+    // Grid
+    const gridAlerts = alerts.filter(a => a.source === 'Sieć');
+    if (gridAlerts.some(a => a.level === 'critical')) scores.grid = 20;
+    else if (gridAlerts.some(a => a.level === 'warning')) scores.grid = 65;
+
+    // Alarms penalty
+    const critCount = alerts.filter(a => a.level === 'critical').length;
+    const warnCount = alerts.filter(a => a.level === 'warning').length;
+    scores.alarms = Math.max(0, 100 - critCount * 30 - warnCount * 10);
+
+    // Weighted total
+    const weights = { data: 0.15, inv: 0.20, pv: 0.20, bat: 0.15, grid: 0.15, alarms: 0.15 };
+    let total = 0;
+    for (const [k, w] of Object.entries(weights)) {
+      total += scores[k] * w;
+    }
+    return { total: Math.round(total), ...scores };
+  }
+
+  _renderAlertStatusBar(alerts, health) {
+    const bar = this.shadowRoot.getElementById('alert-status-bar');
+    const icon = this.shadowRoot.getElementById('alert-status-icon');
+    const text = this.shadowRoot.getElementById('alert-status-text');
+    const count = this.shadowRoot.getElementById('alert-count');
+    const lastUp = this.shadowRoot.getElementById('alert-last-update');
+    const h24 = this.shadowRoot.getElementById('alert-24h-count');
+    if (!bar) return;
+
+    const critCount = alerts.filter(a => a.level === 'critical').length;
+    const warnCount = alerts.filter(a => a.level === 'warning').length;
+    const totalAlerts = alerts.length;
+
+    // Determine global status
+    let status = 'ok';
+    let statusText = '✅ Instalacja OK';
+    let statusIcon = '🟢';
+
+    if (critCount > 0) {
+      status = 'critical';
+      statusText = `🔴 Awaria krytyczna (${critCount})`;
+      statusIcon = '🔴';
+    } else if (warnCount > 0) {
+      status = 'warning';
+      statusText = `🟡 Wykryto anomalię (${warnCount})`;
+      statusIcon = '🟡';
+    } else if (this._nm('pv_power') === null && this._nm('load_power') === null) {
+      status = 'offline';
+      statusText = '⚫ Brak danych / brak komunikacji';
+      statusIcon = '⚫';
+    }
+
+    bar.className = `alert-status-bar ${status}`;
+    icon.textContent = statusIcon;
+    text.textContent = statusText;
+    count.textContent = totalAlerts;
+    lastUp.textContent = new Date().toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    // 24h count
+    const now = Date.now();
+    const h24Count = this._alertState.history.filter(h => (now - h.ts) < 86400000).length;
+    h24.textContent = h24Count;
+
+    // Health score ring
+    const scoreEl = this.shadowRoot.getElementById('health-score-val');
+    const ringFg = this.shadowRoot.getElementById('health-ring-fg');
+    if (scoreEl) scoreEl.textContent = health.total;
+    if (ringFg) {
+      const circumference = 2 * Math.PI * 34; // r=34
+      const offset = circumference * (1 - health.total / 100);
+      ringFg.style.strokeDasharray = circumference;
+      ringFg.style.strokeDashoffset = offset;
+      // Color based on score
+      if (health.total >= 80) ringFg.setAttribute('stroke', '#2ecc71');
+      else if (health.total >= 50) ringFg.setAttribute('stroke', '#f59e0b');
+      else ringFg.setAttribute('stroke', '#e74c3c');
+    }
+  }
+
+  _renderAlertTiles() {
+    // Falownik tile
+    const invTemp = this._nm('inverter_temp');
+    const pvPower = this._nm('pv_power');
+    this._setText('at-inv-status', pvPower !== null ? 'Online' : 'Offline');
+    this._setText('at-inv-temp', invTemp !== null ? `${invTemp.toFixed(1)}°C` : '—');
+    this._setText('at-inv-contact', pvPower !== null ? `${new Date().toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}` : 'Brak');
+
+    let invStatus = 'ok';
+    let invIssue = '';
+    if (pvPower === null) { invStatus = 'offline'; invIssue = '⚫ Brak komunikacji'; }
+    else if (invTemp !== null && invTemp > 75) { invStatus = 'critical'; invIssue = '🔴 Przegrzanie!'; }
+    else if (invTemp !== null && invTemp > 65) { invStatus = 'warning'; invIssue = '🟡 Wysoka temperatura'; }
+    else { invIssue = '✅ Brak błędów'; }
+    this._setTileStatus('alert-tile-inv', invStatus, 'at-inv-issue', invIssue);
+
+    // PV tile
+    const pv1 = this._nm('pv1_power');
+    const pv2 = this._nm('pv2_power');
+    this._setText('at-pv-power', pvPower !== null ? this._pw(pvPower) : '—');
+    // Expected from forecast
+    const fcState = this._hass?.states?.['sensor.smartinghome_pv_forecast_power_now_total'];
+    const expected = fcState ? parseFloat(fcState.state) : null;
+    this._setText('at-pv-expected', expected ? this._pw(expected) : '—');
+    // String delta
+    if (pv1 !== null && pv2 !== null) {
+      const delta = Math.abs(pv1 - pv2);
+      this._setText('at-pv-delta', `${delta.toFixed(0)}W`);
+    } else { this._setText('at-pv-delta', '—'); }
+
+    let pvStatus = 'ok';
+    let pvIssue = '✅ Produkcja w normie';
+    const hour = new Date().getHours();
+    if (hour < 6 || hour > 21) { pvIssue = '🌙 Noc — brak produkcji'; }
+    else if (pvPower !== null && expected && expected > 500 && pvPower < expected * 0.65) {
+      pvStatus = 'warning';
+      pvIssue = `⚠️ -${Math.round((1 - pvPower / expected) * 100)}% poniżej normy`;
+    }
+    if (pv1 !== null && pv2 !== null && Math.max(pv1, pv2) > 200) {
+      const maxPv = Math.max(pv1, pv2);
+      if (Math.abs(pv1 - pv2) > maxPv * 0.25) {
+        pvStatus = pvStatus === 'ok' ? 'warning' : pvStatus;
+        pvIssue += ` | Δ stringów > 25%`;
+      }
+    }
+    this._setTileStatus('alert-tile-pv', pvStatus, 'at-pv-issue', pvIssue);
+
+    // Battery tile
+    const batSoc = this._nm('battery_soc');
+    const batPower = this._nm('battery_power');
+    const batTemp = this._nm('battery_temp');
+    this._setText('at-bat-soc', batSoc !== null ? `${batSoc.toFixed(0)}%` : '—');
+    this._setText('at-bat-power', batPower !== null ? this._pw(Math.abs(batPower)) + (batPower > 50 ? ' ⬆️' : batPower < -50 ? ' ⬇️' : '') : '—');
+    this._setText('at-bat-temp', batTemp !== null ? `${batTemp.toFixed(1)}°C` : '—');
+
+    let batStatus = 'ok';
+    let batIssue = '✅ Bateria OK';
+    if (batSoc === null) { batStatus = 'critical'; batIssue = '🔴 BMS offline'; }
+    else if (batSoc < 10) { batStatus = 'critical'; batIssue = '🔴 SOC krytycznie niski'; }
+    else if (batSoc < 20) { batStatus = 'warning'; batIssue = '🟡 SOC niski'; }
+    this._setTileStatus('alert-tile-bat', batStatus, 'at-bat-issue', batIssue);
+
+    // Grid tile
+    const vl1 = this._nm('voltage_l1');
+    const vl2 = this._nm('voltage_l2');
+    const vl3 = this._nm('voltage_l3');
+    this._setText('at-grid-l1', vl1 !== null ? `${vl1.toFixed(1)}V` : '—');
+    this._setText('at-grid-l2', vl2 !== null ? `${vl2.toFixed(1)}V` : '—');
+    this._setText('at-grid-l3', vl3 !== null ? `${vl3.toFixed(1)}V` : '—');
+
+    let gridStatus = 'ok';
+    let gridIssue = '✅ Napięcia w normie';
+    const allV = [vl1, vl2, vl3].filter(v => v !== null);
+    if (allV.some(v => v > 253)) { gridStatus = 'critical'; gridIssue = '🔴 Napięcie krytyczne!'; }
+    else if (allV.some(v => v > 245)) { gridStatus = 'warning'; gridIssue = '🟡 Napięcie wysokie'; }
+    this._setTileStatus('alert-tile-grid', gridStatus, 'at-grid-issue', gridIssue);
+
+    // Meter/CT tile
+    const gridP = this._nm('grid_power') || 0;
+    const importW = Math.max(gridP, 0);
+    const exportW = Math.max(-gridP, 0);
+    this._setText('at-meter-import', this._pw(importW));
+    this._setText('at-meter-export', this._pw(exportW));
+
+    let meterStatus = 'ok';
+    let meterIssue = '✅ Pomiar OK';
+    const pvP = this._nm('pv_power') || 0;
+    if (pvP < 100 && exportW > 200) {
+      meterStatus = 'warning'; meterIssue = '⚠️ Możliwy błąd CT';
+    }
+    this._setText('at-meter-status', meterStatus === 'ok' ? 'OK' : '⚠️');
+    this._setTileStatus('alert-tile-meter', meterStatus, 'at-meter-issue', meterIssue);
+
+    // Communication tile
+    const haOnline = this._hass?.connected !== false;
+    this._setText('at-comm-ha', haOnline ? 'OK' : '⚠️ Offline');
+    this._setText('at-comm-modbus', pvPower !== null ? 'OK' : '—');
+    this._setText('at-comm-update', new Date().toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+
+    let commStatus = haOnline && pvPower !== null ? 'ok' : (haOnline ? 'warning' : 'critical');
+    let commIssue = commStatus === 'ok' ? '✅ Połączenie stabilne' : (commStatus === 'warning' ? '🟡 Sprawdź Modbus' : '🔴 Brak połączenia HA');
+    this._setTileStatus('alert-tile-comm', commStatus, 'at-comm-issue', commIssue);
+  }
+
+  _setTileStatus(tileId, status, issueId, issueText) {
+    const tile = this.shadowRoot.getElementById(tileId);
+    const issue = this.shadowRoot.getElementById(issueId);
+    if (tile) {
+      tile.classList.remove('ok', 'warning', 'critical', 'offline');
+      tile.classList.add(status);
+    }
+    if (issue) {
+      issue.textContent = issueText;
+      issue.style.display = issueText ? '' : 'none';
+    }
+  }
+
+  _renderActiveAlerts(alerts) {
+    const container = this.shadowRoot.getElementById('alert-list-items');
+    const countEl = this.shadowRoot.getElementById('alert-active-count');
+    if (!container) return;
+
+    if (alerts.length === 0) {
+      container.innerHTML = `<div class="alert-empty"><div class="alert-empty-icon">✅</div><div>Brak aktywnych alertów — instalacja działa prawidłowo</div></div>`;
+      if (countEl) countEl.textContent = '0 alertów';
+      return;
+    }
+
+    if (countEl) countEl.textContent = `${alerts.length} ${alerts.length === 1 ? 'alert' : 'alertów'}`;
+
+    const levelIcons = { critical: '🔴', warning: '🟡', info: '🔵' };
+    const levelCss = { critical: 'crit', warning: 'warn', info: 'info' };
+
+    container.innerHTML = alerts.map((a, i) => `
+      <div class="alert-item" onclick="this.getRootNode().host._showAlertDiagnosis(${i})">
+        <div class="alert-level-badge ${levelCss[a.level] || 'info'}">${levelIcons[a.level] || 'ℹ️'}</div>
+        <div class="alert-item-body">
+          <div class="alert-item-title">${a.title}</div>
+          <div class="alert-item-desc">${a.desc}</div>
+        </div>
+        <div class="alert-item-time">
+          <div>${new Date().toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}</div>
+          <div class="alert-item-source">${a.source}</div>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  _renderHealthBreakdown(health) {
+    const factors = [
+      { id: 'data', val: health.data },
+      { id: 'inv', val: health.inv },
+      { id: 'pv', val: health.pv },
+      { id: 'bat', val: health.bat },
+      { id: 'grid', val: health.grid },
+      { id: 'alarms', val: health.alarms },
+    ];
+
+    factors.forEach(f => {
+      const valEl = this.shadowRoot.getElementById(`hf-${f.id}`);
+      const barEl = this.shadowRoot.getElementById(`hf-${f.id}-bar`);
+      if (valEl) valEl.textContent = `${f.val}/100`;
+      if (barEl) {
+        barEl.style.width = `${f.val}%`;
+        if (f.val >= 80) barEl.style.background = '#2ecc71';
+        else if (f.val >= 50) barEl.style.background = '#f59e0b';
+        else barEl.style.background = '#e74c3c';
+      }
+    });
+  }
+
+  _renderAlertHistory() {
+    const container = this.shadowRoot.getElementById('alert-history-items');
+    if (!container) return;
+
+    const now = Date.now();
+    const recent = this._alertState.history
+      .filter(h => (now - h.ts) < 86400000)
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, 20);
+
+    if (recent.length === 0) {
+      container.innerHTML = '<div style="color:#64748b; text-align:center; padding:16px; font-size:12px">Brak zarejestrowanych zdarzeń</div>';
+      return;
+    }
+
+    const levelIcons = { critical: '🔴', warning: '🟡', info: '🔵' };
+
+    container.innerHTML = recent.map(h => {
+      const time = new Date(h.ts).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const ago = Math.round((now - h.ts) / 60000);
+      const agoText = ago < 1 ? 'teraz' : ago < 60 ? `${ago} min temu` : `${Math.round(ago / 60)}h temu`;
+      return `
+        <div class="alert-item" style="opacity:0.7; cursor:default">
+          <div class="alert-level-badge ${h.level === 'critical' ? 'crit' : h.level === 'warning' ? 'warn' : 'info'}">${levelIcons[h.level] || 'ℹ️'}</div>
+          <div class="alert-item-body">
+            <div class="alert-item-title" style="font-size:11px">${h.title}</div>
+            <div class="alert-item-desc">${h.source}</div>
+          </div>
+          <div class="alert-item-time">
+            <div>${time}</div>
+            <div class="alert-item-source">${agoText}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  _showAlertDiagnosis(alertIndex) {
+    const alert = this._alertState?.alerts?.[alertIndex];
+    if (!alert || !alert.diag) return;
+    const d = alert.diag;
+    const levelColors = { critical: '#e74c3c', warning: '#f59e0b', info: '#00d4ff' };
+    const color = levelColors[alert.level] || '#94a3b8';
+
+    const html = `
+      <div class="sh-modal-title" style="border-bottom:2px solid ${color}; padding-bottom:8px">
+        🔍 Diagnoza: ${alert.title}
+      </div>
+      <div style="margin-top:12px">
+        <div style="margin-bottom:12px">
+          <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">📋 Wykryto</div>
+          <div style="font-size:12px; color:#e2e8f0; padding:8px 12px; background:rgba(255,255,255,0.03); border-radius:8px">${d.detected}</div>
+        </div>
+        <div style="margin-bottom:12px">
+          <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">🧠 Na jakiej podstawie</div>
+          <div style="font-size:12px; color:#e2e8f0; padding:8px 12px; background:rgba(255,255,255,0.03); border-radius:8px">${d.reason}</div>
+        </div>
+        <div style="margin-bottom:12px">
+          <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">❓ Możliwe przyczyny</div>
+          <div style="padding:8px 12px; background:rgba(255,255,255,0.03); border-radius:8px">
+            ${d.causes.map(c => `<div style="font-size:11px; color:#cbd5e1; padding:3px 0">• ${c}</div>`).join('')}
+          </div>
+        </div>
+        <div style="margin-bottom:12px">
+          <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">🛠️ Co zrobić</div>
+          <div style="font-size:12px; color:#2ecc71; padding:8px 12px; background:rgba(46,204,113,0.06); border:1px solid rgba(46,204,113,0.15); border-radius:8px">${d.action}</div>
+        </div>
+        <div>
+          <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">⚡ Poziom ważności</div>
+          <div style="font-size:12px; color:${color}; font-weight:600; padding:8px 12px; background:rgba(255,255,255,0.03); border-radius:8px">${d.severity}</div>
+        </div>
+      </div>
+      <div class="sh-modal-actions" style="margin-top:16px">
+        <button class="sh-modal-btn" onclick="this.getRootNode().host._closeModal()">Zamknij</button>
+      </div>
+    `;
+    this._showModal(html);
+  }
+
+  _showAlertTileDetail(source) {
+    const sourceNames = {
+      inv: 'Falownik', pv: 'PV / Stringi', bat: 'Bateria',
+      grid: 'Sieć', meter: 'Pomiar / CT', comm: 'Komunikacja'
+    };
+    const sourceAlerts = (this._alertState?.alerts || []).filter(a => {
+      const sourceMap = { inv: 'Falownik', pv: 'PV', bat: 'Bateria', grid: 'Sieć', meter: 'Meter/CT', comm: 'Komunikacja' };
+      return a.source === sourceMap[source] || a.source.includes(sourceMap[source] || '');
+    });
+
+    let detailHtml = '';
+    if (source === 'inv') {
+      const temp = this._nm('inverter_temp');
+      const power = this._nm('inverter_power');
+      const mode = this._s(this._m('inverter_model')) || '—';
+      detailHtml = `
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px">
+          <div style="padding:10px; background:rgba(255,255,255,0.03); border-radius:8px">
+            <div style="font-size:9px; color:#64748b">Temperatura</div>
+            <div style="font-size:18px; font-weight:700; color:${temp > 65 ? '#f59e0b' : temp > 75 ? '#e74c3c' : '#2ecc71'}">${temp !== null ? temp.toFixed(1) + '°C' : '—'}</div>
+          </div>
+          <div style="padding:10px; background:rgba(255,255,255,0.03); border-radius:8px">
+            <div style="font-size:9px; color:#64748b">Moc wyjściowa</div>
+            <div style="font-size:18px; font-weight:700; color:#00d4ff">${power !== null ? this._pw(power) : '—'}</div>
+          </div>
+        </div>
+      `;
+    } else if (source === 'grid') {
+      const vl1 = this._nm('voltage_l1');
+      const vl2 = this._nm('voltage_l2');
+      const vl3 = this._nm('voltage_l3');
+      const freq = this._nm('grid_frequency');
+      const vColor = (v) => v > 253 ? '#e74c3c' : v > 245 ? '#f59e0b' : '#2ecc71';
+      detailHtml = `
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:8px; margin-bottom:12px">
+          ${[['L1', vl1], ['L2', vl2], ['L3', vl3]].map(([l, v]) => `
+            <div style="padding:10px; background:rgba(255,255,255,0.03); border-radius:8px; text-align:center">
+              <div style="font-size:9px; color:#64748b">${l}</div>
+              <div style="font-size:16px; font-weight:700; color:${v !== null ? vColor(v) : '#64748b'}">${v !== null ? v.toFixed(1) + 'V' : '—'}</div>
+            </div>
+          `).join('')}
+          <div style="padding:10px; background:rgba(255,255,255,0.03); border-radius:8px; text-align:center">
+            <div style="font-size:9px; color:#64748b">Freq</div>
+            <div style="font-size:16px; font-weight:700; color:#00d4ff">${freq !== null ? freq.toFixed(2) + 'Hz' : '—'}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    const alertsHtml = sourceAlerts.length > 0
+      ? sourceAlerts.map((a, i) => {
+          const globalIdx = this._alertState.alerts.indexOf(a);
+          return `<div class="alert-item" onclick="this.getRootNode().host._closeModal(); setTimeout(() => this.getRootNode().host._showAlertDiagnosis(${globalIdx}), 200)">
+            <div class="alert-level-badge ${a.level === 'critical' ? 'crit' : a.level === 'warning' ? 'warn' : 'info'}">${a.level === 'critical' ? '🔴' : a.level === 'warning' ? '🟡' : '🔵'}</div>
+            <div class="alert-item-body"><div class="alert-item-title">${a.title}</div><div class="alert-item-desc">${a.desc}</div></div>
+          </div>`;
+        }).join('')
+      : '<div style="text-align:center; color:#2ecc71; padding:12px; font-size:12px">✅ Brak aktywnych alertów</div>';
+
+    const html = `
+      <div class="sh-modal-title">📋 ${sourceNames[source] || source} — szczegóły</div>
+      ${detailHtml}
+      <div style="font-size:11px; color:#94a3b8; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px">Aktywne alerty (${sourceAlerts.length})</div>
+      ${alertsHtml}
+      <div class="sh-modal-actions" style="margin-top:14px">
+        <button class="sh-modal-btn" onclick="this.getRootNode().host._closeModal()">Zamknij</button>
+      </div>
+    `;
+    this._showModal(html);
+  }
+
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); this._updateForecastCharts().catch(e => console.error('[SH] charts err:', e)); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); this._updateAlertsTab(); this._updateForecastCharts().catch(e => console.error('[SH] charts err:', e)); }
 
 
   /* ── Overview Autopilot banner (runs every 5s via _updateAll) ── */
@@ -8055,6 +8905,145 @@ class SmartingHomePanel extends HTMLElement {
           .fc-hourly-hour { font-size: 11px; min-width: 36px; }
           .fc-integ-grid { grid-template-columns: repeat(2, 1fr); }
         }
+
+        /* ═══════════════════════════════════════ */
+        /* ═══  ALERTS & ANOMALIES TAB         ═══ */
+        /* ═══════════════════════════════════════ */
+
+        /* Global Status Bar */
+        .alert-status-bar {
+          display: flex; align-items: center; gap: 16px; padding: 18px 22px;
+          border-radius: 16px; margin-bottom: 14px;
+          position: relative; overflow: hidden;
+          border: 1px solid rgba(255,255,255,0.06);
+        }
+        .alert-status-bar.ok { background: linear-gradient(135deg, rgba(46,204,113,0.10), rgba(46,204,113,0.03)); border-color: rgba(46,204,113,0.25); }
+        .alert-status-bar.warning { background: linear-gradient(135deg, rgba(245,158,11,0.12), rgba(245,158,11,0.03)); border-color: rgba(245,158,11,0.3); }
+        .alert-status-bar.critical { background: linear-gradient(135deg, rgba(231,76,60,0.14), rgba(231,76,60,0.04)); border-color: rgba(231,76,60,0.35); animation: alert-critical-pulse 2s ease-in-out infinite; }
+        .alert-status-bar.offline { background: linear-gradient(135deg, rgba(100,116,139,0.12), rgba(100,116,139,0.03)); border-color: rgba(100,116,139,0.25); }
+        @keyframes alert-critical-pulse {
+          0%, 100% { box-shadow: 0 0 20px rgba(231,76,60,0.15); }
+          50% { box-shadow: 0 0 40px rgba(231,76,60,0.35), inset 0 0 20px rgba(231,76,60,0.08); }
+        }
+        .alert-status-icon { font-size: 36px; flex-shrink: 0; }
+        .alert-status-info { flex: 1; min-width: 0; }
+        .alert-status-label { font-size: 10px; color: #64748b; text-transform: uppercase; letter-spacing: 1px; }
+        .alert-status-text { font-size: 18px; font-weight: 800; color: #fff; margin-top: 2px; }
+        .alert-status-meta { font-size: 11px; color: #94a3b8; margin-top: 4px; display: flex; gap: 16px; flex-wrap: wrap; }
+        .alert-status-meta span { white-space: nowrap; }
+
+        /* Health Score Ring */
+        .health-score-wrap { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; }
+        .health-score-ring { position: relative; width: 80px; height: 80px; }
+        .health-score-ring svg { transform: rotate(-90deg); }
+        .health-score-ring .ring-bg { fill: none; stroke: rgba(255,255,255,0.06); stroke-width: 6; }
+        .health-score-ring .ring-fg { fill: none; stroke-width: 6; stroke-linecap: round; transition: stroke-dashoffset 1s ease, stroke 0.5s; }
+        .health-score-val { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 22px; font-weight: 900; color: #fff; }
+        .health-score-label { font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 0.8px; margin-top: 4px; }
+
+        /* Source Tiles Grid */
+        .alert-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+        .alert-tile {
+          background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06);
+          border-radius: 14px; padding: 14px 16px; position: relative; overflow: hidden;
+          transition: all 0.3s; cursor: pointer;
+        }
+        .alert-tile:hover { background: rgba(255,255,255,0.04); transform: translateY(-1px); }
+        .alert-tile::before {
+          content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+          border-radius: 14px 14px 0 0; transition: background 0.3s;
+        }
+        .alert-tile.ok::before { background: linear-gradient(90deg, #2ecc71, #27ae60); }
+        .alert-tile.warning::before { background: linear-gradient(90deg, #f59e0b, #f39c12); }
+        .alert-tile.critical::before { background: linear-gradient(90deg, #e74c3c, #c0392b); }
+        .alert-tile.offline::before { background: linear-gradient(90deg, #64748b, #475569); }
+        .alert-tile-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+        .alert-tile-icon { font-size: 20px; }
+        .alert-tile-name { font-size: 11px; font-weight: 700; color: #e2e8f0; text-transform: uppercase; letter-spacing: 0.5px; }
+        .alert-tile-dot { width: 8px; height: 8px; border-radius: 50%; margin-left: auto; flex-shrink: 0; }
+        .alert-tile.ok .alert-tile-dot { background: #2ecc71; box-shadow: 0 0 8px rgba(46,204,113,0.5); }
+        .alert-tile.warning .alert-tile-dot { background: #f59e0b; box-shadow: 0 0 8px rgba(245,158,11,0.5); animation: dot-pulse-warn 1.5s ease-in-out infinite; }
+        .alert-tile.critical .alert-tile-dot { background: #e74c3c; box-shadow: 0 0 8px rgba(231,76,60,0.5); animation: dot-pulse-crit 1s ease-in-out infinite; }
+        .alert-tile.offline .alert-tile-dot { background: #64748b; }
+        @keyframes dot-pulse-warn { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+        @keyframes dot-pulse-crit { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(1.3); } }
+        .alert-tile-values { display: flex; flex-direction: column; gap: 4px; }
+        .alert-tile-row { display: flex; justify-content: space-between; align-items: center; }
+        .alert-tile-row .atl { font-size: 10px; color: #64748b; }
+        .alert-tile-row .atv { font-size: 12px; font-weight: 600; color: #cbd5e1; }
+        .alert-tile-issue { font-size: 10px; color: #f59e0b; margin-top: 6px; padding: 4px 8px; background: rgba(245,158,11,0.08); border-radius: 6px; font-weight: 500; }
+        .alert-tile.critical .alert-tile-issue { color: #e74c3c; background: rgba(231,76,60,0.08); }
+        .alert-tile.ok .alert-tile-issue { color: #2ecc71; background: rgba(46,204,113,0.08); }
+
+        /* Active Alerts Table */
+        .alert-list { margin-bottom: 14px; }
+        .alert-list-header {
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 10px 16px; margin-bottom: 8px;
+        }
+        .alert-list-title { font-size: 12px; font-weight: 700; color: #e2e8f0; text-transform: uppercase; letter-spacing: 0.8px; }
+        .alert-list-count { font-size: 11px; color: #94a3b8; }
+        .alert-item {
+          display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+          background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05);
+          border-radius: 10px; margin-bottom: 6px; cursor: pointer; transition: all 0.2s;
+        }
+        .alert-item:hover { background: rgba(255,255,255,0.05); transform: translateX(2px); }
+        .alert-level-badge {
+          width: 28px; height: 28px; border-radius: 8px; display: flex;
+          align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0;
+        }
+        .alert-level-badge.crit { background: rgba(231,76,60,0.15); }
+        .alert-level-badge.warn { background: rgba(245,158,11,0.15); }
+        .alert-level-badge.info { background: rgba(0,212,255,0.12); }
+        .alert-item-body { flex: 1; min-width: 0; }
+        .alert-item-title { font-size: 12px; font-weight: 600; color: #e2e8f0; }
+        .alert-item-desc { font-size: 10px; color: #94a3b8; margin-top: 2px; overflow-wrap: break-word; word-break: break-word; }
+        .alert-item-time { font-size: 10px; color: #64748b; flex-shrink: 0; text-align: right; }
+        .alert-item-source { font-size: 9px; color: #475569; }
+        .alert-empty {
+          text-align: center; padding: 30px 16px; color: #64748b;
+          font-size: 13px;
+        }
+        .alert-empty-icon { font-size: 40px; margin-bottom: 8px; }
+
+        /* Health Breakdown */
+        .health-breakdown { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+        .health-factor {
+          display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+          background: rgba(255,255,255,0.02); border-radius: 8px;
+        }
+        .health-factor-icon { font-size: 16px; }
+        .health-factor-info { flex: 1; }
+        .health-factor-name { font-size: 10px; color: #64748b; }
+        .health-factor-val { font-size: 13px; font-weight: 700; color: #cbd5e1; }
+        .health-factor-bar { width: 100%; height: 3px; background: rgba(255,255,255,0.06); border-radius: 2px; margin-top: 3px; }
+        .health-factor-bar-fill { height: 100%; border-radius: 2px; transition: width 0.5s, background 0.3s; }
+
+        /* Alert acknowledge */
+        .alert-ack-btn {
+          padding: 6px 14px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.12);
+          background: rgba(255,255,255,0.04); color: #94a3b8; font-size: 10px;
+          cursor: pointer; transition: all 0.2s; font-weight: 600; white-space: nowrap;
+        }
+        .alert-ack-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+
+        /* Responsive: Alerts tab */
+        @media (max-width: 768px) {
+          .alert-tiles { grid-template-columns: repeat(2, 1fr); }
+          .alert-status-bar { flex-wrap: wrap; gap: 10px; padding: 14px 16px; }
+          .health-score-ring { width: 60px; height: 60px; }
+          .health-score-val { font-size: 18px; }
+          .health-breakdown { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 480px) {
+          .alert-tiles { grid-template-columns: 1fr; }
+          .alert-status-bar { flex-direction: column; align-items: flex-start; }
+          .health-score-wrap { align-self: center; }
+          .alert-status-meta { flex-direction: column; gap: 4px; }
+          .health-breakdown { grid-template-columns: 1fr; }
+        }
+
       </style>
 
       <div class="panel-container">
@@ -8082,6 +9071,7 @@ class SmartingHomePanel extends HTMLElement {
               <button class="tab-btn" data-tab="wind" onclick="this.getRootNode().host._switchTab('wind')">🌬️ Wiatr</button>
               <button class="tab-btn" data-tab="history" onclick="this.getRootNode().host._switchTab('history')">📅 Historia</button>
               <button class="tab-btn" data-tab="forecast" onclick="this.getRootNode().host._switchTab('forecast')">☀️ Prognoza</button>
+              <button class="tab-btn" data-tab="alerts" onclick="this.getRootNode().host._switchTab('alerts')">⚠️ Awarie</button>
               <button class="tab-btn" data-tab="autopilot" onclick="this.getRootNode().host._switchTab('autopilot')" id="tab-btn-autopilot" style="display:none">🧠 Autopilot</button>
             </div>
           </div>
@@ -10747,6 +11737,208 @@ class SmartingHomePanel extends HTMLElement {
 
         </div>
 
+        <!-- ═══════ TAB: ALERTS & ANOMALIES ═══════ -->
+        <div class="tab-content" data-tab="alerts">
+
+          <!-- §1 STATUS BAR -->
+          <div class="alert-status-bar ok" id="alert-status-bar">
+            <div class="alert-status-icon" id="alert-status-icon">🟢</div>
+            <div class="alert-status-info">
+              <div class="alert-status-label">Status instalacji</div>
+              <div class="alert-status-text" id="alert-status-text">Instalacja OK</div>
+              <div class="alert-status-meta">
+                <span>🔔 Aktywne alerty: <strong id="alert-count">0</strong></span>
+                <span>⏱️ Ostatni odczyt: <strong id="alert-last-update">—</strong></span>
+                <span>📊 24h ostrzeżeń: <strong id="alert-24h-count">0</strong></span>
+              </div>
+            </div>
+            <div class="health-score-wrap">
+              <div class="health-score-ring">
+                <svg viewBox="0 0 80 80" width="80" height="80">
+                  <circle class="ring-bg" cx="40" cy="40" r="34" />
+                  <circle class="ring-fg" id="health-ring-fg" cx="40" cy="40" r="34"
+                    stroke="#2ecc71" stroke-dasharray="213.6" stroke-dashoffset="0" />
+                </svg>
+                <div class="health-score-val" id="health-score-val">—</div>
+              </div>
+              <div class="health-score-label">Zdrowie</div>
+            </div>
+          </div>
+
+          <!-- §2 SOURCE TILES -->
+          <div class="alert-tiles" id="alert-tiles">
+            <!-- Falownik -->
+            <div class="alert-tile ok" id="alert-tile-inv" onclick="this.getRootNode().host._showAlertTileDetail('inv')">
+              <div class="alert-tile-header">
+                <span class="alert-tile-icon">🔧</span>
+                <span class="alert-tile-name">Falownik</span>
+                <div class="alert-tile-dot"></div>
+              </div>
+              <div class="alert-tile-values">
+                <div class="alert-tile-row"><span class="atl">Status</span><span class="atv" id="at-inv-status">—</span></div>
+                <div class="alert-tile-row"><span class="atl">Temp.</span><span class="atv" id="at-inv-temp">—</span></div>
+                <div class="alert-tile-row"><span class="atl">Kontakt</span><span class="atv" id="at-inv-contact">—</span></div>
+              </div>
+              <div class="alert-tile-issue" id="at-inv-issue" style="display:none"></div>
+            </div>
+
+            <!-- PV / Stringi -->
+            <div class="alert-tile ok" id="alert-tile-pv" onclick="this.getRootNode().host._showAlertTileDetail('pv')">
+              <div class="alert-tile-header">
+                <span class="alert-tile-icon">☀️</span>
+                <span class="alert-tile-name">PV / Stringi</span>
+                <div class="alert-tile-dot"></div>
+              </div>
+              <div class="alert-tile-values">
+                <div class="alert-tile-row"><span class="atl">Produkcja</span><span class="atv" id="at-pv-power">—</span></div>
+                <div class="alert-tile-row"><span class="atl">Oczekiwana</span><span class="atv" id="at-pv-expected">—</span></div>
+                <div class="alert-tile-row"><span class="atl">Δ Stringi</span><span class="atv" id="at-pv-delta">—</span></div>
+              </div>
+              <div class="alert-tile-issue" id="at-pv-issue" style="display:none"></div>
+            </div>
+
+            <!-- Bateria -->
+            <div class="alert-tile ok" id="alert-tile-bat" onclick="this.getRootNode().host._showAlertTileDetail('bat')">
+              <div class="alert-tile-header">
+                <span class="alert-tile-icon">🔋</span>
+                <span class="alert-tile-name">Bateria</span>
+                <div class="alert-tile-dot"></div>
+              </div>
+              <div class="alert-tile-values">
+                <div class="alert-tile-row"><span class="atl">SOC</span><span class="atv" id="at-bat-soc">—</span></div>
+                <div class="alert-tile-row"><span class="atl">Moc</span><span class="atv" id="at-bat-power">—</span></div>
+                <div class="alert-tile-row"><span class="atl">Temp.</span><span class="atv" id="at-bat-temp">—</span></div>
+              </div>
+              <div class="alert-tile-issue" id="at-bat-issue" style="display:none"></div>
+            </div>
+
+            <!-- Sieć -->
+            <div class="alert-tile ok" id="alert-tile-grid" onclick="this.getRootNode().host._showAlertTileDetail('grid')">
+              <div class="alert-tile-header">
+                <span class="alert-tile-icon">⚡</span>
+                <span class="alert-tile-name">Sieć</span>
+                <div class="alert-tile-dot"></div>
+              </div>
+              <div class="alert-tile-values">
+                <div class="alert-tile-row"><span class="atl">L1</span><span class="atv" id="at-grid-l1">—</span></div>
+                <div class="alert-tile-row"><span class="atl">L2</span><span class="atv" id="at-grid-l2">—</span></div>
+                <div class="alert-tile-row"><span class="atl">L3</span><span class="atv" id="at-grid-l3">—</span></div>
+              </div>
+              <div class="alert-tile-issue" id="at-grid-issue" style="display:none"></div>
+            </div>
+
+            <!-- Pomiar / CT -->
+            <div class="alert-tile ok" id="alert-tile-meter" onclick="this.getRootNode().host._showAlertTileDetail('meter')">
+              <div class="alert-tile-header">
+                <span class="alert-tile-icon">📊</span>
+                <span class="alert-tile-name">Pomiar / CT</span>
+                <div class="alert-tile-dot"></div>
+              </div>
+              <div class="alert-tile-values">
+                <div class="alert-tile-row"><span class="atl">Import</span><span class="atv" id="at-meter-import">—</span></div>
+                <div class="alert-tile-row"><span class="atl">Eksport</span><span class="atv" id="at-meter-export">—</span></div>
+                <div class="alert-tile-row"><span class="atl">Status</span><span class="atv" id="at-meter-status">OK</span></div>
+              </div>
+              <div class="alert-tile-issue" id="at-meter-issue" style="display:none"></div>
+            </div>
+
+            <!-- Komunikacja -->
+            <div class="alert-tile ok" id="alert-tile-comm" onclick="this.getRootNode().host._showAlertTileDetail('comm')">
+              <div class="alert-tile-header">
+                <span class="alert-tile-icon">📡</span>
+                <span class="alert-tile-name">Komunikacja</span>
+                <div class="alert-tile-dot"></div>
+              </div>
+              <div class="alert-tile-values">
+                <div class="alert-tile-row"><span class="atl">Modbus</span><span class="atv" id="at-comm-modbus">—</span></div>
+                <div class="alert-tile-row"><span class="atl">HA</span><span class="atv" id="at-comm-ha">OK</span></div>
+                <div class="alert-tile-row"><span class="atl">Update</span><span class="atv" id="at-comm-update">—</span></div>
+              </div>
+              <div class="alert-tile-issue" id="at-comm-issue" style="display:none"></div>
+            </div>
+          </div>
+
+          <!-- §3 ACTIVE ALERTS -->
+          <div class="card" style="margin-bottom:14px">
+            <div class="alert-list-header">
+              <span class="alert-list-title">🔔 Aktywne alerty</span>
+              <span class="alert-list-count" id="alert-active-count">0 alertów</span>
+            </div>
+            <div id="alert-list-items">
+              <div class="alert-empty">
+                <div class="alert-empty-icon">✅</div>
+                <div>Brak aktywnych alertów — instalacja działa prawidłowo</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- §4 HEALTH BREAKDOWN -->
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-title">🧮 Zdrowie instalacji — szczegóły</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:10px">Składowe Health Score kalkulowane na żywo z danych sensorycznych</div>
+            <div class="health-breakdown" id="health-breakdown">
+              <div class="health-factor">
+                <div class="health-factor-icon">📡</div>
+                <div class="health-factor-info">
+                  <div class="health-factor-name">Dostępność danych</div>
+                  <div class="health-factor-val" id="hf-data">—</div>
+                  <div class="health-factor-bar"><div class="health-factor-bar-fill" id="hf-data-bar" style="width:0%;background:#2ecc71"></div></div>
+                </div>
+              </div>
+              <div class="health-factor">
+                <div class="health-factor-icon">🔧</div>
+                <div class="health-factor-info">
+                  <div class="health-factor-name">Falownik</div>
+                  <div class="health-factor-val" id="hf-inv">—</div>
+                  <div class="health-factor-bar"><div class="health-factor-bar-fill" id="hf-inv-bar" style="width:0%;background:#2ecc71"></div></div>
+                </div>
+              </div>
+              <div class="health-factor">
+                <div class="health-factor-icon">☀️</div>
+                <div class="health-factor-info">
+                  <div class="health-factor-name">Produkcja PV</div>
+                  <div class="health-factor-val" id="hf-pv">—</div>
+                  <div class="health-factor-bar"><div class="health-factor-bar-fill" id="hf-pv-bar" style="width:0%;background:#2ecc71"></div></div>
+                </div>
+              </div>
+              <div class="health-factor">
+                <div class="health-factor-icon">🔋</div>
+                <div class="health-factor-info">
+                  <div class="health-factor-name">Bateria / BMS</div>
+                  <div class="health-factor-val" id="hf-bat">—</div>
+                  <div class="health-factor-bar"><div class="health-factor-bar-fill" id="hf-bat-bar" style="width:0%;background:#2ecc71"></div></div>
+                </div>
+              </div>
+              <div class="health-factor">
+                <div class="health-factor-icon">⚡</div>
+                <div class="health-factor-info">
+                  <div class="health-factor-name">Jakość sieci</div>
+                  <div class="health-factor-val" id="hf-grid">—</div>
+                  <div class="health-factor-bar"><div class="health-factor-bar-fill" id="hf-grid-bar" style="width:0%;background:#2ecc71"></div></div>
+                </div>
+              </div>
+              <div class="health-factor">
+                <div class="health-factor-icon">🔔</div>
+                <div class="health-factor-info">
+                  <div class="health-factor-name">Alarmy</div>
+                  <div class="health-factor-val" id="hf-alarms">—</div>
+                  <div class="health-factor-bar"><div class="health-factor-bar-fill" id="hf-alarms-bar" style="width:0%;background:#2ecc71"></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- §5 ALERT HISTORY (last 20) -->
+          <div class="card">
+            <div class="card-title">📋 Historia zdarzeń (ostatnie 24h)</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:10px">Kliknij zdarzenie aby zobaczyć diagnozę i rekomendację</div>
+            <div id="alert-history-items" style="max-height:300px; overflow-y:auto">
+              <div style="color:#64748b; text-align:center; padding:16px; font-size:12px">Brak zarejestrowanych zdarzeń</div>
+            </div>
+          </div>
+
+        </div>
+
         <!-- ═══════ TAB: SETTINGS ═══════ -->
         <div class="tab-content" data-tab="settings">
           <div class="grid-cards gc-2">
@@ -11279,7 +12471,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.44.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.45.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
