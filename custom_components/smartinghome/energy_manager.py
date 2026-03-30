@@ -180,6 +180,7 @@ class EnergyManager:
             await self._set_eco_mode_soc(100)
             await self._set_work_mode("general")
             await self._enable_charging()
+            await self._set_dod(DEFAULT_DOD_ON_GRID)
         # Turn off force flag (if helper exists)
         _eid = "input_boolean.hems_force_grid_charge"
         if self.hass.states.get(_eid):
@@ -206,6 +207,7 @@ class EnergyManager:
             await self._set_work_mode("general")
             await self._enable_charging()
             await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
+            await self._set_dod(DEFAULT_DOD_ON_GRID)
         # Turn off force flag (if helper exists)
         _eid = "input_boolean.hems_force_battery_discharge"
         if self.hass.states.get(_eid):
@@ -232,6 +234,7 @@ class EnergyManager:
             await self._set_work_mode("general")
             await self._enable_charging()
             await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
+            await self._set_dod(DEFAULT_DOD_ON_GRID)
         self._current_mode = HEMSMode.AUTO
 
     async def emergency_stop(self) -> None:
