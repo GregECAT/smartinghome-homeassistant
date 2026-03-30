@@ -1444,19 +1444,50 @@ class StrategyController:
                         "discharge": ("eco_discharge",),
                     }
                     drifted = False
+                    drift_reason = ""
                     expected_modes = _STRATEGY_EXPECTED_MODES.get(strategy)
                     if expected_modes and work_mode not in expected_modes and work_mode not in ("unknown", ""):
                         drifted = True
+                        drift_reason = f"mode mismatch: expected={expected_modes}, got={work_mode}"
                         _LOGGER.warning(
                             "AI Executor: STATE DRIFT — plan=%s expects mode=%s but got mode=%s, bat=%dW → re-executing",
                             strategy, expected_modes, work_mode, bat_power,
                         )
 
+                    # ── DEAD BATTERY DETECTION ────────────────────
+                    # Mode is correct but battery isn't actually discharging
+                    # (DOD too low, BMS blocking, etc.)
+                    if (
+                        not drifted
+                        and strategy in ("discharge_self_consume", "discharge")
+                        and expected_modes
+                        and work_mode in expected_modes
+                        and bat_power >= -50  # Battery NOT discharging (should be negative)
+                    ):
+                        # Check if grid is importing significantly (home is pulling from grid)
+                        grid_state = self.hass.states.get(SENSOR_GRID_POWER_TOTAL)
+                        grid_power = _safe_float(grid_state.state if grid_state else None)
+                        if grid_power > 500:  # >500W import from grid
+                            drifted = True
+                            # Read DOD to diagnose root cause
+                            from .const import NUMBER_DOD_ON_GRID, DEFAULT_DOD_ON_GRID
+                            dod_state = self.hass.states.get(NUMBER_DOD_ON_GRID)
+                            dod_val = float(dod_state.state) if dod_state and dod_state.state not in ("unknown", "unavailable") else -1
+                            drift_reason = (
+                                f"dead battery: mode={work_mode} OK but bat_power={bat_power:.0f}W "
+                                f"(not discharging), grid_import={grid_power:.0f}W, DOD={dod_val:.0f}%"
+                            )
+                            _LOGGER.warning(
+                                "AI Executor: DEAD BATTERY — mode=%s correct but battery not discharging! "
+                                "bat=%dW, grid_import=%dW, DOD=%d%% → re-executing (will reset DOD to %d%%)",
+                                work_mode, bat_power, grid_power, dod_val, DEFAULT_DOD_ON_GRID,
+                            )
+
                     if drifted:
                         self._drift_last_reexec = now
                         self._block_commands_executed = False  # Force re-execution on next tick
-                        self._log_decision("drift", f"⚠️ State drift detected — re-applying block {block_key}")
-                        actions.append(f"⚠️ Drift: re-applying {block_key}")
+                        self._log_decision("drift", f"⚠️ State drift detected — {drift_reason} — re-applying block {block_key}")
+                        actions.append(f"⚠️ Drift: {drift_reason} → re-applying {block_key}")
 
             # Show current block info
             actions.append(
