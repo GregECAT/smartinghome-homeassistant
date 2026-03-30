@@ -1019,10 +1019,18 @@ Długość: 400-600 słów."""
         if diag_action:
             notif_body += f"\n🛠️ {diag_action}"
 
-        # Channel 1: HA Companion Push
+        # Channel 1: HA Companion Push (multi-device)
         if channels.get("ha_push"):
-            entity = notif_cfg.get("ha_push_entity", "")
-            if entity:
+            entities = notif_cfg.get("ha_push_entities", [])
+            # Backward compat: single entity fallback
+            if not entities:
+                single = notif_cfg.get("ha_push_entity", "")
+                if single:
+                    entities = [single]
+            push_ok = False
+            for entity in entities:
+                if not entity:
+                    continue
                 try:
                     await hass.services.async_call(
                         "notify", entity.replace("notify.", ""),
@@ -1036,9 +1044,12 @@ Długość: 400-600 słów."""
                             },
                         },
                     )
-                    sent_channels.append("ha_push")
+                    push_ok = True
+                    _LOGGER.info("HA push sent to %s", entity)
                 except Exception as err:
-                    _LOGGER.error("HA push notification failed: %s", err)
+                    _LOGGER.error("HA push notification failed for %s: %s", entity, err)
+            if push_ok:
+                sent_channels.append("ha_push")
 
         # Channel 2: Persistent Notification
         if channels.get("persistent"):
