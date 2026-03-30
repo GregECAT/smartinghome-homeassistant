@@ -11279,7 +11279,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.44.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.44.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -12392,18 +12392,18 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   _calcPVProduction(ghi, temp, totalWp, tilt, azimuth) {
-    // Simple POA conversion with tilt/azimuth correction
+    // Physics-based PV production model
+    // P(kW) = (GHI / STC_irradiance) × Prated(kW) × η_system × corrections
     if (ghi <= 0) return 0;
     const radians = Math.PI / 180;
     const tiltFactor = Math.cos((tilt - 35) * radians * 0.5); // optimal ~35° in Poland
     const azFactor = 1 - Math.abs(azimuth - 180) / 360 * 0.3; // South=180 optimal
-    // Temperature correction: -0.4%/°C above 25°C
+    // Temperature correction: -0.4%/°C above 25°C (STC)
     const tempCoeff = 1 - Math.max(0, (temp || 25) - 25) * 0.004;
-    // System efficiency: panels + inverter + wiring ~ 0.85
-    const eta = 0.85;
-    // P = GHI * area_effective * eta
-    const area = totalWp / 200; // ~200 Wp/m² for modern panels
-    const pKw = (ghi * area * eta * tiltFactor * azFactor * tempCoeff) / 1000;
+    // System efficiency: inverter + wiring + soiling + mismatch ~ 0.82
+    const eta = 0.82;
+    // Prated is already in Wp, GHI=1000 W/m² → Prated output at STC
+    const pKw = (ghi / 1000) * (totalWp / 1000) * eta * tiltFactor * azFactor * tempCoeff;
     return Math.max(0, pKw);
   }
 
@@ -12496,9 +12496,8 @@ class SmartingHomePanel extends HTMLElement {
       if (this._settings.ecowitt_enabled && nowHour >= 5 && nowHour <= 20) {
         const ecoRad = parseFloat(this._hass?.states?.['sensor.ecowitt_solar_radiation_9747']?.state);
         if (!isNaN(ecoRad) && ecoRad > 0) {
-          // Convert W/m² to approximate kW using system area
-          const area = (this._fcTotalWp || 5000) / 200;
-          const ecoKw = (ecoRad * area * 0.85) / 1000;
+          // Convert W/m² to approximate kW using rated power
+          const ecoKw = (ecoRad / 1000) * ((this._fcTotalWp || 5000) / 1000) * 0.82;
           const ecoY = padY + chartH - (Math.min(ecoKw, maxKw) / maxKw) * chartH;
           ecowittOverlay = `
             <circle cx="${nowX}" cy="${ecoY}" r="4" fill="none" stroke="#00d4ff" stroke-width="1.5" style="filter:drop-shadow(0 0 4px #00d4ff)"/>
