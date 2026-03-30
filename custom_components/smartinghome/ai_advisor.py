@@ -19,6 +19,11 @@ from .const import (
     G13_PRICES,
     G13Zone,
     DEFAULT_BATTERY_CAPACITY,
+    PROVIDER_TARIFF_PRICES,
+    EnergyProvider,
+    ENERGY_PROVIDER_LABELS,
+    DEFAULT_ENERGY_PROVIDER,
+    CONF_ENERGY_PROVIDER,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -275,10 +280,29 @@ class AIAdvisor:
             "",
         ]
 
-        # Tariff section — dynamic or G13
+        # Tariff section — dynamic or tariff plan
+        # Read provider from settings or config entry
+        provider_key = DEFAULT_ENERGY_PROVIDER
+        try:
+            import json
+            from pathlib import Path
+            sp = Path(self.hass.config.path("custom_components/smartinghome/settings.json"))
+            if sp.exists():
+                s = json.loads(sp.read_text())
+                provider_key = s.get("energy_provider", DEFAULT_ENERGY_PROVIDER)
+        except Exception:
+            pass
+        # Also check config entry
+        if provider_key == DEFAULT_ENERGY_PROVIDER:
+            entries = self.hass.config_entries.async_entries("smartinghome")
+            if entries:
+                provider_key = entries[0].data.get(CONF_ENERGY_PROVIDER, DEFAULT_ENERGY_PROVIDER)
+
+        prov_label = ENERGY_PROVIDER_LABELS.get(provider_key, str(provider_key).upper())
+
         if data.get("dynamic_zone"):
             lines.extend([
-                "## Tariff (Dynamic — Tauron Cena Dynamiczna)",
+                f"## Tariff (Dynamic — {prov_label} Cena Dynamiczna)",
                 "- Type: HOURLY DYNAMIC (price changes every hour based on ENTSO-E market)",
                 f"- Current all-in price: {data.get('dynamic_buy_price', 0)} PLN/kWh",
                 f"- Next hour price: {data.get('dynamic_next_price', 0)} PLN/kWh",
@@ -288,14 +312,27 @@ class AIAdvisor:
                 f"- Zone: {data.get('dynamic_zone', 'unknown')}",
                 "- STRATEGY: Buy when price < avg, sell/discharge battery when price > avg",
             ])
-        else:
+        elif data.get('g13_zone'):
+            # G13 (Tauron)
             lines.extend([
-                "## Tariff (G13 Tauron 2026)",
+                f"## Tariff ({prov_label} G13 2026)",
                 f"- Current Zone: {data.get('g13_zone', 'unknown')}",
                 f"- Current Price: {data.get('g13_price', 0)} PLN/kWh",
                 f"- Off-peak: {G13_PRICES[G13Zone.OFF_PEAK]} PLN/kWh",
                 f"- Morning peak: {G13_PRICES[G13Zone.MORNING_PEAK]} PLN/kWh",
                 f"- Afternoon peak: {G13_PRICES[G13Zone.AFTERNOON_PEAK]} PLN/kWh",
+            ])
+        else:
+            # Non-G13 tariff (G11, G12, G12w, G12n)
+            tariff_name = data.get('tariff_name', 'unknown')
+            tariff_prices = PROVIDER_TARIFF_PRICES.get(provider_key, {})
+            tariff_data = tariff_prices.get(tariff_name, {})
+            price_lines = [f"  - {k}: {v} PLN/kWh" for k, v in tariff_data.items()]
+            lines.extend([
+                f"## Tariff ({prov_label} {tariff_name} 2026)",
+                f"- Provider: {prov_label}",
+                f"- Current Price: {data.get('g13_price', data.get('tariff_price', 0))} PLN/kWh",
+                *price_lines,
             ])
 
         lines.extend([

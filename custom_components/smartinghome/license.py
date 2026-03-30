@@ -273,10 +273,11 @@ class LicenseManager:
         """Send anonymous telemetry ping for FREE mode users.
 
         Non-blocking, fire-and-forget. Never crashes the integration.
+        Also notifies the installations webhook about new FREE installs.
         """
         try:
             import aiohttp
-            from .const import LICENSE_API_URL
+            from .const import LICENSE_API_URL, DOMAIN, VERSION
 
             url = f"{LICENSE_API_URL}/register-free"
 
@@ -287,7 +288,7 @@ class LicenseManager:
             payload = {
                 "device_id": str(device_id),
                 "ha_version": ha_version,
-                "integration_version": "1.3.0",
+                "integration_version": VERSION,
             }
 
             session = self.hass.helpers.aiohttp_client.async_get_clientsession(
@@ -306,3 +307,51 @@ class LicenseManager:
         except Exception as err:
             # Silently ignore — telemetry should never affect operation
             _LOGGER.debug("FREE registration ping failed (non-critical): %s", err)
+
+        # Notify installations webhook about new FREE install
+        try:
+            import aiohttp
+            from .const import VERSION, DOMAIN
+
+            device_id = self.hass.data.get("core.uuid", "unknown")
+            ha_version = self.hass.config.version or "unknown"
+
+            # Extract config entry data (inverter brand, tariff, provider)
+            entry_data = {}
+            domain_data = self.hass.data.get(DOMAIN, {})
+            for entry_id, entry_info in domain_data.items():
+                coord = entry_info.get("coordinator") if isinstance(entry_info, dict) else None
+                if coord and hasattr(coord, "entry"):
+                    entry_data = coord.entry.data or {}
+                    break
+            # Fallback: scan config entries directly
+            if not entry_data:
+                for entry in self.hass.config_entries.async_entries(DOMAIN):
+                    entry_data = entry.data or {}
+                    break
+
+            webhook_payload = {
+                "event": "new_free_installation",
+                "device_id": str(device_id),
+                "ha_version": ha_version,
+                "integration_version": VERSION,
+                "inverter_brand": entry_data.get("inverter_brand", "unknown"),
+                "tariff": entry_data.get("tariff", "unknown"),
+                "energy_provider": entry_data.get("energy_provider", "unknown"),
+                "license_tier": "free",
+            }
+
+            session = self.hass.helpers.aiohttp_client.async_get_clientsession(
+                self.hass
+            )
+            async with session.post(
+                "https://a.gregciupek.com/webhook/7cb899c0-5f2c-40f2-8d65-7dcbbbb28f01",
+                json=webhook_payload,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                _LOGGER.debug(
+                    "New install webhook: status=%s", resp.status
+                )
+
+        except Exception as err:
+            _LOGGER.debug("Install webhook failed (non-critical): %s", err)

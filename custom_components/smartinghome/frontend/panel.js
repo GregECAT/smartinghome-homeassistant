@@ -4,6 +4,48 @@
  * © 2026 Smarting HOME by GregECAT
  */
 
+// ── Provider pricing data (PLN/kWh brutto, energia + przesył) ──
+const SH_PROVIDER_PRICES = {
+  tauron: {
+    label: 'Tauron',
+    G11:  { flat: 0.87 },
+    G12:  { off_peak: 0.55, peak: 1.10 },
+    G12w: { off_peak: 0.55, peak: 1.10 },
+    G13:  { off_peak: 0.63, morning: 0.91, peak: 1.50 },
+  },
+  pge: {
+    label: 'PGE',
+    G11:   { flat: 1.10 },
+    G12:   { off_peak: 0.61, peak: 1.25 },
+    G12w:  { off_peak: 0.69, peak: 1.30 },
+    G12n:  { off_peak: 0.59, peak: 1.21 },
+  },
+};
+
+// Tariffs available per provider
+const SH_PROVIDER_TARIFFS = {
+  tauron: [
+    { value: 'G13',  label: 'G13 — trzystrefowa (przedpołudniowa / popołudniowa / off-peak + weekendy)' },
+    { value: 'G12w', label: 'G12w — dwustrefowa + weekendy (13-15 + 22-06 + weekendy taniej)' },
+    { value: 'G12',  label: 'G12 — dwustrefowa (13-15 + 22-06 taniej)' },
+    { value: 'G11',  label: 'G11 — jednostrefowa (stała cena cały czas)' },
+    { value: 'Dynamic', label: 'Dynamiczna — cena godzinowa ENTSO-E' },
+  ],
+  pge: [
+    { value: 'G12w', label: 'G12w — dwustrefowa + weekendy + letnia/zimowa' },
+    { value: 'G12',  label: 'G12 — dwustrefowa (letnia/zimowa + noc)' },
+    { value: 'G12n', label: 'G12n — niedzielna (noc 1-5 + niedziele taniej)' },
+    { value: 'G11',  label: 'G11 — jednostrefowa (stała 1.10 zł/kWh)' },
+    { value: 'Dynamic', label: 'Dynamiczna — cena godzinowa ENTSO-E' },
+  ],
+};
+
+// Provider labels for selectbox
+const SH_PROVIDER_LABELS = {
+  tauron: 'Tauron',
+  pge: 'PGE (Polska Grupa Energetyczna)',
+};
+
 class SmartingHomePanel extends HTMLElement {
   constructor() {
     super();
@@ -466,7 +508,11 @@ class SmartingHomePanel extends HTMLElement {
         // Restore default provider
         const dpSel = this.shadowRoot.getElementById('sel-default-provider');
         if (dpSel && this._settings.default_ai_provider) dpSel.value = this._settings.default_ai_provider;
-        // Restore tariff plan
+        // Restore energy provider
+        const epSel = this.shadowRoot.getElementById('sel-energy-provider');
+        if (epSel && this._settings.energy_provider) epSel.value = this._settings.energy_provider;
+        // Rebuild tariff options for provider then restore tariff plan
+        this._rebuildTariffOptions();
         const tSel = this.shadowRoot.getElementById('sel-tariff-plan');
         if (tSel && this._settings.tariff_plan) tSel.value = this._settings.tariff_plan;
         // Restore cron settings
@@ -477,6 +523,7 @@ class SmartingHomePanel extends HTMLElement {
         this._renderAILogs();
         // Re-apply PV labels and all data after settings loaded
         if (this._hass) this._updateAll();
+        this._updatePricingTable();
         this._renderWeatherForecast();
         // Restore Ecowitt settings
         const ecoChk = this.shadowRoot.getElementById('chk-ecowitt-enabled');
@@ -2167,9 +2214,52 @@ class SmartingHomePanel extends HTMLElement {
     this._updateG13Timeline();
   }
 
+  _saveEnergyProvider() {
+    const sel = this.shadowRoot.getElementById("sel-energy-provider");
+    if (!sel) return;
+    this._settings.energy_provider = sel.value;
+    this._savePanelSettings({ energy_provider: sel.value });
+    // Rebuild tariff options for new provider
+    this._rebuildTariffOptions();
+    // Update pricing table
+    this._updatePricingTable();
+    this._updateG13Timeline();
+  }
+
+  _rebuildTariffOptions() {
+    const provider = this._settings.energy_provider || 'tauron';
+    const tariffs = SH_PROVIDER_TARIFFS[provider] || SH_PROVIDER_TARIFFS.tauron;
+    const sel = this.shadowRoot.getElementById('sel-tariff-plan');
+    if (!sel) return;
+    const currentVal = sel.value;
+    sel.innerHTML = '';
+    tariffs.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.value;
+      opt.textContent = t.label;
+      sel.appendChild(opt);
+    });
+    // Keep current value if still valid, otherwise pick first
+    const validValues = tariffs.map(t => t.value);
+    if (validValues.includes(currentVal)) {
+      sel.value = currentVal;
+    } else {
+      sel.value = validValues[0];
+      this._settings.tariff_plan = sel.value;
+      this._savePanelSettings({ tariff_plan: sel.value });
+    }
+  }
+
+  /** Get current provider key */
+  _getProvider() {
+    return this._settings.energy_provider || 'tauron';
+  }
+
   /** Shared tariff helper — returns zone info for any supported tariff */
   _getTariffInfo() {
     const tariff = this._settings.tariff_plan || "G13";
+    const provider = this._getProvider();
+    const prices = (SH_PROVIDER_PRICES[provider] || SH_PROVIDER_PRICES.tauron);
     const now = new Date();
     const h = now.getHours(), dow = now.getDay(), m = now.getMonth();
     const isWeekend = (dow === 0 || dow === 6);
@@ -2187,44 +2277,191 @@ class SmartingHomePanel extends HTMLElement {
       else if (allinNow <= 0.90) { zone = "expensive"; zoneName = "DROGO"; zoneColor = "#e67e22"; }
       else { zone = "very_expensive"; zoneName = "B. DROGO"; zoneColor = "#e74c3c"; }
     } else if (tariff === "G11") {
-      zone = "flat"; zoneName = "STAŁA"; zoneColor = "#3b82f6"; price = "0.87";
-    } else if (tariff === "G12") {
-      if ((h >= 13 && h < 15) || h >= 22 || h < 6) {
-        zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = "0.55";
+      const p = prices.G11 || { flat: 0.87 };
+      zone = "flat"; zoneName = "STAŁA"; zoneColor = "#3b82f6"; price = p.flat.toFixed(2);
+    } else if (tariff === "G12n" && provider === "pge") {
+      // PGE G12n — niedzielna: Mon-Sat peak 05:00-01:00, off-peak 01:00-05:00; Sun all off-peak
+      const p = prices.G12n || { off_peak: 0.59, peak: 1.21 };
+      const isSunday = (dow === 0);
+      if (isSunday) {
+        zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = p.off_peak.toFixed(2);
+      } else if ((h >= 5 && h < 25) && !(h >= 1 && h < 5)) {
+        // peak: 05:00 → 01:00 next day (h>=5 || h<1)
+        if (h >= 5 || h < 1) {
+          zone = "peak"; zoneName = "SZCZYT"; zoneColor = "#e74c3c"; price = p.peak.toFixed(2);
+        } else {
+          zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = p.off_peak.toFixed(2);
+        }
       } else {
-        zone = "peak"; zoneName = "SZCZYT"; zoneColor = "#e74c3c"; price = "1.10";
+        zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = p.off_peak.toFixed(2);
+      }
+    } else if (tariff === "G12") {
+      const p = prices.G12 || { off_peak: 0.55, peak: 1.10 };
+      if (provider === "pge") {
+        // PGE G12 — different summer/winter schedules
+        if (isSummer) {
+          // Summer: off-peak 15:00–17:00 + 22:00–06:00
+          if ((h >= 15 && h < 17) || h >= 22 || h < 6) {
+            zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = p.off_peak.toFixed(2);
+          } else {
+            zone = "peak"; zoneName = "SZCZYT"; zoneColor = "#e74c3c"; price = p.peak.toFixed(2);
+          }
+        } else {
+          // Winter: off-peak 13:00–15:00 + 22:00–06:00
+          if ((h >= 13 && h < 15) || h >= 22 || h < 6) {
+            zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = p.off_peak.toFixed(2);
+          } else {
+            zone = "peak"; zoneName = "SZCZYT"; zoneColor = "#e74c3c"; price = p.peak.toFixed(2);
+          }
+        }
+      } else {
+        // Tauron G12
+        if ((h >= 13 && h < 15) || h >= 22 || h < 6) {
+          zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = p.off_peak.toFixed(2);
+        } else {
+          zone = "peak"; zoneName = "SZCZYT"; zoneColor = "#e74c3c"; price = p.peak.toFixed(2);
+        }
       }
     } else if (tariff === "G12w") {
-      if (isWeekend || (h >= 13 && h < 15) || h >= 22 || h < 6) {
-        zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = "0.55";
+      const p = prices.G12w || { off_peak: 0.55, peak: 1.10 };
+      if (provider === "pge") {
+        // PGE G12w — weekends all off-peak; workdays same as G12
+        if (isWeekend) {
+          zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = p.off_peak.toFixed(2);
+        } else if (isSummer) {
+          if ((h >= 15 && h < 17) || h >= 22 || h < 6) {
+            zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = p.off_peak.toFixed(2);
+          } else {
+            zone = "peak"; zoneName = "SZCZYT"; zoneColor = "#e74c3c"; price = p.peak.toFixed(2);
+          }
+        } else {
+          if ((h >= 13 && h < 15) || h >= 22 || h < 6) {
+            zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = p.off_peak.toFixed(2);
+          } else {
+            zone = "peak"; zoneName = "SZCZYT"; zoneColor = "#e74c3c"; price = p.peak.toFixed(2);
+          }
+        }
       } else {
-        zone = "peak"; zoneName = "SZCZYT"; zoneColor = "#e74c3c"; price = "1.10";
+        // Tauron G12w
+        if (isWeekend || (h >= 13 && h < 15) || h >= 22 || h < 6) {
+          zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = p.off_peak.toFixed(2);
+        } else {
+          zone = "peak"; zoneName = "SZCZYT"; zoneColor = "#e74c3c"; price = p.peak.toFixed(2);
+        }
       }
     } else {
-      // G13
+      // G13 (Tauron only)
+      const p = prices.G13 || { off_peak: 0.63, morning: 0.91, peak: 1.50 };
       if (isWeekend) {
-        zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = "0.63";
+        zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = p.off_peak.toFixed(2);
       } else if (h >= 7 && h < 13) {
-        zone = "morning"; zoneName = "PORANNY"; zoneColor = "#e67e22"; price = "0.91";
+        zone = "morning"; zoneName = "PORANNY"; zoneColor = "#e67e22"; price = p.morning.toFixed(2);
       } else if (isSummer) {
-        if (h >= 19 && h < 22) { zone = "peak"; zoneName = "SZCZYT"; zoneColor = "#e74c3c"; price = "1.50"; }
-        else { zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = "0.63"; }
+        if (h >= 19 && h < 22) { zone = "peak"; zoneName = "SZCZYT"; zoneColor = "#e74c3c"; price = p.peak.toFixed(2); }
+        else { zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = p.off_peak.toFixed(2); }
       } else {
-        if (h >= 16 && h < 21) { zone = "peak"; zoneName = "SZCZYT"; zoneColor = "#e74c3c"; price = "1.50"; }
-        else { zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = "0.63"; }
+        if (h >= 16 && h < 21) { zone = "peak"; zoneName = "SZCZYT"; zoneColor = "#e74c3c"; price = p.peak.toFixed(2); }
+        else { zone = "off"; zoneName = "OFF-PEAK"; zoneColor = "#2ecc71"; price = p.off_peak.toFixed(2); }
       }
     }
 
-    return { tariff, zone, zoneName, zoneColor, price, isWeekend, isSummer, hour: h };
+    return { tariff, provider, zone, zoneName, zoneColor, price, isWeekend, isSummer, hour: h };
   }
 
   /** Average tariff price for savings calculations */
   _getTariffAvgPrice() {
     const t = this._settings.tariff_plan || "G13";
+    const provider = this._getProvider();
     if (t === "Dynamic") return parseFloat(this._haState("sensor.entso_e_srednia_dzisiaj")) || 0.50;
-    if (t === "G11") return 0.87;
-    if (t === "G12" || t === "G12w") return 0.82;
-    return 0.87; // G13 weighted avg
+    const prices = (SH_PROVIDER_PRICES[provider] || SH_PROVIDER_PRICES.tauron);
+    if (t === "G11") return (prices.G11 || {}).flat || 0.87;
+    if (t === "G12") {
+      const p = prices.G12 || { off_peak: 0.55, peak: 1.10 };
+      return p.off_peak * 0.7 + p.peak * 0.3; // rough weighted avg
+    }
+    if (t === "G12w") {
+      const p = prices.G12w || { off_peak: 0.55, peak: 1.10 };
+      return p.off_peak * 0.75 + p.peak * 0.25;
+    }
+    if (t === "G12n" && provider === "pge") {
+      const p = prices.G12n || { off_peak: 0.59, peak: 1.21 };
+      return p.off_peak * 0.3 + p.peak * 0.7; // G12n has only 4h off-peak
+    }
+    // G13 (Tauron)
+    const gp = prices.G13 || { off_peak: 0.63, morning: 0.91, peak: 1.50 };
+    return gp.off_peak * 0.85 + gp.morning * 0.05 + gp.peak * 0.10;
+  }
+
+  _updatePricingTable() {
+    const provider = this._getProvider();
+    const prices = SH_PROVIDER_PRICES[provider] || SH_PROVIDER_PRICES.tauron;
+    const label = prices.label || 'Tauron';
+    const titleEl = this.shadowRoot.getElementById('pricing-table-title');
+    const bodyEl = this.shadowRoot.getElementById('pricing-table-body');
+    const footerEl = this.shadowRoot.getElementById('pricing-table-footer');
+    if (!bodyEl) return;
+    if (titleEl) titleEl.textContent = `📋 Cennik ${label} 2026 — porównanie taryf`;
+
+    // Define rows per provider
+    const rows = [];
+    const tariff = this._settings.tariff_plan || 'G13';
+    const selStyle = (t) => t === tariff ? 'background:rgba(46,204,113,0.06)' : 'border-bottom:1px solid rgba(255,255,255,0.05)';
+    const selTd = (t) => t === tariff ? 'font-weight:800; color:#2ecc71' : '';
+    const selMark = (t) => t === tariff ? ' ✓' : '';
+
+    if (provider === 'pge') {
+      rows.push({ name: 'G11', prices_2k: '1.33', prices_4k: '1.24', prices_6k: '1.20', hours: 'brak — stała', key: 'G11' });
+      rows.push({ name: 'G12', prices_2k: '1.01', prices_4k: '0.90', prices_6k: '0.85', hours: 'lato: 15–17+22–06 / zima: 13–15+22–06', key: 'G12' });
+      rows.push({ name: 'G12w', prices_2k: '1.08', prices_4k: '0.97', prices_6k: '0.92', hours: 'jak G12 + weekendy cała doba', key: 'G12w' });
+      rows.push({ name: 'G12n', prices_2k: '0.97', prices_4k: '0.86', prices_6k: '0.81', hours: 'noc 1–5 + niedziele cała doba', key: 'G12n' });
+    } else {
+      // Tauron
+      rows.push({ name: 'G11', prices_2k: '1.22', prices_4k: '1.12', prices_6k: '1.07', hours: 'brak — stała', key: 'G11' });
+      rows.push({ name: 'G12', prices_2k: '0.97', prices_4k: '0.87', prices_6k: '0.82', hours: '13–15 + 22–06', key: 'G12' });
+      rows.push({ name: 'G12w', prices_2k: '0.99', prices_4k: '0.90', prices_6k: '0.85', hours: '13–15 + 22–06 + weekendy', key: 'G12w' });
+      rows.push({ name: 'G13', prices_2k: '0.97', prices_4k: '0.87', prices_6k: '0.83', hours: '85% off-peak + weekendy', key: 'G13' });
+    }
+
+    let html = `<table style="width:100%; border-collapse:collapse; font-size:10px; color:#cbd5e1">
+      <thead><tr style="border-bottom:1px solid rgba(255,255,255,0.1)">
+        <th style="text-align:left; padding:6px; color:#64748b; font-weight:700">Taryfa</th>
+        <th style="text-align:center; padding:6px; color:#64748b">2000 kWh</th>
+        <th style="text-align:center; padding:6px; color:#64748b">4000 kWh</th>
+        <th style="text-align:center; padding:6px; color:#64748b">6000 kWh</th>
+        <th style="text-align:center; padding:6px; color:#64748b">Godziny taniej</th>
+      </tr></thead><tbody>`;
+
+    rows.forEach(r => {
+      const s = selStyle(r.key);
+      const td = selTd(r.key);
+      const mark = selMark(r.key);
+      html += `<tr style="${s}">
+        <td style="padding:6px; font-weight:700; ${td}">${r.name}${mark}</td>
+        <td style="text-align:center; padding:6px; ${td}">${r.prices_2k} zł</td>
+        <td style="text-align:center; padding:6px; ${td}">${r.prices_4k} zł</td>
+        <td style="text-align:center; padding:6px; ${td}">${r.prices_6k} zł</td>
+        <td style="text-align:center; padding:6px; color:${r.key === tariff ? '#2ecc71' : (r.hours.startsWith('brak') ? '#94a3b8' : '#2ecc71')}; ${r.key === tariff ? 'font-weight:700' : ''}">${r.hours}</td>
+      </tr>`;
+    });
+
+    // Dynamic row
+    html += `<tr style="border-top:2px solid rgba(168,85,247,0.3); background:rgba(168,85,247,0.06)">
+      <td style="padding:6px; font-weight:800; color:#a855f7">⚡ Dynamiczna${'Dynamic' === tariff ? ' ✓' : ''}</td>
+      <td style="text-align:center; padding:6px; color:#a855f7">zmienna</td>
+      <td style="text-align:center; padding:6px; color:#a855f7">zmienna</td>
+      <td style="text-align:center; padding:6px; color:#a855f7">zmienna</td>
+      <td style="text-align:center; padding:6px; color:#a855f7; font-weight:700">cena co godzinę wg ENTSO-E</td>
+    </tr>`;
+    html += '</tbody></table>';
+    bodyEl.innerHTML = html;
+
+    if (footerEl) {
+      if (provider === 'pge') {
+        footerEl.innerHTML = '* Ceny brutto za kWh (sprzedaż + dystrybucja) dla zużycia 80/20 (strefa tańsza/droższa).<br>Stawki 2026 r. zatwierdzone przez URE. Instalacja 3-fazowa.';
+      } else {
+        footerEl.innerHTML = '* Ceny brutto za kWh (sprzedaż + dystrybucja). G13: 5% przedpołudniowa, 10% popołudniowa, 85% off-peak.<br>Weekendy i święta = cały dzień off-peak (najtańsza strefa).';
+      }
+    }
   }
 
   _saveApiKeys() {
@@ -10356,64 +10593,15 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
-          <!-- ROW 7: Tauron 2026 Pricing Table -->
+          <!-- ROW 7: Provider Pricing Table (dynamic) -->
           <div class="card" style="margin-bottom:14px">
-            <div class="card-title">📋 Cennik Tauron 2026 — porównanie taryf</div>
-            <div style="overflow-x:auto">
-              <table style="width:100%; border-collapse:collapse; font-size:10px; color:#cbd5e1">
-                <thead>
-                  <tr style="border-bottom:1px solid rgba(255,255,255,0.1)">
-                    <th style="text-align:left; padding:6px; color:#64748b; font-weight:700">Taryfa</th>
-                    <th style="text-align:center; padding:6px; color:#64748b">2000 kWh</th>
-                    <th style="text-align:center; padding:6px; color:#64748b">4000 kWh</th>
-                    <th style="text-align:center; padding:6px; color:#64748b">6000 kWh</th>
-                    <th style="text-align:center; padding:6px; color:#64748b">Godziny taniej</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr style="border-bottom:1px solid rgba(255,255,255,0.05)">
-                    <td style="padding:6px; font-weight:700">G11</td>
-                    <td style="text-align:center; padding:6px">1.22 zł</td>
-                    <td style="text-align:center; padding:6px">1.12 zł</td>
-                    <td style="text-align:center; padding:6px">1.07 zł</td>
-                    <td style="text-align:center; padding:6px; color:#94a3b8">brak — stała</td>
-                  </tr>
-                  <tr style="border-bottom:1px solid rgba(255,255,255,0.05)">
-                    <td style="padding:6px; font-weight:700">G12</td>
-                    <td style="text-align:center; padding:6px">0.97 zł</td>
-                    <td style="text-align:center; padding:6px">0.87 zł</td>
-                    <td style="text-align:center; padding:6px">0.82 zł</td>
-                    <td style="text-align:center; padding:6px; color:#2ecc71">13–15 + 22–06</td>
-                  </tr>
-                  <tr style="border-bottom:1px solid rgba(255,255,255,0.05)">
-                    <td style="padding:6px; font-weight:700">G12w</td>
-                    <td style="text-align:center; padding:6px">0.99 zł</td>
-                    <td style="text-align:center; padding:6px">0.90 zł</td>
-                    <td style="text-align:center; padding:6px">0.85 zł</td>
-                    <td style="text-align:center; padding:6px; color:#2ecc71">13–15 + 22–06 + weekendy</td>
-                  </tr>
-                  <tr style="background:rgba(46,204,113,0.06)">
-                    <td style="padding:6px; font-weight:800; color:#2ecc71">G13 ✓</td>
-                    <td style="text-align:center; padding:6px; font-weight:800; color:#2ecc71">0.97 zł</td>
-                    <td style="text-align:center; padding:6px; font-weight:800; color:#2ecc71">0.87 zł</td>
-                    <td style="text-align:center; padding:6px; font-weight:800; color:#2ecc71">0.83 zł</td>
-                    <td style="text-align:center; padding:6px; color:#2ecc71; font-weight:700">85% off-peak + weekendy</td>
-                  </tr>
-                  <tr style="border-top:2px solid rgba(168,85,247,0.3); background:rgba(168,85,247,0.06)">
-                    <td style="padding:6px; font-weight:800; color:#a855f7">⚡ Dynamiczna</td>
-                    <td style="text-align:center; padding:6px; color:#a855f7">zmienna</td>
-                    <td style="text-align:center; padding:6px; color:#a855f7">zmienna</td>
-                    <td style="text-align:center; padding:6px; color:#a855f7">zmienna</td>
-                    <td style="text-align:center; padding:6px; color:#a855f7; font-weight:700">cena co godzinę wg ENTSO-E</td>
-                  </tr>
-                </tbody>
-              </table>
+            <div class="card-title" id="pricing-table-title">📋 Cennik Tauron 2026 — porównanie taryf</div>
+            <div style="overflow-x:auto" id="pricing-table-body">
             </div>
-            <div style="font-size:9px; color:#64748b; margin-top:6px; line-height:1.4">
-              * Ceny brutto za kWh (sprzedaż + dystrybucja). G13: 5% przedpołudniowa, 10% popołudniowa, 85% off-peak.<br>
-              Weekendy i święta = cały dzień off-peak (najtańsza strefa).
+            <div style="font-size:9px; color:#64748b; margin-top:6px; line-height:1.4" id="pricing-table-footer">
             </div>
           </div>
+
 
         </div>
 
@@ -12622,10 +12810,17 @@ class SmartingHomePanel extends HTMLElement {
               <div id="v-ecowitt-save-status" style="font-size:11px; color:#2ecc71; margin-top:6px"></div>
             </div>
 
-            <!-- ⚡ Tariff Plan -->
+            <!-- ⚡ Energy Provider + Tariff Plan -->
             <div class="card" style="grid-column: 1 / -1">
-              <div class="card-title">⚡ Taryfa energetyczna</div>
-              <div style="font-size:11px; color:#94a3b8; margin-bottom:10px">Wybierz taryfę aby panel dynamicznie dostosował harmonogram stref cenowych, wskaźniki i rekomendacje.</div>
+              <div class="card-title">⚡ Dostawca energii i taryfa</div>
+              <div style="font-size:11px; color:#94a3b8; margin-bottom:10px">Wybierz dostawcę energii, a następnie taryfę. Lista taryf, ceny i harmonogramy stref zostaną automatycznie dostosowane.</div>
+              <div class="settings-field" style="margin-bottom:12px">
+                <label style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Dostawca energii</label>
+                <select id="sel-energy-provider" style="width:100%; max-width:400px; padding:10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px" onchange="this.getRootNode().host._saveEnergyProvider()">
+                  <option value="tauron">Tauron</option>
+                  <option value="pge">PGE (Polska Grupa Energetyczna)</option>
+                </select>
+              </div>
               <div class="settings-field">
                 <label style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">Plan taryfowy</label>
                 <select id="sel-tariff-plan" style="width:100%; max-width:400px; padding:10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px" onchange="this.getRootNode().host._saveTariffPlan()">
@@ -12633,10 +12828,11 @@ class SmartingHomePanel extends HTMLElement {
                   <option value="G12w">G12w — dwustrefowa + weekendy (13-15 + 22-06 + weekendy taniej)</option>
                   <option value="G12">G12 — dwustrefowa (13-15 + 22-06 taniej)</option>
                   <option value="G11">G11 — jednostrefowa (stała cena cały czas)</option>
-                  <option value="Dynamic">Dynamiczna — cena godzinowa ENTSO-E (Tauron Prąd z Ceną Dynamiczną)</option>
+                  <option value="Dynamic">Dynamiczna — cena godzinowa ENTSO-E</option>
                 </select>
               </div>
             </div>
+
 
             <!-- 🖼️ Inverter Image Upload -->
             <div class="card" style="grid-column: 1 / -1">
@@ -12994,7 +13190,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.47.5</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.48.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

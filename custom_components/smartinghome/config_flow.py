@@ -20,6 +20,7 @@ from .const import (
     CONF_LICENSE_MODE,
     CONF_DEVICE_ID,
     CONF_TARIFF,
+    CONF_ENERGY_PROVIDER,
     CONF_RCE_ENABLED,
     CONF_GEMINI_API_KEY,
     CONF_ANTHROPIC_API_KEY,
@@ -49,6 +50,11 @@ from .const import (
     LICENSE_MODE_FREE,
     LICENSE_MODE_PRO,
     TariffType,
+    EnergyProvider,
+    ENERGY_PROVIDER_LABELS,
+    DEFAULT_ENERGY_PROVIDER,
+    PROVIDER_TARIFFS,
+    PROVIDER_TARIFF_LABELS,
     G13_PRICES,
     G13Zone,
 )
@@ -65,6 +71,17 @@ def _get_defaults_for_brand(brand: str) -> dict:
     if brand == INVERTER_BRAND_SOFAR:
         return DEFAULT_SENSOR_MAP_SOFAR
     return DEFAULT_SENSOR_MAP
+
+
+def _get_tariff_options(provider: str) -> dict[str, str]:
+    """Return tariff selection options based on energy provider."""
+    try:
+        prov = EnergyProvider(provider)
+    except ValueError:
+        prov = DEFAULT_ENERGY_PROVIDER
+    labels = PROVIDER_TARIFF_LABELS.get(prov, PROVIDER_TARIFF_LABELS[DEFAULT_ENERGY_PROVIDER])
+    tariffs = PROVIDER_TARIFFS.get(prov, PROVIDER_TARIFFS[DEFAULT_ENERGY_PROVIDER])
+    return {t: labels[t] for t in tariffs if t in labels}
 
 
 class SmartingHomeConfigFlow(
@@ -246,10 +263,14 @@ class SmartingHomeConfigFlow(
     async def async_step_tariff(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Step 3: Tariff configuration."""
+        """Step 3: Provider + Tariff configuration."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
+            provider = user_input.get(
+                CONF_ENERGY_PROVIDER, DEFAULT_ENERGY_PROVIDER
+            )
+            self._data[CONF_ENERGY_PROVIDER] = provider
             self._data[CONF_TARIFF] = user_input.get(
                 CONF_TARIFF, TariffType.G13
             )
@@ -282,21 +303,20 @@ class SmartingHomeConfigFlow(
                 data=self._data,
             )
 
+        # Build dynamic tariff options based on default provider
+        tariff_options = _get_tariff_options(DEFAULT_ENERGY_PROVIDER)
+        default_tariff = TariffType.G13 if TariffType.G13 in tariff_options else list(tariff_options.keys())[0]
+
         return self.async_show_form(
             step_id="tariff",
             data_schema=vol.Schema(
                 {
                     vol.Required(
-                        CONF_TARIFF, default=TariffType.G13
-                    ): vol.In(
-                        {
-                            TariffType.G11: "G11 — Flat rate",
-                            TariffType.G12: "G12 — Two-zone",
-                            TariffType.G12W: "G12w — Two-zone + weekends",
-                            TariffType.G13: "G13 — Three-zone (recommended)",
-                            TariffType.DYNAMIC: "Dynamiczna — cena godzinowa ENTSO-E (Tauron)",
-                        }
-                    ),
+                        CONF_ENERGY_PROVIDER, default=DEFAULT_ENERGY_PROVIDER
+                    ): vol.In(ENERGY_PROVIDER_LABELS),
+                    vol.Required(
+                        CONF_TARIFF, default=default_tariff
+                    ): vol.In(tariff_options),
                     vol.Optional(
                         CONF_RCE_ENABLED, default=True
                     ): bool,
@@ -489,8 +509,12 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             license_key = user_input.get(CONF_LICENSE_KEY, "").strip()
 
-            # Always persist tariff/RCE/interval to entry.data
+            # Always persist provider/tariff/RCE/interval to entry.data
             new_data = {**current}
+            new_data[CONF_ENERGY_PROVIDER] = user_input.get(
+                CONF_ENERGY_PROVIDER,
+                current.get(CONF_ENERGY_PROVIDER, DEFAULT_ENERGY_PROVIDER),
+            )
             new_data[CONF_TARIFF] = user_input.get(
                 CONF_TARIFF, current.get(CONF_TARIFF, TariffType.G13)
             )
@@ -544,6 +568,12 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
                 )
                 return self.async_create_entry(title="", data={})
 
+        provider = current.get(CONF_ENERGY_PROVIDER, DEFAULT_ENERGY_PROVIDER)
+        tariff_options = _get_tariff_options(provider)
+        current_tariff = current.get(CONF_TARIFF, TariffType.G13)
+        if current_tariff not in tariff_options:
+            current_tariff = list(tariff_options.keys())[0]
+
         return self.async_show_form(
             step_id="upgrade",
             data_schema=vol.Schema(
@@ -554,17 +584,13 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
                         description={"suggested_value": ""},
                     ): str,
                     vol.Optional(
+                        CONF_ENERGY_PROVIDER,
+                        default=provider,
+                    ): vol.In(ENERGY_PROVIDER_LABELS),
+                    vol.Optional(
                         CONF_TARIFF,
-                        default=current.get(CONF_TARIFF, TariffType.G13),
-                    ): vol.In(
-                        {
-                            TariffType.G11: "G11 — Flat rate",
-                            TariffType.G12: "G12 — Two-zone",
-                            TariffType.G12W: "G12w — Two-zone + weekends",
-                            TariffType.G13: "G13 — Three-zone",
-                            TariffType.DYNAMIC: "Dynamiczna — cena godzinowa ENTSO-E (Tauron)",
-                        }
-                    ),
+                        default=current_tariff,
+                    ): vol.In(tariff_options),
                     vol.Optional(
                         CONF_RCE_ENABLED,
                         default=current.get(CONF_RCE_ENABLED, True),
@@ -746,10 +772,14 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """PRO settings — tariff, RCE, update interval (no API keys here)."""
+        """PRO settings — provider, tariff, RCE, update interval."""
         if user_input is not None:
             current = self._config_entry.data
             new_data = {**current}
+            new_data[CONF_ENERGY_PROVIDER] = user_input.get(
+                CONF_ENERGY_PROVIDER,
+                current.get(CONF_ENERGY_PROVIDER, DEFAULT_ENERGY_PROVIDER),
+            )
             new_data[CONF_TARIFF] = user_input.get(
                 CONF_TARIFF, current.get(CONF_TARIFF, TariffType.G13)
             )
@@ -766,20 +796,21 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(title="", data={})
 
         current = self._config_entry.data
+        provider = current.get(CONF_ENERGY_PROVIDER, DEFAULT_ENERGY_PROVIDER)
+        tariff_options = _get_tariff_options(provider)
+        current_tariff = current.get(CONF_TARIFF, TariffType.G13)
+        if current_tariff not in tariff_options:
+            current_tariff = list(tariff_options.keys())[0]
 
         schema_dict = {
             vol.Optional(
+                CONF_ENERGY_PROVIDER,
+                default=provider,
+            ): vol.In(ENERGY_PROVIDER_LABELS),
+            vol.Optional(
                 CONF_TARIFF,
-                default=current.get(CONF_TARIFF, TariffType.G13),
-            ): vol.In(
-                {
-                    TariffType.G11: "G11 — Flat rate",
-                    TariffType.G12: "G12 — Two-zone",
-                    TariffType.G12W: "G12w — Two-zone + weekends",
-                    TariffType.G13: "G13 — Three-zone",
-                    TariffType.DYNAMIC: "Dynamiczna — cena godzinowa ENTSO-E (Tauron)",
-                }
-            ),
+                default=current_tariff,
+            ): vol.In(tariff_options),
             vol.Optional(
                 CONF_RCE_ENABLED,
                 default=current.get(CONF_RCE_ENABLED, True),
