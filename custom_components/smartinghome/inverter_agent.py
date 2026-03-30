@@ -272,6 +272,8 @@ class InverterAgent:
         # Work mode
         work_mode_state = states.get(SELECT_WORK_MODE)
         work_mode = work_mode_state.state if work_mode_state else "unknown"
+        if work_mode in ("unavailable", "unknown"):
+            work_mode = "unknown"
 
         # DOD on grid
         dod_state = states.get(NUMBER_DOD_ON_GRID)
