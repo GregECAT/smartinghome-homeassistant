@@ -20,6 +20,7 @@ CONF_LICENSE_MODE: Final = "license_mode"
 CONF_DEVICE_ID: Final = "device_id"
 CONF_TARIFF: Final = "tariff"
 CONF_TARIFF_PRICES: Final = "tariff_prices"
+CONF_ENERGY_PROVIDER: Final = "energy_provider"
 CONF_RCE_ENABLED: Final = "rce_enabled"
 CONF_GEMINI_API_KEY: Final = "gemini_api_key"
 CONF_ANTHROPIC_API_KEY: Final = "anthropic_api_key"
@@ -492,6 +493,24 @@ PLATFORMS: Final = [
 ]
 
 # =============================================================================
+# Energy Providers
+# =============================================================================
+
+class EnergyProvider(StrEnum):
+    """Supported energy providers."""
+
+    TAURON = "tauron"
+    PGE = "pge"
+
+
+ENERGY_PROVIDER_LABELS: Final = {
+    EnergyProvider.TAURON: "Tauron",
+    EnergyProvider.PGE: "PGE (Polska Grupa Energetyczna)",
+}
+
+DEFAULT_ENERGY_PROVIDER: Final = EnergyProvider.TAURON
+
+# =============================================================================
 # Tariffs
 # =============================================================================
 
@@ -501,8 +520,34 @@ class TariffType(StrEnum):
     G11 = "g11"
     G12 = "g12"
     G12W = "g12w"
-    G13 = "g13"
+    G12N = "g12n"   # PGE "niedzielna" — only PGE
+    G13 = "g13"     # Tauron "trzystrefowa" — only Tauron
     DYNAMIC = "dynamic"
+
+
+# Tariffs available per provider
+PROVIDER_TARIFFS: Final = {
+    EnergyProvider.TAURON: [TariffType.G11, TariffType.G12, TariffType.G12W, TariffType.G13, TariffType.DYNAMIC],
+    EnergyProvider.PGE: [TariffType.G11, TariffType.G12, TariffType.G12W, TariffType.G12N, TariffType.DYNAMIC],
+}
+
+# Provider-specific tariff labels
+PROVIDER_TARIFF_LABELS: Final = {
+    EnergyProvider.TAURON: {
+        TariffType.G11: "G11 — Flat rate (stała cena)",
+        TariffType.G12: "G12 — Two-zone (13-15 + 22-06 taniej)",
+        TariffType.G12W: "G12w — Two-zone + weekends",
+        TariffType.G13: "G13 — Three-zone (recommended)",
+        TariffType.DYNAMIC: "Dynamiczna — cena godzinowa ENTSO-E",
+    },
+    EnergyProvider.PGE: {
+        TariffType.G11: "G11 — Flat rate (stała cena)",
+        TariffType.G12: "G12 — Two-zone (letnia/zimowa + noc)",
+        TariffType.G12W: "G12w — Two-zone + weekends",
+        TariffType.G12N: "G12n — Niedzielna (noc 1-5 + niedziele)",
+        TariffType.DYNAMIC: "Dynamiczna — cena godzinowa ENTSO-E",
+    },
+}
 
 
 class G13Zone(StrEnum):
@@ -513,11 +558,42 @@ class G13Zone(StrEnum):
     AFTERNOON_PEAK = "afternoon_peak"
 
 
-# G13 Tauron 2026 prices (PLN/kWh brutto)
+# ── Tauron 2026 prices (PLN/kWh brutto) ──
+# G13 Tauron 2026 prices
 G13_PRICES: Final = {
     G13Zone.OFF_PEAK: 0.63,
     G13Zone.MORNING_PEAK: 0.91,
     G13Zone.AFTERNOON_PEAK: 1.50,
+}
+
+TAURON_G11_PRICE: Final = 0.87   # flat rate per kWh (avg for 4000 kWh/yr)
+TAURON_G12_PRICES: Final = {"off_peak": 0.55, "peak": 1.10}
+TAURON_G12W_PRICES: Final = {"off_peak": 0.55, "peak": 1.10}
+
+# ── PGE 2026 prices (PLN/kWh brutto, energia + przesył) ──
+PGE_G11_PRICE: Final = 1.10      # energia czynna 0.62 + przesył 0.48
+PGE_G12_PRICES: Final = {"off_peak": 0.61, "peak": 1.25}
+PGE_G12W_PRICES: Final = {"off_peak": 0.69, "peak": 1.30}
+PGE_G12N_PRICES: Final = {"off_peak": 0.59, "peak": 1.21}
+
+# ── Unified provider → tariff → prices dictionary ──
+PROVIDER_TARIFF_PRICES: Final = {
+    EnergyProvider.TAURON: {
+        TariffType.G11: {"flat": TAURON_G11_PRICE},
+        TariffType.G12: TAURON_G12_PRICES,
+        TariffType.G12W: TAURON_G12W_PRICES,
+        TariffType.G13: {
+            "off_peak": G13_PRICES[G13Zone.OFF_PEAK],
+            "morning": G13_PRICES[G13Zone.MORNING_PEAK],
+            "peak": G13_PRICES[G13Zone.AFTERNOON_PEAK],
+        },
+    },
+    EnergyProvider.PGE: {
+        TariffType.G11: {"flat": PGE_G11_PRICE},
+        TariffType.G12: PGE_G12_PRICES,
+        TariffType.G12W: PGE_G12W_PRICES,
+        TariffType.G12N: PGE_G12N_PRICES,
+    },
 }
 
 # G13 Schedule — WINTER (October–March)
@@ -535,6 +611,31 @@ G13_SUMMER_SCHEDULE: Final = {
     (13, 19): G13Zone.OFF_PEAK,
     (19, 22): G13Zone.AFTERNOON_PEAK,
     (22, 7): G13Zone.OFF_PEAK,  # wraps midnight
+}
+
+# PGE G12 zone schedules (differ from Tauron)
+# SUMMER (April–September)
+PGE_G12_SUMMER: Final = {
+    # off-peak: 15:00–17:00 + 22:00–06:00
+    # peak:     06:00–15:00 + 17:00–22:00
+    "off_peak_ranges": [(15, 17), (22, 6)],
+    "peak_ranges": [(6, 15), (17, 22)],
+}
+# WINTER (October–March)
+PGE_G12_WINTER: Final = {
+    # off-peak: 13:00–15:00 + 22:00–06:00
+    # peak:     06:00–13:00 + 15:00–22:00
+    "off_peak_ranges": [(13, 15), (22, 6)],
+    "peak_ranges": [(6, 13), (15, 22)],
+}
+
+# PGE G12n zone schedules
+# Mon-Sat: peak 05:00–01:00, off-peak 01:00–05:00
+# Sunday + holidays: off-peak all day
+PGE_G12N_SCHEDULE: Final = {
+    "weekday_peak": (5, 1),    # 05:00 – 01:00 next day (20h)
+    "weekday_offpeak": (1, 5), # 01:00 – 05:00 (4h)
+    "weekend_offpeak": True,   # all day off-peak
 }
 
 # Months: winter = 10,11,12,1,2,3; summer = 4,5,6,7,8,9
