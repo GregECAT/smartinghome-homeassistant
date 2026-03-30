@@ -58,6 +58,9 @@ SERVICE_TRIGGER_AUTOPILOT_ACTION = "trigger_autopilot_action"
 SERVICE_TOGGLE_AUTOPILOT_ACTION = "toggle_autopilot_action"
 SERVICE_SYNC_ECOWITT_STATE = "sync_ecowitt_state"
 SERVICE_UPDATE_SENSOR_MAP = "update_sensor_map"
+SERVICE_SEND_ALERT_NOTIFICATION = "send_alert_notification"
+
+ALERT_WEBHOOK_URL = "https://a.gregciupek.com/webhook/1161573e-6e16-4884-97f9-e98d7f6d04e2"
 
 FORCE_CUSTOM_SCHEMA = vol.Schema(
     {
@@ -176,6 +179,17 @@ UPDATE_SENSOR_MAP_SCHEMA = vol.Schema(
     {
         vol.Required("sensor_key"): cv.string,
         vol.Required("entity_id"): cv.string,
+    }
+)
+
+SEND_ALERT_SCHEMA = vol.Schema(
+    {
+        vol.Required("alert_id"): cv.string,
+        vol.Required("level"): vol.In(["critical", "warning", "info"]),
+        vol.Required("source"): cv.string,
+        vol.Required("title"): cv.string,
+        vol.Required("message"): cv.string,
+        vol.Optional("diag_action", default=""): cv.string,
     }
 )
 
@@ -928,6 +942,187 @@ Długość: 400-600 słów."""
                 {"error": f"Błąd analizy AI: {err}"},
             )
 
+    # ── Send Alert Notification service ──
+
+    async def handle_send_alert_notification(call: ServiceCall) -> None:
+        """Dispatch alert notification to configured channels."""
+        alert_id = call.data["alert_id"]
+        level = call.data["level"]
+        source = call.data["source"]
+        title = call.data["title"]
+        message = call.data["message"]
+        diag_action = call.data.get("diag_action", "")
+
+        settings = _read_settings(hass)
+        notif_cfg = settings.get("notification_config", {})
+
+        if not notif_cfg.get("enabled", False):
+            _LOGGER.debug("Alert notification skipped — disabled")
+            return
+
+        # Cooldown check
+        cooldown_min = int(notif_cfg.get("cooldown", 15))
+        notif_log = settings.get("notification_log", [])
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        now_str = now.strftime("%Y-%m-%dT%H:%M:%S")
+        cutoff = now - timedelta(minutes=cooldown_min)
+        cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%S")
+
+        recent_same = [
+            e for e in notif_log
+            if e.get("alert_id") == alert_id and e.get("ts", "") > cutoff_str
+        ]
+        if recent_same:
+            _LOGGER.debug(
+                "Alert notification '%s' skipped — cooldown (%d min)",
+                alert_id, cooldown_min,
+            )
+            return
+
+        # Quiet hours check (skip non-critical during quiet hours)
+        quiet_start = notif_cfg.get("quiet_start", "")
+        quiet_end = notif_cfg.get("quiet_end", "")
+        if quiet_start and quiet_end and level != "critical":
+            try:
+                h_now = now.hour * 100 + now.minute
+                qs = int(quiet_start.replace(":", ""))
+                qe = int(quiet_end.replace(":", ""))
+                if qs > qe:  # e.g. 22:00 — 07:00
+                    in_quiet = h_now >= qs or h_now < qe
+                else:
+                    in_quiet = qs <= h_now < qe
+                if in_quiet:
+                    _LOGGER.debug(
+                        "Alert '%s' skipped — quiet hours (%s-%s)",
+                        alert_id, quiet_start, quiet_end,
+                    )
+                    return
+            except Exception:
+                pass
+
+        # Level filter
+        allowed_levels = notif_cfg.get("levels", ["critical", "warning"])
+        if level not in allowed_levels:
+            _LOGGER.debug("Alert '%s' skipped — level '%s' not in filter", alert_id, level)
+            return
+
+        channels = notif_cfg.get("channels", {})
+        sent_channels = []
+        level_emoji = {"critical": "🔴", "warning": "🟡", "info": "🔵"}.get(level, "ℹ️")
+        notif_title = f"{level_emoji} Smarting HOME — {title}"
+        notif_body = f"{message}"
+        if diag_action:
+            notif_body += f"\n🛠️ {diag_action}"
+
+        # Channel 1: HA Companion Push
+        if channels.get("ha_push"):
+            entity = notif_cfg.get("ha_push_entity", "")
+            if entity:
+                try:
+                    await hass.services.async_call(
+                        "notify", entity.replace("notify.", ""),
+                        {
+                            "title": notif_title,
+                            "message": notif_body,
+                            "data": {
+                                "tag": f"smartinghome_{alert_id}",
+                                "importance": "high" if level == "critical" else "default",
+                                "channel": "smartinghome_alerts",
+                            },
+                        },
+                    )
+                    sent_channels.append("ha_push")
+                except Exception as err:
+                    _LOGGER.error("HA push notification failed: %s", err)
+
+        # Channel 2: Persistent Notification
+        if channels.get("persistent"):
+            try:
+                await hass.services.async_call(
+                    "persistent_notification", "create",
+                    {
+                        "title": notif_title,
+                        "message": notif_body,
+                        "notification_id": f"smartinghome_{alert_id}",
+                    },
+                )
+                sent_channels.append("persistent")
+            except Exception as err:
+                _LOGGER.error("Persistent notification failed: %s", err)
+
+        # Channel 3: Webhook SMS
+        if channels.get("sms"):
+            phone = notif_cfg.get("phone", "")
+            if phone:
+                try:
+                    import aiohttp
+                    async with aiohttp.ClientSession() as session:
+                        await session.post(
+                            ALERT_WEBHOOK_URL,
+                            json={
+                                "channel": "sms",
+                                "phone": phone,
+                                "subject": notif_title,
+                                "message": notif_body,
+                                "level": level,
+                                "alert_id": alert_id,
+                                "source": source,
+                                "timestamp": now_str,
+                            },
+                            timeout=aiohttp.ClientTimeout(total=10),
+                        )
+                    sent_channels.append("sms")
+                except Exception as err:
+                    _LOGGER.error("Webhook SMS failed: %s", err)
+
+        # Channel 4: Webhook Email
+        if channels.get("email"):
+            email = notif_cfg.get("email", "")
+            if email:
+                try:
+                    import aiohttp
+                    async with aiohttp.ClientSession() as session:
+                        await session.post(
+                            ALERT_WEBHOOK_URL,
+                            json={
+                                "channel": "email",
+                                "email": email,
+                                "subject": notif_title,
+                                "message": notif_body,
+                                "level": level,
+                                "alert_id": alert_id,
+                                "source": source,
+                                "timestamp": now_str,
+                            },
+                            timeout=aiohttp.ClientTimeout(total=10),
+                        )
+                    sent_channels.append("email")
+                except Exception as err:
+                    _LOGGER.error("Webhook email failed: %s", err)
+
+        if sent_channels:
+            # Log to notification_log
+            log_entry = {
+                "alert_id": alert_id,
+                "level": level,
+                "title": title,
+                "channels": sent_channels,
+                "ts": now_str,
+            }
+            notif_log.append(log_entry)
+            # Trim to last 30
+            if len(notif_log) > 30:
+                notif_log = notif_log[-30:]
+            await _update_settings_file(hass, {"notification_log": notif_log})
+
+            _LOGGER.info(
+                "Alert notification sent: '%s' [%s] → %s",
+                alert_id, level, ", ".join(sent_channels),
+            )
+        else:
+            _LOGGER.debug("Alert '%s': no channels dispatched", alert_id)
+
     # Register all services
     hass.services.async_register(
         DOMAIN, SERVICE_SET_MODE, handle_set_mode, schema=SET_MODE_SCHEMA
@@ -1008,8 +1203,12 @@ Długość: 400-600 słów."""
         DOMAIN, SERVICE_ANALYZE_ROI, handle_analyze_roi,
         schema=ANALYZE_ROI_SCHEMA,
     )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SEND_ALERT_NOTIFICATION, handle_send_alert_notification,
+        schema=SEND_ALERT_SCHEMA,
+    )
 
-    _LOGGER.info("Registered %d Smarting HOME services", 19)
+    _LOGGER.info("Registered %d Smarting HOME services", 20)
 
     # Start AI Cron Scheduler
     cron = AICronScheduler(
@@ -1047,5 +1246,6 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_SYNC_ECOWITT_STATE,
         SERVICE_UPDATE_SENSOR_MAP,
         "analyze_roi",
+        SERVICE_SEND_ALERT_NOTIFICATION,
     ]:
         hass.services.async_remove(DOMAIN, service)
