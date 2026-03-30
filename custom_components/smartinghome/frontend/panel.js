@@ -150,7 +150,7 @@ class SmartingHomePanel extends HTMLElement {
     if (tab === 'autopilot') { this._updateAutopilot(); }
     if (tab === 'energy' || tab === 'battery' || tab === 'overview') { this._updateForecastCharts(); }
     if (tab === 'forecast') { this._initForecastTab(); }
-    if (tab === 'alerts') { this._updateAlertsTab(); }
+    if (tab === 'alerts') { this._updateAlertsTab(); this._loadNotificationConfig(); }
   }
 
   /* ── Sensor mapping ─────────────────────── */
@@ -4972,6 +4972,8 @@ class SmartingHomePanel extends HTMLElement {
       );
       if (!isDup) {
         this._alertState.history.push({ ...a, ts: now });
+        // Send notification for new alerts
+        this._sendAlertNotification(a);
       }
     });
     // Trim history to last 50
@@ -4988,6 +4990,7 @@ class SmartingHomePanel extends HTMLElement {
     this._renderActiveAlerts(alerts);
     this._renderHealthBreakdown(health);
     this._renderAlertHistory();
+    this._renderNotificationLog();
 
     // Save history periodically (every 60s)
     if (!this._lastAlertHistorySave || (now - this._lastAlertHistorySave) > 60000) {
@@ -5678,6 +5681,189 @@ class SmartingHomePanel extends HTMLElement {
           </div>
         </div>
       `;
+    }).join('');
+  }
+
+  // ── Notification System Methods ──
+
+  _sendAlertNotification(alert) {
+    // Check config
+    const cfg = this._settings?.notification_config;
+    if (!cfg?.enabled) return;
+
+    // Cooldown check (client-side)
+    const cooldownMin = cfg.cooldown || 15;
+    if (!this._notifLastSent) this._notifLastSent = {};
+    const lastSent = this._notifLastSent[alert.id] || 0;
+    if (Date.now() - lastSent < cooldownMin * 60000) return;
+
+    // Level filter
+    const levels = cfg.levels || ['critical', 'warning'];
+    if (!levels.includes(alert.level)) return;
+
+    // Dispatch to backend
+    try {
+      this._hass.callService('smartinghome', 'send_alert_notification', {
+        alert_id: alert.id,
+        level: alert.level,
+        source: alert.source || 'System',
+        title: alert.title || alert.id,
+        message: alert.desc || alert.title || '',
+        diag_action: alert.diag?.action || '',
+      });
+      this._notifLastSent[alert.id] = Date.now();
+    } catch (e) {
+      console.warn('Notification dispatch error:', e);
+    }
+  }
+
+  _onNotifToggle() {
+    const master = this.shadowRoot.getElementById('notif-master')?.checked;
+    const wrap = this.shadowRoot.getElementById('notif-channels-wrap');
+    if (wrap) wrap.style.display = master ? 'block' : 'none';
+
+    // Show/hide sub-fields
+    const pushOn = this.shadowRoot.getElementById('notif-ch-push')?.checked;
+    const smsOn = this.shadowRoot.getElementById('notif-ch-sms')?.checked;
+    const emailOn = this.shadowRoot.getElementById('notif-ch-email')?.checked;
+    const pushWrap = this.shadowRoot.getElementById('notif-push-entity-wrap');
+    const smsWrap = this.shadowRoot.getElementById('notif-sms-wrap');
+    const emailWrap = this.shadowRoot.getElementById('notif-email-wrap');
+    if (pushWrap) pushWrap.style.display = pushOn ? 'block' : 'none';
+    if (smsWrap) smsWrap.style.display = smsOn ? 'block' : 'none';
+    if (emailWrap) emailWrap.style.display = emailOn ? 'block' : 'none';
+  }
+
+  _loadNotificationConfig() {
+    const cfg = this._settings?.notification_config || {};
+    const s = this.shadowRoot;
+    if (!s) return;
+
+    const el = id => s.getElementById(id);
+
+    // Master
+    const master = el('notif-master');
+    if (master) master.checked = !!cfg.enabled;
+
+    // Channels
+    const ch = cfg.channels || {};
+    if (el('notif-ch-push')) el('notif-ch-push').checked = !!ch.ha_push;
+    if (el('notif-ch-persistent')) el('notif-ch-persistent').checked = !!ch.persistent;
+    if (el('notif-ch-sms')) el('notif-ch-sms').checked = !!ch.sms;
+    if (el('notif-ch-email')) el('notif-ch-email').checked = !!ch.email;
+
+    // Inputs
+    if (el('notif-push-entity')) el('notif-push-entity').value = cfg.ha_push_entity || '';
+    if (el('notif-phone')) el('notif-phone').value = cfg.phone || '';
+    if (el('notif-email')) el('notif-email').value = cfg.email || '';
+
+    // Levels
+    const levels = cfg.levels || ['critical', 'warning'];
+    if (el('notif-lvl-critical')) el('notif-lvl-critical').checked = levels.includes('critical');
+    if (el('notif-lvl-warning')) el('notif-lvl-warning').checked = levels.includes('warning');
+    if (el('notif-lvl-info')) el('notif-lvl-info').checked = levels.includes('info');
+
+    // Settings
+    if (el('notif-cooldown')) el('notif-cooldown').value = cfg.cooldown || 15;
+    if (el('notif-quiet-start')) el('notif-quiet-start').value = cfg.quiet_start || '22:00';
+    if (el('notif-quiet-end')) el('notif-quiet-end').value = cfg.quiet_end || '07:00';
+
+    // Trigger visibility update
+    this._onNotifToggle();
+  }
+
+  _saveNotificationConfig() {
+    const s = this.shadowRoot;
+    const el = id => s.getElementById(id);
+
+    // Collect levels
+    const levels = [];
+    if (el('notif-lvl-critical')?.checked) levels.push('critical');
+    if (el('notif-lvl-warning')?.checked) levels.push('warning');
+    if (el('notif-lvl-info')?.checked) levels.push('info');
+
+    const cfg = {
+      enabled: !!el('notif-master')?.checked,
+      channels: {
+        ha_push: !!el('notif-ch-push')?.checked,
+        persistent: !!el('notif-ch-persistent')?.checked,
+        sms: !!el('notif-ch-sms')?.checked,
+        email: !!el('notif-ch-email')?.checked,
+      },
+      ha_push_entity: (el('notif-push-entity')?.value || '').trim(),
+      phone: (el('notif-phone')?.value || '').trim(),
+      email: (el('notif-email')?.value || '').trim(),
+      levels,
+      cooldown: parseInt(el('notif-cooldown')?.value || '15', 10) || 15,
+      quiet_start: el('notif-quiet-start')?.value || '22:00',
+      quiet_end: el('notif-quiet-end')?.value || '07:00',
+    };
+
+    // Update in-memory settings
+    if (!this._settings) this._settings = {};
+    this._settings.notification_config = cfg;
+
+    // Persist to settings.json
+    this._savePanelSettings({ notification_config: cfg });
+
+    // Show saved status
+    const status = el('notif-save-status');
+    if (status) {
+      status.textContent = '✅ Konfiguracja zapisana!';
+      status.style.display = 'block';
+      setTimeout(() => { status.style.display = 'none'; }, 3000);
+    }
+  }
+
+  _testNotification() {
+    try {
+      this._hass.callService('smartinghome', 'send_alert_notification', {
+        alert_id: 'TEST_NOTIFICATION',
+        level: 'info',
+        source: 'System',
+        title: 'Test powiadomień',
+        message: '✅ Test powiadomień Smarting HOME — jeśli to widzisz, konfiguracja działa poprawnie!',
+        diag_action: '',
+      });
+
+      const status = this.shadowRoot.getElementById('notif-save-status');
+      if (status) {
+        status.textContent = '🔔 Testowe powiadomienie wysłane!';
+        status.style.color = '#00d4ff';
+        status.style.display = 'block';
+        setTimeout(() => {
+          status.style.display = 'none';
+          status.style.color = '#2ecc71';
+        }, 4000);
+      }
+    } catch (e) {
+      console.error('Test notification error:', e);
+    }
+  }
+
+  _renderNotificationLog() {
+    const container = this.shadowRoot.getElementById('notif-log-items');
+    if (!container) return;
+
+    const log = this._settings?.notification_log || [];
+    if (log.length === 0) {
+      container.innerHTML = '<div style="text-align:center; padding:8px">Brak wysłanych powiadomień</div>';
+      return;
+    }
+
+    const levelIcons = { critical: '🔴', warning: '🟡', info: '🔵' };
+    const channelIcons = { ha_push: '📱', persistent: '📌', sms: '📱', email: '📧' };
+
+    container.innerHTML = log.slice().reverse().slice(0, 15).map(e => {
+      const icon = levelIcons[e.level] || 'ℹ️';
+      const chIcons = (e.channels || []).map(c => channelIcons[c] || '').join(' ');
+      const time = e.ts ? e.ts.split('T')[1]?.substring(0, 5) || '' : '';
+      return `<div style="display:flex; align-items:center; gap:6px; padding:4px 0; border-bottom:1px solid rgba(255,255,255,0.04)">
+        <span>${icon}</span>
+        <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${e.title || e.alert_id}</span>
+        <span style="font-size:9px; color:#64748b">${chIcons}</span>
+        <span style="font-size:9px; color:#64748b; min-width:35px; text-align:right">${time}</span>
+      </div>`;
     }).join('');
   }
 
@@ -9044,6 +9230,25 @@ class SmartingHomePanel extends HTMLElement {
           .health-breakdown { grid-template-columns: 1fr; }
         }
 
+        /* Toggle Switch */
+        .toggle-switch {
+          position: relative; display: inline-block; width: 42px; height: 24px; flex-shrink: 0;
+        }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider {
+          position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+          background: rgba(255,255,255,0.1); border-radius: 24px; transition: 0.3s;
+        }
+        .toggle-slider::before {
+          content: ""; position: absolute; height: 18px; width: 18px; left: 3px; bottom: 3px;
+          background: #94a3b8; border-radius: 50%; transition: 0.3s;
+        }
+        .toggle-switch input:checked + .toggle-slider { background: rgba(0,212,255,0.35); }
+        .toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); background: #00d4ff; }
+        .toggle-switch.sm { width: 34px; height: 20px; }
+        .toggle-switch.sm .toggle-slider::before { height: 14px; width: 14px; }
+        .toggle-switch.sm input:checked + .toggle-slider::before { transform: translateX(14px); }
+
       </style>
 
       <div class="panel-container">
@@ -11937,6 +12142,119 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
+          <!-- §6 NOTIFICATION CONFIG -->
+          <div class="card">
+            <div class="card-title">🔔 Powiadomienia</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:12px">Otrzymuj alerty o awariach na telefon, email lub w Home Assistant</div>
+
+            <!-- Master switch -->
+            <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; background:rgba(255,255,255,0.03); border-radius:10px; margin-bottom:14px">
+              <div>
+                <div style="font-size:13px; font-weight:600; color:#e2e8f0">Powiadomienia aktywne</div>
+                <div style="font-size:10px; color:#64748b">Włącz aby otrzymywać alerty</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="notif-master" onchange="this.getRootNode().host._onNotifToggle()">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+
+            <!-- Channels -->
+            <div id="notif-channels-wrap" style="display:none">
+              <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px">Kanały dostarczania</div>
+
+              <!-- HA Push -->
+              <div style="padding:10px 14px; background:rgba(255,255,255,0.02); border-radius:8px; margin-bottom:8px; border-left:3px solid #00d4ff">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px">
+                  <div style="font-size:12px; font-weight:600; color:#e2e8f0">📱 Push (HA App)</div>
+                  <label class="toggle-switch sm"><input type="checkbox" id="notif-ch-push" onchange="this.getRootNode().host._onNotifToggle()"><span class="toggle-slider"></span></label>
+                </div>
+                <div id="notif-push-entity-wrap" style="display:none">
+                  <input type="text" id="notif-push-entity" placeholder="notify.mobile_app_iphone" style="width:100%; padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#e2e8f0; font-size:11px; outline:none">
+                  <div style="font-size:9px; color:#64748b; margin-top:3px">Nazwa entity z HA (np. notify.mobile_app_iphone)</div>
+                </div>
+              </div>
+
+              <!-- Persistent -->
+              <div style="padding:10px 14px; background:rgba(255,255,255,0.02); border-radius:8px; margin-bottom:8px; border-left:3px solid #2ecc71">
+                <div style="display:flex; align-items:center; justify-content:space-between">
+                  <div style="font-size:12px; font-weight:600; color:#e2e8f0">📌 Powiadomienie HA</div>
+                  <label class="toggle-switch sm"><input type="checkbox" id="notif-ch-persistent" onchange="this.getRootNode().host._onNotifToggle()"><span class="toggle-slider"></span></label>
+                </div>
+                <div style="font-size:9px; color:#64748b; margin-top:3px">Pojawia się w panelu powiadomień Home Assistant</div>
+              </div>
+
+              <!-- SMS -->
+              <div style="padding:10px 14px; background:rgba(255,255,255,0.02); border-radius:8px; margin-bottom:8px; border-left:3px solid #f59e0b">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px">
+                  <div style="font-size:12px; font-weight:600; color:#e2e8f0">📱 SMS</div>
+                  <label class="toggle-switch sm"><input type="checkbox" id="notif-ch-sms" onchange="this.getRootNode().host._onNotifToggle()"><span class="toggle-slider"></span></label>
+                </div>
+                <div id="notif-sms-wrap" style="display:none">
+                  <input type="tel" id="notif-phone" placeholder="+48 600 123 456" style="width:100%; padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#e2e8f0; font-size:11px; outline:none">
+                  <div style="font-size:9px; color:#64748b; margin-top:3px">Numer z kierunkowym kraju (np. +48...)</div>
+                </div>
+              </div>
+
+              <!-- Email -->
+              <div style="padding:10px 14px; background:rgba(255,255,255,0.02); border-radius:8px; margin-bottom:8px; border-left:3px solid #a855f7">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px">
+                  <div style="font-size:12px; font-weight:600; color:#e2e8f0">📧 Email</div>
+                  <label class="toggle-switch sm"><input type="checkbox" id="notif-ch-email" onchange="this.getRootNode().host._onNotifToggle()"><span class="toggle-slider"></span></label>
+                </div>
+                <div id="notif-email-wrap" style="display:none">
+                  <input type="email" id="notif-email" placeholder="user@example.com" style="width:100%; padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#e2e8f0; font-size:11px; outline:none">
+                </div>
+              </div>
+
+              <!-- Filters -->
+              <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin:14px 0 8px">Filtry i ustawienia</div>
+
+              <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px">
+                <label style="display:flex; align-items:center; gap:5px; font-size:11px; color:#e2e8f0; cursor:pointer">
+                  <input type="checkbox" id="notif-lvl-critical" checked> 🔴 Krytyczne
+                </label>
+                <label style="display:flex; align-items:center; gap:5px; font-size:11px; color:#e2e8f0; cursor:pointer">
+                  <input type="checkbox" id="notif-lvl-warning" checked> 🟡 Ostrzeżenia
+                </label>
+                <label style="display:flex; align-items:center; gap:5px; font-size:11px; color:#e2e8f0; cursor:pointer">
+                  <input type="checkbox" id="notif-lvl-info"> 🔵 Informacyjne
+                </label>
+              </div>
+
+              <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:14px">
+                <div>
+                  <div style="font-size:9px; color:#64748b; margin-bottom:3px">Cooldown (min)</div>
+                  <input type="number" id="notif-cooldown" value="15" min="1" max="120" style="width:100%; padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#e2e8f0; font-size:11px; outline:none; text-align:center">
+                </div>
+                <div>
+                  <div style="font-size:9px; color:#64748b; margin-bottom:3px">Cisza od</div>
+                  <input type="time" id="notif-quiet-start" value="22:00" style="width:100%; padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#e2e8f0; font-size:11px; outline:none; text-align:center">
+                </div>
+                <div>
+                  <div style="font-size:9px; color:#64748b; margin-bottom:3px">Cisza do</div>
+                  <input type="time" id="notif-quiet-end" value="07:00" style="width:100%; padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#e2e8f0; font-size:11px; outline:none; text-align:center">
+                </div>
+              </div>
+              <div style="font-size:9px; color:#64748b; margin-bottom:14px">⚡ Alerty krytyczne wysyłane zawsze — niezależnie od ciszy i filtrów</div>
+
+              <!-- Actions -->
+              <div style="display:flex; gap:10px">
+                <button class="action-btn" style="flex:1" onclick="this.getRootNode().host._saveNotificationConfig()">💾 Zapisz konfigurację</button>
+                <button class="action-btn" style="flex:1; background:rgba(0,212,255,0.1); border-color:rgba(0,212,255,0.3)" onclick="this.getRootNode().host._testNotification()">🔔 Test powiadomień</button>
+              </div>
+              <div id="notif-save-status" style="font-size:10px; color:#2ecc71; text-align:center; margin-top:8px; display:none"></div>
+
+              <!-- Last sent log -->
+              <div style="margin-top:14px">
+                <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px">Ostatnio wysłane</div>
+                <div id="notif-log-items" style="max-height:120px; overflow-y:auto; font-size:10px; color:#94a3b8">
+                  <div style="text-align:center; padding:8px">Brak wysłanych powiadomień</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
         </div>
 
         <!-- ═══════ TAB: SETTINGS ═══════ -->
@@ -12471,7 +12789,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.45.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.46.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
