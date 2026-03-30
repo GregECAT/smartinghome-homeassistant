@@ -569,7 +569,22 @@ class InverterAgent:
         work_mode_state = self.hass.states.get(SELECT_WORK_MODE)
         current_mode = work_mode_state.state if work_mode_state else "unknown"
 
-        if current_mode == "general" and self._is_on_cooldown("set_general"):
+        # Check if DOD is critically low (stuck at wrong value)
+        dod_needs_fix = False
+        dod_state = self.hass.states.get(NUMBER_DOD_ON_GRID)
+        if dod_state and dod_state.state not in ("unknown", "unavailable"):
+            try:
+                dod_val = float(dod_state.state)
+                if dod_val < 50:  # DOD below 50% is abnormal → force reset
+                    dod_needs_fix = True
+                    _LOGGER.warning(
+                        "AI CTRL: DOD on-grid=%d%% is critically low → forcing set_general to reset DOD to %d%%",
+                        int(dod_val), DEFAULT_DOD_ON_GRID,
+                    )
+            except (ValueError, TypeError):
+                pass
+
+        if current_mode == "general" and self._is_on_cooldown("set_general") and not dod_needs_fix:
             return ExecutionResult(
                 tool="set_general",
                 skipped=True,
@@ -584,10 +599,11 @@ class InverterAgent:
         self._commanded_charging = None  # General mode: let inverter decide
         self._mark_executed("set_general")
 
+        extra = " (DOD reset forced)" if dod_needs_fix else ""
         return ExecutionResult(
             tool="set_general",
             executed=True,
-            message=f"{prefix}: set_general → tryb General (bateria zasila dom)",
+            message=f"{prefix}: set_general → tryb General (bateria zasila dom){extra}",
             previous_state=current_mode,
             new_state="general (self-consumption)",
         )

@@ -657,10 +657,16 @@ class EnergyManager:
             entity = NUMBER_SOFAR_DOD
         else:
             entity = NUMBER_DOD_ON_GRID
-        if not self.hass.states.get(entity):
-            _LOGGER.debug("Entity %s not available — skipping DOD set", entity)
+        state = self.hass.states.get(entity)
+        if not state:
+            _LOGGER.warning("Entity %s not available — skipping DOD set to %d%%", entity, dod)
             return
+        current_dod = state.state
         dod = max(0, min(dod, DEFAULT_DOD_ON_GRID))
+        _LOGGER.warning(
+            "Setting DOD on-grid: %s → %d%% (current: %s)",
+            entity, dod, current_dod,
+        )
         await self.hass.services.async_call(
             "number",
             "set_value",
