@@ -133,3 +133,4 @@ The frontend reads settings.json via HTTP fetch and writes via HA services:
 | `forecast_calibration_history` | panel.js | Array of calibration data points |
 | `notification_config` | panel.js / services | Alert notification config (enabled, channels, phone, email, levels, cooldown, quiet hours) |
 | `notification_log` | services | Last 30 sent alert notifications (alert_id, level, channels, timestamp) |
+| `pv_string_baselines` | panel.js | Per-string hourly power baselines for anomaly detection (7 samples per hour slot) |

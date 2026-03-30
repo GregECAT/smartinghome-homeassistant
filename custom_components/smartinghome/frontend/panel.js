@@ -5174,26 +5174,13 @@ class SmartingHomePanel extends HTMLElement {
       }
     }
 
-    // PV string delta
-    if (isSolarHours && pv1 !== null && pv2 !== null && (pv1 > 200 || pv2 > 200)) {
-      const maxPv = Math.max(pv1, pv2);
-      const delta = Math.abs(pv1 - pv2);
-      if (maxPv > 0 && delta > maxPv * 0.25) {
-        const deltaPct = Math.round(delta / maxPv * 100);
-        const weaker = pv1 < pv2 ? 'PV1' : 'PV2';
-        alerts.push({
-          id: 'PV_STRING_DELTA', level: 'warning', source: 'PV',
-          title: `Różnica stringów: ${deltaPct}% (${weaker} słabszy)`,
-          desc: `PV1: ${this._pw(pv1)}, PV2: ${this._pw(pv2)}`,
-          diag: {
-            detected: `Różnica między stringami: ${deltaPct}% (próg: 25%)`,
-            reason: `String ${weaker} produkuje znacząco mniej`,
-            causes: ['Cień na jednym ze stringów', 'Zabrudzenie paneli', 'Uszkodzony panel', 'Różne kierunki (celowe)', 'Problem z MPPT'],
-            action: `Sprawdź string ${weaker} — szukaj cienia, brudu, uszkodzeń`,
-            severity: 'Ważne — możliwa utrata produkcji'
-          }
-        });
-      }
+    // PV string anomaly — per-string baseline tracking
+    // Instead of comparing PV1 vs PV2 (which can differ by design),
+    // we track each string's own historical performance and detect
+    // when it drops significantly below its own baseline at the same hour.
+    if (isSolarHours && (pv1 !== null || pv2 !== null)) {
+      this._trackAndCheckStringBaseline('PV1', pv1, alerts);
+      this._trackAndCheckStringBaseline('PV2', pv2, alerts);
     }
 
     // Battery no charge despite surplus
@@ -5500,7 +5487,7 @@ class SmartingHomePanel extends HTMLElement {
     const fcState = this._hass?.states?.['sensor.smartinghome_pv_forecast_power_now_total'];
     const expected = fcState ? parseFloat(fcState.state) : null;
     this._setText('at-pv-expected', expected ? this._pw(expected) : '—');
-    // String delta
+    // String delta (now shows absolute diff, informational only)
     if (pv1 !== null && pv2 !== null) {
       const delta = Math.abs(pv1 - pv2);
       this._setText('at-pv-delta', `${delta.toFixed(0)}W`);
@@ -5514,12 +5501,14 @@ class SmartingHomePanel extends HTMLElement {
       pvStatus = 'warning';
       pvIssue = `⚠️ -${Math.round((1 - pvPower / expected) * 100)}% poniżej normy`;
     }
-    if (pv1 !== null && pv2 !== null && Math.max(pv1, pv2) > 200) {
-      const maxPv = Math.max(pv1, pv2);
-      if (Math.abs(pv1 - pv2) > maxPv * 0.25) {
-        pvStatus = pvStatus === 'ok' ? 'warning' : pvStatus;
-        pvIssue += ` | Δ stringów > 25%`;
-      }
+    // Check for per-string baseline drops (from anomaly engine)
+    const stringDropAlerts = (this._alertState?.alerts || []).filter(a => 
+      a.id && a.id.startsWith('PV_STRING_DROP_')
+    );
+    if (stringDropAlerts.length > 0) {
+      pvStatus = pvStatus === 'ok' ? 'warning' : pvStatus;
+      const names = stringDropAlerts.map(a => a.id.replace('PV_STRING_DROP_', '')).join(', ');
+      pvIssue += ` | ${names} poniżej normy`;
     }
     this._setTileStatus('alert-tile-pv', pvStatus, 'at-pv-issue', pvIssue);
 
@@ -5682,6 +5671,105 @@ class SmartingHomePanel extends HTMLElement {
         </div>
       `;
     }).join('');
+  }
+
+  // ── PV String Baseline Tracking ──
+
+  /**
+   * Track each string's performance over time and detect anomalies
+   * by comparing to its own historical baseline at the same hour.
+   *
+   * Data structure (persisted to settings.json as pv_string_baselines):
+   *   { PV1: { "8": [vals...], "9": [vals...], ... }, PV2: { ... } }
+   *   Each hour key has an array of up to 7 samples (last 7 days).
+   *
+   * Algorithm:
+   *   1. Record current power for this string at current hour
+   *   2. Compare to average of previous samples at the same hour
+   *   3. Alert if current output is >35% below baseline AND baseline > 200W
+   */
+  _trackAndCheckStringBaseline(stringName, currentPower, alerts) {
+    if (currentPower === null || currentPower === undefined) return;
+
+    const hour = new Date().getHours().toString();
+
+    // Initialize baseline storage
+    if (!this._pvStringBaselines) {
+      this._pvStringBaselines = this._settings?.pv_string_baselines || {};
+    }
+    if (!this._pvStringBaselines[stringName]) {
+      this._pvStringBaselines[stringName] = {};
+    }
+    const stringData = this._pvStringBaselines[stringName];
+    if (!stringData[hour]) {
+      stringData[hour] = [];
+    }
+
+    // Rate-limit recording — max once per 10 minutes per string
+    const recordKey = `_pvBaselineLastRecord_${stringName}`;
+    const now = Date.now();
+    if (!this[recordKey] || (now - this[recordKey]) > 600000) {
+      this[recordKey] = now;
+
+      // Only record meaningful values (> 50W) to avoid cloudy/night noise
+      if (currentPower > 50) {
+        stringData[hour].push({
+          w: Math.round(currentPower),
+          ts: now,
+        });
+
+        // Keep only last 7 samples per hour slot (≈ 7 days of data)
+        if (stringData[hour].length > 7) {
+          stringData[hour] = stringData[hour].slice(-7);
+        }
+
+        // Persist baselines every 5 minutes  
+        if (!this._lastBaselineSave || (now - this._lastBaselineSave) > 300000) {
+          this._lastBaselineSave = now;
+          this._savePanelSettings({ pv_string_baselines: this._pvStringBaselines });
+        }
+      }
+    }
+
+    // Need at least 3 historical samples for this hour to detect anomalies
+    const samples = stringData[hour];
+    if (!samples || samples.length < 3) return;
+
+    // Calculate baseline: average of previous samples (exclude the one we just added)
+    // Use samples older than 30 min to avoid self-comparison
+    const cutoff = now - 1800000; // 30 min ago
+    const historicalSamples = samples.filter(s => s.ts < cutoff);
+    if (historicalSamples.length < 2) return;
+
+    const baseline = historicalSamples.reduce((sum, s) => sum + s.w, 0) / historicalSamples.length;
+
+    // Don't alert if baseline is very low (cloudy/early/late hours)
+    if (baseline < 200) return;
+
+    // Don't alert if current is very low but still reporting (could be sudden cloud)
+    // Only alert if sustained drop: current < 65% of baseline
+    if (currentPower < baseline * 0.65 && currentPower > 10) {
+      const dropPct = Math.round((1 - currentPower / baseline) * 100);
+      alerts.push({
+        id: `PV_STRING_DROP_${stringName}`, level: 'warning', source: 'PV',
+        title: `${stringName} spadek: -${dropPct}% vs norma`,
+        desc: `Teraz: ${this._pw(currentPower)}, norma (${hour}:00): ${this._pw(baseline)}`,
+        diag: {
+          detected: `${stringName} produkuje ${dropPct}% mniej niż zwykle o tej porze (baseline: ${Math.round(baseline)}W z ${historicalSamples.length} dni)`,
+          reason: `Porównanie z historyczną średnią tego samego stringa o godzinie ${hour}:00`,
+          causes: [
+            'Nowe zacienienie (drzewo, budynek, komin)',
+            'Zabrudzenie paneli na tym stringu',
+            'Uszkodzony panel lub optymizer',
+            'Problem z MPPT falownika',
+            'Degradacja paneli',
+            'Krótkotrwałe zachmurzenie (poczekaj 15 min)',
+          ],
+          action: `Sprawdź ${stringName} wizualnie. Jeśli alert powtarza się codziennie o tej porze — prawdopodobnie nowe zacienienie.`,
+          severity: dropPct > 50 ? 'Krytyczne — duża utrata produkcji' : 'Ważne — spadek wydajności'
+        }
+      });
+    }
   }
 
   // ── Notification System Methods ──
@@ -12818,7 +12906,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.46.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.47.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
