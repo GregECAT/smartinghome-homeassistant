@@ -10647,6 +10647,39 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
+          <!-- §5b PV SYSTEM CONFIG -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">⚙️ Parametry Instalacji PV</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:12px">Uzupełnij dane instalacji — wpływa na dokładność prognozy produkcji</div>
+            <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:12px">
+              <div>
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">Moc instalacji (kWp)</div>
+                <input type="number" id="fc-cfg-kwp" min="0.5" max="100" step="0.1" value="9" style="width:100%; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:10px; color:#fff; font-size:16px; font-weight:700; text-align:center; outline:none; transition:border 0.3s" onfocus="this.style.borderColor='#f7b731'" onblur="this.style.borderColor='rgba(255,255,255,0.12)'; this.getRootNode().host._saveForecastConfig()" />
+              </div>
+              <div>
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">Kąt nachylenia (°)</div>
+                <input type="number" id="fc-cfg-tilt" min="0" max="90" step="1" value="35" style="width:100%; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:10px; color:#fff; font-size:16px; font-weight:700; text-align:center; outline:none; transition:border 0.3s" onfocus="this.style.borderColor='#00d4ff'" onblur="this.style.borderColor='rgba(255,255,255,0.12)'; this.getRootNode().host._saveForecastConfig()" />
+              </div>
+              <div>
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">Kierunek (azymut)</div>
+                <select id="fc-cfg-azimuth" style="width:100%; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:10px; color:#fff; font-size:14px; font-weight:600; text-align:center; outline:none; cursor:pointer; transition:border 0.3s; appearance:none; -webkit-appearance:none" onfocus="this.style.borderColor='#2ecc71'" onblur="this.style.borderColor='rgba(255,255,255,0.12)'; this.getRootNode().host._saveForecastConfig()" onchange="this.getRootNode().host._saveForecastConfig()">
+                  <option value="0" style="background:#1a1a2e">N — Północ</option>
+                  <option value="45" style="background:#1a1a2e">NE — Płn-Wsch</option>
+                  <option value="90" style="background:#1a1a2e">E — Wschód</option>
+                  <option value="135" style="background:#1a1a2e">SE — Płd-Wsch</option>
+                  <option value="180" selected style="background:#1a1a2e">S — Południe ✓</option>
+                  <option value="225" style="background:#1a1a2e">SW — Płd-Zach</option>
+                  <option value="270" style="background:#1a1a2e">W — Zachód</option>
+                  <option value="315" style="background:#1a1a2e">NW — Płn-Zach</option>
+                </select>
+              </div>
+            </div>
+            <div style="margin-top:10px; display:flex; align-items:center; gap:12px">
+              <div style="font-size:10px; color:#94a3b8; flex:1" id="fc-cfg-summary">Szacunkowa roczna produkcja: — kWh</div>
+              <button style="background:linear-gradient(135deg,#f7b731,#e67e22); border:none; color:#0f172a; padding:8px 18px; border-radius:8px; font-size:11px; font-weight:700; cursor:pointer; letter-spacing:0.3px" onclick="this.getRootNode().host._saveForecastConfig(true)">🔄 PRZELICZ</button>
+            </div>
+          </div>
+
           <!-- §6 AUTO-CALIBRATION -->
           <div class="card" style="margin-bottom:12px">
             <div class="card-title">🔧 Autokalibracja — Filtr Kalman</div>
@@ -11241,7 +11274,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.43.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.44.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -12217,28 +12250,55 @@ class SmartingHomePanel extends HTMLElement {
       return;
     }
 
-    // Get PV system config
-    const cfg = this._settings.pv_string_config || {};
+    // Get PV system config — prefer user-defined settings, fallback to pv_string_config
     let totalWp = 0;
     let avgTilt = 35;
     let avgAzimuth = 180; // South
-    let stringCount = 0;
 
-    for (let i = 1; i <= 4; i++) {
-      const sc = cfg[`pv${i}`];
-      if (sc && sc.substrings) {
-        sc.substrings.forEach(sub => {
-          const wp = (sub.panel_count || 0) * (sub.panel_power || 405);
-          totalWp += wp;
-          avgTilt += (sub.tilt || 35);
-          const dirMap = { 'N': 0, 'NE': 45, 'E': 90, 'SE': 135, 'S': 180, 'SW': 225, 'W': 270, 'NW': 315 };
-          avgAzimuth += (dirMap[sub.direction] || 180);
-          stringCount++;
-        });
+    // Priority 1: User-configured values in forecast tab
+    const fcKwp = parseFloat(this._settings.forecast_pv_kwp) || 0;
+    const fcTilt = parseFloat(this._settings.forecast_pv_tilt);
+    const fcAzimuth = parseFloat(this._settings.forecast_pv_azimuth);
+
+    if (fcKwp > 0) {
+      totalWp = fcKwp * 1000;
+      avgTilt = !isNaN(fcTilt) ? fcTilt : 35;
+      avgAzimuth = !isNaN(fcAzimuth) ? fcAzimuth : 180;
+    } else {
+      // Priority 2: Zima na plusie pv_kwp
+      const winterKwp = parseFloat(this._settings.winter_pv_kwp) || 0;
+      if (winterKwp > 0) {
+        totalWp = winterKwp * 1000;
+      } else {
+        // Priority 3: pv_string_config from inverter setup
+        const cfg = this._settings.pv_string_config || {};
+        let stringCount = 0;
+        for (let i = 1; i <= 4; i++) {
+          const sc = cfg[`pv${i}`];
+          if (sc && sc.substrings) {
+            sc.substrings.forEach(sub => {
+              const wp = (sub.panel_count || 0) * (sub.panel_power || 405);
+              totalWp += wp;
+              avgTilt += (sub.tilt || 35);
+              const dirMap = { 'N': 0, 'NE': 45, 'E': 90, 'SE': 135, 'S': 180, 'SW': 225, 'W': 270, 'NW': 315 };
+              avgAzimuth += (dirMap[sub.direction] || 180);
+              stringCount++;
+            });
+          }
+        }
+        if (stringCount > 0) { avgTilt /= (stringCount + 1); avgAzimuth /= (stringCount + 1); }
       }
     }
-    if (stringCount > 0) { avgTilt /= (stringCount + 1); avgAzimuth /= (stringCount + 1); }
     if (totalWp === 0) totalWp = 5000; // Default 5 kWp
+
+    // Update config UI with actual values
+    const kwpInput = this.shadowRoot.getElementById('fc-cfg-kwp');
+    if (kwpInput) kwpInput.value = (totalWp / 1000).toFixed(1);
+    const tiltInput = this.shadowRoot.getElementById('fc-cfg-tilt');
+    if (tiltInput) tiltInput.value = Math.round(avgTilt);
+    const azSelect = this.shadowRoot.getElementById('fc-cfg-azimuth');
+    if (azSelect) azSelect.value = String(Math.round(avgAzimuth / 45) * 45);
+    this._updateForecastCfgSummary(totalWp / 1000);
 
     // Fetch Open-Meteo Solar Radiation
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=shortwave_radiation,temperature_2m,cloud_cover,direct_radiation,diffuse_radiation&daily=shortwave_radiation_sum&timezone=auto&forecast_days=7`;
@@ -12533,6 +12593,36 @@ class SmartingHomePanel extends HTMLElement {
       // Regenerate decisions with new mode
       if (this._fcHourlyData) this._generateDecisions();
     }
+  }
+
+  _saveForecastConfig(recompute) {
+    const kwp = parseFloat(this.shadowRoot.getElementById('fc-cfg-kwp')?.value) || 9;
+    const tilt = parseInt(this.shadowRoot.getElementById('fc-cfg-tilt')?.value) || 35;
+    const azimuth = parseInt(this.shadowRoot.getElementById('fc-cfg-azimuth')?.value) || 180;
+    this._savePanelSettings({
+      forecast_pv_kwp: kwp,
+      forecast_pv_tilt: tilt,
+      forecast_pv_azimuth: azimuth,
+      // Sync kWp with Zima na plusie for consistency
+      winter_pv_kwp: kwp,
+    });
+    this._updateForecastCfgSummary(kwp);
+    if (recompute) {
+      // Refresh forecast with new params
+      this._fetchSolarForecast().catch(e => console.warn('[SH] recompute error:', e));
+    }
+  }
+
+  _updateForecastCfgSummary(kwp) {
+    const el = this.shadowRoot.getElementById('fc-cfg-summary');
+    if (!el) return;
+    // Poland average: ~950-1100 kWh/kWp/year depending on region
+    const zone = this._hass?.states['zone.home'];
+    const lat = zone?.attributes?.latitude || 51;
+    // Approximate annual yield based on latitude
+    const kwhPerKwp = lat > 52 ? 950 : lat > 50 ? 1000 : 1050;
+    const annual = (kwp * kwhPerKwp).toFixed(0);
+    el.innerHTML = `Szacunkowa roczna produkcja: <strong style="color:#2ecc71">${annual} kWh</strong> (~${kwhPerKwp} kWh/kWp)`;
   }
 
   _updateIntegrationStatus() {
