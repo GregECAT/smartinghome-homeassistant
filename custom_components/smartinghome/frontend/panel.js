@@ -5752,8 +5752,29 @@ class SmartingHomePanel extends HTMLElement {
     if (el('notif-ch-sms')) el('notif-ch-sms').checked = !!ch.sms;
     if (el('notif-ch-email')) el('notif-ch-email').checked = !!ch.email;
 
-    // Inputs
-    if (el('notif-push-entity')) el('notif-push-entity').value = cfg.ha_push_entity || '';
+    // Inputs — populate push entity dropdown
+    const pushSelect = el('notif-push-entity');
+    if (pushSelect && this._hass?.services?.notify) {
+      const savedEntity = cfg.ha_push_entity || '';
+      const notifyServices = Object.keys(this._hass.services.notify);
+      const mobileApps = notifyServices.filter(s => s.startsWith('mobile_app_'));
+      pushSelect.innerHTML = '<option value="">\u2014 Wybierz urz\u0105dzenie \u2014</option>';
+      mobileApps.forEach(svc => {
+        const entity = `notify.${svc}`;
+        const label = svc.replace('mobile_app_', '').replace(/_/g, ' ');
+        const displayLabel = label.charAt(0).toUpperCase() + label.slice(1);
+        const selected = entity === savedEntity ? ' selected' : '';
+        pushSelect.innerHTML += `<option value="${entity}"${selected}>\ud83d\udcf1 ${displayLabel}</option>`;
+      });
+      // If no mobile apps found, add all notify services
+      if (mobileApps.length === 0) {
+        notifyServices.forEach(svc => {
+          const entity = `notify.${svc}`;
+          const selected = entity === savedEntity ? ' selected' : '';
+          pushSelect.innerHTML += `<option value="${entity}"${selected}>${svc}</option>`;
+        });
+      }
+    }
     if (el('notif-phone')) el('notif-phone').value = cfg.phone || '';
     if (el('notif-email')) el('notif-email').value = cfg.email || '';
 
@@ -5816,29 +5837,35 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   _testNotification() {
-    try {
-      this._hass.callService('smartinghome', 'send_alert_notification', {
-        alert_id: 'TEST_NOTIFICATION',
-        level: 'info',
-        source: 'System',
-        title: 'Test powiadomień',
-        message: '✅ Test powiadomień Smarting HOME — jeśli to widzisz, konfiguracja działa poprawnie!',
-        diag_action: '',
-      });
+    // Auto-save config first to ensure backend has current settings
+    this._saveNotificationConfig();
 
-      const status = this.shadowRoot.getElementById('notif-save-status');
-      if (status) {
-        status.textContent = '🔔 Testowe powiadomienie wysłane!';
-        status.style.color = '#00d4ff';
-        status.style.display = 'block';
-        setTimeout(() => {
-          status.style.display = 'none';
-          status.style.color = '#2ecc71';
-        }, 4000);
+    // Small delay to let settings.json write complete
+    setTimeout(() => {
+      try {
+        this._hass.callService('smartinghome', 'send_alert_notification', {
+          alert_id: 'TEST_NOTIFICATION',
+          level: 'critical',
+          source: 'System',
+          title: 'Test powiadomie\u0144 Smarting HOME',
+          message: '\u2705 Test powiadomie\u0144 Smarting HOME \u2014 je\u015bli to widzisz, konfiguracja dzia\u0142a poprawnie!',
+          diag_action: '',
+        });
+
+        const status = this.shadowRoot.getElementById('notif-save-status');
+        if (status) {
+          status.textContent = '\ud83d\udd14 Testowe powiadomienie wys\u0142ane!';
+          status.style.color = '#00d4ff';
+          status.style.display = 'block';
+          setTimeout(() => {
+            status.style.display = 'none';
+            status.style.color = '#2ecc71';
+          }, 4000);
+        }
+      } catch (e) {
+        console.error('Test notification error:', e);
       }
-    } catch (e) {
-      console.error('Test notification error:', e);
-    }
+    }, 500);
   }
 
   _renderNotificationLog() {
@@ -12170,8 +12197,10 @@ class SmartingHomePanel extends HTMLElement {
                   <label class="toggle-switch sm"><input type="checkbox" id="notif-ch-push" onchange="this.getRootNode().host._onNotifToggle()"><span class="toggle-slider"></span></label>
                 </div>
                 <div id="notif-push-entity-wrap" style="display:none">
-                  <input type="text" id="notif-push-entity" placeholder="notify.mobile_app_iphone" style="width:100%; padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#e2e8f0; font-size:11px; outline:none">
-                  <div style="font-size:9px; color:#64748b; margin-top:3px">Nazwa entity z HA (np. notify.mobile_app_iphone)</div>
+                  <select id="notif-push-entity" style="width:100%; padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#e2e8f0; font-size:11px; outline:none; cursor:pointer">
+                    <option value="">— Wybierz urządzenie —</option>
+                  </select>
+                  <div style="font-size:9px; color:#64748b; margin-top:3px">Wybierz urządzenie z aplikacji HA Companion</div>
                 </div>
               </div>
 
@@ -12789,7 +12818,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.46.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.46.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

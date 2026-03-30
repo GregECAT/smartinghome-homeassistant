@@ -960,6 +960,9 @@ Długość: 400-600 słów."""
             _LOGGER.debug("Alert notification skipped — disabled")
             return
 
+        # Test notifications bypass all filters
+        is_test = alert_id == "TEST_NOTIFICATION"
+
         # Cooldown check
         cooldown_min = int(notif_cfg.get("cooldown", 15))
         notif_log = settings.get("notification_log", [])
@@ -969,21 +972,22 @@ Długość: 400-600 słów."""
         cutoff = now - timedelta(minutes=cooldown_min)
         cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%S")
 
-        recent_same = [
-            e for e in notif_log
-            if e.get("alert_id") == alert_id and e.get("ts", "") > cutoff_str
-        ]
-        if recent_same:
-            _LOGGER.debug(
-                "Alert notification '%s' skipped — cooldown (%d min)",
-                alert_id, cooldown_min,
-            )
-            return
+        if not is_test:
+            recent_same = [
+                e for e in notif_log
+                if e.get("alert_id") == alert_id and e.get("ts", "") > cutoff_str
+            ]
+            if recent_same:
+                _LOGGER.debug(
+                    "Alert notification '%s' skipped — cooldown (%d min)",
+                    alert_id, cooldown_min,
+                )
+                return
 
         # Quiet hours check (skip non-critical during quiet hours)
         quiet_start = notif_cfg.get("quiet_start", "")
         quiet_end = notif_cfg.get("quiet_end", "")
-        if quiet_start and quiet_end and level != "critical":
+        if quiet_start and quiet_end and level != "critical" and not is_test:
             try:
                 h_now = now.hour * 100 + now.minute
                 qs = int(quiet_start.replace(":", ""))
@@ -1003,7 +1007,7 @@ Długość: 400-600 słów."""
 
         # Level filter
         allowed_levels = notif_cfg.get("levels", ["critical", "warning"])
-        if level not in allowed_levels:
+        if not is_test and level not in allowed_levels:
             _LOGGER.debug("Alert '%s' skipped — level '%s' not in filter", alert_id, level)
             return
 
