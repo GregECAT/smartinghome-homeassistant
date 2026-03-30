@@ -11279,7 +11279,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.44.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.44.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -12255,55 +12255,67 @@ class SmartingHomePanel extends HTMLElement {
       return;
     }
 
-    // Get PV system config — prefer user-defined settings, fallback to pv_string_config
-    let totalWp = 0;
-    let avgTilt = 35;
-    let avgAzimuth = 180; // South
-
-    // Priority 1: User-configured values in forecast tab
-    const fcKwp = parseFloat(this._settings.forecast_pv_kwp) || 0;
-    const fcTilt = parseFloat(this._settings.forecast_pv_tilt);
-    const fcAzimuth = parseFloat(this._settings.forecast_pv_azimuth);
-
-    if (fcKwp > 0) {
-      totalWp = fcKwp * 1000;
-      avgTilt = !isNaN(fcTilt) ? fcTilt : 35;
-      avgAzimuth = !isNaN(fcAzimuth) ? fcAzimuth : 180;
-    } else {
-      // Priority 2: Zima na plusie pv_kwp
-      const winterKwp = parseFloat(this._settings.winter_pv_kwp) || 0;
-      if (winterKwp > 0) {
-        totalWp = winterKwp * 1000;
-      } else {
-        // Priority 3: pv_string_config from inverter setup
-        const cfg = this._settings.pv_string_config || {};
-        let stringCount = 0;
-        for (let i = 1; i <= 4; i++) {
-          const sc = cfg[`pv${i}`];
-          if (sc && sc.substrings) {
-            sc.substrings.forEach(sub => {
-              const wp = (sub.panel_count || 0) * (sub.panel_power || 405);
-              totalWp += wp;
-              avgTilt += (sub.tilt || 35);
-              const dirMap = { 'N': 0, 'NE': 45, 'E': 90, 'SE': 135, 'S': 180, 'SW': 225, 'W': 270, 'NW': 315 };
-              avgAzimuth += (dirMap[sub.direction] || 180);
-              stringCount++;
+    // Build PV string array — each entry has { wp, tilt, azimuth, label }
+    // Priority 1: pv_string_config (most precise — per-string tilt/azimuth)
+    const dirMap = { 'N': 0, 'NE': 45, 'E': 90, 'SE': 135, 'S': 180, 'SW': 225, 'W': 270, 'NW': 315 };
+    let pvStrings = [];
+    const cfg = this._settings.pv_string_config || {};
+    for (let i = 1; i <= 4; i++) {
+      const sc = cfg[`pv${i}`];
+      if (sc && sc.substrings) {
+        sc.substrings.forEach((sub, si) => {
+          const wp = (sub.panel_count || 0) * (sub.panel_power || 405);
+          if (wp > 0) {
+            pvStrings.push({
+              wp,
+              tilt: sub.tilt || 35,
+              azimuth: dirMap[sub.direction] || 180,
+              label: sc.name || `String ${i}${sc.substrings.length > 1 ? `.${si+1}` : ''}`
             });
           }
-        }
-        if (stringCount > 0) { avgTilt /= (stringCount + 1); avgAzimuth /= (stringCount + 1); }
+        });
       }
     }
-    if (totalWp === 0) totalWp = 5000; // Default 5 kWp
 
-    // Update config UI with actual values
+    // Priority 2: forecast tab manual config
+    if (pvStrings.length === 0) {
+      const fcKwp = parseFloat(this._settings.forecast_pv_kwp) || 0;
+      if (fcKwp > 0) {
+        pvStrings.push({
+          wp: fcKwp * 1000,
+          tilt: parseFloat(this._settings.forecast_pv_tilt) || 35,
+          azimuth: parseFloat(this._settings.forecast_pv_azimuth) || 180,
+          label: 'Ręczna konfiguracja'
+        });
+      }
+    }
+
+    // Priority 3: Zima na plusie kWp (no tilt/az data)
+    if (pvStrings.length === 0) {
+      const winterKwp = parseFloat(this._settings.winter_pv_kwp) || 0;
+      if (winterKwp > 0) {
+        pvStrings.push({ wp: winterKwp * 1000, tilt: 35, azimuth: 180, label: 'Zima na plusie' });
+      }
+    }
+
+    // Priority 4: Default
+    if (pvStrings.length === 0) {
+      pvStrings.push({ wp: 5000, tilt: 35, azimuth: 180, label: 'Domyślne 5 kWp' });
+    }
+
+    const totalWp = pvStrings.reduce((s, p) => s + p.wp, 0);
+
+    // Update config UI with string breakdown
     const kwpInput = this.shadowRoot.getElementById('fc-cfg-kwp');
     if (kwpInput) kwpInput.value = (totalWp / 1000).toFixed(1);
+    // Show weighted average tilt/azimuth for display
+    const wTilt = pvStrings.reduce((s, p) => s + p.tilt * p.wp, 0) / totalWp;
+    const wAz = pvStrings.reduce((s, p) => s + p.azimuth * p.wp, 0) / totalWp;
     const tiltInput = this.shadowRoot.getElementById('fc-cfg-tilt');
-    if (tiltInput) tiltInput.value = Math.round(avgTilt);
+    if (tiltInput) tiltInput.value = Math.round(wTilt);
     const azSelect = this.shadowRoot.getElementById('fc-cfg-azimuth');
-    if (azSelect) azSelect.value = String(Math.round(avgAzimuth / 45) * 45);
-    this._updateForecastCfgSummary(totalWp / 1000);
+    if (azSelect) azSelect.value = String(Math.round(wAz / 45) * 45);
+    this._updateForecastCfgSummary(totalWp / 1000, pvStrings);
 
     // Fetch Open-Meteo Solar Radiation
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=shortwave_radiation,temperature_2m,cloud_cover,direct_radiation,diffuse_radiation&daily=shortwave_radiation_sum&timezone=auto&forecast_days=7`;
@@ -12316,7 +12328,7 @@ class SmartingHomePanel extends HTMLElement {
     const meteoEl = this.shadowRoot.getElementById('fc-integ-meteo');
     if (meteoEl) meteoEl.style.color = '#2ecc71';
 
-    // Process hourly data for today
+    // Process hourly data for today — calculate per-string and sum
     const now = new Date();
     const todayStr = now.toISOString().slice(0, 10);
     const hourlyData = [];
@@ -12338,7 +12350,12 @@ class SmartingHomePanel extends HTMLElement {
       const ghi = hourlyGHI[i] || 0;
       const temp = hourlyTemp[i];
       const cloud = hourlyCloud[i];
-      const kw = this._calcPVProduction(ghi, temp, totalWp, avgTilt, avgAzimuth) * cf;
+      // Sum production across all strings (each with own tilt/azimuth)
+      let kw = 0;
+      pvStrings.forEach(ps => {
+        kw += this._calcPVProduction(ghi, temp, ps.wp, ps.tilt, ps.azimuth);
+      });
+      kw *= cf;
       todayTotalKwh += kw;
 
       hourlyData.push({ hour, kw, temp, cloud, ghi });
@@ -12359,8 +12376,9 @@ class SmartingHomePanel extends HTMLElement {
     this._fcTodayKwh = todayTotalKwh;
     this._fcPeakWindow = { start: peakHourStart, end: peakHourEnd, kw: peakKw };
     this._fcTotalWp = totalWp;
+    this._fcPvStrings = pvStrings;
 
-    // Process daily data
+    // Process daily data — per-string calculation
     const dailyData = [];
     const dailyTimes = data.daily?.time || [];
     const dailyRad = data.daily?.shortwave_radiation_sum || [];
@@ -12369,9 +12387,12 @@ class SmartingHomePanel extends HTMLElement {
     for (let i = 0; i < dailyTimes.length && i < 7; i++) {
       const d = new Date(dailyTimes[i]);
       const radSum = dailyRad[i] || 0;
-      // Convert MJ/m² to average W/m² then to kWh
-      const avgGhi = (radSum * 1e6) / (3600 * 12); // rough 12 daylight hours
-      const kwh = this._calcPVProduction(avgGhi, 15, totalWp, avgTilt, avgAzimuth) * 12 * cf;
+      const avgGhi = (radSum * 1e6) / (3600 * 12);
+      let kwh = 0;
+      pvStrings.forEach(ps => {
+        kwh += this._calcPVProduction(avgGhi, 15, ps.wp, ps.tilt, ps.azimuth);
+      });
+      kwh *= 12 * cf;
       dailyData.push({
         date: dailyTimes[i],
         dayName: dayNames[d.getDay()],
@@ -12634,16 +12655,28 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
 
-  _updateForecastCfgSummary(kwp) {
+  _updateForecastCfgSummary(kwp, pvStrings) {
     const el = this.shadowRoot.getElementById('fc-cfg-summary');
     if (!el) return;
-    // Poland average: ~950-1100 kWh/kWp/year depending on region
     const zone = this._hass?.states['zone.home'];
     const lat = zone?.attributes?.latitude || 51;
-    // Approximate annual yield based on latitude
     const kwhPerKwp = lat > 52 ? 950 : lat > 50 ? 1000 : 1050;
     const annual = (kwp * kwhPerKwp).toFixed(0);
-    el.innerHTML = `Szacunkowa roczna produkcja: <strong style="color:#2ecc71">${annual} kWh</strong> (~${kwhPerKwp} kWh/kWp)`;
+    const azLabels = { 0:'N', 45:'NE', 90:'E', 135:'SE', 180:'S', 225:'SW', 270:'W', 315:'NW' };
+    let html = `Roczna produkcja: <strong style="color:#2ecc71">${annual} kWh</strong> (~${kwhPerKwp} kWh/kWp)`;
+    if (pvStrings && pvStrings.length > 1) {
+      html += '<br><span style="font-size:9px; color:#64748b">';
+      html += pvStrings.map(ps => {
+        const dir = azLabels[ps.azimuth] || `${ps.azimuth}°`;
+        return `${ps.label}: ${(ps.wp/1000).toFixed(1)} kWp ${dir} ${ps.tilt}°`;
+      }).join(' · ');
+      html += '</span>';
+    } else if (pvStrings && pvStrings.length === 1 && pvStrings[0].label !== 'Domyślne 5 kWp') {
+      const ps = pvStrings[0];
+      const dir = azLabels[ps.azimuth] || `${ps.azimuth}°`;
+      html += ` <span style="font-size:9px; color:#64748b">· ${ps.label}: ${dir} ${ps.tilt}°</span>`;
+    }
+    el.innerHTML = html;
   }
 
   _updateIntegrationStatus() {
