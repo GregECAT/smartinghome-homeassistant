@@ -123,3 +123,11 @@ The frontend reads settings.json via HTTP fetch and writes via HA services:
 | `ai_strategic_plan` | strategy_controller | AI 24h strategic plan |
 | `ai_cron_*` | cron_scheduler | AI cron job results |
 | `inverter_capabilities` | inverter_agent | Detected inverter features |
+| `forecast_pv_kwp` | panel.js | PV system power in kWp |
+| `forecast_pv_tilt` | panel.js | PV panel tilt angle (°) |
+| `forecast_pv_azimuth` | panel.js | PV panel azimuth (compass direction) |
+| `forecast_strategy` | panel.js | Active strategy (MAX_ZYSK, AUTARKIA, ECO) |
+| `forecast_calibration_factor` | panel.js | Kalman filter calibration factor |
+| `forecast_calibration_samples` | panel.js | Number of calibration history samples |
+| `forecast_calibration_mape` | panel.js | Mean absolute percentage error |
+| `forecast_calibration_history` | panel.js | Array of calibration data points |

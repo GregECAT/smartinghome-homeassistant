@@ -10737,6 +10737,11 @@ class SmartingHomePanel extends HTMLElement {
                 <div class="fc-integ-name">Forecast.Solar</div>
                 <div class="fc-integ-status" id="fc-integ-fcsolar" style="color:#64748b">wykrywanie...</div>
               </div>
+              <div class="fc-integ-item">
+                <div class="fc-integ-icon">🌡️</div>
+                <div class="fc-integ-name">Ecowitt Local</div>
+                <div class="fc-integ-status" id="fc-integ-ecowitt" style="color:#64748b">wykrywanie...</div>
+              </div>
             </div>
           </div>
 
@@ -11274,7 +11279,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.44.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.44.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -12486,23 +12491,40 @@ class SmartingHomePanel extends HTMLElement {
       gridLines += `<text x="${padX - 4}" y="${y + 3}" text-anchor="end" fill="#475569" font-size="8">${v.toFixed(1)}</text>`;
     }
 
-    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="fc-curve-svg" style="height:200px">
-      <defs>
-        <linearGradient id="fc-grad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#2ecc71" stop-opacity="0.25"/>
-          <stop offset="100%" stop-color="#2ecc71" stop-opacity="0.02"/>
-        </linearGradient>
-      </defs>
-      ${gridLines}
-      <path d="${areaPath}" fill="url(#fc-grad)"/>
-      <path d="${path}" fill="none" stroke="#2ecc71" stroke-width="2.5" stroke-linecap="round"/>
-      ${nowHour >= 5 && nowHour <= 20 ? `
-        <line x1="${nowX}" y1="${padY}" x2="${nowX}" y2="${padY + chartH}" class="fc-now-line"/>
-        <circle cx="${nowX}" cy="${realY}" r="5" fill="#f7b731" style="filter:drop-shadow(0 0 6px #f7b731)"/>
-        <text x="${nowX}" y="${realY - 10}" text-anchor="middle" fill="#f7b731" font-size="10" font-weight="700">${realPv.toFixed(1)} kW</text>
-        <text x="${nowX}" y="${padY - 4}" text-anchor="middle" fill="#f7b731" font-size="8">teraz</text>
-      ` : ''}
-    </svg>`;
+      // Ecowitt real-time solar radiation overlay
+      let ecowittOverlay = '';
+      if (this._settings.ecowitt_enabled && nowHour >= 5 && nowHour <= 20) {
+        const ecoRad = parseFloat(this._hass?.states?.['sensor.ecowitt_solar_radiation_9747']?.state);
+        if (!isNaN(ecoRad) && ecoRad > 0) {
+          // Convert W/m² to approximate kW using system area
+          const area = (this._fcTotalWp || 5000) / 200;
+          const ecoKw = (ecoRad * area * 0.85) / 1000;
+          const ecoY = padY + chartH - (Math.min(ecoKw, maxKw) / maxKw) * chartH;
+          ecowittOverlay = `
+            <circle cx="${nowX}" cy="${ecoY}" r="4" fill="none" stroke="#00d4ff" stroke-width="1.5" style="filter:drop-shadow(0 0 4px #00d4ff)"/>
+            <text x="${nowX + 12}" y="${ecoY + 3}" fill="#00d4ff" font-size="8">Ecowitt ${ecoRad.toFixed(0)} W/m²</text>
+          `;
+        }
+      }
+
+      el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="fc-curve-svg" style="height:200px">
+        <defs>
+          <linearGradient id="fc-grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#2ecc71" stop-opacity="0.25"/>
+            <stop offset="100%" stop-color="#2ecc71" stop-opacity="0.02"/>
+          </linearGradient>
+        </defs>
+        ${gridLines}
+        <path d="${areaPath}" fill="url(#fc-grad)"/>
+        <path d="${path}" fill="none" stroke="#2ecc71" stroke-width="2.5" stroke-linecap="round"/>
+        ${nowHour >= 5 && nowHour <= 20 ? `
+          <line x1="${nowX}" y1="${padY}" x2="${nowX}" y2="${padY + chartH}" class="fc-now-line"/>
+          <circle cx="${nowX}" cy="${realY}" r="5" fill="#f7b731" style="filter:drop-shadow(0 0 6px #f7b731)"/>
+          <text x="${nowX}" y="${realY - 10}" text-anchor="middle" fill="#f7b731" font-size="10" font-weight="700">${realPv.toFixed(1)} kW</text>
+          <text x="${nowX}" y="${padY - 4}" text-anchor="middle" fill="#f7b731" font-size="8">teraz</text>
+          ${ecowittOverlay}
+        ` : ''}
+      </svg>`;
   }
 
   _renderHourlyList(hourlyData) {
@@ -12653,6 +12675,21 @@ class SmartingHomePanel extends HTMLElement {
     if (fcEl) {
       if (hasFS) { fcEl.textContent = '✅ Aktywny'; fcEl.style.color = '#2ecc71'; }
       else { fcEl.textContent = '— nieaktywny'; fcEl.style.color = '#64748b'; }
+    }
+    // Ecowitt local weather
+    const ecoEl = this.shadowRoot.getElementById('fc-integ-ecowitt');
+    if (ecoEl) {
+      if (this._settings.ecowitt_enabled) {
+        const ecoRad = this._hass?.states?.['sensor.ecowitt_solar_radiation_9747'];
+        if (ecoRad) {
+          ecoEl.innerHTML = `✅ ${parseFloat(ecoRad.state).toFixed(0)} W/m²`;
+          ecoEl.style.color = '#2ecc71';
+        } else {
+          ecoEl.textContent = '⚠️ Brak sensora'; ecoEl.style.color = '#f39c12';
+        }
+      } else {
+        ecoEl.textContent = '— wyłączony'; ecoEl.style.color = '#64748b';
+      }
     }
   }
 
