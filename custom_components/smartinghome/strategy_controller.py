@@ -45,6 +45,7 @@ from .const import (
     SOC_CHECK_12_THRESHOLD,
     NIGHT_ARBITRAGE_MIN_FORECAST,
     DEFAULT_BATTERY_CAPACITY,
+    DEFAULT_BATTERY_MIN_SOC,
     SENSOR_GRID_VOLTAGE_L1,
     SENSOR_GRID_VOLTAGE_L2,
     SENSOR_GRID_VOLTAGE_L3,
@@ -241,6 +242,7 @@ class StrategyController:
         self._strategist_interval: int = 900  # default 15 min, AI can override
         self._current_block_key: str = ""  # "HH:MM-HH:MM" of currently executing block
         self._block_commands_executed: bool = False  # True when current block commands done
+        self._block_charge_completed: bool = False  # True when charge block reached SOC target → switched to general
 
         # Energy history cache (refreshed hourly for AI prompts)
         self._energy_history_cache: list[dict[str, Any]] = []
@@ -691,16 +693,19 @@ class StrategyController:
         # ═══════════════════════════════════════════════════════
 
         # W3: SOC Emergency (highest priority)
-        if soc < SOC_EMERGENCY:
+        # During expensive afternoon_peak (1.50 PLN/kWh), allow deeper discharge to 5%
+        # — it's cheaper to use battery than buy from grid at premium price
+        soc_emergency_threshold = DEFAULT_BATTERY_MIN_SOC if g13_zone == G13Zone.AFTERNOON_PEAK else SOC_EMERGENCY
+        if soc < soc_emergency_threshold:
             # We must execute force_charge frequently (every 60s) to fight the integration auto-reset
             if await self._throttled_action("soc_emergency_execute", cooldown=60):
                 await self._em.force_charge()
                 self._charging_enabled = True
-                actions_taken.append("W3: ⚠️ SOC emergency — wymuszono ładowanie")
+                actions_taken.append(f"W3: ⚠️ SOC emergency — wymuszono ładowanie (próg: {soc_emergency_threshold}%)")
                 
                 # But only log to the UI every 15 minutes to avoid spam
                 if await self._throttled_action("soc_emergency_log", cooldown=900):
-                    self._log_decision("soc_emergency", f"SOC={soc:.0f}% < {SOC_EMERGENCY}% — ładowanie awaryjne (Modbus BT)")
+                    self._log_decision("soc_emergency", f"SOC={soc:.0f}% < {soc_emergency_threshold}% — ładowanie awaryjne")
 
         # W0: Grid Import Guard
         w0_actions = await self._execute_w0_grid_import_guard(
@@ -862,20 +867,20 @@ class StrategyController:
             ),
             "high_price_sell": (
                 rce_mwh > RCE_PRICE_THRESHOLDS["expensive"]
-                and soc > 20
+                and soc > (DEFAULT_BATTERY_MIN_SOC if g13_zone == G13Zone.AFTERNOON_PEAK else 20)
             ),
             "rce_peak_g13": (
                 rce_mwh > RCE_PRICE_THRESHOLDS.get("very_expensive", 500)
                 and g13_zone == G13Zone.AFTERNOON_PEAK
-                and soc > 20
+                and soc > DEFAULT_BATTERY_MIN_SOC
             ),
             "negative_price": rce_mwh < 0,
 
             # W3: SOC Safety
             "soc_check_11": (hour == 11 and soc < SOC_CHECK_11_THRESHOLD),
             "soc_check_12": (hour == 12 and soc < SOC_CHECK_12_THRESHOLD),
-            "smart_soc_protection": (soc < 20),
-            "soc_emergency": (soc < SOC_EMERGENCY),
+            "smart_soc_protection": (soc < (DEFAULT_BATTERY_MIN_SOC if g13_zone == G13Zone.AFTERNOON_PEAK else 20)),
+            "soc_emergency": (soc < (DEFAULT_BATTERY_MIN_SOC if g13_zone == G13Zone.AFTERNOON_PEAK else SOC_EMERGENCY)),
 
             # W4: Voltage
             "voltage_boiler": (v_l1 > VOLTAGE_THRESHOLD_WARNING),
@@ -1141,7 +1146,7 @@ class StrategyController:
                     actions.append(msg)
                     self._log_decision("mp_charge", msg)
 
-        elif is_expensive and soc > 20:
+        elif is_expensive and soc > (DEFAULT_BATTERY_MIN_SOC if g13_zone == G13Zone.AFTERNOON_PEAK else 20):
             # Expensive → discharge + export
             if self._charging_enabled is not False:
                 if await self._throttled_action("mp_expensive_sell"):
@@ -1386,12 +1391,15 @@ class StrategyController:
             if block_key != self._current_block_key:
                 self._current_block_key = block_key
                 self._block_commands_executed = False
+                self._block_charge_completed = False  # Reset charge completion on block transition
                 _LOGGER.info(
                     "AI Executor: entered block %s (%s) — %s",
                     block_key,
                     block.get("strategy", "?"),
                     block.get("reasoning", "")[:80],
                 )
+
+            strategy = block.get("strategy", "")  # Available for both auto-completion and drift detection
 
             # Execute block commands ONCE per block
             if not self._block_commands_executed:
@@ -1419,13 +1427,37 @@ class StrategyController:
                 if reasoning:
                     self._log_decision("ai_exec", f"🧠 Block {block_key}: {reasoning}")
 
-            else:
+            # ── CHARGE AUTO-COMPLETION ────────────────────────
+            # If charging block and SOC >= 95%, auto-switch to general
+            # Battery is full → let it power the house naturally
+            if (
+                self._block_commands_executed
+                and not self._block_charge_completed
+                and strategy in ("aggressive_charge", "charge", "night_charge")
+            ):
+                soc_state = self.hass.states.get(SENSOR_BATTERY_SOC)
+                soc_now = _safe_float(soc_state.state if soc_state else 0)
+                if soc_now >= 95:
+                    result = await self._inverter_agent.execute("set_general", {})
+                    if result.executed:
+                        self._block_charge_completed = True
+                        msg = (
+                            f"🧠 Auto-complete: SOC={soc_now:.0f}% ≥ 95% → general mode "
+                            f"(bateria pełna, zasil dom z baterii zamiast z sieci)"
+                        )
+                        actions.append(msg)
+                        self._log_decision("charge_complete", msg)
+                        _LOGGER.info(
+                            "AI Executor: charge auto-completed — SOC=%.0f%% → general mode (block %s)",
+                            soc_now, block_key,
+                        )
+
+            if self._block_commands_executed and not self._block_charge_completed:
                 # ── STATE-DRIFT DETECTION ────────────────────────
                 # Check every tick if device state matches plan expectations
                 # This catches manual overrides by user or external automations
                 drift_cooldown = getattr(self, "_drift_last_reexec", 0)
                 if now - drift_cooldown >= 120:  # Max once per 120s
-                    strategy = block.get("strategy", "")
                     device_status = self._inverter_agent.get_device_status()
                     work_mode = device_status.get("work_mode", "")
                     bat_power = device_status.get("battery_power", 0)
@@ -1446,7 +1478,27 @@ class StrategyController:
                     drifted = False
                     drift_reason = ""
                     expected_modes = _STRATEGY_EXPECTED_MODES.get(strategy)
-                    if expected_modes and work_mode not in expected_modes and work_mode not in ("unknown", "", "unavailable"):
+
+                    # ── SOC-AWARE DRIFT EXCEPTION ────────────────
+                    # If charge strategy reached SOC target (>= 95%), general mode
+                    # is CORRECT — battery is full, it should power the house.
+                    # Do NOT treat this as drift!
+                    soc_for_drift = device_status.get("battery_soc", 0)
+                    charge_goal_reached = (
+                        strategy in ("aggressive_charge", "charge", "night_charge")
+                        and soc_for_drift >= 95
+                        and work_mode == "general"
+                    )
+                    if charge_goal_reached:
+                        # Mark as completed so we don't re-check
+                        if not self._block_charge_completed:
+                            self._block_charge_completed = True
+                            _LOGGER.info(
+                                "AI Executor: charge goal reached (SOC=%.0f%%) — "
+                                "general mode is correct, skipping drift detection (block %s)",
+                                soc_for_drift, block_key,
+                            )
+                    elif expected_modes and work_mode not in expected_modes and work_mode not in ("unknown", "", "unavailable"):
                         drifted = True
                         drift_reason = f"mode mismatch: expected={expected_modes}, got={work_mode}"
                         _LOGGER.warning(
@@ -1560,6 +1612,7 @@ class StrategyController:
                 # Reset block execution tracking
                 self._current_block_key = ""
                 self._block_commands_executed = False
+                self._block_charge_completed = False
 
                 # Update strategist interval from AI response
                 next_min = plan.get("next_analysis_minutes", 15)

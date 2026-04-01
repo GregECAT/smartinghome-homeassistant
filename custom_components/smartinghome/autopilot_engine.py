@@ -805,8 +805,9 @@ STRATEGY_AI_INSTRUCTIONS: dict[str, str] = {
         "  Afternoon_peak (1.50): set_general → bateria zasila dom (autokonsumpcja).\n"
         "  Jeśli RCE sell > 0.63: force_discharge → sprzedaj nadwyżkę do sieci.\n"
         "  SPRZEDAWAJ TYLKO gdy RCE sell > 0.63 PLN/kWh (koszt zakupu). Inaczej zachowaj.\n"
-        "  Zostaw min 20% SOC na przetrwanie szczytu po rozładowaniu.\n"
-        "  SOC limits: min=15%, max=100%."
+        "  W szczycie popołudniowym (1.50 PLN) rozładuj baterię do 5% — lepsze niż płacić za sieć!\n"
+        "  Poza szczytem: zostaw min 20% SOC.\n"
+        "  SOC limits: min=5% (peak) / 15% (off-peak), max=100%."
     ),
     "battery_protection": (
         "STRATEGIA: 🔋 Ochrona Baterii\n"
@@ -1071,13 +1072,14 @@ Odpowiedz WYŁĄCZNIE poprawnym JSON.
 4. Night 22-06: ładuj baterię ale SPRAWDŹ sekcję NOCNE ŁADOWANIE — nie ładuj do 100% jeśli jutro dobra pogoda!
 5. PV surplus > 2kW + SOC > 80% → switch_on boiler
 6. AUTO-STOP CHARGE: when SOC >= 95% → call stop_force_charge
-7. AUTO-STOP DISCHARGE: when SOC <= 20% → call stop_force_discharge
+7. AUTO-STOP DISCHARGE: when SOC <= 5% during afternoon_peak, or SOC <= 20% during other zones → call stop_force_discharge
 8. EMERGENCY: SOC < 5% → call emergency_stop, then force_charge
 9. ZONE TRADING:
    - Tania strefa (off_peak 0.63) + zła pogoda (PV forecast < 5kWh) → force_charge z sieci
-   - Droga strefa (afternoon_peak 1.50) + SOC > 30% → set_general (zasil dom z baterii)
-   - Droga strefa + RCE sell > 0.63 + SOC > 50% → force_discharge (sprzedaj nadwyżkę)
-   - Zostaw min 20% SOC na przetrwanie szczytu
+   - Droga strefa (afternoon_peak 1.50) + SOC > 5% → set_general (zasil dom z baterii, rozładuj do 5%!)
+   - Droga strefa + RCE sell > 0.63 + SOC > 30% → force_discharge (sprzedaj nadwyżkę)
+   - W SZCZYCIE POPOŁUDNIOWYM (1.50 PLN): bateria może się rozładować do 5% — lepiej niż kupować z sieci!
+   - Poza szczytem: zostaw min 20% SOC
 10. SELL PROFITABILITY: sprzedawaj TYLKO gdy RCE sell ({rce_sell:.4f}) > G13 buy (0.63 PLN/kWh)
    - Jeśli RCE sell < 0.63 → nie opłaca się, zostaw w baterii
 11. ALWAYS call stop_force after force operations end. NEVER leave inverter in forced state.
@@ -1245,15 +1247,16 @@ Net savings: {estimation.get('net_savings', 0):.2f} PLN
 4. During peaks: ZERO grid import. Battery + PV must cover all load.
 5. Managed loads (boiler, AC) should run ONLY during off-peak or PV surplus > 2kW.
 6. AUTO-STOP CHARGE: plan stop_force_charge when SOC reaches 95%. Include in commands.
-7. AUTO-STOP DISCHARGE: plan stop_force_discharge when SOC reaches 20%.
+7. AUTO-STOP DISCHARGE: plan stop_force_discharge when SOC reaches 5% during afternoon_peak, or 20% during other zones.
 8. ZONE TRADING:
    - Tania strefa (off_peak 0.63) + zła pogoda (PV forecast < 5kWh) → force_charge z sieci
-   - Droga strefa (afternoon_peak 1.50) + SOC > 30% → set_general (zasil dom z baterii)
-   - Droga strefa + RCE sell > 0.63 + SOC > 50% → force_discharge (sprzedaj nadwyżkę do sieci)
-   - Zostaw zawsze min 20% SOC na przetrwanie szczytu po rozładowaniu
+   - Droga strefa (afternoon_peak 1.50) + SOC > 5% → set_general (zasil dom z baterii, rozładuj baterię do 5%!)
+   - Droga strefa + RCE sell > 0.63 + SOC > 30% → force_discharge (sprzedaj nadwyżkę do sieci)
+   - W SZCZYCIE POPOŁUDNIOWYM (1.50 PLN): bateria może się rozładować do 5% — NIE ograniczaj do 20%!
+   - Poza szczytem: zostaw zawsze min 20% SOC
 9. SELL PROFITABILITY: sprzedawaj TYLKO gdy RCE sell ({rce_sell:.4f}) > G13 buy (0.63 PLN/kWh)
    - Jeśli RCE sell < 0.63 → nie opłaca się, zostaw w baterii  
-10. NEVER discharge below 10% SOC.
+10. NEVER discharge below 5% SOC (absolute hardware minimum).
 11. NOCNE ŁADOWANIE vs PV: Sprawdź sekcję "NOCNE ŁADOWANIE — OPTYMALIZACJA MIEJSCA NA PV":
    - Dobra pogoda jutro (PV > 8kWh) → NIE ładuj do 100%, zostaw miejsce na darmowe PV!
    - Zła pogoda (PV < 5kWh) → ładuj do 100%
