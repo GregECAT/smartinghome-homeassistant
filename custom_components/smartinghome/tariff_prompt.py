@@ -7,7 +7,7 @@ G13-specific data into prompts, preventing AI hallucination on zone times.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Final
+from typing import Final
 
 from .const import (
     TariffType,

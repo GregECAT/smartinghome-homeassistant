@@ -972,7 +972,6 @@ def build_ai_controller_prompt(
     day_names = ['Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota', 'Niedziela']
     month = now.month
     weekday = now.weekday()
-    hour = now.hour
 
     # Dynamic tariff context from user's config
     tariff_type = current_data.get('tariff_type', TariffType.G13)
@@ -1130,7 +1129,6 @@ def build_ai_strategist_prompt(
     day_names = ['Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota', 'Niedziela']
     month = now.month
     weekday = now.weekday()
-    hour = now.hour
 
     # Dynamic tariff context from user's config
     tariff_type = current_data.get('tariff_type', TariffType.G13)
