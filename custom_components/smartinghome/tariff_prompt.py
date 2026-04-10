@@ -152,6 +152,7 @@ class TariffPromptContext:
         "arbitrage_margin", "arbitrage_text",
         "key_rules_text", "warning_text",
         "next_expensive_zone_text",
+        "precomputed_advisory_facts",
     )
 
     def __init__(self) -> None:
@@ -171,6 +172,7 @@ class TariffPromptContext:
         self.key_rules_text: str = ""
         self.warning_text: str = ""
         self.next_expensive_zone_text: str = ""
+        self.precomputed_advisory_facts: str = ""
 
 
 def build_tariff_prompt_context(
@@ -349,6 +351,62 @@ def _build_g13_context(
         "  Używaj WYŁĄCZNIE harmonogramu podanego powyżej.\n"
         "  NIE WOLNO CI używać swoich danych treningowych do określania godzin stref G13!"
     )
+
+    # Pre-computed advisory facts — ready-made sentences for the AI to USE VERBATIM
+    # This eliminates the need for the AI to "interpret" zone schedules
+    if is_summer:
+        afternoon_start = 19
+        afternoon_end = 22
+        offpeak_mid_start = 13
+        offpeak_mid_end = 19
+    else:
+        afternoon_start = 16
+        afternoon_end = 21
+        offpeak_mid_start = 13
+        offpeak_mid_end = 16
+
+    if weekday >= 5:
+        ctx.precomputed_advisory_facts = (
+            "FAKTY DO UŻYCIA W TEKŚCIE (powtórz dosłownie):\n"
+            "- Dziś weekend — cały dzień obowiązuje strefa off-peak (0.63 PLN/kWh).\n"
+            "- Brak drogich stref — nie ma potrzeby optymalizacji taryfowej.\n"
+            "- Priorytet: maksymalna autokonsumpcja PV i ładowanie baterii."
+        )
+    elif zone == G13Zone.OFF_PEAK and hour >= offpeak_mid_start and hour < afternoon_start:
+        hours_left = afternoon_start - hour
+        ctx.precomputed_advisory_facts = (
+            "FAKTY DO UŻYCIA W TEKŚCIE (powtórz dosłownie):\n"
+            f"- Jesteś w strefie off-peak (taniej, {ctx.cheapest_price:.2f} PLN/kWh).\n"
+            f"- Drogi szczyt popołudniowy ({ctx.most_expensive_price:.2f} PLN/kWh) "
+            f"zaczyna się o {afternoon_start}:00 — za {hours_left} godzin.\n"
+            f"- Do godziny {afternoon_start}:00 powinieneś naładować baterię do 100% "
+            f"i uruchomić energochłonne urządzenia (bojler, AGD).\n"
+            f"- NIE pisz że szczyt zaczyna się o 15:00 ani 16:00 — LATEM zaczyna się o {afternoon_start}:00!"
+        )
+    elif zone == G13Zone.AFTERNOON_PEAK:
+        ctx.precomputed_advisory_facts = (
+            "FAKTY DO UŻYCIA W TEKŚCIE (powtórz dosłownie):\n"
+            f"- JESTEŚ w najdroższej strefie — szczyt popołudniowy "
+            f"({afternoon_start}:00-{afternoon_end}:00, {ctx.most_expensive_price:.2f} PLN/kWh).\n"
+            f"- Rozładowuj baterię aby zasilić dom. Cel: ZEROWY import z sieci.\n"
+            f"- Każda kWh z baterii oszczędza {ctx.most_expensive_price:.2f} PLN."
+        )
+    elif zone == G13Zone.MORNING_PEAK:
+        ctx.precomputed_advisory_facts = (
+            "FAKTY DO UŻYCIA W TEKŚCIE (powtórz dosłownie):\n"
+            f"- Jesteś w szczycie porannym (07:00-13:00, {G13_PRICES[G13Zone.MORNING_PEAK]:.2f} PLN/kWh).\n"
+            f"- Po 13:00 wejdziesz w off-peak ({ctx.cheapest_price:.2f} PLN/kWh) do {afternoon_start}:00.\n"
+            f"- Następny drogi szczyt popołudniowy dopiero o {afternoon_start}:00 "
+            f"({ctx.most_expensive_price:.2f} PLN/kWh)."
+        )
+    else:
+        ctx.precomputed_advisory_facts = (
+            "FAKTY DO UŻYCIA W TEKŚCIE (powtórz dosłownie):\n"
+            f"- Jesteś w strefie off-peak ({ctx.cheapest_price:.2f} PLN/kWh).\n"
+            f"- Kolejny szczyt poranny o 07:00 ({G13_PRICES[G13Zone.MORNING_PEAK]:.2f} PLN/kWh).\n"
+            f"- Szczyt popołudniowy o {afternoon_start}:00 "
+            f"({ctx.most_expensive_price:.2f} PLN/kWh)."
+        )
 
     return ctx
 
