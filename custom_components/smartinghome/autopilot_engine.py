@@ -970,7 +970,6 @@ def build_ai_controller_prompt(
     """
     now = datetime.now()
     day_names = ['Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota', 'Niedziela']
-    month = now.month
     weekday = now.weekday()
 
     # Dynamic tariff context from user's config
