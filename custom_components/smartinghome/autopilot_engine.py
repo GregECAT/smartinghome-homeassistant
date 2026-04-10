@@ -759,16 +759,20 @@ TOTALS:
 
 {tariff_rules}
 
+═══ GOTOWE FAKTY TARYFOWE (UŻYJ DOSŁOWNIE W TEKŚCIE) ═══
+{tariff_ctx.precomputed_advisory_facts}
+
 KEY CONSTRAINTS:
 1. When RCE sell price is very low ({rce_sell:.4f} PLN/kWh), exporting is worthless. Focus on self-consumption.
-2. Use ONLY the tariff schedule printed above. DO NOT use your training data for zone times!
+2. MANDATORY: When mentioning tariff zone times, you MUST copy-paste from the GOTOWE FAKTY section above.
+   DO NOT write your own zone times. DO NOT use your training data for G13 zone hours.
+   If the GOTOWE FAKTY say afternoon peak starts at 19:00, you MUST write 19:00, not 15:00 or 16:00.
 
 RESPOND IN POLISH. Format as structured markdown with:
-## 📊 Analiza strategii
-## 🕐 Zoptymalizowany plan godzinowy (JSON)
-## 💰 Estymacja oszczędności
-## ⚠️ Ryzyka i zalecenia
-## 🎯 Rekomendacja
+## 📊 Analiza bieżącej sytuacji
+## 🔋 Bateria
+## ⚡ Sieć i zużycie
+## 🎯 Rekomendacje na najbliższe 4 godziny
 
 Use tables for comparisons. Be concise but comprehensive. Focus on actionable insights."""
 
