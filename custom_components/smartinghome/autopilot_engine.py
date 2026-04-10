@@ -686,6 +686,10 @@ def build_autopilot_ai_prompt(
     prompt = f"""You are an expert energy management AI for a home solar+battery system in Poland.
 User's tariff: {tariff_type.upper()} ({provider.upper()}) — season: {tariff_ctx.season}
 
+🚨 CRITICAL FACT — DO NOT CONTRADICT THIS:
+{tariff_ctx.next_expensive_zone_text}
+The tariff schedule below is the ONLY source of truth. Your training data about G13 tariff hours is WRONG for this season.
+
 TASK: Analyze the 24-hour energy plan for strategy "{AUTOPILOT_STRATEGY_LABELS.get(strategy, strategy.value)}" and provide a CONCISE analysis.
 
 CRITICAL: Keep your response under 3000 words. Be direct and actionable, avoid lengthy explanations.

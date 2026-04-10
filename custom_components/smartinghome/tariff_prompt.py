@@ -151,6 +151,7 @@ class TariffPromptContext:
         "cheapest_price", "most_expensive_price",
         "arbitrage_margin", "arbitrage_text",
         "key_rules_text", "warning_text",
+        "next_expensive_zone_text",
     )
 
     def __init__(self) -> None:
@@ -169,6 +170,7 @@ class TariffPromptContext:
         self.arbitrage_text: str = ""
         self.key_rules_text: str = ""
         self.warning_text: str = ""
+        self.next_expensive_zone_text: str = ""
 
 
 def build_tariff_prompt_context(
@@ -230,14 +232,49 @@ def _build_g13_context(
     schedule = G13_SUMMER_SCHEDULE if _is_summer(month) else G13_WINTER_SCHEDULE
     is_summer = _is_summer(month)
 
-    # Schedule text
+    # Compute next zone transitions — find the next expensive zone start
+    if weekday >= 5:
+        ctx.next_expensive_zone_text = "Weekend — cały dzień off-peak, brak drogich stref"
+    else:
+        # Find next afternoon_peak start from the schedule
+        afternoon_start = None
+        morning_start = None
+        for (start, end), z in schedule.items():
+            if z == G13Zone.AFTERNOON_PEAK:
+                afternoon_start = start
+            elif z == G13Zone.MORNING_PEAK:
+                morning_start = start
+
+        if afternoon_start is not None and hour < afternoon_start:
+            ctx.next_expensive_zone_text = (
+                f"⚡ NASTĘPNA DROGA STREFA: szczyt popołudniowy zaczyna się o {afternoon_start:02d}:00 "
+                f"(za {afternoon_start - hour}h) → cena {G13_PRICES[G13Zone.AFTERNOON_PEAK]:.2f} PLN/kWh"
+            )
+        elif morning_start is not None and hour < morning_start:
+            ctx.next_expensive_zone_text = (
+                f"⚡ NASTĘPNA DROGA STREFA: szczyt poranny zaczyna się o {morning_start:02d}:00 "
+                f"(za {morning_start - hour}h) → cena {G13_PRICES[G13Zone.MORNING_PEAK]:.2f} PLN/kWh"
+            )
+        elif afternoon_start is not None and hour >= afternoon_start:
+            # We're already in or past afternoon peak
+            ctx.next_expensive_zone_text = (
+                f"⚡ JESTEŚ W SZCZYCIE POPOŁUDNIOWYM ({afternoon_start:02d}:00-) → "
+                f"cena {G13_PRICES[G13Zone.AFTERNOON_PEAK]:.2f} PLN/kWh → ROZŁADOWUJ BATERIĘ!"
+            )
+        else:
+            ctx.next_expensive_zone_text = (
+                f"Następny szczyt poranny jutro o {morning_start:02d}:00"
+                if morning_start else "Brak informacji o strefach"
+            )
+
+    # Schedule text — with EXPLICIT hours for this season
     lines = []
     if weekday >= 5:
         lines.append("  Weekend — cały dzień off-peak (0.63 PLN/kWh)")
     else:
         for (start, end), z in schedule.items():
             p = G13_PRICES[z]
-            marker = " ← TERAZ" if z == zone else ""
+            marker = " ← JESTEŚ TUTAJ" if z == zone else ""
             zone_label = _ZONE_LABELS.get(z, z)
             lines.append(f"  {start:02d}:00-{end:02d}:00 → {zone_label} ({p:.2f} PLN/kWh){marker}")
 
@@ -262,30 +299,55 @@ def _build_g13_context(
         f"= {ctx.arbitrage_margin:.2f} PLN/kWh marży"
     )
 
-    # Season-specific key rules
+    # Season-specific key rules — EXTREMELY explicit about times
     if is_summer:
         ctx.key_rules_text = (
-            "SEZON LETNI (kwi-wrz) — harmonogram G13:\n"
-            "  - 07:00-13:00: szczyt poranny (0.91 PLN/kWh) — rozładowuj baterię\n"
-            "  - 13:00-19:00: off-peak (0.63 PLN/kWh) — ładuj baterię, uruchom AGD\n"
-            "  - 19:00-22:00: szczyt popołudniowy (1.50 PLN/kWh) — MAX rozładowanie!\n"
-            "  - 22:00-07:00: off-peak (0.63 PLN/kWh) — nocne ładowanie\n"
-            "  UWAGA: Szczyt popołudniowy LATEM zaczyna się o 19:00 (NIE 16:00 jak zimą!)"
+            "██████████████████████████████████████████████████████████\n"
+            "██  SEZON LETNI (kwiecień-wrzesień) — HARMONOGRAM G13  ██\n"
+            "██████████████████████████████████████████████████████████\n"
+            "  07:00-13:00 → SZCZYT PORANNY (0.91 PLN/kWh)\n"
+            "  13:00-19:00 → OFF-PEAK TANI (0.63 PLN/kWh) ← okno na ładowanie!\n"
+            "  19:00-22:00 → SZCZYT POPOŁUDNIOWY (1.50 PLN/kWh) ← NAJDROŻEJ!\n"
+            "  22:00-07:00 → OFF-PEAK TANI (0.63 PLN/kWh)\n"
+            "\n"
+            "  ╔══════════════════════════════════════════════════════╗\n"
+            "  ║  LATEM szczyt popołudniowy = 19:00-22:00            ║\n"
+            "  ║  NIE 15:00! NIE 16:00! NIE 13:00!                  ║\n"
+            "  ║  Dokładnie: DZIEWIETNASTA (19:00) do 22:00          ║\n"
+            "  ╚══════════════════════════════════════════════════════╝\n"
+            "\n"
+            f"  {ctx.next_expensive_zone_text}"
         )
     else:
         ctx.key_rules_text = (
-            "SEZON ZIMOWY (paź-mar) — harmonogram G13:\n"
-            "  - 07:00-13:00: szczyt poranny (0.91 PLN/kWh) — rozładowuj baterię\n"
-            "  - 13:00-16:00: off-peak (0.63 PLN/kWh) — ładuj baterię, uruchom AGD\n"
-            "  - 16:00-21:00: szczyt popołudniowy (1.50 PLN/kWh) — MAX rozładowanie!\n"
-            "  - 21:00-07:00: off-peak (0.63 PLN/kWh) — nocne ładowanie\n"
-            "  UWAGA: Szczyt popołudniowy ZIMĄ zaczyna się o 16:00 (nie 19:00 jak latem!)"
+            "██████████████████████████████████████████████████████████\n"
+            "██  SEZON ZIMOWY (październik-marzec) — HARMONOGRAM G13 ██\n"
+            "██████████████████████████████████████████████████████████\n"
+            "  07:00-13:00 → SZCZYT PORANNY (0.91 PLN/kWh)\n"
+            "  13:00-16:00 → OFF-PEAK TANI (0.63 PLN/kWh) ← okno na ładowanie!\n"
+            "  16:00-21:00 → SZCZYT POPOŁUDNIOWY (1.50 PLN/kWh) ← NAJDROŻEJ!\n"
+            "  21:00-07:00 → OFF-PEAK TANI (0.63 PLN/kWh)\n"
+            "\n"
+            "  ╔══════════════════════════════════════════════════════╗\n"
+            "  ║  ZIMĄ szczyt popołudniowy = 16:00-21:00             ║\n"
+            "  ║  NIE 19:00! NIE 15:00! NIE 13:00!                  ║\n"
+            "  ║  Dokładnie: SZESNASTA (16:00) do 21:00              ║\n"
+            "  ╚══════════════════════════════════════════════════════╝\n"
+            "\n"
+            f"  {ctx.next_expensive_zone_text}"
         )
 
+    # Warning text — MAXIMALLY aggressive
+    season_detail = "LATO: 19:00-22:00" if is_summer else "ZIMA: 16:00-21:00"
+    wrong_time = "15:00, 16:00 lub 13:00" if is_summer else "19:00 lub 15:00"
     ctx.warning_text = (
-        "⚠️ KRYTYCZNE: Godziny stref taryfowych G13 ZMIENIAJĄ SIĘ sezonowo!\n"
+        "🚨🚨🚨 BEZWZGLĘDNY ZAKAZ HALUCYNACJI NA TEMAT GODZIN TARYFOWYCH 🚨🚨🚨\n"
         f"  Aktualny sezon: {ctx.season}\n"
-        "  Używaj WYŁĄCZNIE harmonogramu podanego powyżej. NIE używaj swoich danych treningowych!"
+        f"  Szczyt popołudniowy w tym sezonie: {season_detail}\n"
+        f"  Jeśli napiszesz że szczyt zaczyna się o {wrong_time} — TO JEST BŁĄD!\n"
+        f"  {ctx.next_expensive_zone_text}\n"
+        "  Używaj WYŁĄCZNIE harmonogramu podanego powyżej.\n"
+        "  NIE WOLNO CI używać swoich danych treningowych do określania godzin stref G13!"
     )
 
     return ctx
