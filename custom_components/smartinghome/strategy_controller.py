@@ -154,6 +154,9 @@ def _build_ai_data(data: dict[str, Any]) -> dict[str, Any]:
         "pv_today_kwh": _safe_float(data.get("pv_today")),
         # Voltage
         "voltage_l1": _safe_float(data.get(SENSOR_GRID_VOLTAGE_L1)),
+        # Tariff config (for dynamic prompt rendering)
+        "tariff_type": data.get("tariff_type", "g13"),
+        "energy_provider": data.get("energy_provider", "tauron"),
     }
 
 

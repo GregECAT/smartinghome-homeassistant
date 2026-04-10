@@ -589,6 +589,9 @@ async def async_setup_services(
             "rce_avg_today": data.get("rce_average_today"),
             "rce_min_today": data.get("rce_min_today"),
             "rce_max_today": data.get("rce_max_today"),
+            # Tariff config (for dynamic prompt rendering)
+            "tariff_type": data.get("tariff_type", "g13"),
+            "energy_provider": data.get("energy_provider", "tauron"),
         }
 
         # Try to get weather data (AccuWeather / weather.dom)

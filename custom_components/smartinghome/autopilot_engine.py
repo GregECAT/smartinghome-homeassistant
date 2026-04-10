@@ -20,7 +20,16 @@ from .const import (
     G13_SUMMER_SCHEDULE,
     WINTER_MONTHS,
     DEFAULT_BATTERY_CAPACITY,
+    DEFAULT_ENERGY_PROVIDER,
+    TariffType,
     RCE_PROSUMER_COEFFICIENT,
+)
+from .tariff_prompt import (
+    build_tariff_prompt_context,
+    render_tariff_schedule_section,
+    render_tariff_pricing_section,
+    render_tariff_key_rules,
+    render_next_zones,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -644,16 +653,10 @@ def build_autopilot_ai_prompt(
     month = now.month
     weekday = now.weekday()
 
-    # Build current G13 zone info
-    current_zone = _get_g13_zone(now.hour, month, weekday)
-    current_price = _get_g13_price(current_zone)
-
-    # Build G13 schedule for today
-    schedule = G13_WINTER_SCHEDULE if month in WINTER_MONTHS else G13_SUMMER_SCHEDULE
-    g13_lines = []
-    for (start, end), zone in schedule.items():
-        price = G13_PRICES.get(zone, 0.63)
-        g13_lines.append(f"  {start:02d}:00-{end:02d}:00 → {zone.value} ({price:.2f} PLN/kWh)")
+    # Dynamic tariff context from user's config
+    tariff_type = current_data.get('tariff_type', TariffType.G13)
+    provider = current_data.get('energy_provider', DEFAULT_ENERGY_PROVIDER)
+    tariff_ctx = build_tariff_prompt_context(tariff_type, provider, now)
 
     # Build hourly plan summary
     plan_lines = []
@@ -664,7 +667,7 @@ def build_autopilot_ai_prompt(
             f"PV:{h['pv']:5.0f}W | Load:{h['load']:5.0f}W | "
             f"Bat:{h['battery']:+6.0f}W | Grid:{h['grid']:+6.0f}W | "
             f"SOC:{h['soc_start']:.0f}→{h['soc_end']:.0f}% | "
-            f"G13:{zone.value}"
+            f"zone:{zone.value}"
         )
 
     # RCE sell price calculation
@@ -675,7 +678,13 @@ def build_autopilot_ai_prompt(
     bat_cap = current_data.get('battery_capacity') or DEFAULT_BATTERY_CAPACITY
     bat_cap_kwh = float(bat_cap or DEFAULT_BATTERY_CAPACITY) / 1000
 
-    prompt = f"""You are an expert energy management AI for a home solar+battery system in Poland with G13 multi-zone tariff.
+    # Render dynamic tariff sections
+    tariff_schedule = render_tariff_schedule_section(tariff_ctx)
+    tariff_pricing = render_tariff_pricing_section(tariff_ctx, rce_mwh, rce_sell, bat_cap_kwh)
+    tariff_rules = render_tariff_key_rules(tariff_ctx, rce_sell, bat_cap_kwh)
+
+    prompt = f"""You are an expert energy management AI for a home solar+battery system in Poland.
+User's tariff: {tariff_type.upper()} ({provider.upper()}) — season: {tariff_ctx.season}
 
 TASK: Analyze the 24-hour energy plan for strategy "{AUTOPILOT_STRATEGY_LABELS.get(strategy, strategy.value)}" and provide a CONCISE analysis.
 
@@ -701,16 +710,9 @@ Provide EXACTLY 3 sections:
 - PV Surplus: {current_data.get('pv_surplus', 0)} W
 - Grid Voltage: L1={current_data.get('voltage_l1', 'N/A')}V
 
-═══ TARIFF G13 — TODAY'S SCHEDULE ═══
-{'weekend (all off-peak 0.63 PLN/kWh)' if weekday >= 5 else chr(10).join(g13_lines)}
-Current zone: {current_zone.value} ({current_price:.2f} PLN/kWh)
+{tariff_schedule}
 
-═══ PRICING ═══
-- G13 Buy Prices: Off-Peak=0.63, Morning Peak=0.91, Afternoon Peak=1.50 PLN/kWh
-- RCE Price: {rce_mwh:.1f} PLN/MWh ({rce_mwh/1000:.4f} PLN/kWh)
-- RCE Sell Price: {rce_sell:.4f} PLN/kWh (prosumer coefficient applied)
-- IMPORTANT: At current RCE, selling to grid earns {rce_sell:.4f} PLN/kWh vs buying at {current_price:.2f} PLN/kWh
-- Arbitrage potential: Buy at 0.63, sell self-consumption at 1.50 = {1.50 - 0.63:.2f} PLN/kWh margin
+{tariff_pricing}
 
 ═══ RCE PRICE FORECAST (next hours) ═══
 - Next hour (+1h): {current_data.get('rce_next_hour', 'N/A')} PLN/MWh (sell: {current_data.get('rce_sell_next_hour', 'N/A')} PLN/kWh)
@@ -720,7 +722,6 @@ Current zone: {current_zone.value} ({current_price:.2f} PLN/kWh)
 - Today's RCE min: {current_data.get('rce_min_today', 'N/A')} PLN/kWh
 - Today's RCE max: {current_data.get('rce_max_today', 'N/A')} PLN/kWh
 - RCE Trend: {current_data.get('rce_trend', 'N/A')}
-- CRITICAL: If RCE is rising and afternoon peak (15:00-22:00) is approaching, grid-charge battery NOW at off-peak (0.63) to sell at high RCE + avoid buying at peak (1.50)!
 
 ═══ WEATHER & FORECAST ═══
 Current conditions:
@@ -744,19 +745,19 @@ TOTALS:
 - vs No Management: {estimation.get('vs_no_management', 0):.2f} PLN
 
 ═══ ACTIVE HEMS AUTOMATION LAYERS ═══
-- W0: Grid Import Guard — STOP battery grid-charging in expensive G13 zones.
+- W0: Grid Import Guard — STOP battery grid-charging in expensive tariff zones.
   Exception: RCE < 100 PLN/MWh (arbitrage). PV charging always allowed.
-- W1: G13 Schedule — 07:00 sell mode, 13:00 charge mode (off-peak), night arbitrage 23:00.
+- W1: Tariff Schedule — automatic mode switching based on zone transitions.
 - W2: RCE Dynamic — cheapest/most expensive windows, thresholds 150/300/500 PLN/MWh.
 - W3: SOC Safety — tariff-aware: expensive hours PV-only, cheap hours normal. Emergency SOC <5%.
 - W4: Voltage Cascade (252/253/254V) + PV Surplus Cascade (2/3/4kW → boiler/AC/socket).
 - W5: Smart Pre-Peak — weather forecast-driven pre-charging before peaks.
 
+{tariff_rules}
+
 KEY CONSTRAINTS:
 1. When RCE sell price is very low ({rce_sell:.4f} PLN/kWh), exporting is worthless. Focus on self-consumption.
-2. G13 arbitrage (grid-charge at 0.63, discharge at 1.50) yields {1.50 - 0.63:.2f} PLN/kWh — THIS IS THE PRIMARY PROFIT LEVER.
-3. Battery has {bat_cap_kwh:.1f} kWh capacity × {1.50 - 0.63:.2f} PLN/kWh = ~{bat_cap_kwh * (1.50 - 0.63):.2f} PLN per full arbitrage cycle.
-4. Night charge (23:00-07:00) at 0.63 → discharge 07:00-13:00/15:00-22:00 at 0.91/1.50 is the core strategy.
+2. Use ONLY the tariff schedule printed above. DO NOT use your training data for zone times!
 
 RESPOND IN POLISH. Format as structured markdown with:
 ## 📊 Analiza strategii
@@ -973,17 +974,13 @@ def build_ai_controller_prompt(
     weekday = now.weekday()
     hour = now.hour
 
-    # G13 zone
-    current_zone = _get_g13_zone(hour, month, weekday)
-    current_price = _get_g13_price(current_zone)
+    # Dynamic tariff context from user's config
+    tariff_type = current_data.get('tariff_type', TariffType.G13)
+    provider = current_data.get('energy_provider', DEFAULT_ENERGY_PROVIDER)
+    tariff_ctx = build_tariff_prompt_context(tariff_type, provider, now)
 
-    # Next zone info — what's coming in the next hours
-    next_zones = []
-    for h_offset in range(1, 4):
-        fh = (hour + h_offset) % 24
-        fz = _get_g13_zone(fh, month, weekday)
-        fp = _get_g13_price(fz)
-        next_zones.append(f"+{h_offset}h ({fh:02d}:00): {fz.value} ({fp:.2f} PLN/kWh)")
+    # Upcoming zones
+    next_zones_text = render_next_zones(tariff_type, provider, now, hours_ahead=3)
 
     # RCE data
     rce_mwh = float(current_data.get('rce_price') or 250)
@@ -1014,7 +1011,11 @@ def build_ai_controller_prompt(
     if device_status_text:
         device_section = f"\n{device_status_text}\n"
 
-    prompt = f"""Jesteś autonomicznym kontrolerem energii dla domowego systemu solar+bateria w Polsce (taryfa G13).
+    # Tariff key rules
+    tariff_rules = render_tariff_key_rules(tariff_ctx, rce_sell, bat_cap_kwh)
+
+    prompt = f"""Jesteś autonomicznym kontrolerem energii dla domowego systemu solar+bateria w Polsce.
+Taryfa użytkownika: {tariff_type.upper()} ({provider.upper()}) — sezon: {tariff_ctx.season}
 Odpowiadaj ZAWSZE po polsku. Wszystkie opisy, reasoning, analysis — po polsku.
 
 TWOJE ZADANIE: Zdecyduj jaką akcję podjąć TERAZ na podstawie bieżącego stanu systemu.
@@ -1040,14 +1041,16 @@ Odpowiedz WYŁĄCZNIE poprawnym JSON.
   Battery Capacity: {bat_cap_kwh:.1f} kWh
 {device_section}
 ═══ TARIFF & PRICING ═══
-  Current zone: {current_zone.value} ({current_price:.2f} PLN/kWh)
+  Current zone: {tariff_ctx.current_zone} ({tariff_ctx.current_price:.2f} PLN/kWh)
   Upcoming zones:
-    {chr(10) + "    ".join(next_zones)}
-  G13 prices: off_peak=0.63, morning_peak=0.91, afternoon_peak=1.50 PLN/kWh
+    {next_zones_text}
+  Tariff prices: {tariff_ctx.prices_summary}
   RCE: {rce_mwh:.1f} PLN/MWh (sell: {rce_sell:.4f} PLN/kWh)
   RCE next hour: {current_data.get('rce_next_hour', 'N/A')} PLN/MWh
   RCE +2h: {current_data.get('rce_2h', 'N/A')} PLN/MWh
   RCE +3h: {current_data.get('rce_3h', 'N/A')} PLN/MWh
+
+{tariff_ctx.warning_text}
 
 ═══ WEATHER & FORECAST ═══
 {_render_weather_detailed(current_data)}
@@ -1065,32 +1068,34 @@ Odpowiedz WYŁĄCZNIE poprawnym JSON.
 
 {_format_decision_history(decision_history)}
 {_format_financial_context(current_data)}
+{tariff_rules}
+
 ═══ KEY RULES ═══
-1. ARBITRAGE: off_peak(0.63)→afternoon_peak(1.50)=0.87 margin. Charge cheap, discharge expensive.
-2. If approaching afternoon_peak AND SOC < 90% → force_charge NOW
-3. During afternoon_peak → set_general (bateria zasila dom) LUB force_discharge (sprzedaż do sieci gdy RCE > 0.63)
-4. Night 22-06: ładuj baterię ale SPRAWDŹ sekcję NOCNE ŁADOWANIE — nie ładuj do 100% jeśli jutro dobra pogoda!
+1. ARBITRAGE: charge at cheapest ({tariff_ctx.cheapest_price:.2f}) → discharge at most expensive ({tariff_ctx.most_expensive_price:.2f}) = {tariff_ctx.arbitrage_margin:.2f} margin.
+2. If approaching expensive zone AND SOC < 90% → force_charge NOW
+3. During expensive zone → set_general (bateria zasila dom) LUB force_discharge (sprzedaż do sieci gdy RCE > cheapest)
+4. Night: ładuj baterię ale SPRAWDŹ sekcję NOCNE ŁADOWANIE — nie ładuj do 100% jeśli jutro dobra pogoda!
 5. PV surplus > 2kW + SOC > 80% → switch_on boiler
 6. AUTO-STOP CHARGE: when SOC >= 95% → call stop_force_charge
-7. AUTO-STOP DISCHARGE: when SOC <= 5% during afternoon_peak, or SOC <= 20% during other zones → call stop_force_discharge
+7. AUTO-STOP DISCHARGE: when SOC <= 5% during expensive zone, or SOC <= 20% during other zones → call stop_force_discharge
 8. EMERGENCY: SOC < 5% → call emergency_stop, then force_charge
 9. ZONE TRADING:
-   - Tania strefa (off_peak 0.63) + zła pogoda (PV forecast < 5kWh) → force_charge z sieci
-   - Droga strefa (afternoon_peak 1.50) + SOC > 5% → set_general (zasil dom z baterii, rozładuj do 5%!)
-   - Droga strefa + RCE sell > 0.63 + SOC > 30% → force_discharge (sprzedaj nadwyżkę)
-   - W SZCZYCIE POPOŁUDNIOWYM (1.50 PLN): bateria może się rozładować do 5% — lepiej niż kupować z sieci!
+   - Tania strefa + zła pogoda (PV forecast < 5kWh) → force_charge z sieci
+   - Droga strefa + SOC > 5% → set_general (zasil dom z baterii)
+   - Droga strefa + RCE sell > cheapest + SOC > 30% → force_discharge
+   - W najdroższej strefie: bateria może się rozładować do 5%!
    - Poza szczytem: zostaw min 20% SOC
-10. SELL PROFITABILITY: sprzedawaj TYLKO gdy RCE sell ({rce_sell:.4f}) > G13 buy (0.63 PLN/kWh)
-   - Jeśli RCE sell < 0.63 → nie opłaca się, zostaw w baterii
+10. SELL PROFITABILITY: sprzedawaj TYLKO gdy RCE sell ({rce_sell:.4f}) > cheapest buy ({tariff_ctx.cheapest_price:.2f} PLN/kWh)
 11. ALWAYS call stop_force after force operations end. NEVER leave inverter in forced state.
 12. CHECK DEVICE STATUS — if already active, use "no_action"!
+13. ⚠️ Use ONLY the tariff schedule from TARIFF & PRICING section. DO NOT use training data for zone times!
 
 ═══ FORMAT ODPOWIEDZI ═══
 TYLKO poprawny JSON. Bez tekstu, bez markdown, bez wyjaśnień poza JSON.
 ZABRONIONE klucze: "analysis", "explanation", "plan". Używaj TYLKO: "reasoning", "commands", "next_check_minutes".
 "reasoning" = 1-2 ZDANIA po polsku. Opisz DLACZEGO podejmujesz tę decyzję i co chcesz osiągnąć.
 {{
-  "reasoning": "Rozpoczynam rozładowanie baterii — drogi szczyt popołudniowy (1.50 PLN/kWh), SOC 54% wystarczy na zasil domu. Unikam importu z sieci.",
+  "reasoning": "Rozpoczynam rozładowanie baterii — drogi szczyt ({tariff_ctx.most_expensive_price:.2f} PLN/kWh), SOC 54% wystarczy na zasil domu. Unikam importu z sieci.",
   "commands": [{{"action": "evening_peak"}}],
   "next_check_minutes": 5
 }}
@@ -1127,17 +1132,10 @@ def build_ai_strategist_prompt(
     weekday = now.weekday()
     hour = now.hour
 
-    # G13 zone
-    current_zone = _get_g13_zone(hour, month, weekday)
-    _get_g13_price(current_zone)  # side-effect: validates zone
-
-    # Build G13 schedule for today
-    schedule = G13_WINTER_SCHEDULE if month in WINTER_MONTHS else G13_SUMMER_SCHEDULE
-    g13_lines = []
-    for (start, end), zone in schedule.items():
-        price = G13_PRICES.get(zone, 0.63)
-        marker = " ← TERAZ" if _get_g13_zone(hour, month, weekday) == zone else ""
-        g13_lines.append(f"  {start:02d}:00-{end:02d}:00 → {zone.value} ({price:.2f} PLN/kWh){marker}")
+    # Dynamic tariff context from user's config
+    tariff_type = current_data.get('tariff_type', TariffType.G13)
+    provider = current_data.get('energy_provider', DEFAULT_ENERGY_PROVIDER)
+    tariff_ctx = build_tariff_prompt_context(tariff_type, provider, now)
 
     # RCE data
     rce_mwh = float(current_data.get('rce_price') or 250)
@@ -1148,8 +1146,6 @@ def build_ai_strategist_prompt(
     bat_cap_kwh = float(bat_cap) / 1000
 
     # Transform raw sensor values to explicit human-readable format
-    # GoodWe convention: battery_power positive=charging, negative=discharging
-    # grid_power: negative=export, positive=import
     raw_bat = float(current_data.get('battery_power', 0))
     raw_grid = float(current_data.get('grid_power', 0))
     bat_state = f"ŁADOWANIE {abs(raw_bat):.0f}W (do baterii z sieci/PV)" if raw_bat > 50 else f"ROZŁADOWYWANIE {abs(raw_bat):.0f}W (z baterii do domu)" if raw_bat < -50 else "BEZCZYNNA (idle)"
@@ -1178,7 +1174,13 @@ def build_ai_strategist_prompt(
         f'  - "{name}": {desc}' for name, desc in AI_CONTROLLER_TOOLS.items()
     )
 
-    prompt = f"""Jesteś ekspertem od strategii energetycznej AI dla domowego systemu solar+bateria w Polsce (taryfa G13).
+    # Dynamic tariff sections
+    tariff_schedule = render_tariff_schedule_section(tariff_ctx)
+    tariff_pricing = render_tariff_pricing_section(tariff_ctx, rce_mwh, rce_sell, bat_cap_kwh)
+    tariff_rules = render_tariff_key_rules(tariff_ctx, rce_sell, bat_cap_kwh)
+
+    prompt = f"""Jesteś ekspertem od strategii energetycznej AI dla domowego systemu solar+bateria w Polsce.
+Taryfa użytkownika: {tariff_type.upper()} ({provider.upper()}) — sezon: {tariff_ctx.season}
 Odpowiadaj ZAWSZE po polsku. Wszystkie opisy, reasoning, analysis — po polsku.
 
 TWOJE ZADANIE: Stwórz STRATEGICZNY PLAN 24H określający jakie AKCJE aktywować w każdym bloku czasowym.
@@ -1200,10 +1202,9 @@ This plan will be executed automatically by the InverterAgent. Respond ONLY with
   Battery SOC: {current_data.get('battery_soc', 0)}% | {bat_state}
   Siec: {grid_state} | PV Surplus: {current_data.get('pv_surplus', 0)} W
 
-═══ TARIFF G13 — SCHEDULE ═══
-{'Weekend (all off-peak 0.63 PLN/kWh)' if weekday >= 5 else chr(10).join(g13_lines)}
-  Prices: off_peak=0.63, morning_peak=0.91, afternoon_peak=1.50 PLN/kWh
-  Arbitrage potential: charge@0.63 → discharge@1.50 = 0.87 PLN/kWh × {bat_cap_kwh:.1f} kWh = {bat_cap_kwh * 0.87:.2f} PLN/cycle
+{tariff_schedule}
+
+{tariff_pricing}
 
 ═══ RCE PRICES ═══
   Current: {rce_mwh:.1f} PLN/MWh (sell: {rce_sell:.4f} PLN/kWh)
@@ -1240,31 +1241,28 @@ Net savings: {estimation.get('net_savings', 0):.2f} PLN
 
 {_format_decision_history(decision_history)}
 {_format_financial_context(current_data)}
+{tariff_rules}
+
 ═══ STRATEGIC RULES ═══
-1. ARBITRAGE IS KING: charge battery at off_peak (0.63) → discharge at afternoon_peak (1.50) = 0.87 PLN/kWh
-2. Before EVERY peak: battery MUST be at 95-100% SOC. Plan charging accordingly.
-3. Night charge (21:00-07:00 off_peak at 0.63) is CRITICAL for morning peak coverage.
-4. During peaks: ZERO grid import. Battery + PV must cover all load.
-5. Managed loads (boiler, AC) should run ONLY during off-peak or PV surplus > 2kW.
-6. AUTO-STOP CHARGE: plan stop_force_charge when SOC reaches 95%. Include in commands.
-7. AUTO-STOP DISCHARGE: plan stop_force_discharge when SOC reaches 5% during afternoon_peak, or 20% during other zones.
+1. ARBITRAGE: charge at cheapest ({tariff_ctx.cheapest_price:.2f}) → discharge at most expensive ({tariff_ctx.most_expensive_price:.2f}) = {tariff_ctx.arbitrage_margin:.2f} PLN/kWh
+2. Before EVERY expensive zone: battery MUST be at 95-100% SOC.
+3. Night charge at cheapest rate is CRITICAL for morning coverage.
+4. During expensive zones: ZERO grid import. Battery + PV must cover all load.
+5. Managed loads (boiler, AC) should run ONLY during cheap zones or PV surplus > 2kW.
+6. AUTO-STOP CHARGE: plan stop_force_charge when SOC reaches 95%.
+7. AUTO-STOP DISCHARGE: plan stop when SOC reaches 5% during expensive zone, or 20% otherwise.
 8. ZONE TRADING:
-   - Tania strefa (off_peak 0.63) + zła pogoda (PV forecast < 5kWh) → force_charge z sieci
-   - Droga strefa (afternoon_peak 1.50) + SOC > 5% → set_general (zasil dom z baterii, rozładuj baterię do 5%!)
-   - Droga strefa + RCE sell > 0.63 + SOC > 30% → force_discharge (sprzedaj nadwyżkę do sieci)
-   - W SZCZYCIE POPOŁUDNIOWYM (1.50 PLN): bateria może się rozładować do 5% — NIE ograniczaj do 20%!
-   - Poza szczytem: zostaw zawsze min 20% SOC
-9. SELL PROFITABILITY: sprzedawaj TYLKO gdy RCE sell ({rce_sell:.4f}) > G13 buy (0.63 PLN/kWh)
-   - Jeśli RCE sell < 0.63 → nie opłaca się, zostaw w baterii  
+   - Tania strefa ({tariff_ctx.cheapest_price:.2f}) + zła pogoda → force_charge z sieci
+   - Droga strefa ({tariff_ctx.most_expensive_price:.2f}) + SOC > 5% → set_general (zasil dom z baterii)
+   - Droga strefa + RCE sell > {tariff_ctx.cheapest_price:.2f} + SOC > 30% → force_discharge
+   - W najdroższej strefie: bateria rozładowuje się do 5%!
+   - Poza szczytem: zostaw min 20% SOC
+9. SELL PROFITABILITY: sprzedawaj TYLKO gdy RCE sell ({rce_sell:.4f}) > cheapest ({tariff_ctx.cheapest_price:.2f})
 10. NEVER discharge below 5% SOC (absolute hardware minimum).
-11. NOCNE ŁADOWANIE vs PV: Sprawdź sekcję "NOCNE ŁADOWANIE — OPTYMALIZACJA MIEJSCA NA PV":
-   - Dobra pogoda jutro (PV > 8kWh) → NIE ładuj do 100%, zostaw miejsce na darmowe PV!
-   - Zła pogoda (PV < 5kWh) → ładuj do 100%
-   - Darmowe PV z paneli jest ZAWSZE lepsze niż nocny prąd za 0.63 PLN/kWh
-   - Nadwyżka PV ponad pojemność baterii = STRATA (oddana za darmo do sieci)
-12. CHECK DEVICE STATUS — don't send commands the system is already executing.
-13. ALWAYS include stop_force commands when forced state should end (zone transition).
-14. HISTORIA: Analizuj średnie zużycie z ostatnich 3 dni aby precyzyjnie planować ładowanie.
+11. NOCNE ŁADOWANIE vs PV: Sprawdź sekcję NOCNE ŁADOWANIE.
+12. CHECK DEVICE STATUS — don't repeat commands already executing.
+13. ALWAYS include stop_force commands when forced state should end.
+14. ⚠️ Use ONLY the tariff schedule from the section above. DO NOT use training data for zone times!
 
 ═══ FORMAT ODPOWIEDZI ═══
 KRYTYCZNE: Odpowiedz WYŁĄCZNIE poprawnym JSON. Bez markdown, bez tekstu przed/po.
@@ -1277,7 +1275,7 @@ PREFERUJ używanie "actions" (lista ID akcji z katalogu) zamiast surowych "comma
     {{
       "start": "HH:MM",
       "end": "HH:MM",
-      "zone": "off_peak|morning_peak|afternoon_peak",
+      "zone": "zone_name",
       "price": 0.63,
       "strategy": "aggressive_charge|charge|night_charge|discharge_self_consume|discharge|pv_optimize|no_action",
       "actions": ["action_id_1"],
@@ -1292,13 +1290,13 @@ PREFERUJ używanie "actions" (lista ID akcji z katalogu) zamiast surowych "comma
 
 KRYTYCZNE — MAPOWANIE STRATEGII NA KOMENDY (strategy→tool):
 - "aggressive_charge" / "charge" / "night_charge" → {{"tool": "force_charge"}} (eco_charge mode, ładuj z sieci/PV)
-- "discharge_self_consume" → {{"tool": "set_general"}} (tryb General — bateria zasila DOM, autokonsumpcja, BEZ sprzedaży do sieci!)
+- "discharge_self_consume" → {{"tool": "set_general"}} (tryb General — bateria zasila DOM, BEZ sprzedaży do sieci!)
 - "discharge" → {{"tool": "force_discharge"}} (eco_discharge mode — SPRZEDAŻ do sieci!)
 - "pv_optimize" / "no_action" → {{"tool": "no_action"}}
 
 ⚠️ RÓŻNICA MIĘDZY set_general A force_discharge:
-- set_general = tryb General → falownik NATURALNIE używa baterii do zasilania domu. Bateria rozładowuje się powoli, zaspokajając domowe zapotrzebowanie. NIE sprzedaje do sieci.
-- force_discharge = tryb eco_discharge → falownik AGRESYWNIE rozładowuje baterię i SPRZEDAJE energię do sieci. Używaj TYLKO gdy RCE sell > 0.63 PLN/kWh.
+- set_general = tryb General → falownik NATURALNIE używa baterii do zasilania domu. NIE sprzedaje do sieci.
+- force_discharge = tryb eco_discharge → falownik AGRESYWNIE rozładowuje baterię i SPRZEDAJE do sieci. Użyj TYLKO gdy RCE sell > {tariff_ctx.cheapest_price:.2f} PLN/kWh.
 
 {{
   "time_blocks": [
@@ -1316,7 +1314,7 @@ KRYTYCZNE — MAPOWANIE STRATEGII NA KOMENDY (strategy→tool):
 
 RULES FOR time_blocks:
 - Start from NOW ({now.strftime('%H:%M')}) and cover next 24h
-- Each block aligns with G13 tariff zone transitions
+- Each block aligns with tariff zone transitions
 - Max 6 blocks (group similar periods)
 - Max 3 commands per block
 - Order blocks chronologically
