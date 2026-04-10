@@ -77,6 +77,8 @@ from .const import (
     DEFAULT_BATTERY_MIN_SOC,
     CONF_ECOWITT_ENABLED,
     CONF_SENSOR_MAP,
+    CONF_ENERGY_PROVIDER,
+    DEFAULT_ENERGY_PROVIDER,
     DYNAMIC_PRICE_THRESHOLDS,
     SENSOR_ENTSOE_PRICE_NOW,
     SENSOR_ENTSOE_ALLIN_NOW,
@@ -313,6 +315,12 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             tariff_data = self._compute_g13(now)
         data.update(tariff_data)
+
+        # —— Tariff config for AI prompts ——
+        data["tariff_type"] = self._tariff
+        data["energy_provider"] = self.entry.data.get(
+            CONF_ENERGY_PROVIDER, DEFAULT_ENERGY_PROVIDER
+        )
 
         # —— RCE calculations ——
         if self._rce_enabled:
