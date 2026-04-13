@@ -59,6 +59,7 @@ SERVICE_TOGGLE_AUTOPILOT_ACTION = "toggle_autopilot_action"
 SERVICE_SYNC_ECOWITT_STATE = "sync_ecowitt_state"
 SERVICE_UPDATE_SENSOR_MAP = "update_sensor_map"
 SERVICE_SEND_ALERT_NOTIFICATION = "send_alert_notification"
+SERVICE_SET_PEAK_SELL_PERCENT = "set_peak_sell_percent"
 
 ALERT_WEBHOOK_URL = "https://a.gregciupek.com/webhook/1161573e-6e16-4884-97f9-e98d7f6d04e2"
 
@@ -190,6 +191,14 @@ SEND_ALERT_SCHEMA = vol.Schema(
         vol.Required("title"): cv.string,
         vol.Required("message"): cv.string,
         vol.Optional("diag_action", default=""): cv.string,
+    }
+)
+
+SET_PEAK_SELL_SCHEMA = vol.Schema(
+    {
+        vol.Required("percent"): vol.All(
+            vol.Coerce(int), vol.Range(min=0, max=80)
+        ),
     }
 )
 
@@ -808,6 +817,18 @@ async def async_setup_services(
 
         _LOGGER.info("Sensor map updated: %s → %s", sensor_key, entity_id)
 
+    # ── Set Peak Sell Percent service ──
+
+    async def handle_set_peak_sell_percent(call: ServiceCall) -> None:
+        """Handle set_peak_sell_percent — update peak sell SOC percentage."""
+        if not strategy_controller:
+            _LOGGER.warning("Strategy controller not available")
+            return
+
+        percent = call.data["percent"]
+        await strategy_controller.set_peak_sell_soc_percent(percent)
+        _LOGGER.info("Peak sell SOC percent set to: %d%%", percent)
+
     # ── Analyze ROI — AI Interpreter for tariff comparison ──
 
     SERVICE_ANALYZE_ROI = "analyze_roi"
@@ -1225,8 +1246,12 @@ Długość: 400-600 słów."""
         DOMAIN, SERVICE_SEND_ALERT_NOTIFICATION, handle_send_alert_notification,
         schema=SEND_ALERT_SCHEMA,
     )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SET_PEAK_SELL_PERCENT, handle_set_peak_sell_percent,
+        schema=SET_PEAK_SELL_SCHEMA,
+    )
 
-    _LOGGER.info("Registered %d Smarting HOME services", 20)
+    _LOGGER.info("Registered %d Smarting HOME services", 21)
 
     # Start AI Cron Scheduler
     cron = AICronScheduler(
@@ -1265,5 +1290,6 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_UPDATE_SENSOR_MAP,
         "analyze_roi",
         SERVICE_SEND_ALERT_NOTIFICATION,
+        SERVICE_SET_PEAK_SELL_PERCENT,
     ]:
         hass.services.async_remove(DOMAIN, service)

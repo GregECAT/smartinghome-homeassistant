@@ -533,6 +533,12 @@ class SmartingHomePanel extends HTMLElement {
         if (this._settings.sensor_map_overrides) {
           this._sensorMapOverrides = { ...this._settings.sensor_map_overrides };
         }
+        // Restore Peak Sell slider
+        const peakSellSlider = this.shadowRoot.getElementById('ap-peak-sell-slider');
+        if (peakSellSlider && this._settings.peak_sell_soc_percent !== undefined) {
+          peakSellSlider.value = this._settings.peak_sell_soc_percent;
+          this._onPeakSellSliderChange(this._settings.peak_sell_soc_percent);
+        }
         // Restore sub-meters settings
         const smChk = this.shadowRoot.getElementById('chk-submeters-enabled');
         if (smChk && this._settings.sub_meters_enabled !== undefined) smChk.checked = this._settings.sub_meters_enabled;
@@ -12026,6 +12032,40 @@ class SmartingHomePanel extends HTMLElement {
             <div style="display:flex; flex-wrap:wrap; gap:6px" id="ap-strategy-presets"></div>
           </div>
 
+          <!-- ═══ PEAK SELL CONFIGURATION ═══ -->
+          <div class="card" style="margin-bottom:14px; border:1px solid rgba(247,183,49,0.2); background:linear-gradient(135deg, rgba(247,183,49,0.04) 0%, rgba(231,76,60,0.03) 100%)">
+            <div class="card-title" style="display:flex; justify-content:space-between; align-items:center">
+              <span>💰 Sprzedaż energii w szczycie (Peak Sell)</span>
+              <span id="ap-peak-sell-badge" style="font-size:11px; padding:3px 10px; border-radius:20px; background:rgba(247,183,49,0.15); color:#f7b731; font-weight:600">50%</span>
+            </div>
+            <div style="font-size:11px; color:#94a3b8; margin-bottom:12px; line-height:1.5">
+              Ile % baterii aktywnie sprzedać do sieci w najdroższym szczycie popołudniowym (AFTERNOON_PEAK)?<br>
+              <span style="color:#64748b">Reszta zostanie zarezerwowana na zasilanie domu. 0% = wyłączone.</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px">
+              <span style="font-size:10px; color:#64748b; min-width:20px">0%</span>
+              <input type="range" id="ap-peak-sell-slider" min="0" max="80" step="5" value="50"
+                style="flex:1; accent-color:#f7b731; height:6px; cursor:pointer"
+                oninput="this.getRootNode().host._onPeakSellSliderChange(this.value)"
+                onchange="this.getRootNode().host._savePeakSellPercent(this.value)" />
+              <span style="font-size:10px; color:#64748b; min-width:28px">80%</span>
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; margin-top:8px">
+              <div style="text-align:center; padding:6px; border-radius:8px; background:rgba(255,255,255,0.03)">
+                <div style="font-size:9px; color:#64748b">Na sprzedaż</div>
+                <div id="ap-peak-sell-kwh" style="font-size:14px; font-weight:700; color:#f7b731">—</div>
+              </div>
+              <div style="text-align:center; padding:6px; border-radius:8px; background:rgba(255,255,255,0.03)">
+                <div style="font-size:9px; color:#64748b">Rezerwa dom</div>
+                <div id="ap-peak-sell-reserve" style="font-size:14px; font-weight:700; color:#2ecc71">—</div>
+              </div>
+              <div style="text-align:center; padding:6px; border-radius:8px; background:rgba(255,255,255,0.03)">
+                <div style="font-size:9px; color:#64748b">~Zarobek</div>
+                <div id="ap-peak-sell-revenue" style="font-size:14px; font-weight:700; color:#00d4ff">—</div>
+              </div>
+            </div>
+          </div>
+
           <!-- ═══ ACTION SECTIONS (W0-W5) — rendered dynamically ═══ -->
           <div id="ap-action-sections"></div>
 
@@ -13190,7 +13230,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.50.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.51.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -13746,6 +13786,65 @@ class SmartingHomePanel extends HTMLElement {
       console.error('[SH] Deactivation failed:', err);
       if (statusEl) { statusEl.textContent = '❌ BŁĄD'; statusEl.style.color = '#e74c3c'; }
     }
+  }
+
+  /* ── Peak Sell — slider handlers ── */
+  _onPeakSellSliderChange(value) {
+    const v = parseInt(value);
+    const badge = this.shadowRoot.getElementById('ap-peak-sell-badge');
+    if (badge) {
+      badge.textContent = v === 0 ? 'WYŁĄCZONE' : `${v}%`;
+      badge.style.color = v === 0 ? '#64748b' : '#f7b731';
+      badge.style.background = v === 0 ? 'rgba(100,116,139,0.15)' : 'rgba(247,183,49,0.15)';
+    }
+    this._updatePeakSellDisplay(v);
+  }
+
+  async _savePeakSellPercent(value) {
+    const v = parseInt(value);
+    // Save to settings.json
+    this._savePanelSettings({ peak_sell_soc_percent: v });
+    // Call backend service to update strategy controller
+    if (this._hass) {
+      try {
+        await this._hass.callService('smartinghome', 'set_peak_sell_percent', {
+          percent: v,
+        });
+        console.log('[SH] Peak sell set to', v, '%');
+      } catch (err) {
+        console.warn('[SH] Peak sell service call failed (will use settings.json fallback):', err.message || err);
+      }
+    }
+  }
+
+  _updatePeakSellDisplay(sellPercent) {
+    if (sellPercent === undefined) {
+      const slider = this.shadowRoot.getElementById('ap-peak-sell-slider');
+      sellPercent = slider ? parseInt(slider.value) : 50;
+    }
+    // Get current SOC and battery capacity
+    const soc = this._nm('battery_soc') || 0;
+    const batCapWh = parseFloat(this._settings?.battery_capacity_kwh || 10.2) * 1000 || 10200;
+    const batCapKwh = batCapWh / 1000;
+
+    // Calculate sell target SOC (with floor of 20%)
+    const sellTarget = Math.max(soc - sellPercent, 20);
+    const sellKwh = Math.max(0, (soc - sellTarget) / 100 * batCapKwh);
+    const reserveKwh = Math.max(0, (sellTarget - 5) / 100 * batCapKwh); // 5% = hardware min
+
+    // Revenue estimate — use current RCE
+    const rceState = this._hass?.states['sensor.smartinghome_rce_price'];
+    const rceMwh = rceState ? parseFloat(rceState.state) || 500 : 500;
+    const rceSellKwh = rceMwh / 1000 * 1.23; // prosumer coefficient
+    const revenue = sellKwh * rceSellKwh;
+
+    const elKwh = this.shadowRoot.getElementById('ap-peak-sell-kwh');
+    const elReserve = this.shadowRoot.getElementById('ap-peak-sell-reserve');
+    const elRevenue = this.shadowRoot.getElementById('ap-peak-sell-revenue');
+
+    if (elKwh) elKwh.textContent = sellPercent === 0 ? '—' : `${sellKwh.toFixed(1)} kWh`;
+    if (elReserve) elReserve.textContent = sellPercent === 0 ? `${(soc > 5 ? (soc - 5) / 100 * batCapKwh : 0).toFixed(1)} kWh` : `${reserveKwh.toFixed(1)} kWh`;
+    if (elRevenue) elRevenue.textContent = sellPercent === 0 ? '—' : `~${revenue.toFixed(2)} PLN`;
   }
 
   _updateAutopilotContext() {
