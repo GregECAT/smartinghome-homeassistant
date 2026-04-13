@@ -358,12 +358,10 @@ def _build_g13_context(
         afternoon_start = 19
         afternoon_end = 22
         offpeak_mid_start = 13
-        offpeak_mid_end = 19
     else:
         afternoon_start = 16
         afternoon_end = 21
         offpeak_mid_start = 13
-        offpeak_mid_end = 16
 
     if weekday >= 5:
         ctx.precomputed_advisory_facts = (
