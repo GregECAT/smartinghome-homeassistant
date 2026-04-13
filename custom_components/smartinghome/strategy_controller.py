@@ -29,6 +29,7 @@ from .const import (
     G13_SUMMER_SCHEDULE,
     WINTER_MONTHS,
     RCE_PRICE_THRESHOLDS,
+    RCE_PROSUMER_COEFFICIENT,
     VOLTAGE_THRESHOLD_WARNING,
     VOLTAGE_THRESHOLD_HIGH,
     VOLTAGE_THRESHOLD_CRITICAL,
@@ -46,6 +47,11 @@ from .const import (
     NIGHT_ARBITRAGE_MIN_FORECAST,
     DEFAULT_BATTERY_CAPACITY,
     DEFAULT_BATTERY_MIN_SOC,
+    DEFAULT_PEAK_SELL_SOC_PERCENT,
+    PEAK_SELL_SOC_MIN,
+    PEAK_SELL_SOC_MAX,
+    PEAK_SELL_SOC_FLOOR,
+    PEAK_SELL_SETTINGS_KEY,
     SENSOR_GRID_VOLTAGE_L1,
     SENSOR_GRID_VOLTAGE_L2,
     SENSOR_GRID_VOLTAGE_L3,
@@ -252,6 +258,11 @@ class StrategyController:
         self._energy_history_last_fetch: float = 0.0
         self._energy_history_ttl: int = 3600  # cache for 1 hour
 
+        # Peak Sell — active energy export during expensive afternoon peak
+        self._peak_sell_soc_percent: int = DEFAULT_PEAK_SELL_SOC_PERCENT
+        self._peak_sell_phase: str = ""  # "sell" or "reserve" — tracks current phase
+        self._peak_sell_soc_at_entry: float = 0.0  # SOC when entering peak zone
+
         # InverterAgent — state-aware command executor
         self._inverter_agent = InverterAgent(
             hass, energy_manager, dry_run=self._ai_dry_run,
@@ -436,6 +447,30 @@ class StrategyController:
         # Persist deactivated state
         await self._persist_autopilot_state()
 
+    async def set_peak_sell_soc_percent(self, percent: int) -> None:
+        """Set peak sell SOC percentage (called from panel.js via service).
+
+        Args:
+            percent: 0-80, what % of battery SOC to actively sell to grid
+                     during the most expensive afternoon peak.
+        """
+        self._peak_sell_soc_percent = max(
+            PEAK_SELL_SOC_MIN, min(int(percent), PEAK_SELL_SOC_MAX)
+        )
+        self._log_decision(
+            "peak_sell_config",
+            f"Peak sell ustawiony na {self._peak_sell_soc_percent}% baterii do sprzedaży w szczycie",
+        )
+        _LOGGER.info(
+            "Peak sell SOC percent set to %d%%", self._peak_sell_soc_percent,
+        )
+        await self._persist_autopilot_state()
+
+    @property
+    def peak_sell_soc_percent(self) -> int:
+        """Current peak sell SOC percentage."""
+        return self._peak_sell_soc_percent
+
     # ══════════════════════════════════════════════════════════════
     # Action-based system — public API
     # ══════════════════════════════════════════════════════════════
@@ -473,10 +508,13 @@ class StrategyController:
 
     def _get_action_states_for_ai(self) -> dict[str, str]:
         """Get simple action_id → status mapping for AI prompt injection."""
-        return {
+        states = {
             action.id: action.status.value
             for action in self._all_actions
         }
+        # Expose peak sell setting so AI knows the user's preference
+        states["__peak_sell_soc_percent"] = str(self._peak_sell_soc_percent)
+        return states
 
     def get_actions_grouped(self) -> dict[str, Any]:
         """Get actions grouped by category with labels, for structured frontend rendering."""
@@ -782,6 +820,7 @@ class StrategyController:
             g13_zone=g13_zone, g13_price=g13_price, rce_mwh=rce_mwh,
             hour=hour, v_l1=v_l1,
             forecast_tomorrow=forecast_tomorrow,
+            data=data,
         )
 
         return {
@@ -811,6 +850,7 @@ class StrategyController:
         g13_zone: G13Zone, g13_price: float, rce_mwh: float,
         hour: int, v_l1: float,
         forecast_tomorrow: float = 0.0,
+        data: dict[str, Any] | None = None,
     ) -> None:
         """Evaluate conditions for all active actions and update statuses.
 
@@ -846,9 +886,10 @@ class StrategyController:
             ),
             "charge_13": (
                 g13_zone == G13Zone.OFF_PEAK
-                and 13 <= hour < 16
+                and 0 < self._hours_until_expensive_zone(hour, datetime.now().month, weekday) <= 2
                 and soc < 90
                 and not is_weekend
+                and self._should_grid_charge_before_peak(soc, pv, load, data or {})
             ),
             "evening_peak": (
                 g13_zone == G13Zone.AFTERNOON_PEAK
@@ -945,6 +986,78 @@ class StrategyController:
                 for a in self._all_actions
             },
         )
+
+    # ------------------------------------------------------------------
+    #  Helper: hours until expensive zone & PV-aware grid charge decision
+    # ------------------------------------------------------------------
+
+    def _hours_until_expensive_zone(
+        self, hour: int, month: int, weekday: int,
+    ) -> float:
+        """Calculate hours until next AFTERNOON_PEAK zone starts.
+
+        Returns a float: e.g. 6.0 if peak starts in 6 hours.
+        Returns 24.0 if no upcoming peak (weekend, already past peak).
+        """
+        if weekday >= 5:  # Weekend — no expensive zones
+            return 24.0
+
+        schedule = G13_WINTER_SCHEDULE if month in WINTER_MONTHS else G13_SUMMER_SCHEDULE
+        for (start, end), zone in schedule.items():
+            if zone == G13Zone.AFTERNOON_PEAK:
+                if hour < start:
+                    return float(start - hour)
+                elif start <= hour < end:
+                    return 0.0  # Already in expensive zone
+        return 24.0  # No upcoming peak found (past all peaks today)
+
+    def _should_grid_charge_before_peak(
+        self,
+        soc: float,
+        pv: float,
+        load: float,
+        data: dict,
+    ) -> bool:
+        """Determine if grid charging is justified before peak.
+
+        Returns False (= DON'T charge from grid) if:
+        - PV forecast remaining is sufficient to charge battery naturally
+        - PV is currently producing enough surplus to charge battery
+        Returns True (= charge from grid) if:
+        - PV forecast is insufficient to fill battery before peak
+        - PV production is weak relative to load
+        """
+        forecast_remaining = _safe_float(
+            data.get("pv_forecast_remaining_today_total")
+        )
+        bat_cap_kwh = DEFAULT_BATTERY_CAPACITY / 1000
+        # Energy needed to charge from current SOC to ~95%
+        energy_needed_kwh = (95 - soc) / 100 * bat_cap_kwh * 0.9
+
+        if energy_needed_kwh <= 0:
+            return False  # Battery already near full
+
+        # PV forecast remaining can cover battery needs with 30% margin
+        if forecast_remaining > energy_needed_kwh * 1.3:
+            _LOGGER.debug(
+                "Pre-peak PV check: forecast_remaining=%.1fkWh > needed=%.1fkWh*1.3 → skip grid charge",
+                forecast_remaining, energy_needed_kwh,
+            )
+            return False
+
+        # PV currently producing surplus (PV > load * 1.2) AND SOC already reasonable
+        if pv > load * 1.2 and soc > 50:
+            _LOGGER.debug(
+                "Pre-peak PV check: PV=%.0fW > load*1.2=%.0fW and SOC=%.0f%% > 50%% → skip grid charge",
+                pv, load * 1.2, soc,
+            )
+            return False
+
+        _LOGGER.debug(
+            "Pre-peak PV check: forecast=%.1fkWh, needed=%.1fkWh, PV=%.0fW, load=%.0fW → GRID CHARGE justified",
+            forecast_remaining, energy_needed_kwh, pv, load,
+        )
+        return True  # Weak PV forecast / low production → charge from grid
 
     # ------------------------------------------------------------------
     #  W0 — Grid Import Guard
@@ -1087,6 +1200,139 @@ class StrategyController:
         return actions
 
     # ==================================================================
+    #  PEAK SELL — Active energy export during expensive peak
+    # ==================================================================
+
+    async def _execute_peak_sell(
+        self,
+        soc: float, pv: float, load: float,
+        g13_zone: G13Zone, rce_mwh: float,
+        hour: int, minute: int,
+    ) -> list[str]:
+        """Active energy selling to grid during AFTERNOON_PEAK.
+
+        Divides available battery capacity:
+        - Sell portion: force_discharge (export to grid at RCE price)
+        - Reserve portion: set_general (battery powers home)
+
+        User configures `_peak_sell_soc_percent` (default 50%).
+        """
+        actions: list[str] = []
+
+        # Skip if user disabled peak sell
+        if self._peak_sell_soc_percent <= 0:
+            return actions
+
+        # Only active during AFTERNOON_PEAK (most expensive zone)
+        if g13_zone != G13Zone.AFTERNOON_PEAK:
+            # Reset tracking when leaving peak zone
+            if self._peak_sell_phase:
+                self._peak_sell_phase = ""
+                self._peak_sell_soc_at_entry = 0.0
+            return actions
+
+        # Record SOC at peak entry (once)
+        if self._peak_sell_soc_at_entry <= 0:
+            self._peak_sell_soc_at_entry = soc
+            _LOGGER.info(
+                "Peak sell: entering AFTERNOON_PEAK with SOC=%.0f%%, sell_percent=%d%%",
+                soc, self._peak_sell_soc_percent,
+            )
+
+        # Calculate sell target SOC
+        sell_target_soc = max(
+            self._peak_sell_soc_at_entry - self._peak_sell_soc_percent,
+            PEAK_SELL_SOC_FLOOR,
+        )
+
+        # Profitability check: RCE must be high enough to justify selling
+        # Net-billing: RCE sell = RCE/1000 * prosumer_coefficient → PLN credit for winter
+        # We sell during peak because RCE is highest → most PLN deposited in net-billing
+        # Threshold: 300 PLN/MWh minimum (below that, RCE is too low for peak)
+        rce_sell_kwh = rce_mwh / 1000 * RCE_PROSUMER_COEFFICIENT
+        rce_min_sell_threshold = 300  # PLN/MWh — minimum RCE to justify selling
+
+        if rce_mwh < rce_min_sell_threshold:
+            # RCE too low for peak — self-consumption only
+            if self._peak_sell_phase != "reserve_unprofitable":
+                if await self._throttled_action("peak_sell_unprofitable"):
+                    await self._em.set_general_mode()
+                    self._peak_sell_phase = "reserve_unprofitable"
+                    self._charging_enabled = False
+                    msg = (
+                        f"💰 Peak Sell: RCE za niskie ({rce_mwh:.0f} PLN/MWh < {rce_min_sell_threshold}) "
+                        f"→ set_general (autokonsumpcja, brak eksportu)"
+                    )
+                    actions.append(msg)
+                    self._log_decision("peak_sell_unprofitable", msg)
+            return actions
+
+        # Determine peak end time for safety reserve
+        # Summer: peak 19:00-22:00, Winter: peak 16:00-21:00
+        now = datetime.now()
+        schedule = G13_WINTER_SCHEDULE if now.month in WINTER_MONTHS else G13_SUMMER_SCHEDULE
+        peak_end_hour = 22  # default summer
+        for (start, end), zone in schedule.items():
+            if zone == G13Zone.AFTERNOON_PEAK:
+                peak_end_hour = end
+                break
+
+        # Last 30 min of peak → safety reserve, switch to set_general
+        peak_end_approaching = (
+            hour >= peak_end_hour - 1 and minute >= 30
+        ) or hour >= peak_end_hour
+
+        # PHASE 1: SELL — force_discharge while SOC > sell_target
+        if soc > sell_target_soc and not peak_end_approaching:
+            if self._peak_sell_phase != "sell":
+                if await self._throttled_action("peak_sell_discharge"):
+                    await self._em.force_discharge()
+                    self._charging_enabled = False
+                    self._peak_sell_phase = "sell"
+                    energy_to_sell = (soc - sell_target_soc) / 100 * DEFAULT_BATTERY_CAPACITY / 1000
+                    potential_revenue = energy_to_sell * rce_sell_kwh
+                    msg = (
+                        f"💰 Peak Sell: FAZA SPRZEDAŻY → force_discharge do sieci. "
+                        f"SOC={soc:.0f}% → cel: {sell_target_soc:.0f}%, "
+                        f"~{energy_to_sell:.1f}kWh do sprzedania po {rce_sell_kwh:.3f} PLN/kWh "
+                        f"(~{potential_revenue:.2f} PLN). "
+                        f"Rezerwa na dom: {sell_target_soc:.0f}% SOC"
+                    )
+                    actions.append(msg)
+                    self._log_decision("peak_sell_start", msg)
+            else:
+                # Already in sell phase — log progress periodically
+                if await self._throttled_action("peak_sell_progress", cooldown=300):
+                    remaining = (soc - sell_target_soc) / 100 * DEFAULT_BATTERY_CAPACITY / 1000
+                    actions.append(
+                        f"💰 Peak Sell: sprzedaż trwa... SOC={soc:.0f}% → {sell_target_soc:.0f}% "
+                        f"(~{remaining:.1f}kWh pozostało)"
+                    )
+
+        # PHASE 2: RESERVE — set_general when SOC reached sell_target or peak ending
+        elif soc <= sell_target_soc or peak_end_approaching:
+            if self._peak_sell_phase != "reserve":
+                if await self._throttled_action("peak_sell_reserve"):
+                    await self._em.set_general_mode()
+                    self._charging_enabled = False
+                    self._peak_sell_phase = "reserve"
+                    reason = (
+                        "koniec szczytu za 30 min" if peak_end_approaching
+                        else f"SOC {soc:.0f}% osiągnął cel {sell_target_soc:.0f}%"
+                    )
+                    energy_sold = max(0, (self._peak_sell_soc_at_entry - soc)) / 100 * DEFAULT_BATTERY_CAPACITY / 1000
+                    revenue = energy_sold * rce_sell_kwh
+                    msg = (
+                        f"💰 Peak Sell: FAZA REZERWY → set_general ({reason}). "
+                        f"Sprzedano ~{energy_sold:.1f}kWh za ~{revenue:.2f} PLN. "
+                        f"Rezerwa SOC={soc:.0f}% na zasilanie domu"
+                    )
+                    actions.append(msg)
+                    self._log_decision("peak_sell_reserve", msg)
+
+        return actions
+
+    # ==================================================================
     #  STRATEGY IMPLEMENTATIONS
     # ==================================================================
 
@@ -1149,8 +1395,26 @@ class StrategyController:
                     actions.append(msg)
                     self._log_decision("mp_charge", msg)
 
-        elif is_expensive and soc > (DEFAULT_BATTERY_MIN_SOC if g13_zone == G13Zone.AFTERNOON_PEAK else 20):
-            # Expensive → discharge + export
+        elif is_expensive and g13_zone == G13Zone.AFTERNOON_PEAK:
+            # Afternoon peak — use peak sell logic (divide battery: sell + reserve)
+            minute = datetime.now().minute
+            peak_actions = await self._execute_peak_sell(
+                soc, pv, load, g13_zone, rce_mwh, hour, minute,
+            )
+            actions.extend(peak_actions)
+            if not peak_actions:
+                # Peak sell returned empty (disabled or unprofitable) — fallback to self-consumption
+                if soc > DEFAULT_BATTERY_MIN_SOC:
+                    if self._charging_enabled is not False:
+                        if await self._throttled_action("mp_expensive_general"):
+                            await self._em.set_general_mode()
+                            self._charging_enabled = False
+                            msg = f"💰 MP: Droga strefa ({g13_price:.2f} PLN) → set_general (SOC={soc:.0f}%)"
+                            actions.append(msg)
+                            self._log_decision("mp_general", msg)
+
+        elif is_expensive and soc > 20:
+            # Morning peak or RCE expensive — simple discharge
             if self._charging_enabled is not False:
                 if await self._throttled_action("mp_expensive_sell"):
                     await self._em.force_discharge()
@@ -1193,41 +1457,34 @@ class StrategyController:
                     self._log_decision("mp_night_arb", msg)
 
         # Pre-afternoon-peak smart charging (W5+)
-        # If we're in off-peak (13:00-14:59) approaching afternoon peak (15:00),
-        # PV is weak and battery low → grid-charge at 0.63 PLN/kWh to:
-        # (a) avoid buying at 1.50 during peak
-        # (b) sell if RCE spikes in afternoon
-        # (c) self-consumption savings during 7h peak window
+        # Grid charge ONLY when ≤ 2 hours before expensive zone,
+        # AND PV forecast cannot cover battery needs naturally.
+        # This prevents wasteful grid charging during daytime when PV
+        # can charge the battery for free.
+        hours_to_peak = self._hours_until_expensive_zone(
+            hour, datetime.now().month, datetime.now().weekday(),
+        )
         if (
-            hour in (13, 14)
-            and g13_zone == G13Zone.OFF_PEAK
-            and soc < 70
-            and pv < load * 0.8  # PV can't cover load → no natural charge
+            g13_zone == G13Zone.OFF_PEAK
+            and 0 < hours_to_peak <= 2
+            and soc < 80
+            and self._should_grid_charge_before_peak(soc, pv, load, data)
         ):
             remaining_forecast = _safe_float(
                 data.get("pv_forecast_remaining_today_total")
             )
-            rce_next = _safe_float(data.get("sensor.rce_pse_cena_nastepnej_godziny"))
-            # Charge if: PV forecast too low to fill naturally,
-            # OR RCE is rising (arbitrage opportunity)
-            should_charge = (
-                remaining_forecast < 3.0  # Less than 3 kWh left today from PV
-                or rce_next > rce_mwh * 1.2  # RCE rising 20%+ → sell later
-                or soc < 40  # Critical SOC before 7h peak window
-            )
-            if should_charge:
-                if await self._throttled_action("mp_prepeak_fill"):
-                    await self._em.force_charge()
-                    self._charging_enabled = True
-                    margin = G13_PRICES[G13Zone.AFTERNOON_PEAK] - G13_PRICES[G13Zone.OFF_PEAK]
-                    msg = (
-                        f"💰 MP: Pre-peak fill → ładuj baterię z sieci po {G13_PRICES[G13Zone.OFF_PEAK]:.2f} PLN "
-                        f"przed szczytem popołudniowym (1.50 PLN). "
-                        f"SOC={soc:.0f}%, PV={pv:.0f}W, forecast remaining={remaining_forecast:.1f}kWh, "
-                        f"marża arbitrażu: {margin:.2f} PLN/kWh"
-                    )
-                    actions.append(msg)
-                    self._log_decision("mp_prepeak", msg)
+            if await self._throttled_action("mp_prepeak_fill"):
+                await self._em.force_charge()
+                self._charging_enabled = True
+                margin = G13_PRICES[G13Zone.AFTERNOON_PEAK] - G13_PRICES[G13Zone.OFF_PEAK]
+                msg = (
+                    f"💰 MP: Pre-peak fill → ładuj z sieci po {G13_PRICES[G13Zone.OFF_PEAK]:.2f} PLN "
+                    f"({hours_to_peak:.0f}h do szczytu {G13_PRICES[G13Zone.AFTERNOON_PEAK]:.2f} PLN). "
+                    f"SOC={soc:.0f}%, PV={pv:.0f}W, forecast remaining={remaining_forecast:.1f}kWh, "
+                    f"marża: {margin:.2f} PLN/kWh"
+                )
+                actions.append(msg)
+                self._log_decision("mp_prepeak", msg)
 
         return actions
 
@@ -1341,11 +1598,23 @@ class StrategyController:
             actions.extend(s_actions)
 
         # Pre-peak battery fill check (W5 logic)
-        if hour in (11, 12) and soc < 60 and forecast_today_remaining < 3:
+        # Grid charge ONLY when ≤ 2h before expensive zone AND PV can't cover needs
+        hours_to_peak = self._hours_until_expensive_zone(
+            hour, datetime.now().month, datetime.now().weekday(),
+        )
+        if (
+            0 < hours_to_peak <= 2
+            and soc < 60
+            and forecast_today_remaining < 3
+            and self._should_grid_charge_before_peak(soc, pv, load, data)
+        ):
             if await self._throttled_action("wa_prepeak_fill"):
                 await self._em.force_charge()
                 self._charging_enabled = True
-                msg = f"🌧️ WA: Pre-peak fill (SOC={soc:.0f}%, prognoza={forecast_today_remaining:.1f}kWh)"
+                msg = (
+                    f"🌧️ WA: Pre-peak fill ({hours_to_peak:.0f}h do szczytu, "
+                    f"SOC={soc:.0f}%, prognoza={forecast_today_remaining:.1f}kWh)"
+                )
                 actions.append(msg)
                 self._log_decision("wa_prepeak", msg)
 
@@ -1889,6 +2158,7 @@ class StrategyController:
             "autopilot_enabled": self._enabled,
             "autopilot_active_action_ids": list(self._active_action_ids),
             "autopilot_disabled_action_ids": disabled_ids,
+            PEAK_SELL_SETTINGS_KEY: self._peak_sell_soc_percent,
         }
 
         def _do_write() -> None:
@@ -1919,6 +2189,14 @@ class StrategyController:
         saved_enabled = settings.get("autopilot_enabled", False)
         saved_active_ids = settings.get("autopilot_active_action_ids", [])
         saved_disabled_ids = settings.get("autopilot_disabled_action_ids", [])
+
+        # Restore peak sell setting (always, even if autopilot is disabled)
+        self._peak_sell_soc_percent = int(
+            settings.get(PEAK_SELL_SETTINGS_KEY, DEFAULT_PEAK_SELL_SOC_PERCENT)
+        )
+        _LOGGER.info(
+            "Restored peak sell SOC percent: %d%%", self._peak_sell_soc_percent,
+        )
 
         if not saved_strategy or not saved_enabled:
             _LOGGER.debug("No active autopilot strategy to restore")

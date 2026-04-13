@@ -742,6 +742,14 @@ AUTOPILOT_PLAN_KEY: Final = "ai_autopilot_plan"
 AUTOPILOT_ACTIONS_STATE_KEY: Final = "autopilot_actions_state"
 AUTOPILOT_ACTIONS_OVERRIDES_KEY: Final = "autopilot_action_sensor_overrides"
 
+# Peak Sell — active energy export during expensive afternoon peak
+# User sets what % of battery SOC to sell to grid during AFTERNOON_PEAK
+DEFAULT_PEAK_SELL_SOC_PERCENT: Final = 50   # % of battery SOC allocated for grid sell
+PEAK_SELL_SOC_MIN: Final = 0                # 0% = no sell (only self-consumption)
+PEAK_SELL_SOC_MAX: Final = 80               # 80% = aggressive sell (keep 20% for home)
+PEAK_SELL_SOC_FLOOR: Final = 20             # absolute minimum SOC after selling
+PEAK_SELL_SETTINGS_KEY: Final = "peak_sell_soc_percent"
+
 
 class EMSMode(StrEnum):
     """GoodWe EMS modes."""
