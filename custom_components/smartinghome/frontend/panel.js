@@ -172,7 +172,7 @@ class SmartingHomePanel extends HTMLElement {
     this.shadowRoot.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
     this.shadowRoot.querySelectorAll(".tab-content").forEach(c => c.classList.toggle("active", c.dataset.tab === tab));
     if (tab === 'winter') { this._initWinterTab(); this._loadWinterData(); }
-    if (tab === 'wind') { this._initWindTab(); this._loadWindData(); this._fetchWindHistoricalStats(); }
+    if (tab === 'wind') { this._initWindTab(); this._loadWindData(); this._fetchWindHistoricalStats(); this._initWindCalendar(); }
     if (tab === 'hems') { this._updateHEMSArbitrage(); }
     if (tab === 'history') { this._updateHistoryTab(); }
     if (tab === 'autopilot') { this._updateAutopilot(); }
@@ -3043,6 +3043,7 @@ class SmartingHomePanel extends HTMLElement {
     if (!this._settings.wind_turbine) {
       this._applyWindPreset('medium', true);
     }
+    this._windDataLoaded = true;
   }
 
   _loadWindData() {
@@ -3050,6 +3051,7 @@ class SmartingHomePanel extends HTMLElement {
     const wt = this._settings.wind_turbine;
     if (!wt) {
       this._applyWindPreset('medium', true);
+      this._windDataLoaded = true;
       this._windLoading = false;
       return;
     }
@@ -3067,6 +3069,7 @@ class SmartingHomePanel extends HTMLElement {
     });
     this._windActivePreset = this._settings.wind_turbine_preset || 'custom';
     this._updateWindPresetButtons();
+    this._windDataLoaded = true;
     this._recalcWindProfitability();
     // Keep _windLoading true longer than the 1500ms auto-save debounce to prevent overwrite
     setTimeout(() => { this._windLoading = false; }, 2500);
@@ -3082,9 +3085,20 @@ class SmartingHomePanel extends HTMLElement {
       investment: g('wind-turbine-investment'),
       price_kwh: g('wind-turbine-price'),
     };
+    // Safety: never save all-zero config (protects against save when inputs are empty/hidden)
+    if (wt.power_kw === 0 && wt.rotor_diameter === 0 && wt.investment === 0) {
+      console.warn('[SH] Wind save blocked — all values are zero (inputs not loaded yet)');
+      return;
+    }
     this._savePanelSettings({ wind_turbine: wt, wind_turbine_preset: this._windActivePreset });
     const st = this.shadowRoot.getElementById('wind-save-status');
     if (st) { st.textContent = '✅ Zapisano konfigurację turbiny!'; setTimeout(() => { st.textContent = ''; }, 4000); }
+    // Recalculate wind calendar with new turbine params
+    if (this._hass) {
+      this._hass.callService('smartinghome', 'recalculate_wind_calendar', {})
+        .then(() => { if (this._wcListenersAttached) this._fetchWindCalData(); })
+        .catch(e => console.warn('[SH] Wind recalculate error:', e));
+    }
   }
 
   _applyWindPreset(key, silent = false) {
@@ -3161,6 +3175,9 @@ class SmartingHomePanel extends HTMLElement {
     if (!this._hass?.states) return;
     const container = this.shadowRoot.getElementById('wind-live-data');
     if (!container) return;
+    // Don't run calculations until wind data has been loaded into the inputs
+    // Otherwise, input fields are empty (0) and auto-save would overwrite real data
+    if (!this._windDataLoaded) return;
 
     const n = (id) => { const st = this._hass.states[id]; return (st && st.state !== 'unknown' && st.state !== 'unavailable') ? parseFloat(st.state) : null; };
 
@@ -3246,6 +3263,8 @@ class SmartingHomePanel extends HTMLElement {
 
     // Recalc profitability
     this._recalcWindProfitability();
+    // Update wind calendar today card
+    this._updateWindCalendarToday();
   }
 
   /* ── Wind Historical Stats (Recorder API) ─── */
@@ -3427,8 +3446,8 @@ class SmartingHomePanel extends HTMLElement {
 
     // Monthly bar chart
     this._renderWindMonthlyChart();
-    // Auto-save wind data with debounce (1.5s) — skip during initial load
-    if (!this._windLoading) {
+    // Auto-save wind data with debounce (1.5s) — skip during initial load AND before data is loaded
+    if (!this._windLoading && this._windDataLoaded) {
       if (this._windSaveTimeout) clearTimeout(this._windSaveTimeout);
       this._windSaveTimeout = setTimeout(() => this._saveWindData(), 1500);
     }
@@ -3496,6 +3515,321 @@ class SmartingHomePanel extends HTMLElement {
         legendEl.innerHTML = '<span style="color:#f39c12">■</span> Szacunek — brak danych historycznych';
       }
     }
+  }
+
+  /* ═══════════════════════════════════════════════
+     ✦  WIND CALENDAR — Frontend Engine
+     ═══════════════════════════════════════════════ */
+  _wcPeriod = 'week';
+  _wcOffset = 0;
+  _wcData = null;
+  _wcListenersAttached = false;
+
+  _initWindCalendar() {
+    if (this._wcListenersAttached) return;
+    this._wcListenersAttached = true;
+    // Listen for backend calendar data events
+    if (this._hass) {
+      this._hass.connection.subscribeEvents((ev) => {
+        this._wcData = ev.data;
+        this._renderWindCalendarUI();
+      }, 'smartinghome_wind_calendar_data');
+    }
+    // Initial load
+    this._windCalNavigate(0);
+  }
+
+  _switchWindCalPeriod(period) {
+    this._wcPeriod = period;
+    this._wcOffset = 0;
+    const root = this.shadowRoot;
+    ['week','month','year','all'].forEach(p => {
+      const btn = root.getElementById(`wc-period-${p}`);
+      if (btn) btn.classList.toggle('active', p === period);
+    });
+    this._fetchWindCalData();
+  }
+
+  _windCalNavigate(dir) {
+    if (dir === 0) {
+      this._wcOffset = 0;
+    } else {
+      this._wcOffset += dir;
+    }
+    this._fetchWindCalData();
+  }
+
+  _fetchWindCalData() {
+    if (!this._hass) return;
+    const {start, end, label} = this._getWindCalRange();
+    const labelEl = this.shadowRoot.getElementById('wc-period-label');
+    if (labelEl) labelEl.textContent = label;
+
+    this._hass.callService('smartinghome', 'get_wind_calendar', {
+      start_date: start,
+      end_date: end,
+    }).catch(e => console.warn('[SH] Wind calendar fetch error:', e));
+  }
+
+  _getWindCalRange() {
+    const now = new Date();
+    let start, end, label;
+    const fmt = (d) => d.toISOString().split('T')[0];
+    const plMonth = ['Styczeń','Luty','Marzec','Kwiecień','Maj','Czerwiec','Lipiec','Sierpień','Wrzesień','Październik','Listopad','Grudzień'];
+
+    switch (this._wcPeriod) {
+      case 'week': {
+        const ref = new Date(now);
+        ref.setDate(ref.getDate() + this._wcOffset * 7);
+        const day = ref.getDay() || 7;
+        const monday = new Date(ref);
+        monday.setDate(ref.getDate() - day + 1);
+        const sunday = new Date(monday);
+        sunday.setDate(monday.getDate() + 6);
+        start = fmt(monday);
+        end = fmt(sunday);
+        label = `${monday.getDate()}.${monday.getMonth()+1} – ${sunday.getDate()}.${sunday.getMonth()+1}.${sunday.getFullYear()}`;
+        break;
+      }
+      case 'month': {
+        const ref = new Date(now.getFullYear(), now.getMonth() + this._wcOffset, 1);
+        const last = new Date(ref.getFullYear(), ref.getMonth() + 1, 0);
+        start = fmt(ref);
+        end = fmt(last);
+        label = `${plMonth[ref.getMonth()]} ${ref.getFullYear()}`;
+        break;
+      }
+      case 'year': {
+        const y = now.getFullYear() + this._wcOffset;
+        start = `${y}-01-01`;
+        end = `${y}-12-31`;
+        label = `Rok ${y}`;
+        break;
+      }
+      case 'all':
+      default:
+        start = '';
+        end = '';
+        label = 'Cały okres (do 5 lat)';
+        break;
+    }
+    return { start, end, label };
+  }
+
+  _renderWindCalendarUI() {
+    if (!this._wcData || this._wcData.error) {
+      console.warn('[SH] Wind calendar data error:', this._wcData?.error);
+      return;
+    }
+
+    const { days, summary, meta } = this._wcData;
+    if (!days || !summary) return;
+
+    const dayEntries = Object.entries(days).sort((a,b) => a[0].localeCompare(b[0]));
+
+    // Update KPI cards
+    this._setText('wc-kpi-kwh', (summary.total_kwh || 0).toFixed(1));
+    this._setText('wc-kpi-revenue', (summary.total_revenue || 0).toFixed(2));
+    this._setText('wc-kpi-days', summary.productive_days || 0);
+    this._setText('wc-kpi-days-total', `/ ${summary.total_days || 0} łącznie`);
+    this._setText('wc-kpi-cf', `${((summary.avg_capacity_factor || 0) * 100).toFixed(1)}%`);
+
+    // Best day
+    if (summary.best_day) {
+      this._setText('wc-kpi-best', `${(summary.best_day.kwh || 0).toFixed(1)} kWh`);
+      this._setText('wc-kpi-best-date', summary.best_day.date || '—');
+    }
+    this._setText('wc-kpi-wind', ((summary.avg_wind_kmh || 0)).toFixed(1));
+
+    // Chart subtitle
+    const subtitleEl = this.shadowRoot.getElementById('wc-chart-subtitle');
+    if (subtitleEl) {
+      subtitleEl.textContent = `${dayEntries.length} dni · Avg wiatr: ${(summary.avg_wind_kmh || 0).toFixed(1)} km/h · Produkcja: ${(summary.total_kwh || 0).toFixed(1)} kWh`;
+    }
+
+    // Render daily bar chart
+    this._renderWindCalDailyChart(dayEntries);
+
+    // Wind distribution
+    this._renderWindDistribution(dayEntries);
+
+    // ROI
+    this._renderWindCalROI(summary, dayEntries.length);
+
+    // Recommendation
+    this._renderWindCalRecommendation(summary);
+  }
+
+  _renderWindCalDailyChart(dayEntries) {
+    const chartEl = this.shadowRoot.getElementById('wc-daily-chart');
+    if (!chartEl || dayEntries.length === 0) {
+      if (chartEl) chartEl.innerHTML = '<div style="color:#64748b; font-size:11px; text-align:center; width:100%">Brak danych dla wybranego okresu</div>';
+      return;
+    }
+
+    const maxKwh = Math.max(...dayEntries.map(([,d]) => d.kwh_produced || 0), 0.1);
+    const barWidth = Math.max(4, Math.min(20, Math.floor(600 / dayEntries.length)));
+
+    chartEl.innerHTML = dayEntries.map(([date, d]) => {
+      const kwh = d.kwh_produced || 0;
+      const h = Math.max(2, (kwh / maxKwh) * 140);
+      const profitable = kwh > 0 && (d.revenue_pln || 0) > 0;
+      const color = kwh === 0 ? '#475569' : profitable ? '#2ecc71' : '#e74c3c';
+      const shortDate = date.slice(5); // MM-DD
+      const tooltip = `${date}: ${kwh.toFixed(2)} kWh, ${(d.avg_wind_kmh || 0).toFixed(1)} km/h`;
+      return `<div style="flex:0 0 ${barWidth}px; display:flex; flex-direction:column; align-items:center; gap:1px" title="${tooltip}">
+        <div style="width:${Math.max(3, barWidth - 2)}px; height:${h}px; background:${color}; border-radius:2px 2px 0 0; opacity:0.85; transition:height 0.3s"></div>
+        ${dayEntries.length <= 31 ? `<div style="font-size:6px; color:#64748b; writing-mode:vertical-lr; transform:rotate(180deg); height:24px; overflow:hidden">${shortDate}</div>` : ''}
+      </div>`;
+    }).join('');
+  }
+
+  _renderWindDistribution(dayEntries) {
+    // Classify days by avg wind (m/s)
+    let calm = 0, light = 0, moderate = 0, strong = 0, vstrong = 0;
+    dayEntries.forEach(([, d]) => {
+      const ms = (d.avg_wind_kmh || 0) / 3.6;
+      if (ms < 2) calm++;
+      else if (ms < 4) light++;
+      else if (ms < 6) moderate++;
+      else if (ms < 8) strong++;
+      else vstrong++;
+    });
+    this._setText('wc-dist-calm', calm);
+    this._setText('wc-dist-light', light);
+    this._setText('wc-dist-moderate', moderate);
+    this._setText('wc-dist-strong', strong);
+    this._setText('wc-dist-vstrong', vstrong);
+  }
+
+  _renderWindCalROI(summary, totalDays) {
+    const el = this.shadowRoot.getElementById('wc-roi-content');
+    if (!el) return;
+
+    const g = (id) => parseFloat(this.shadowRoot.getElementById(id)?.value) || 0;
+    const investment = g('wind-turbine-investment') || 25000;
+    const nominalKw = g('wind-turbine-power') || 3;
+    const priceKwh = g('wind-turbine-price') || 0.87;
+
+    if (totalDays < 7) {
+      el.innerHTML = '<div style="text-align:center; color:#64748b; font-size:12px; padding:16px">Potrzebujesz minimum 7 dni danych aby wyświetlić analizę opłacalności.</div>';
+      return;
+    }
+
+    const kwhPerDay = (summary.total_kwh || 0) / (totalDays || 1);
+    const revenuePerDay = kwhPerDay * priceKwh;
+    const yearlyKwh = kwhPerDay * 365;
+    const yearlySavings = yearlyKwh * priceKwh;
+    const payback = yearlySavings > 0 ? investment / yearlySavings : null;
+    const profit20 = yearlySavings * 20 - investment;
+    const cf = nominalKw > 0 ? (kwhPerDay / (nominalKw * 24)) * 100 : 0;
+    const productiveRatio = totalDays > 0 ? ((summary.productive_days || 0) / totalDays * 100) : 0;
+
+    const paybackColor = payback && payback <= 10 ? '#2ecc71' : payback && payback <= 15 ? '#f7b731' : '#e74c3c';
+
+    el.innerHTML = `
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:10px; margin-bottom:12px">
+        <div style="background:rgba(0,212,255,0.06); border:1px solid rgba(0,212,255,0.12); border-radius:12px; padding:14px; text-align:center">
+          <div style="font-size:9px; color:#64748b; text-transform:uppercase">📊 Ekstrapolacja roczna</div>
+          <div style="font-size:24px; font-weight:900; color:#f7b731; margin-top:4px">${yearlyKwh.toFixed(0)} kWh</div>
+          <div style="font-size:10px; color:#94a3b8">~${kwhPerDay.toFixed(2)} kWh/dzień</div>
+        </div>
+        <div style="background:rgba(46,204,113,0.06); border:1px solid rgba(46,204,113,0.12); border-radius:12px; padding:14px; text-align:center">
+          <div style="font-size:9px; color:#64748b; text-transform:uppercase">💰 Oszczędność roczna</div>
+          <div style="font-size:24px; font-weight:900; color:#2ecc71; margin-top:4px">${yearlySavings.toFixed(0)} zł</div>
+          <div style="font-size:10px; color:#94a3b8">~${revenuePerDay.toFixed(2)} zł/dzień</div>
+        </div>
+        <div style="background:rgba(${paybackColor === '#2ecc71' ? '46,204,113' : paybackColor === '#f7b731' ? '247,183,49' : '231,76,60'},0.06); border:1px solid rgba(${paybackColor === '#2ecc71' ? '46,204,113' : paybackColor === '#f7b731' ? '247,183,49' : '231,76,60'},0.12); border-radius:12px; padding:14px; text-align:center">
+          <div style="font-size:9px; color:#64748b; text-transform:uppercase">⏱️ Zwrot inwestycji</div>
+          <div style="font-size:24px; font-weight:900; color:${paybackColor}; margin-top:4px">${payback ? `~${payback.toFixed(1)} lat` : '—'}</div>
+          <div style="font-size:10px; color:#94a3b8">Inwestycja: ${investment.toLocaleString('pl-PL')} zł</div>
+        </div>
+        <div style="background:rgba(${profit20 >= 0 ? '46,204,113' : '231,76,60'},0.06); border:1px solid rgba(${profit20 >= 0 ? '46,204,113' : '231,76,60'},0.12); border-radius:12px; padding:14px; text-align:center">
+          <div style="font-size:9px; color:#64748b; text-transform:uppercase">🏆 Zysk w 20 lat</div>
+          <div style="font-size:24px; font-weight:900; color:${profit20 >= 0 ? '#2ecc71' : '#e74c3c'}; margin-top:4px">${profit20 >= 0 ? '+' : ''}${Math.round(profit20).toLocaleString('pl-PL')} zł</div>
+          <div style="font-size:10px; color:#94a3b8">CF: ${cf.toFixed(1)}% · ${productiveRatio.toFixed(0)}% dni produktywnych</div>
+        </div>
+      </div>
+      <div style="font-size:10px; color:#64748b; text-align:center; line-height:1.5">
+        📋 Obliczenia na podstawie <strong>${totalDays}</strong> dni rzeczywistych pomiarów · Turbina: ${nominalKw} kW · Cena: ${priceKwh} zł/kWh
+      </div>`;
+  }
+
+  _renderWindCalRecommendation(summary) {
+    const el = this.shadowRoot.getElementById('wc-recommendation');
+    if (!el) return;
+
+    const totalDays = summary.total_days || 0;
+    if (totalDays < 7) {
+      el.innerHTML = '<div style="text-align:center; color:#64748b; font-size:12px; padding:8px">Zbierz minimum 7 dni danych aby zobaczyć rekomendację.</div>';
+      return;
+    }
+
+    const avgMs = (summary.avg_wind_kmh || 0) / 3.6;
+    const productivePct = totalDays > 0 ? ((summary.productive_days || 0) / totalDays) * 100 : 0;
+    const kwhPerDay = (summary.total_kwh || 0) / totalDays;
+
+    const g = (id) => parseFloat(this.shadowRoot.getElementById(id)?.value) || 0;
+    const investment = g('wind-turbine-investment') || 25000;
+    const priceKwh = g('wind-turbine-price') || 0.87;
+    const yearlySavings = kwhPerDay * 365 * priceKwh;
+    const payback = yearlySavings > 0 ? investment / yearlySavings : null;
+
+    let icon, title, color, advice;
+
+    if (avgMs >= 5 && productivePct >= 50 && payback && payback <= 12) {
+      icon = '✅'; title = 'Lokalizacja KORZYSTNA'; color = '#2ecc71';
+      advice = `Średnia prędkość wiatru <strong>${avgMs.toFixed(1)} m/s</strong> z <strong>${productivePct.toFixed(0)}%</strong> dni produkcyjnych (${summary.productive_days}/${totalDays}) zapewnia opłacalną eksploatację turbiny wiatrowej. Szacowany zwrot inwestycji: <strong>~${payback.toFixed(1)} lat</strong>.`;
+    } else if (avgMs >= 3.5 && productivePct >= 30) {
+      icon = '⚠️'; title = 'Lokalizacja UMIARKOWANA'; color = '#f7b731';
+      advice = `Średnia prędkość wiatru <strong>${avgMs.toFixed(1)} m/s</strong> z <strong>${productivePct.toFixed(0)}%</strong> dni produkcyjnych. Opłacalność zależy od wyboru turbiny — rozważ model o niskim progu startu (cut-in &lt; 2.5 m/s) lub system hybrydowy PV + wiatr. ${payback ? `Szacowany zwrot: ~${payback.toFixed(1)} lat.` : ''}`;
+    } else {
+      icon = '❌'; title = 'Lokalizacja NIEKORZYSTNA'; color = '#e74c3c';
+      advice = `Średnia prędkość wiatru <strong>${avgMs.toFixed(1)} m/s</strong> z zaledwie <strong>${productivePct.toFixed(0)}%</strong> dni produkcyjnych to za mało dla opłacalnej turbiny wiatrowej. ${payback ? `Zwrot dopiero za ~${payback.toFixed(0)} lat.` : ''} Zalecamy inwestycję w fotowoltaikę lub system hybrydowy z magazynem energii.`;
+    }
+
+    el.innerHTML = `
+      <div style="font-size:48px; text-align:center; margin-bottom:8px">${icon}</div>
+      <div style="font-size:16px; font-weight:800; color:${color}; text-align:center">${title}</div>
+      <div style="font-size:11px; color:#94a3b8; text-align:center; margin-top:6px; line-height:1.6">${advice}</div>
+      <div style="font-size:9px; color:#475569; text-align:center; margin-top:8px">Na podstawie ${totalDays} dni pomiarów z kalendarza wiatrowego</div>`;
+  }
+
+  _updateWindCalendarToday() {
+    // Update today's live card from Ecowitt sensor data
+    if (!this._hass?.states) return;
+    const n = (id) => {
+      const st = this._hass.states[id];
+      return (st && st.state !== 'unknown' && st.state !== 'unavailable') ? parseFloat(st.state) : null;
+    };
+    const wind = n('sensor.ecowitt_wind_speed_9747');
+    if (wind === null) return;
+
+    const g = (id) => parseFloat(this.shadowRoot.getElementById(id)?.value) || 0;
+    const cutIn = g('wind-turbine-cutin') || 3;
+    const diameter = g('wind-turbine-diameter') || 3.2;
+    const nominalKw = g('wind-turbine-power') || 3;
+    const priceKwh = g('wind-turbine-price') || 0.87;
+    const windMs = wind / 3.6;
+
+    // Estimate instantaneous power
+    let power = 0;
+    if (windMs >= cutIn) {
+      power = this._calcWindPower(wind, diameter);
+      if (power > nominalKw * 1000) power = nominalKw * 1000;
+    }
+    const dailyKwh = (power * 24) / 1000; // rough estimate based on current speed
+    const dailyRevenue = dailyKwh * priceKwh;
+
+    // Use _windCalSamples to track how many updates we've seen
+    if (!this._windCalSamples) this._windCalSamples = 0;
+    this._windCalSamples++;
+
+    this._setText('wc-today-samples', this._windCalSamples);
+    this._setText('wc-today-avgwind', `${wind.toFixed(1)} km/h`);
+    this._setText('wc-today-kwh', dailyKwh.toFixed(2));
+    this._setText('wc-today-revenue', `${dailyRevenue.toFixed(2)} zł`);
+    this._setText('wc-today-productive', windMs >= cutIn ? '✅ Tak' : '⏸️ Nie');
   }
 
   _calcHEMSScore() {
@@ -6674,9 +7008,9 @@ class SmartingHomePanel extends HTMLElement {
 
     // ── Day/Night energy from backend (server-side, 24/7) ──
     {
-      const dayKwh = this._n('sensor.smartinghome_load_day_kwh') || 0;
-      const nightKwh = this._n('sensor.smartinghome_load_night_kwh') || 0;
-      const pvToHome = this._n('sensor.smartinghome_load_pv_to_home_kwh') || 0;
+      const dayKwh = this._n('sensor.smartinghome_load_day') || this._n('sensor.smartinghome_load_day_kwh') || 0;
+      const nightKwh = this._n('sensor.smartinghome_load_night') || this._n('sensor.smartinghome_load_night_kwh') || 0;
+      const pvToHome = this._n('sensor.smartinghome_pv_to_home_today') || this._n('sensor.smartinghome_load_pv_to_home_kwh') || 0;
 
       const loadTodayNum = typeof loadTodayVal === 'number' ? loadTodayVal : parseFloat(loadTodayVal);
       const loadTotalForPct = !isNaN(loadTodayNum) && loadTodayNum > 0 ? loadTodayNum : (dayKwh + nightKwh);
@@ -7671,8 +8005,8 @@ class SmartingHomePanel extends HTMLElement {
 
     // ROW 1b: Day/Night breakdown in Energy tab (from backend)
     {
-      const enDayKwh = this._n('sensor.smartinghome_load_day_kwh') || 0;
-      const enNightKwh = this._n('sensor.smartinghome_load_night_kwh') || 0;
+      const enDayKwh = this._n('sensor.smartinghome_load_day') || this._n('sensor.smartinghome_load_day_kwh') || 0;
+      const enNightKwh = this._n('sensor.smartinghome_load_night') || this._n('sensor.smartinghome_load_night_kwh') || 0;
 
       const enTotalLoad = enDayKwh + enNightKwh;
       const enDayPct = enTotalLoad > 0 ? (enDayKwh / enTotalLoad) * 100 : 50;
@@ -11646,30 +11980,164 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
-          <!-- Profitability analysis -->
+          <!-- Today's Wind Calendar Status (live from backend) -->
           <div class="card" style="margin-bottom:12px">
-            <div class="card-title">💰 Analiza opłacalności — Porównanie scenariuszy wiatru</div>
-            <div style="font-size:10px; color:#94a3b8; margin-bottom:12px">Porównanie 4 klas wiatrowości + Twoja rzeczywista lokalizacja na podstawie Ecowitt WH90.</div>
-            <div id="wind-profit-cards" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:10px"></div>
-          </div>
-
-          <!-- Monthly chart -->
-          <div class="card" style="margin-bottom:12px">
-            <div class="card-title">📉 Szacunkowa produkcja miesięczna (kWh)</div>
-            <div id="wind-monthly-subtitle" style="font-size:10px; color:#94a3b8; margin-bottom:8px">Ładowanie danych historycznych...</div>
-            <div id="wind-monthly-chart" style="display:flex; align-items:flex-end; gap:4px; height:180px; padding:10px 0"></div>
-            <div id="wind-chart-legend" style="font-size:9px; color:#64748b; text-align:center; margin-top:6px"></div>
-          </div>
-
-          <!-- Recommendation -->
-          <div class="card" style="margin-bottom:12px">
-            <div class="card-title">💡 Rekomendacja — czy warto stawiać turbinę?</div>
-            <div id="wind-recommendation" style="padding:16px">
-              <div style="text-align:center; color:#64748b; font-size:12px">Oczekiwanie na dane wiatru z Ecowitt WH90...</div>
+            <div class="card-title">📅 Dzisiejszy dzień — status kalendarza wiatrowego</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:10px">Aktualizacja na żywo z silnika WindCalendar (co 30s). Zamknięcie dnia o północy.</div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px" id="wind-cal-today-grid">
+              <div style="background:rgba(0,212,255,0.06); border:1px solid rgba(0,212,255,0.12); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase">⏱️ Próbki</div>
+                <div style="font-size:18px; font-weight:800; color:#00d4ff; margin-top:4px" id="wc-today-samples">0</div>
+              </div>
+              <div style="background:rgba(46,204,113,0.06); border:1px solid rgba(46,204,113,0.12); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase">💨 Średni wiatr</div>
+                <div style="font-size:18px; font-weight:800; color:#2ecc71; margin-top:4px" id="wc-today-avgwind">— km/h</div>
+              </div>
+              <div style="background:rgba(247,183,49,0.06); border:1px solid rgba(247,183,49,0.12); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase">⚡ Estymacja kWh</div>
+                <div style="font-size:18px; font-weight:800; color:#f7b731; margin-top:4px" id="wc-today-kwh">—</div>
+              </div>
+              <div style="background:rgba(46,204,113,0.06); border:1px solid rgba(46,204,113,0.12); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase">💰 Przychód</div>
+                <div style="font-size:18px; font-weight:800; color:#2ecc71; margin-top:4px" id="wc-today-revenue">— zł</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase">📊 Produktywność</div>
+                <div style="font-size:18px; font-weight:800; color:#e0e6ed; margin-top:4px" id="wc-today-productive">—%</div>
+              </div>
             </div>
           </div>
 
-          <!-- Beaufort scale reference -->
+          <!-- ═══ Period Navigator ═══ -->
+          <div class="card" style="margin-bottom:12px">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px">
+              <div style="display:flex; gap:4px">
+                <button class="hist-period-btn active" id="wc-period-week" onclick="this.getRootNode().host._switchWindCalPeriod('week')">📆 Tydzień</button>
+                <button class="hist-period-btn" id="wc-period-month" onclick="this.getRootNode().host._switchWindCalPeriod('month')">🗓️ Miesiąc</button>
+                <button class="hist-period-btn" id="wc-period-year" onclick="this.getRootNode().host._switchWindCalPeriod('year')">📊 Rok</button>
+                <button class="hist-period-btn" id="wc-period-all" onclick="this.getRootNode().host._switchWindCalPeriod('all')">🗂️ Wszystko</button>
+              </div>
+              <div style="display:flex; align-items:center; gap:6px">
+                <button class="hist-nav-btn hist-nav-arrow" onclick="this.getRootNode().host._windCalNavigate(-1)">◀</button>
+                <span style="font-size:13px; font-weight:700; color:#e0e6ed; min-width:160px; text-align:center" id="wc-period-label">—</span>
+                <button class="hist-nav-btn hist-nav-arrow" onclick="this.getRootNode().host._windCalNavigate(1)">▶</button>
+                <button class="hist-nav-btn" onclick="this.getRootNode().host._windCalNavigate(0)" style="font-size:10px; padding:4px 10px">Dziś</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ═══ KPI Cards for selected period ═══ -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">📊 Podsumowanie wybranego okresu</div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:8px; margin-top:8px" id="wc-kpi-grid">
+              <div style="background:rgba(0,212,255,0.06); border:1px solid rgba(0,212,255,0.12); border-radius:12px; padding:12px; text-align:center">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase">⚡ Produkcja</div>
+                <div style="font-size:22px; font-weight:900; color:#00d4ff; margin-top:4px" id="wc-kpi-kwh">—</div>
+                <div style="font-size:9px; color:#94a3b8">kWh</div>
+              </div>
+              <div style="background:rgba(46,204,113,0.06); border:1px solid rgba(46,204,113,0.12); border-radius:12px; padding:12px; text-align:center">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase">💰 Przychód</div>
+                <div style="font-size:22px; font-weight:900; color:#2ecc71; margin-top:4px" id="wc-kpi-revenue">—</div>
+                <div style="font-size:9px; color:#94a3b8">zł</div>
+              </div>
+              <div style="background:rgba(247,183,49,0.06); border:1px solid rgba(247,183,49,0.12); border-radius:12px; padding:12px; text-align:center">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase">📅 Dni produkcyjne</div>
+                <div style="font-size:22px; font-weight:900; color:#f7b731; margin-top:4px" id="wc-kpi-days">—</div>
+                <div style="font-size:9px; color:#94a3b8" id="wc-kpi-days-total">/ — łącznie</div>
+              </div>
+              <div style="background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:12px; text-align:center">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase">📊 Capacity Factor</div>
+                <div style="font-size:22px; font-weight:900; color:#e0e6ed; margin-top:4px" id="wc-kpi-cf">—%</div>
+                <div style="font-size:9px; color:#94a3b8">średni</div>
+              </div>
+              <div style="background:rgba(46,204,113,0.04); border:1px solid rgba(46,204,113,0.08); border-radius:12px; padding:12px; text-align:center">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase">🏆 Najlepszy dzień</div>
+                <div style="font-size:14px; font-weight:800; color:#2ecc71; margin-top:4px" id="wc-kpi-best">—</div>
+                <div style="font-size:9px; color:#94a3b8" id="wc-kpi-best-date">—</div>
+              </div>
+              <div style="background:rgba(231,76,60,0.04); border:1px solid rgba(231,76,60,0.08); border-radius:12px; padding:12px; text-align:center">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase">💨 Średni wiatr</div>
+                <div style="font-size:14px; font-weight:800; color:#94a3b8; margin-top:4px" id="wc-kpi-wind">—</div>
+                <div style="font-size:9px; color:#94a3b8">km/h</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ═══ Daily Production Bar Chart ═══ -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">📊 Produkcja dzienna (kWh)</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:8px" id="wc-chart-subtitle">Wybierz okres aby zobaczyć dane</div>
+            <div id="wc-daily-chart" style="display:flex; align-items:flex-end; gap:2px; height:160px; padding:8px 0; overflow-x:auto">
+              <div style="color:#64748b; font-size:11px; text-align:center; width:100%">Ładowanie danych kalendarza wiatrowego...</div>
+            </div>
+            <div id="wc-chart-legend" style="font-size:9px; color:#64748b; text-align:center; margin-top:6px">
+              <span style="color:#2ecc71">■</span> Zyskowny &nbsp;
+              <span style="color:#e74c3c">■</span> Poniżej progu &nbsp;
+              <span style="color:#475569">■</span> Brak produkcji
+            </div>
+          </div>
+
+          <!-- ═══ Wind Distribution (Beaufort histogram) ═══ -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">🌡️ Rozkład dni wg klasy wiatru</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:10px">Ile dni w wybranym okresie miało dany poziom wiatru</div>
+            <div id="wc-distribution" style="display:grid; grid-template-columns:repeat(5, 1fr); gap:6px">
+              <div style="background:rgba(100,116,139,0.1); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:22px">🍃</div>
+                <div style="font-size:10px; font-weight:700; color:#64748b">Cisza</div>
+                <div style="font-size:9px; color:#94a3b8">&lt; 2 m/s</div>
+                <div style="font-size:18px; font-weight:900; color:#64748b; margin-top:4px" id="wc-dist-calm">—</div>
+                <div style="font-size:9px; color:#94a3b8">dni</div>
+              </div>
+              <div style="background:rgba(46,204,113,0.08); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:22px">🌿</div>
+                <div style="font-size:10px; font-weight:700; color:#2ecc71">Słaby</div>
+                <div style="font-size:9px; color:#94a3b8">2–4 m/s</div>
+                <div style="font-size:18px; font-weight:900; color:#2ecc71; margin-top:4px" id="wc-dist-light">—</div>
+                <div style="font-size:9px; color:#94a3b8">dni</div>
+              </div>
+              <div style="background:rgba(247,183,49,0.08); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:22px">🌬️</div>
+                <div style="font-size:10px; font-weight:700; color:#f7b731">Umiarkowany</div>
+                <div style="font-size:9px; color:#94a3b8">4–6 m/s</div>
+                <div style="font-size:18px; font-weight:900; color:#f7b731; margin-top:4px" id="wc-dist-moderate">—</div>
+                <div style="font-size:9px; color:#94a3b8">dni</div>
+              </div>
+              <div style="background:rgba(231,76,60,0.06); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:22px">💨</div>
+                <div style="font-size:10px; font-weight:700; color:#e67e22">Silny</div>
+                <div style="font-size:9px; color:#94a3b8">6–8 m/s</div>
+                <div style="font-size:18px; font-weight:900; color:#e67e22; margin-top:4px" id="wc-dist-strong">—</div>
+                <div style="font-size:9px; color:#94a3b8">dni</div>
+              </div>
+              <div style="background:rgba(192,57,43,0.08); border-radius:10px; padding:10px; text-align:center">
+                <div style="font-size:22px">🌪️</div>
+                <div style="font-size:10px; font-weight:700; color:#c0392b">Bardzo silny</div>
+                <div style="font-size:9px; color:#94a3b8">&gt; 8 m/s</div>
+                <div style="font-size:18px; font-weight:900; color:#c0392b; margin-top:4px" id="wc-dist-vstrong">—</div>
+                <div style="font-size:9px; color:#94a3b8">dni</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ═══ ROI / Profitability from Calendar ═══ -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">💰 Analiza opłacalności — na podstawie kalendarza</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:10px">Obliczenia na podstawie rzeczywistych danych dziennych, nie średniej rocznej</div>
+            <div id="wc-roi-content" style="padding:8px">
+              <div style="text-align:center; color:#64748b; font-size:12px">Ładowanie danych kalendarza...</div>
+            </div>
+          </div>
+
+          <!-- ═══ Dynamic Recommendation ═══ -->
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-title">💡 Rekomendacja — na podstawie kalendarza wiatrowego</div>
+            <div id="wc-recommendation" style="padding:12px">
+              <div style="text-align:center; color:#64748b; font-size:12px">Oczekiwanie na dane kalendarza wiatrowego...</div>
+            </div>
+          </div>
+
+          <!-- Beaufort scale reference (zachowane) -->
           <div class="card" style="margin-bottom:12px">
             <div class="card-title">📖 Skala Beauforta — Referencja</div>
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:6px; margin-top:8px">

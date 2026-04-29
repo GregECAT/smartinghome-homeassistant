@@ -336,3 +336,54 @@ apply_manual_mode:
             - "zero_export"
             - "battery_hold"
             - "off"
+
+get_wind_calendar:
+  name: Get Wind Calendar
+  description: >-
+    Retrieve daily wind energy calendar data for a date range.
+    Returns per-day wind statistics, production, and revenue.
+    Fires a smartinghome_wind_calendar_data event with the response.
+  fields:
+    start_date:
+      name: Start Date
+      description: "Start date (YYYY-MM-DD). Leave empty for all data."
+      required: false
+      example: "2025-01-01"
+      selector:
+        text:
+    end_date:
+      name: End Date
+      description: "End date (YYYY-MM-DD). Leave empty for all data."
+      required: false
+      example: "2025-12-31"
+      selector:
+        text:
+
+get_wind_summary:
+  name: Get Wind Summary
+  description: >-
+    Get aggregated wind energy summary for a period.
+    Returns production totals, productive days, revenue, and ROI metrics.
+    Fires a smartinghome_wind_summary event with the response.
+  fields:
+    start_date:
+      name: Start Date
+      description: "Start date (YYYY-MM-DD). Leave empty for all data."
+      required: false
+      example: "2025-01-01"
+      selector:
+        text:
+    end_date:
+      name: End Date
+      description: "End date (YYYY-MM-DD). Leave empty for all data."
+      required: false
+      example: "2025-12-31"
+      selector:
+        text:
+
+recalculate_wind_calendar:
+  name: Recalculate Wind Calendar
+  description: >-
+    Recalculate production and revenue for all historical wind calendar days
+    using the current turbine parameters. Use after changing turbine config
+    (power, diameter, cut-in, price). Wind data remains unchanged.

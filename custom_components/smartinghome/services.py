@@ -64,6 +64,9 @@ SERVICE_SYNC_ECOWITT_STATE = "sync_ecowitt_state"
 SERVICE_UPDATE_SENSOR_MAP = "update_sensor_map"
 SERVICE_SEND_ALERT_NOTIFICATION = "send_alert_notification"
 SERVICE_SET_PEAK_SELL_PERCENT = "set_peak_sell_percent"
+SERVICE_GET_WIND_CALENDAR = "get_wind_calendar"
+SERVICE_GET_WIND_SUMMARY = "get_wind_summary"
+SERVICE_RECALCULATE_WIND_CALENDAR = "recalculate_wind_calendar"
 
 ALERT_WEBHOOK_URL = "https://a.gregciupek.com/webhook/1161573e-6e16-4884-97f9-e98d7f6d04e2"
 
@@ -218,6 +221,20 @@ SAVE_SCHEDULE_SCHEMA = vol.Schema(
 APPLY_MANUAL_MODE_SCHEMA = vol.Schema(
     {
         vol.Required("mode"): vol.In([m.value for m in ManualMode]),
+    }
+)
+
+GET_WIND_CALENDAR_SCHEMA = vol.Schema(
+    {
+        vol.Optional("start_date", default=""): cv.string,
+        vol.Optional("end_date", default=""): cv.string,
+    }
+)
+
+GET_WIND_SUMMARY_SCHEMA = vol.Schema(
+    {
+        vol.Optional("start_date", default=""): cv.string,
+        vol.Optional("end_date", default=""): cv.string,
     }
 )
 
@@ -932,6 +949,64 @@ async def async_setup_services(
         )
         _LOGGER.info("Manual mode applied: %s", mode_str)
 
+    # ── Wind Calendar services ──
+
+    async def handle_get_wind_calendar(call: ServiceCall) -> None:
+        """Return wind calendar data for the requested date range."""
+        wind_cal = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("wind_calendar")
+        if not wind_cal:
+            _LOGGER.warning("Wind calendar not available")
+            hass.bus.async_fire(
+                f"{DOMAIN}_wind_calendar_data",
+                {"error": "Wind calendar not initialized"},
+            )
+            return
+
+        start = call.data.get("start_date", "") or None
+        end = call.data.get("end_date", "") or None
+
+        data = wind_cal.get_calendar_data(start, end)
+        hass.bus.async_fire(f"{DOMAIN}_wind_calendar_data", data)
+        _LOGGER.debug(
+            "Wind calendar data returned: %d days (%s → %s)",
+            len(data.get("days", {})), start or "all", end or "all",
+        )
+
+    async def handle_get_wind_summary(call: ServiceCall) -> None:
+        """Return aggregated wind summary for a period."""
+        wind_cal = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("wind_calendar")
+        if not wind_cal:
+            _LOGGER.warning("Wind calendar not available")
+            hass.bus.async_fire(
+                f"{DOMAIN}_wind_summary",
+                {"error": "Wind calendar not initialized"},
+            )
+            return
+
+        start = call.data.get("start_date", "") or None
+        end = call.data.get("end_date", "") or None
+
+        data = wind_cal.get_calendar_data(start, end)
+        # Return only summary (without all day records) for lighter payload
+        hass.bus.async_fire(
+            f"{DOMAIN}_wind_summary",
+            {"summary": data.get("summary", {}), "meta": data.get("meta", {})},
+        )
+
+    async def handle_recalculate_wind_calendar(call: ServiceCall) -> None:
+        """Recalculate all wind calendar production with current turbine params."""
+        wind_cal = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("wind_calendar")
+        if not wind_cal:
+            _LOGGER.warning("Wind calendar not available")
+            return
+
+        count = await wind_cal.recalculate_all()
+        hass.bus.async_fire(
+            f"{DOMAIN}_wind_calendar_recalculated",
+            {"days_recalculated": count},
+        )
+        _LOGGER.info("Wind calendar recalculated: %d days", count)
+
     # ── Analyze ROI — AI Interpreter for tariff comparison ──
 
     SERVICE_ANALYZE_ROI = "analyze_roi"
@@ -1364,8 +1439,19 @@ Długość: 400-600 słów."""
         DOMAIN, SERVICE_APPLY_MANUAL_MODE, handle_apply_manual_mode,
         schema=APPLY_MANUAL_MODE_SCHEMA,
     )
+    hass.services.async_register(
+        DOMAIN, SERVICE_GET_WIND_CALENDAR, handle_get_wind_calendar,
+        schema=GET_WIND_CALENDAR_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_GET_WIND_SUMMARY, handle_get_wind_summary,
+        schema=GET_WIND_SUMMARY_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_RECALCULATE_WIND_CALENDAR, handle_recalculate_wind_calendar,
+    )
 
-    _LOGGER.info("Registered %d Smarting HOME services", 24)
+    _LOGGER.info("Registered %d Smarting HOME services", 27)
 
     # Start AI Cron Scheduler
     cron = AICronScheduler(
@@ -1408,5 +1494,8 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_SAVE_SCHEDULE,
         SERVICE_GET_SCHEDULE_STATUS,
         SERVICE_APPLY_MANUAL_MODE,
+        SERVICE_GET_WIND_CALENDAR,
+        SERVICE_GET_WIND_SUMMARY,
+        SERVICE_RECALCULATE_WIND_CALENDAR,
     ]:
         hass.services.async_remove(DOMAIN, service)

@@ -835,7 +835,7 @@ AI_CONTROLLER_TOOLS = {
     "stop_force_charge": "STOP forced charging — restore general mode",
     "stop_force_discharge": "STOP forced discharge — restore general mode",
     "emergency_stop": "EMERGENCY STOP all force operations — reset everything to general mode immediately",
-    "set_dod": "Set max depth of discharge (params: dod: int 0-95). Higher = more capacity available. Max is 95.",
+    "set_dod": "Set depth of discharge = % of battery capacity AVAILABLE for use (params: dod: int 0-95). DOD=95 → battery discharges to ~5% SOC (MAXIMUM discharge). DOD=5 → battery BLOCKED (only 5% usable!). For discharge/sell: ALWAYS set dod=95. For protection: dod=70.",
     "set_export_limit": "Set grid export limit in watts (params: limit: int). 0 = no export",
     "switch_on": "Turn on managed load (params: entity: 'boiler'|'ac'|'socket2')",
     "switch_off": "Turn off managed load (params: entity: 'boiler'|'ac'|'socket2')",
@@ -1185,6 +1185,11 @@ Odpowiedz WYŁĄCZNIE poprawnym JSON.
    - TYLKO gdy RCE sell > cheapest buy ({tariff_ctx.cheapest_price:.2f} PLN/kWh)
    - Ostatnie 30 min szczytu → ZAWSZE set_general (rezerwa bezpieczeństwa)
    - To jest JEDYNA okazja do zarabiania na energii w net-billingu!
+15. ⚠️ DOD (Depth of Discharge) = % pojemności baterii DOZWOLONE do rozładowania:
+   - DOD=95 → bateria rozładowuje się do ~5% SOC (MAKSIMUM dostępnej energii)
+   - DOD=5 → bateria ZABLOKOWANA (tylko 5% pojemności dostępne!)
+   - Przed force_discharge: ZAWSZE set_dod(95)!  Inaczej bateria się NIE rozładuje!
+   - NIE mylić DOD z minimalnym SOC! set_dod(5) ≠ "rozładuj do 5%", set_dod(5) = "ZABLOKUJ baterię"!
 
 ═══ FORMAT ODPOWIEDZI ═══
 TYLKO poprawny JSON. Bez tekstu, bez markdown, bez wyjaśnień poza JSON.
@@ -1384,6 +1389,11 @@ Net savings: {estimation.get('net_savings', 0):.2f} PLN
     - TYLKO gdy RCE sell > cheapest buy ({tariff_ctx.cheapest_price:.2f} PLN/kWh)
     - Ostatnie 30 min szczytu → ZAWSZE set_general
     - To jedyna okazja na net-billing — odkładaj pieniądze na zimę!
+17. ⚠️ DOD (Depth of Discharge) = % pojemności baterii DOZWOLONE do rozładowania:
+    - DOD=95 → bateria rozładowuje się do ~5% SOC (MAKSIMUM dostępnej energii)
+    - DOD=5 → bateria ZABLOKOWANA (tylko 5% pojemności dostępne!)
+    - W bloku "discharge": ZAWSZE dodaj {{"tool": "set_dod", "params": {{"dod": 95}}}}
+    - NIE mylić DOD z minimalnym SOC! set_dod(5) = BLOKADA baterii, nie rozładowanie do 5%!
 
 ═══ FORMAT ODPOWIEDZI ═══
 KRYTYCZNE: Odpowiedz WYŁĄCZNIE poprawnym JSON. Bez markdown, bez tekstu przed/po.

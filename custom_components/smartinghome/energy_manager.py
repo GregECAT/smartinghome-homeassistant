@@ -148,7 +148,7 @@ class EnergyManager:
             await self._sofar_set_export_limit(16000)    # Allow grid export
             await self._set_work_mode("Self Use")
         else:
-            _LOGGER.info("Forcing battery discharge (eco_discharge, soc=5, power=100, grid_export=ON)")
+            _LOGGER.info("Forcing battery discharge (eco_discharge, DOD=95%%, soc=5, power=100, grid_export=ON)")
             # Enable grid export (47509=1) — critical for BT!
             await self.hass.services.async_call(
                 "modbus",
@@ -162,6 +162,9 @@ class EnergyManager:
             )
             await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
             await self._block_charging()
+            # DOD=95% means 95% of battery capacity CAN be discharged (SOC → ~5%)
+            # DOD=5% would BLOCK discharge (only 5% usable)! This is the critical fix.
+            await self._set_dod(95)
             await self._set_eco_mode_soc(5)
             await self._set_eco_mode_power(100)
             await self._set_work_mode("eco_discharge")

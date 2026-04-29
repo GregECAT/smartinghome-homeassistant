@@ -616,6 +616,11 @@ class StrategyController:
             return "Force discharge started"
         elif tool == "set_dod":
             dod = params.get("dod", 95)
+            # Safety net: values < 50 are almost certainly confused with SOC target
+            if isinstance(dod, (int, float)) and dod < 50:
+                corrected = min(100 - int(dod), 95)
+                _LOGGER.warning("set_dod(%s) auto-corrected to %d%% (DOD = capacity available)", dod, corrected)
+                dod = corrected
             await em._set_dod(dod)
             return f"DOD set to {dod}%"
         elif tool == "switch_on":
@@ -1940,11 +1945,13 @@ class StrategyController:
                     #   discharge_self_consume → general (battery powers house naturally)
                     #   discharge → eco_discharge (aggressive sell to grid)
                     _STRATEGY_EXPECTED_MODES = {
-                        "aggressive_charge": ("eco_charge",),
-                        "charge": ("eco_charge",),
-                        "night_charge": ("eco_charge",),
+                        # GoodWe HA integration reports "eco" for both
+                        # eco_charge and eco_discharge in the select entity
+                        "aggressive_charge": ("eco_charge", "eco"),
+                        "charge": ("eco_charge", "eco"),
+                        "night_charge": ("eco_charge", "eco"),
                         "discharge_self_consume": ("general",),
-                        "discharge": ("eco_discharge",),
+                        "discharge": ("eco_discharge", "eco"),
                     }
                     drifted = False
                     drift_reason = ""
@@ -2002,9 +2009,15 @@ class StrategyController:
                             )
                             _LOGGER.warning(
                                 "AI Executor: DEAD BATTERY — mode=%s correct but battery not discharging! "
-                                "bat=%dW, grid_import=%dW, DOD=%d%% → re-executing (will reset DOD to %d%%)",
-                                work_mode, bat_power, grid_power, dod_val, DEFAULT_DOD_ON_GRID,
+                                "bat=%dW, grid_import=%dW, DOD=%d%% → forcing DOD=95%% to unblock discharge",
+                                work_mode, bat_power, grid_power, dod_val,
                             )
+                            # Immediately fix DOD — this is the #1 cause of dead battery
+                            try:
+                                await self._em._set_dod(95)
+                                self._log_decision("drift_fix", "🔧 DOD reset to 95% (was {:.0f}%) — unblocking discharge".format(dod_val))
+                            except Exception as dod_err:
+                                _LOGGER.error("Failed to reset DOD: %s", dod_err)
 
                     if drifted:
                         self._drift_last_reexec = now
@@ -2255,6 +2268,19 @@ class StrategyController:
             elif tool == "set_dod":
                 dod = int(params.get("dod", 80))
                 dod = max(0, min(dod, 95))  # clamp to GoodWe max (95%)
+                # Safety net: AI often confuses DOD with min-SOC target.
+                # DOD=5 means "allow only 5% discharge" (battery blocked!).
+                # If AI sends low DOD during discharge, auto-correct.
+                if dod < 50:
+                    corrected = 100 - dod
+                    corrected = min(corrected, 95)
+                    _LOGGER.warning(
+                        "AI sent set_dod(%d%%) — likely confused with SOC target. "
+                        "Auto-correcting to DOD=%d%% (allows discharge to ~%d%% SOC). "
+                        "DOD = %% of capacity AVAILABLE for discharge.",
+                        dod, corrected, 100 - corrected,
+                    )
+                    dod = corrected
                 if not self._ai_dry_run:
                     await self._em._set_dod(dod)
                 msg = f"{prefix}: set_dod({dod}%) → głębokość rozładowania"
