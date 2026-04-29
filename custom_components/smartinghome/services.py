@@ -608,16 +608,24 @@ async def async_setup_services(
             "voltage_l1": data.get("sensor.grid_voltage_l1"),
             "battery_capacity": data.get("sensor.battery_capacity",
                                          data.get("battery_capacity_wh", 10000)),
-            # RCE future prices for arbitrage decisions
-            "rce_next_hour": data.get("sensor.rce_pse_cena_nastepnej_godziny"),
-            "rce_2h": data.get("sensor.rce_pse_cena_za_2_godziny"),
-            "rce_3h": data.get("sensor.rce_pse_cena_za_3_godziny"),
-            "rce_sell_next_hour": data.get("rce_sell_price_next_hour"),
-            "rce_sell_2h": data.get("rce_sell_price_2h"),
-            "rce_sell_3h": data.get("rce_sell_price_3h"),
+            # RCE future prices for arbitrage decisions (v2 keys)
+            "rce_next_period": data.get("rce_sell_price_next_hour"),
+            "rce_2h": data.get("rce_sell_price_2h"),
+            "rce_3h": data.get("rce_sell_price_3h"),
             "rce_avg_today": data.get("rce_average_today"),
             "rce_min_today": data.get("rce_min_today"),
             "rce_max_today": data.get("rce_max_today"),
+            "rce_median_today": data.get("rce_median_today"),
+            # v2: Energy Compass (PDGSZ) — PSE grid demand signal
+            "rce_compass": data.get("rce_compass", "unknown"),
+            # v2: Tomorrow awareness
+            "rce_tomorrow_price": data.get("rce_tomorrow_price"),
+            "rce_avg_tomorrow": data.get("rce_avg_tomorrow"),
+            "rce_tomorrow_vs_today_pct": data.get("rce_tomorrow_vs_today_pct"),
+            # v2: Window averages & arbitrage margin
+            "rce_cheap_window_avg": data.get("rce_cheap_window_avg"),
+            "rce_expensive_window_avg": data.get("rce_expensive_window_avg"),
+            "rce_window_arbitrage_margin": data.get("rce_window_arbitrage_margin"),
             # Tariff config (for dynamic prompt rendering)
             "tariff_type": data.get("tariff_type", "g13"),
             "energy_provider": data.get("energy_provider", "tauron"),
