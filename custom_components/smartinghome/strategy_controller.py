@@ -2000,7 +2000,7 @@ class StrategyController:
                         if grid_power > 500:  # >500W import from grid
                             drifted = True
                             # Read DOD to diagnose root cause
-                            from .const import NUMBER_DOD_ON_GRID, DEFAULT_DOD_ON_GRID
+                            from .const import NUMBER_DOD_ON_GRID
                             dod_state = self.hass.states.get(NUMBER_DOD_ON_GRID)
                             dod_val = float(dod_state.state) if dod_state and dod_state.state not in ("unknown", "unavailable") else -1
                             drift_reason = (

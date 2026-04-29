@@ -272,21 +272,6 @@ class WindCalendar:
 
         _LOGGER.info("Wind calendar: starting bootstrap from Recorder...")
 
-        try:
-            now = datetime.now()
-            start = now - timedelta(days=MAX_RETENTION_YEARS * 365)
-            start = start.replace(hour=0, minute=0, second=0, microsecond=0)
-
-            stats = await self.hass.async_add_executor_job(
-                lambda: None  # placeholder — actual call below
-            )
-
-            # Use WebSocket API for Recorder statistics
-            stats = await self.hass.services.async_call(
-                "recorder", "get_statistics", {}, blocking=True
-            )
-        except Exception:
-            pass
 
         # Use the WebSocket-style call
         try:
