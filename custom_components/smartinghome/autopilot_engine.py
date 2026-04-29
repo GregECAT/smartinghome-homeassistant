@@ -753,13 +753,23 @@ Provide EXACTLY 3 sections:
 {tariff_pricing}
 
 ═══ RCE PRICE FORECAST (next hours) ═══
-- Next hour (+1h): {current_data.get('rce_next_hour', 'N/A')} PLN/MWh (sell: {current_data.get('rce_sell_next_hour', 'N/A')} PLN/kWh)
-- +2 hours: {current_data.get('rce_2h', 'N/A')} PLN/MWh (sell: {current_data.get('rce_sell_2h', 'N/A')} PLN/kWh)
-- +3 hours: {current_data.get('rce_3h', 'N/A')} PLN/MWh (sell: {current_data.get('rce_sell_3h', 'N/A')} PLN/kWh)
+- Next period (+1h): {current_data.get('rce_next_period', 'N/A')} PLN/kWh (sell price)
+- +2 hours: {current_data.get('rce_2h', 'N/A')} PLN/kWh (sell price)
+- +3 hours: {current_data.get('rce_3h', 'N/A')} PLN/kWh (sell price)
 - Today's RCE avg: {current_data.get('rce_avg_today', 'N/A')} PLN/kWh
 - Today's RCE min: {current_data.get('rce_min_today', 'N/A')} PLN/kWh
 - Today's RCE max: {current_data.get('rce_max_today', 'N/A')} PLN/kWh
+- Today's RCE median: {current_data.get('rce_median_today', 'N/A')} PLN/kWh
 - RCE Trend: {current_data.get('rce_trend', 'N/A')}
+- Energy Compass (PDGSZ): {current_data.get('rce_compass', 'N/A')}
+
+═══ RCE TOMORROW & ARBITRAGE ═══
+- Tomorrow RCE price: {current_data.get('rce_tomorrow_price', 'N/A')} PLN/MWh
+- Tomorrow RCE avg: {current_data.get('rce_avg_tomorrow', 'N/A')} PLN/kWh
+- Tomorrow vs Today: {current_data.get('rce_tomorrow_vs_today_pct', 'N/A')}%
+- Cheap window avg: {current_data.get('rce_cheap_window_avg', 'N/A')} PLN/kWh
+- Expensive window avg: {current_data.get('rce_expensive_window_avg', 'N/A')} PLN/kWh
+- Window arbitrage margin: {current_data.get('rce_window_arbitrage_margin', 'N/A')} PLN/kWh
 
 ═══ WEATHER & FORECAST ═══
 Current conditions:
@@ -1117,9 +1127,12 @@ Odpowiedz WYŁĄCZNIE poprawnym JSON.
     {next_zones_text}
   Tariff prices: {tariff_ctx.prices_summary}
   RCE: {rce_mwh:.1f} PLN/MWh (sell: {rce_sell:.4f} PLN/kWh)
-  RCE next hour: {current_data.get('rce_next_hour', 'N/A')} PLN/MWh
-  RCE +2h: {current_data.get('rce_2h', 'N/A')} PLN/MWh
-  RCE +3h: {current_data.get('rce_3h', 'N/A')} PLN/MWh
+  RCE next period: {current_data.get('rce_next_period', 'N/A')} PLN/kWh
+  RCE +2h: {current_data.get('rce_2h', 'N/A')} PLN/kWh
+  RCE +3h: {current_data.get('rce_3h', 'N/A')} PLN/kWh
+  RCE compass (PDGSZ): {current_data.get('rce_compass', 'N/A')}
+  RCE tomorrow avg: {current_data.get('rce_avg_tomorrow', 'N/A')} PLN/kWh
+  Arbitrage margin: {current_data.get('rce_window_arbitrage_margin', 'N/A')} PLN/kWh
 
 {tariff_ctx.warning_text}
 
@@ -1295,8 +1308,10 @@ This plan will be executed automatically by the InverterAgent. Respond ONLY with
 
 ═══ RCE PRICES ═══
   Current: {rce_mwh:.1f} PLN/MWh (sell: {rce_sell:.4f} PLN/kWh)
-  +1h: {current_data.get('rce_next_hour', 'N/A')} | +2h: {current_data.get('rce_2h', 'N/A')} | +3h: {current_data.get('rce_3h', 'N/A')} PLN/MWh
-  Today avg: {current_data.get('rce_avg_today', 'N/A')} | min: {current_data.get('rce_min_today', 'N/A')} | max: {current_data.get('rce_max_today', 'N/A')} PLN/MWh
+  +1h: {current_data.get('rce_next_period', 'N/A')} | +2h: {current_data.get('rce_2h', 'N/A')} | +3h: {current_data.get('rce_3h', 'N/A')} PLN/kWh
+  Today avg: {current_data.get('rce_avg_today', 'N/A')} | min: {current_data.get('rce_min_today', 'N/A')} | max: {current_data.get('rce_max_today', 'N/A')} PLN/kWh
+  Compass: {current_data.get('rce_compass', 'N/A')} | Tomorrow: {current_data.get('rce_avg_tomorrow', 'N/A')} ({current_data.get('rce_tomorrow_vs_today_pct', 'N/A')}% vs today)
+  Arbitrage: cheap {current_data.get('rce_cheap_window_avg', 'N/A')} → expensive {current_data.get('rce_expensive_window_avg', 'N/A')} (margin: {current_data.get('rce_window_arbitrage_margin', 'N/A')}) PLN/kWh
 
 ═══ WEATHER ═══
   {current_data.get('weather_condition', 'N/A')}, {current_data.get('weather_temp', 'N/A')}°C, clouds {current_data.get('weather_clouds', 'N/A')}%
