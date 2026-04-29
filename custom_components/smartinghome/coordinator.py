@@ -169,6 +169,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._sensor_map = entry.data.get(CONF_SENSOR_MAP, {})
         self._strategy_controller = None
         self._schedule_manager = None
+        self._wind_calendar = None
 
         # ── Day/Night energy accumulation (server-side, 24/7) ──
         self._load_day_ws: float = 0.0    # watt-seconds during daytime
@@ -183,6 +184,10 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def set_schedule_manager(self, manager) -> None:
         """Set the schedule manager for hourly autopilot/manual orchestration."""
         self._schedule_manager = manager
+
+    def set_wind_calendar(self, calendar) -> None:
+        """Set the wind calendar for daily wind energy tracking."""
+        self._wind_calendar = calendar
 
     def update_sensor_map(self, key: str, entity_id: str) -> None:
         """Update a single sensor mapping in-memory (no restart needed)."""
@@ -204,6 +209,16 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if self._ecowitt_enabled:
                 ecowitt = self._read_ecowitt_sensors()
                 computed.update(ecowitt)
+
+                # Feed wind data to calendar accumulator
+                if self._wind_calendar:
+                    self._wind_calendar.accumulate_sample(
+                        ecowitt.get("ecowitt_wind_speed"),
+                        ecowitt.get("ecowitt_wind_gust"),
+                    )
+                    computed["wind_calendar_today"] = (
+                        self._wind_calendar.get_today_status()
+                    )
 
             # Evaluate schedule manager (if enabled)
             schedule_result = {}

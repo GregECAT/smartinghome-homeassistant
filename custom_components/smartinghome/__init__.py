@@ -29,6 +29,7 @@ from .services import async_setup_services, async_unload_services
 from .strategy_controller import StrategyController
 from .energy_manager import EnergyManager
 from .schedule_manager import ScheduleManager
+from .wind_calendar import WindCalendar
 from .const import AutopilotStrategy as AutopilotStrategy, CONF_DEVICE_ID, DEFAULT_GOODWE_DEVICE_ID, CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE
 
 _LOGGER = logging.getLogger(__name__)
@@ -199,6 +200,23 @@ async def async_setup_entry(
     hass.data[DOMAIN][entry.entry_id]["cron_scheduler"] = cron_scheduler
     hass.data[DOMAIN][entry.entry_id]["strategy_controller"] = strategy_ctrl
     hass.data[DOMAIN][entry.entry_id]["schedule_manager"] = schedule_mgr
+
+    # Initialize Wind Calendar for daily wind energy tracking
+    wind_calendar = WindCalendar(hass)
+    await wind_calendar.async_load()
+    coordinator.set_wind_calendar(wind_calendar)
+    hass.data[DOMAIN][entry.entry_id]["wind_calendar"] = wind_calendar
+
+    # Bootstrap wind history from Recorder (async, non-blocking)
+    async def _bootstrap_wind():
+        try:
+            count = await wind_calendar.bootstrap_from_recorder()
+            if count > 0:
+                _LOGGER.info("Wind calendar bootstrapped: %d days", count)
+        except Exception as err:
+            _LOGGER.debug("Wind calendar bootstrap skipped: %s", err)
+
+    hass.async_create_task(_bootstrap_wind())
 
     # Register custom panel in sidebar
     try:
