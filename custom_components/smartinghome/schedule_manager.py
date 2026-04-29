@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     from .strategy_controller import StrategyController
 
 from .const import (
-    DOMAIN,
     ManualMode,
     AutopilotStrategy,
     MANUAL_MODE_LABELS,
