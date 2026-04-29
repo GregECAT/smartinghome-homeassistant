@@ -42,6 +42,8 @@ from .const import (
     PV_SURPLUS_MIN_SOC_TIER2,
     PV_SURPLUS_MIN_SOC_TIER3,
     SOC_EMERGENCY,
+    SOC_GRID_IMPORT_THRESHOLD,
+    GRID_IMPORT_DETECT_THRESHOLD_W,
     SOC_CHECK_11_THRESHOLD,
     SOC_CHECK_12_THRESHOLD,
     NIGHT_ARBITRAGE_MIN_FORECAST,
@@ -61,9 +63,10 @@ from .const import (
     SENSOR_LOAD_TOTAL,
     SENSOR_GRID_POWER_TOTAL,
     SENSOR_RCE_PRICE,
-    SENSOR_RCE_NEXT_HOUR,
-    SENSOR_RCE_2H,
-    SENSOR_RCE_3H,
+    SENSOR_RCE_NEXT_PERIOD,
+    SENSOR_RCE_COMPASS_TODAY,
+    SENSOR_RCE_CHEAP_WINDOW_AVG,
+    SENSOR_RCE_EXPENSIVE_WINDOW_AVG,
     SWITCH_BOILER,
     SWITCH_AC,
     SWITCH_SOCKET2,
@@ -136,13 +139,24 @@ def _build_ai_data(data: dict[str, Any]) -> dict[str, Any]:
         # RCE
         "rce_price": _safe_float(data.get(SENSOR_RCE_PRICE)),
         "rce_sell": _safe_float(data.get("rce_sell_price")),
-        "rce_next_hour": data.get(SENSOR_RCE_NEXT_HOUR),
-        "rce_2h": data.get(SENSOR_RCE_2H),
-        "rce_3h": data.get(SENSOR_RCE_3H),
+        "rce_next_period": data.get("rce_sell_price_next_hour"),
+        "rce_2h": data.get("rce_sell_price_2h"),
+        "rce_3h": data.get("rce_sell_price_3h"),
         "rce_avg_today": data.get("rce_average_today"),
         "rce_min_today": data.get("rce_min_today"),
         "rce_max_today": data.get("rce_max_today"),
+        "rce_median_today": data.get("rce_median_today"),
         "rce_trend": str(data.get("rce_price_trend", "")),
+        # v2: Energy Compass (PDGSZ) — PSE grid demand signal
+        "rce_compass": data.get("rce_compass", "unknown"),
+        # v2: Tomorrow awareness
+        "rce_tomorrow_price": data.get("rce_tomorrow_price"),
+        "rce_avg_tomorrow": data.get("rce_avg_tomorrow"),
+        "rce_tomorrow_vs_today_pct": data.get("rce_tomorrow_vs_today_pct"),
+        # v2: Window averages & arbitrage margin
+        "rce_cheap_window_avg": data.get("rce_cheap_window_avg"),
+        "rce_expensive_window_avg": data.get("rce_expensive_window_avg"),
+        "rce_window_arbitrage_margin": data.get("rce_window_arbitrage_margin"),
         # Weather  (from HA weather entity or ecowitt)
         "weather_condition": data.get("weather_condition"),
         "weather_temp": data.get("weather_temp") or data.get("ecowitt_temp"),
@@ -276,6 +290,9 @@ class StrategyController:
         self._action_sensor_overrides: dict[str, dict[str, str]] = {}  # action_id → {slot_key: entity_id}
         self._active_action_ids: set[str] = set()  # currently active action IDs
 
+        # Schedule Manager integration
+        self._schedule_managed: bool = False  # True when ScheduleManager controls this controller
+
     def set_ai_advisor(self, ai_advisor: AIAdvisor) -> None:
         """Inject AI advisor reference (called after services setup)."""
         self._ai = ai_advisor
@@ -285,6 +302,20 @@ class StrategyController:
         """Set inverter brand for entity discovery."""
         self._inverter_agent._inverter_brand = brand
         _LOGGER.info("InverterAgent: brand set to %s", brand)
+
+    def set_schedule_managed(self, managed: bool) -> None:
+        """Set whether ScheduleManager controls this controller.
+
+        When True, the controller knows that its activation/deactivation
+        is driven by the hourly schedule — not by the user directly.
+        """
+        self._schedule_managed = managed
+        _LOGGER.debug("StrategyController: schedule_managed=%s", managed)
+
+    @property
+    def schedule_managed(self) -> bool:
+        """Whether the schedule manager is controlling this controller."""
+        return self._schedule_managed
 
     async def _fetch_energy_history(self) -> list[dict[str, Any]]:
         """Fetch 3-day energy history from HA Recorder (cached hourly).
@@ -734,9 +765,9 @@ class StrategyController:
         # ═══════════════════════════════════════════════════════
 
         # W3: SOC Emergency (highest priority)
-        # During expensive afternoon_peak (1.50 PLN/kWh), allow deeper discharge to 5%
-        # — it's cheaper to use battery than buy from grid at premium price
-        soc_emergency_threshold = DEFAULT_BATTERY_MIN_SOC if g13_zone == G13Zone.AFTERNOON_PEAK else SOC_EMERGENCY
+        # Próg krytyczny ZAWSZE 5% (DEFAULT_BATTERY_MIN_SOC) — spójny we wszystkich strefach.
+        # Poniżej tego progu dozwolone ładowanie z sieci (jedyny automatyczny wyjątek).
+        soc_emergency_threshold = DEFAULT_BATTERY_MIN_SOC  # Zawsze 5%
         if soc < soc_emergency_threshold:
             # We must execute force_charge frequently (every 60s) to fight the integration auto-reset
             if await self._throttled_action("soc_emergency_execute", cooldown=60):
@@ -840,6 +871,79 @@ class StrategyController:
             "action_states": self._get_action_states_for_ai(),
         }
 
+    async def execute_safety_only(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Execute only safety layers (W0, W3, W4) — no strategy logic.
+
+        Used by ScheduleManager when the system is in manual mode.
+        Safety layers must ALWAYS run regardless of operating mode.
+
+        Args:
+            data: merged raw + computed sensor data from coordinator.
+
+        Returns:
+            dict with safety actions taken.
+        """
+        now = datetime.now()
+        hour = now.hour
+        month = now.month
+        weekday = now.weekday()
+
+        soc = _safe_float(data.get(SENSOR_BATTERY_SOC))
+        pv = _safe_float(data.get(SENSOR_PV_POWER))
+        load = _safe_float(data.get(SENSOR_LOAD_TOTAL))
+        grid = _safe_float(data.get(SENSOR_GRID_POWER_TOTAL))
+        v_l1 = _safe_float(data.get(SENSOR_GRID_VOLTAGE_L1))
+        v_l2 = _safe_float(data.get(SENSOR_GRID_VOLTAGE_L2))
+        v_l3 = _safe_float(data.get(SENSOR_GRID_VOLTAGE_L3))
+        rce_mwh = _safe_float(data.get(SENSOR_RCE_PRICE))
+        surplus = max(pv - load, 0)
+
+        g13_zone = _get_g13_zone(hour, month, weekday)
+
+        actions_taken: list[str] = []
+
+        # W3: SOC Emergency
+        from .const import DEFAULT_BATTERY_MIN_SOC
+        soc_emergency_threshold = DEFAULT_BATTERY_MIN_SOC  # Zawsze 5% — spójny próg awaryjny
+        if soc < soc_emergency_threshold:
+            if await self._throttled_action("soc_emergency_execute", cooldown=60):
+                await self._em.force_charge()
+                actions_taken.append(
+                    f"W3: ⚠️ SOC emergency — ładowanie (próg: {soc_emergency_threshold}%)"
+                )
+                if await self._throttled_action("soc_emergency_log", cooldown=900):
+                    self._log_decision(
+                        "soc_emergency",
+                        f"SOC={soc:.0f}% < {soc_emergency_threshold}% — ładowanie awaryjne (manual mode)",
+                    )
+
+        # W0: Grid Import Guard
+        w0_actions = await self._execute_w0_grid_import_guard(
+            soc, pv, load, grid, g13_zone,
+            G13_PRICES.get(g13_zone, 0.63), rce_mwh, hour,
+        )
+        actions_taken.extend(w0_actions)
+
+        # W4: Voltage cascade
+        if pv > 50:
+            v_actions = await self._execute_w4_voltage_cascade(v_l1, v_l2, v_l3, soc)
+            actions_taken.extend(v_actions)
+
+        # W4: PV Surplus cascade
+        surplus_actions = await self._execute_w4_pv_surplus_cascade(surplus, soc)
+        actions_taken.extend(surplus_actions)
+
+        return {
+            "enabled": False,
+            "safety_only": True,
+            "strategy": "manual_schedule",
+            "actions": actions_taken,
+            "soc": soc,
+            "pv": pv,
+            "surplus": surplus,
+            "timestamp": now.strftime("%H:%M:%S"),
+        }
+
     # ------------------------------------------------------------------
     #  Action Condition Evaluation Engine
     # ------------------------------------------------------------------
@@ -923,8 +1027,8 @@ class StrategyController:
             # W3: SOC Safety
             "soc_check_11": (hour == 11 and soc < SOC_CHECK_11_THRESHOLD),
             "soc_check_12": (hour == 12 and soc < SOC_CHECK_12_THRESHOLD),
-            "smart_soc_protection": (soc < (DEFAULT_BATTERY_MIN_SOC if g13_zone == G13Zone.AFTERNOON_PEAK else 20)),
-            "soc_emergency": (soc < (DEFAULT_BATTERY_MIN_SOC if g13_zone == G13Zone.AFTERNOON_PEAK else SOC_EMERGENCY)),
+            "smart_soc_protection": (soc < DEFAULT_BATTERY_MIN_SOC),  # Spójny próg 5%
+            "soc_emergency": (soc < DEFAULT_BATTERY_MIN_SOC),  # Spójny próg 5%
 
             # W4: Voltage
             "voltage_boiler": (v_l1 > VOLTAGE_THRESHOLD_WARNING),
@@ -1069,12 +1173,42 @@ class StrategyController:
         g13_zone: G13Zone, g13_price: float, rce_mwh: float,
         hour: int,
     ) -> list[str]:
-        """W0: Block battery charging from grid during expensive hours.
+        """W0: BEZWZGLĘDNA blokada importu z sieci gdy SOC > 5%.
 
-        Exception: RCE < 100 PLN/MWh (arbitrage profitable).
-        PV charging is always allowed.
+        ZASADA NADRZĘDNA:
+        Jeśli SOC > SOC_GRID_IMPORT_THRESHOLD (5%), system MUSI korzystać
+        z baterii zamiast z sieci. Jedyny wyjątek: ręczne wymuszenie
+        ładowania (ManualMode.CHARGE_FROM_GRID).
+
+        Dodatkowa logika dla drogich stref G13 (jak dotychczas).
         """
         actions: list[str] = []
+
+        # ══════════════════════════════════════════════════════════
+        # GUARD NADRZĘDNY: Zero Grid Import gdy SOC > 5%
+        # ══════════════════════════════════════════════════════════
+        battery_available = soc > SOC_GRID_IMPORT_THRESHOLD
+        grid_importing = grid > GRID_IMPORT_DETECT_THRESHOLD_W
+        pv_insufficient = pv < load * 0.8  # PV nie pokrywa popytu
+
+        if battery_available and grid_importing and pv_insufficient:
+            # System pobiera z sieci mimo dostępnej baterii!
+            # Wymuś rozładowanie baterii, by pokryć zapotrzebowanie
+            if await self._throttled_action("w0_zero_grid", cooldown=30):
+                await self._em.force_discharge()
+                self._charging_enabled = False
+                msg = (
+                    f"W0: 🛡️ ZERO GRID — SOC={soc:.0f}% > {SOC_GRID_IMPORT_THRESHOLD}%, "
+                    f"grid_import={grid:.0f}W → force_discharge "
+                    f"(bateria MUSI zasilać dom, NIE sieć)"
+                )
+                actions.append(msg)
+                self._log_decision("w0_zero_grid", msg)
+                return actions  # Guard nadrzędny — nie wykonuj dalszej logiki
+
+        # ══════════════════════════════════════════════════════════
+        # GUARD DODATKOWY: Ochrona w drogich strefach G13
+        # ══════════════════════════════════════════════════════════
         is_expensive = g13_zone in (G13Zone.MORNING_PEAK, G13Zone.AFTERNOON_PEAK)
         rce_cheap_exception = rce_mwh < RCE_PRICE_THRESHOLDS["very_cheap"]
 
@@ -1372,119 +1506,185 @@ class StrategyController:
         g13_zone: G13Zone, g13_price: float, rce_mwh: float,
         hour: int, data: dict,
     ) -> list[str]:
-        """💰 Max Profit: Arbitrage-focused. Buy low, sell high."""
+        """💰 Max Profit: 3-fazowa strategia — Sell Morning → Charge Midday → Sell Peak.
+
+        FAZA 1 (7-13, MORNING_PEAK): Sprzedawaj PV + baterię do sieci.
+            NIE ładuj baterii! Każdy sprzedany wat = zysk po 0.91 PLN.
+            Bateria dosiła dom gdy PV < load (set_general, nie grid!).
+
+        FAZA 2 (13-16/19, OFF_PEAK po 12): Ładuj baterię z PV.
+            PV jest najsilniejsze, darmowe ładowanie do 100% przed szczytem.
+
+        FAZA 3 (16/19-21/22, AFTERNOON_PEAK): Peak Sell.
+            Znajdź najdroższą godzinę RCE → sprzedaj ~40% SOC.
+            Reszta SOC na zasilanie domu. Net-billing → odkładaj na zimę.
+        """
         actions: list[str] = []
 
-        is_cheap = (
-            g13_zone == G13Zone.OFF_PEAK
-            or rce_mwh < RCE_PRICE_THRESHOLDS["cheap"]
-        )
-        is_expensive = (
-            g13_zone == G13Zone.AFTERNOON_PEAK
-            or rce_mwh > RCE_PRICE_THRESHOLDS["expensive"]
-        )
+        # ═══════════════════════════════════════════════════════
+        # FAZA 1: MORNING_PEAK (7:00-13:00) — SPRZEDAWAJ!
+        # ═══════════════════════════════════════════════════════
+        if g13_zone == G13Zone.MORNING_PEAK:
+            # Priorytet: sprzedaż do sieci, NIE ładowanie baterii
+            # Bateria służy TYLKO jako backup gdy PV < load
 
-        # W1: G13 Schedule + W2: RCE dynamic
-        if is_cheap and soc < 90:
-            # Cheap → charge battery (even from grid)
-            if self._charging_enabled is not True:
-                if await self._throttled_action("mp_cheap_charge"):
-                    await self._em.force_charge()
-                    self._charging_enabled = True
-                    msg = f"💰 MP: Tania energia ({g13_price:.2f} PLN, RCE={rce_mwh:.0f}) → ładowanie (SOC={soc:.0f}%)"
+            if surplus > 200 and soc > 15:
+                # PV nadwyżka + bateria ma zapas → SPRZEDAWAJ agresywnie
+                if self._charging_enabled is not False:
+                    if await self._throttled_action("mp_morning_sell"):
+                        await self._em.force_discharge()
+                        self._charging_enabled = False
+                        rce_sell_kwh = (rce_mwh / 1000) * RCE_PROSUMER_COEFFICIENT
+                        msg = (
+                            f"💰 MP FAZA1: Poranna sprzedaż → force_discharge "
+                            f"(G13={g13_price:.2f}, RCE sell={rce_sell_kwh:.3f} PLN/kWh). "
+                            f"PV={pv:.0f}W, surplus={surplus:.0f}W, SOC={soc:.0f}%"
+                        )
+                        actions.append(msg)
+                        self._log_decision("mp_morning_sell", msg)
+
+            elif pv >= load * 0.8 and soc > 15:
+                # PV pokrywa dom → bateria może eksportować
+                if self._charging_enabled is not False:
+                    if await self._throttled_action("mp_morning_sell_pv"):
+                        await self._em.force_discharge()
+                        self._charging_enabled = False
+                        msg = (
+                            f"💰 MP FAZA1: PV pokrywa dom ({pv:.0f}W vs load {load:.0f}W) "
+                            f"→ force_discharge, bateria sprzedaje (SOC={soc:.0f}%)"
+                        )
+                        actions.append(msg)
+                        self._log_decision("mp_morning_sell_pv", msg)
+
+            elif pv < load * 0.8 and soc > DEFAULT_BATTERY_MIN_SOC:
+                # PV nie pokrywa domu → bateria dosiła dom (set_general)
+                # NIE kupuj z sieci! Bateria zastępuje sieć.
+                if await self._throttled_action("mp_morning_backup"):
+                    await self._em.set_general_mode()
+                    self._charging_enabled = False
+                    msg = (
+                        f"💰 MP FAZA1: PV słabe ({pv:.0f}W < load {load:.0f}W) "
+                        f"→ set_general, bateria dosiła dom (SOC={soc:.0f}%)"
+                    )
                     actions.append(msg)
-                    self._log_decision("mp_charge", msg)
+                    self._log_decision("mp_morning_backup", msg)
 
-        elif is_expensive and g13_zone == G13Zone.AFTERNOON_PEAK:
-            # Afternoon peak — use peak sell logic (divide battery: sell + reserve)
+        # ═══════════════════════════════════════════════════════
+        # FAZA 2: OFF_PEAK po 12:00 — ŁADUJ Z PV!
+        # ═══════════════════════════════════════════════════════
+        elif g13_zone == G13Zone.OFF_PEAK and hour >= 12:
+            # Dopiero TERAZ ładujemy baterię — z PV, NIGDY z sieci!
+            if surplus > 200 and soc < 95:
+                # PV nadwyżka → ładuj baterię do pełna
+                if self._charging_enabled is not True:
+                    if await self._throttled_action("mp_midday_pv_charge"):
+                        await self._em.force_charge()
+                        self._charging_enabled = True
+                        msg = (
+                            f"💰 MP FAZA2: PV ładuje baterię → force_charge "
+                            f"(surplus={surplus:.0f}W, SOC={soc:.0f}% → cel: 95-100%)"
+                        )
+                        actions.append(msg)
+                        self._log_decision("mp_midday_charge", msg)
+
+            elif surplus <= 200 and soc < 80:
+                # PV nie ma dużej nadwyżki, bateria jeszcze nie pełna
+                # Sprawdź czy PV pokrywa load — jeśli tak, pozwól naturalnie ładować
+                if pv > load:
+                    # PV > load ale mała nadwyżka → set_general (naturalne ładowanie)
+                    if await self._throttled_action("mp_midday_natural"):
+                        await self._em.set_general_mode()
+                        self._charging_enabled = False
+                        msg = (
+                            f"💰 MP FAZA2: PV > load ({pv:.0f}W > {load:.0f}W) "
+                            f"→ set_general, naturalne ładowanie (SOC={soc:.0f}%)"
+                        )
+                        actions.append(msg)
+                        self._log_decision("mp_midday_natural", msg)
+                elif soc > DEFAULT_BATTERY_MIN_SOC:
+                    # PV < load → bateria dosiła dom
+                    if await self._throttled_action("mp_midday_backup"):
+                        await self._em.set_general_mode()
+                        self._charging_enabled = False
+                        msg = (
+                            f"💰 MP FAZA2: PV nie pokrywa ({pv:.0f}W < {load:.0f}W) "
+                            f"→ set_general, bateria dosiła dom (SOC={soc:.0f}%)"
+                        )
+                        actions.append(msg)
+                        self._log_decision("mp_midday_backup", msg)
+
+            elif soc >= 95:
+                # Bateria pełna → eksportuj nadwyżkę PV
+                if surplus > 100:
+                    if await self._throttled_action("mp_midday_full_export"):
+                        await self._em.force_discharge()
+                        self._charging_enabled = False
+                        msg = (
+                            f"💰 MP FAZA2: Bateria pełna (SOC={soc:.0f}%) "
+                            f"→ force_discharge, eksport nadwyżki PV ({surplus:.0f}W)"
+                        )
+                        actions.append(msg)
+                        self._log_decision("mp_midday_export", msg)
+
+        # ═══════════════════════════════════════════════════════
+        # FAZA 3: AFTERNOON_PEAK — PEAK SELL + DOM
+        # ═══════════════════════════════════════════════════════
+        elif g13_zone == G13Zone.AFTERNOON_PEAK:
+            # Peak sell: podziel baterię na sprzedaż + rezerwę na dom
             minute = datetime.now().minute
             peak_actions = await self._execute_peak_sell(
                 soc, pv, load, g13_zone, rce_mwh, hour, minute,
             )
             actions.extend(peak_actions)
             if not peak_actions:
-                # Peak sell returned empty (disabled or unprofitable) — fallback to self-consumption
+                # Peak sell wyłączony lub nieopłacalny → autokonsumpcja
                 if soc > DEFAULT_BATTERY_MIN_SOC:
                     if self._charging_enabled is not False:
-                        if await self._throttled_action("mp_expensive_general"):
+                        if await self._throttled_action("mp_peak_general"):
                             await self._em.set_general_mode()
                             self._charging_enabled = False
-                            msg = f"💰 MP: Droga strefa ({g13_price:.2f} PLN) → set_general (SOC={soc:.0f}%)"
+                            msg = (
+                                f"💰 MP FAZA3: Szczyt ({g13_price:.2f} PLN) "
+                                f"→ set_general, bateria zasiła dom (SOC={soc:.0f}%)"
+                            )
                             actions.append(msg)
-                            self._log_decision("mp_general", msg)
+                            self._log_decision("mp_peak_general", msg)
 
-        elif is_expensive and soc > 20:
-            # Morning peak or RCE expensive — simple discharge
-            if self._charging_enabled is not False:
-                if await self._throttled_action("mp_expensive_sell"):
-                    await self._em.force_discharge()
+        # ═══════════════════════════════════════════════════════
+        # OFF_PEAK NOCNY (22-7) i OFF_PEAK przed 12
+        # ═══════════════════════════════════════════════════════
+        elif g13_zone == G13Zone.OFF_PEAK and hour < 12:
+            # Przed 12:00 w OFF_PEAK — NIE ładuj baterii z sieci!
+            # Jeśli jest PV nadwyżka, ładuj. Inaczej — set_general.
+            if surplus > 200 and soc < 95:
+                if self._charging_enabled is not True:
+                    if await self._throttled_action("mp_early_pv_charge"):
+                        await self._em.force_charge()
+                        self._charging_enabled = True
+                        msg = (
+                            f"💰 MP: Wczesna nadwyżka PV ({surplus:.0f}W) "
+                            f"→ ładuj baterię (SOC={soc:.0f}%)"
+                        )
+                        actions.append(msg)
+                        self._log_decision("mp_early_pv", msg)
+            elif pv < load * 0.5 and soc > DEFAULT_BATTERY_MIN_SOC:
+                # Noc/wczesny ranek — bateria dosiła dom
+                if await self._throttled_action("mp_night_general"):
+                    await self._em.set_general_mode()
                     self._charging_enabled = False
-                    msg = f"💰 MP: Droga energia ({g13_price:.2f} PLN, RCE={rce_mwh:.0f}) → sprzedaż (SOC={soc:.0f}%)"
-                    actions.append(msg)
-                    self._log_decision("mp_sell", msg)
 
-        elif rce_mwh < 0:
-            # Negative RCE → charge everything, enable all loads
+        # ═══════════════════════════════════════════════════════
+        # WYJĄTKI
+        # ═══════════════════════════════════════════════════════
+
+        # Ujemna cena RCE → ładuj wszystko (darmowa energia!)
+        if rce_mwh < 0:
             if await self._throttled_action("mp_negative_rce"):
                 await self._em.force_charge()
                 self._charging_enabled = True
                 msg = f"💰 MP: Ujemna cena RCE ({rce_mwh:.0f}) — darmowa energia! Ładuj + wszystko ON"
                 actions.append(msg)
                 self._log_decision("mp_negative_rce", msg)
-
-        else:
-            # Normal time → self-consumption
-            s_actions = await self._strategy_max_self_consumption(
-                soc, pv, load, surplus, g13_zone, g13_price, hour,
-            )
-            actions.extend(s_actions)
-
-        # Night arbitrage check (W1)
-        if hour == 23 and soc < 50:
-            forecast_tmr = _safe_float(data.get("pv_forecast_tomorrow_total"))
-            if forecast_tmr < NIGHT_ARBITRAGE_MIN_FORECAST:
-                if await self._throttled_action("mp_night_arb"):
-                    await self._em.force_charge()
-                    self._charging_enabled = True
-                    profit = (DEFAULT_BATTERY_CAPACITY / 1000) * (
-                        G13_PRICES[G13Zone.AFTERNOON_PEAK] - G13_PRICES[G13Zone.OFF_PEAK]
-                    )
-                    msg = (
-                        f"💰 MP: Arbitraż nocny — ładowanie z sieci "
-                        f"(prognoza jutro: {forecast_tmr:.1f}kWh, zysk: ~{profit:.2f} PLN)"
-                    )
-                    actions.append(msg)
-                    self._log_decision("mp_night_arb", msg)
-
-        # Pre-afternoon-peak smart charging (W5+)
-        # Grid charge ONLY when ≤ 2 hours before expensive zone,
-        # AND PV forecast cannot cover battery needs naturally.
-        # This prevents wasteful grid charging during daytime when PV
-        # can charge the battery for free.
-        hours_to_peak = self._hours_until_expensive_zone(
-            hour, datetime.now().month, datetime.now().weekday(),
-        )
-        if (
-            g13_zone == G13Zone.OFF_PEAK
-            and 0 < hours_to_peak <= 2
-            and soc < 80
-            and self._should_grid_charge_before_peak(soc, pv, load, data)
-        ):
-            remaining_forecast = _safe_float(
-                data.get("pv_forecast_remaining_today_total")
-            )
-            if await self._throttled_action("mp_prepeak_fill"):
-                await self._em.force_charge()
-                self._charging_enabled = True
-                margin = G13_PRICES[G13Zone.AFTERNOON_PEAK] - G13_PRICES[G13Zone.OFF_PEAK]
-                msg = (
-                    f"💰 MP: Pre-peak fill → ładuj z sieci po {G13_PRICES[G13Zone.OFF_PEAK]:.2f} PLN "
-                    f"({hours_to_peak:.0f}h do szczytu {G13_PRICES[G13Zone.AFTERNOON_PEAK]:.2f} PLN). "
-                    f"SOC={soc:.0f}%, PV={pv:.0f}W, forecast remaining={remaining_forecast:.1f}kWh, "
-                    f"marża: {margin:.2f} PLN/kWh"
-                )
-                actions.append(msg)
-                self._log_decision("mp_prepeak", msg)
 
         return actions
 
@@ -1508,14 +1708,16 @@ class StrategyController:
                     self._log_decision("bp_high", msg)
 
         elif soc <= limits["min"]:
-            # SOC too low — charge
-            if self._charging_enabled is not True:
-                if await self._throttled_action("bp_soc_low"):
-                    await self._em.force_charge()
-                    self._charging_enabled = True
-                    msg = f"🔋 BP: SOC={soc:.0f}% <= {limits['min']:.0f}% — ładowanie ochronne"
-                    actions.append(msg)
-                    self._log_decision("bp_low", msg)
+            # SOC too low — charge (PV only, grid only if SOC < critical 5%)
+            if soc < SOC_GRID_IMPORT_THRESHOLD or surplus > 100:
+                if self._charging_enabled is not True:
+                    if await self._throttled_action("bp_soc_low"):
+                        await self._em.force_charge()
+                        self._charging_enabled = True
+                        source = "PV" if surplus > 100 else "sieć (SOC krytyczny)"
+                        msg = f"🔋 BP: SOC={soc:.0f}% <= {limits['min']:.0f}% — ładowanie ochronne [{source}]"
+                        actions.append(msg)
+                        self._log_decision("bp_low", msg)
 
         elif surplus > 300 and soc < limits["max"]:
             # PV surplus and room to charge
@@ -1605,6 +1807,7 @@ class StrategyController:
         if (
             0 < hours_to_peak <= 2
             and soc < 60
+            and soc < SOC_GRID_IMPORT_THRESHOLD  # ZERO GRID: ładuj z sieci TYLKO gdy bateria krytycznie niska
             and forecast_today_remaining < 3
             and self._should_grid_charge_before_peak(soc, pv, load, data)
         ):

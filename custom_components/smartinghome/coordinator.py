@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -45,14 +46,19 @@ from .const import (
     SENSOR_WORK_MODE,
     SENSOR_INVERTER_TEMP,
     SENSOR_RCE_PRICE,
-    SENSOR_RCE_PRICE_KWH,
     SENSOR_RCE_SELL_PROSUMER,
-    SENSOR_RCE_NEXT_HOUR,
-    SENSOR_RCE_2H,
-    SENSOR_RCE_3H,
+    SENSOR_RCE_NEXT_PERIOD,
+    SENSOR_RCE_PREV_PERIOD,
     SENSOR_RCE_AVG_TODAY,
     SENSOR_RCE_MIN_TODAY,
     SENSOR_RCE_MAX_TODAY,
+    SENSOR_RCE_MEDIAN_TODAY,
+    SENSOR_RCE_PRICE_TOMORROW,
+    SENSOR_RCE_AVG_TOMORROW,
+    SENSOR_RCE_TOMORROW_VS_TODAY,
+    SENSOR_RCE_COMPASS_TODAY,
+    SENSOR_RCE_CHEAP_WINDOW_AVG,
+    SENSOR_RCE_EXPENSIVE_WINDOW_AVG,
     SENSOR_FORECAST_POWER_1,
     SENSOR_FORECAST_POWER_2,
     SENSOR_FORECAST_TODAY_1,
@@ -108,9 +114,14 @@ SOURCE_SENSORS: list[str] = [
     SENSOR_LOAD_TOTAL, SENSOR_LOAD_L1, SENSOR_LOAD_L2, SENSOR_LOAD_L3,
     SENSOR_LOAD_TODAY,
     SENSOR_WORK_MODE, SENSOR_INVERTER_TEMP,
-    SENSOR_RCE_PRICE, SENSOR_RCE_PRICE_KWH, SENSOR_RCE_SELL_PROSUMER,
-    SENSOR_RCE_NEXT_HOUR, SENSOR_RCE_2H, SENSOR_RCE_3H,
+    SENSOR_RCE_PRICE, SENSOR_RCE_SELL_PROSUMER,
+    SENSOR_RCE_NEXT_PERIOD, SENSOR_RCE_PREV_PERIOD,
     SENSOR_RCE_AVG_TODAY, SENSOR_RCE_MIN_TODAY, SENSOR_RCE_MAX_TODAY,
+    SENSOR_RCE_MEDIAN_TODAY,
+    SENSOR_RCE_PRICE_TOMORROW, SENSOR_RCE_AVG_TOMORROW,
+    SENSOR_RCE_TOMORROW_VS_TODAY,
+    SENSOR_RCE_COMPASS_TODAY,
+    SENSOR_RCE_CHEAP_WINDOW_AVG, SENSOR_RCE_EXPENSIVE_WINDOW_AVG,
     SENSOR_FORECAST_POWER_1, SENSOR_FORECAST_POWER_2,
     SENSOR_FORECAST_TODAY_1, SENSOR_FORECAST_TODAY_2,
     SENSOR_FORECAST_REMAINING_1, SENSOR_FORECAST_REMAINING_2,
@@ -157,10 +168,21 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._ecowitt_enabled = entry.data.get(CONF_ECOWITT_ENABLED, False)
         self._sensor_map = entry.data.get(CONF_SENSOR_MAP, {})
         self._strategy_controller = None
+        self._schedule_manager = None
+
+        # ── Day/Night energy accumulation (server-side, 24/7) ──
+        self._load_day_ws: float = 0.0    # watt-seconds during daytime
+        self._load_night_ws: float = 0.0  # watt-seconds during nighttime
+        self._last_load_ts: float | None = None  # monotonic timestamp
+        self._accum_date: str = ""        # YYYY-MM-DD for midnight reset
 
     def set_strategy_controller(self, controller) -> None:
         """Set the strategy controller for autonomous HEMS control."""
         self._strategy_controller = controller
+
+    def set_schedule_manager(self, manager) -> None:
+        """Set the schedule manager for hourly autopilot/manual orchestration."""
+        self._schedule_manager = manager
 
     def update_sensor_map(self, key: str, entity_id: str) -> None:
         """Update a single sensor mapping in-memory (no restart needed)."""
@@ -183,11 +205,45 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ecowitt = self._read_ecowitt_sensors()
                 computed.update(ecowitt)
 
+            # Evaluate schedule manager (if enabled)
+            schedule_result = {}
+            if self._schedule_manager:
+                try:
+                    merged_for_schedule = {**raw, **computed}
+                    schedule_result = await self._schedule_manager.evaluate_tick(
+                        merged_for_schedule
+                    )
+                    computed["schedule_status"] = schedule_result
+                except Exception as sched_err:
+                    _LOGGER.error(
+                        "Schedule manager tick failed: %s", sched_err
+                    )
+                    schedule_result = {}
+                    computed["schedule_status"] = {"error": str(sched_err)}
+
             # Execute strategy controller tick (autonomous HEMS control)
+            # Schedule manager controls whether full strategy or safety-only runs
+            autopilot_should_run = schedule_result.get(
+                "autopilot_should_run", self._strategy_controller.enabled if self._strategy_controller else False
+            )
+            safety_only = schedule_result.get("safety_only", False)
+
             if self._strategy_controller:
                 try:
                     merged = {**raw, **computed}
-                    ctrl_result = await self._strategy_controller.execute_tick(merged)
+                    if safety_only:
+                        # Manual mode — only safety layers (W0/W3/W4)
+                        ctrl_result = await self._strategy_controller.execute_safety_only(merged)
+                    elif autopilot_should_run:
+                        # Autopilot mode — full strategy execution
+                        ctrl_result = await self._strategy_controller.execute_tick(merged)
+                    else:
+                        # Autopilot disabled, no schedule — skip
+                        ctrl_result = {
+                            "enabled": False,
+                            "strategy": self._strategy_controller.active_strategy.value,
+                        }
+
                     computed["autopilot_status"] = ctrl_result
                     computed["autopilot_active_strategy"] = (
                         self._strategy_controller.active_strategy.value
@@ -369,11 +425,16 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             data["goodwe_home_consumption_from_pv_today"] = round(home_from_pv, 2)
         else:
+            home_from_pv = 0.0
             data["goodwe_autarky_today"] = 0.0
             data["goodwe_self_consumption_today"] = 0.0
             data["goodwe_home_consumption_from_pv_today"] = 0.0
 
         data["goodwe_net_grid_today"] = round(grid_import - grid_export, 2)
+
+        # —— Day/Night energy accumulation (server-side) ——
+        day_night = self._accumulate_day_night(load, load_today, home_from_pv)
+        data.update(day_night)
 
         # —— System status ——
         data["goodwe_system_status"] = self._compute_system_status(raw, soc)
@@ -388,6 +449,94 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data["license_tier"] = self.license_manager.tier.value
 
         return data
+
+    def _accumulate_day_night(
+        self,
+        load_w: float,
+        load_today_kwh: float,
+        pv_to_home_kwh: float,
+    ) -> dict[str, Any]:
+        """Accumulate load energy into day/night buckets (server-side, 24/7).
+
+        Cycle: midnight → midnight (24h).
+        Day   = sunrise → sunset  (sun.sun above_horizon)
+        Night = (00:00 → sunrise) + (sunset → 24:00)
+
+        Both accumulators reset at midnight. Night is the SUM of the
+        morning segment (00:00→sunrise) and evening segment (sunset→24:00)
+        within the same calendar day.
+
+        Calibrates against load_today from inverter for accuracy.
+        """
+        now_ts = time.monotonic()
+        today_str = datetime.now().strftime("%Y-%m-%d")
+
+        # ── Midnight reset ──
+        # Reset BOTH accumulators at midnight — new 24h cycle begins.
+        if self._accum_date and self._accum_date != today_str:
+            _LOGGER.debug(
+                "Day/night midnight reset: day=%.0f Ws, night=%.0f Ws",
+                self._load_day_ws,
+                self._load_night_ws,
+            )
+            self._load_day_ws = 0.0
+            self._load_night_ws = 0.0
+            self._accum_date = today_str
+            # Reset timestamp to avoid a huge delta after date change
+            self._last_load_ts = now_ts
+
+        if not self._accum_date:
+            self._accum_date = today_str
+
+        # ── Determine if it's daytime ──
+        sun_state = self.hass.states.get("sun.sun")
+        is_day = sun_state is not None and sun_state.state == "above_horizon"
+
+        # ── Accumulate energy ──
+        # Night accumulates in two segments within the same day:
+        #   1. Morning: 00:00 → sunrise (sun below horizon)
+        #   2. Evening: sunset → 24:00 (sun below horizon)
+        if self._last_load_ts is not None and load_w > 0:
+            dt_sec = now_ts - self._last_load_ts
+            if 0 < dt_sec < 120:  # Cap at 2 min to avoid spikes after sleep
+                watt_sec = load_w * dt_sec
+                if is_day:
+                    self._load_day_ws += watt_sec
+                else:
+                    self._load_night_ws += watt_sec
+        self._last_load_ts = now_ts
+
+        # ── Calibrate against load_today from inverter ──
+        # The inverter's load_today is the ground truth. Our accumulators
+        # provide the day/night RATIO, which we apply to the inverter value.
+        total_ws = self._load_day_ws + self._load_night_ws
+        day_kwh = 0.0
+        night_kwh = 0.0
+
+        if total_ws > 0 and load_today_kwh > 0:
+            day_ratio = self._load_day_ws / total_ws
+            day_kwh = round(load_today_kwh * day_ratio, 2)
+            night_kwh = round(load_today_kwh * (1 - day_ratio), 2)
+        elif total_ws > 0:
+            # No load_today yet — use raw accumulator values
+            day_kwh = round(self._load_day_ws / 3_600_000, 2)
+            night_kwh = round(self._load_night_ws / 3_600_000, 2)
+
+        # ── PV-based fallback ──
+        # If accumulators missed daytime (e.g. HA restart after sunset),
+        # PV self-consumption is the physical minimum for day consumption
+        if day_kwh == 0 and pv_to_home_kwh > 0 and load_today_kwh > 0:
+            day_kwh = round(min(load_today_kwh, pv_to_home_kwh), 2)
+            night_kwh = round(max(0, load_today_kwh - day_kwh), 2)
+
+        # ── PV to home (server-side, for frontend) ──
+        pv_to_home = round(pv_to_home_kwh, 2) if pv_to_home_kwh > 0 else 0.0
+
+        return {
+            "load_day_kwh": day_kwh,
+            "load_night_kwh": night_kwh,
+            "load_pv_to_home_kwh": pv_to_home,
+        }
 
     def _compute_g13(self, now: datetime) -> dict[str, Any]:
         """Compute G13 tariff data."""
@@ -484,10 +633,45 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return data
 
+    def _get_price_lookahead(self, hours_ahead: int = 3) -> dict[str, float]:
+        """Extract future prices from the 96-point prices attribute (v2).
+
+        RCE PSE v2 provides 15-min resolution data in the 'prices' attribute
+        of sensor.rce_pse_cena (96 entries per day). We use this to compute
+        +1h, +2h, +3h lookahead — replacing the removed v1 sensors.
+        """
+        state = self.hass.states.get(SENSOR_RCE_PRICE)
+        if not state or not state.attributes:
+            return {}
+
+        prices = state.attributes.get("prices", [])
+        if not prices:
+            return {}
+
+        now = datetime.now()
+        result: dict[str, float] = {}
+
+        for offset in range(1, hours_ahead + 1):
+            target_time = now + timedelta(hours=offset)
+            # Find the price entry covering the target time
+            for entry in prices:
+                try:
+                    dtime_str = entry.get("dtime", "")
+                    entry_time = datetime.fromisoformat(str(dtime_str))
+                    if entry_time >= target_time:
+                        result[f"rce_lookahead_{offset}h_mwh"] = float(
+                            entry.get("rce_pln", 0)
+                        )
+                        break
+                except (ValueError, TypeError):
+                    continue
+
+        return result
+
     def _compute_rce(
         self, raw: dict[str, Any], g13_data: dict[str, Any]
     ) -> dict[str, Any]:
-        """Compute RCE-derived values."""
+        """Compute RCE-derived values (v2 — 15-min resolution)."""
         data: dict[str, Any] = {}
 
         rce_mwh = _safe_float(raw.get(SENSOR_RCE_PRICE))
@@ -496,19 +680,23 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         data["rce_sell_price"] = round(rce_sell, 4)
 
-        # Next hours
-        rce_next = _safe_float(raw.get(SENSOR_RCE_NEXT_HOUR)) / 1000
+        # —— Next period price (v2: 15min or 1h depending on config) ——
+        rce_next = _safe_float(raw.get(SENSOR_RCE_NEXT_PERIOD)) / 1000
         data["rce_sell_price_next_hour"] = round(
             rce_next * RCE_PROSUMER_COEFFICIENT, 4
         )
 
-        rce_2h = _safe_float(raw.get(SENSOR_RCE_2H)) / 1000
-        data["rce_sell_price_2h"] = round(rce_2h * RCE_PROSUMER_COEFFICIENT, 4)
+        # —— Lookahead prices (computed from 96-point attribute) ——
+        lookahead = self._get_price_lookahead(hours_ahead=3)
+        rce_2h_mwh = lookahead.get("rce_lookahead_2h_mwh", rce_mwh)
+        rce_3h_mwh = lookahead.get("rce_lookahead_3h_mwh", rce_mwh)
+        rce_2h = rce_2h_mwh / 1000
+        rce_3h = rce_3h_mwh / 1000
 
-        rce_3h = _safe_float(raw.get(SENSOR_RCE_3H)) / 1000
+        data["rce_sell_price_2h"] = round(rce_2h * RCE_PROSUMER_COEFFICIENT, 4)
         data["rce_sell_price_3h"] = round(rce_3h * RCE_PROSUMER_COEFFICIENT, 4)
 
-        # Averages
+        # —— Statistics ——
         avg = _safe_float(raw.get(SENSOR_RCE_AVG_TODAY)) / 1000
         data["rce_average_today"] = round(avg * RCE_PROSUMER_COEFFICIENT, 4)
 
@@ -518,11 +706,48 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         max_rce = _safe_float(raw.get(SENSOR_RCE_MAX_TODAY)) / 1000
         data["rce_max_today"] = round(max_rce * RCE_PROSUMER_COEFFICIENT, 4)
 
-        # Spread: G13 buy - RCE sell
+        # v2: Median — more robust than average for skewed distributions
+        median_mwh = _safe_float(raw.get(SENSOR_RCE_MEDIAN_TODAY))
+        data["rce_median_today"] = round(
+            median_mwh / 1000 * RCE_PROSUMER_COEFFICIENT, 4
+        ) if median_mwh else 0.0
+
+        # —— Tomorrow awareness (available after ~14:00) ——
+        tomorrow_mwh = _safe_float(raw.get(SENSOR_RCE_PRICE_TOMORROW))
+        data["rce_tomorrow_price"] = round(tomorrow_mwh / 1000, 4) if tomorrow_mwh else None
+        tomorrow_avg = _safe_float(raw.get(SENSOR_RCE_AVG_TOMORROW))
+        data["rce_avg_tomorrow"] = round(
+            tomorrow_avg / 1000 * RCE_PROSUMER_COEFFICIENT, 4
+        ) if tomorrow_avg else None
+        data["rce_tomorrow_vs_today_pct"] = _safe_float(
+            raw.get(SENSOR_RCE_TOMORROW_VS_TODAY)
+        )
+
+        # —— Energy Compass (PDGSZ) — PSE grid demand signal ——
+        compass_state = self.hass.states.get(SENSOR_RCE_COMPASS_TODAY)
+        if compass_state and compass_state.state not in ("unknown", "unavailable"):
+            data["rce_compass"] = compass_state.state
+        else:
+            data["rce_compass"] = "unknown"
+
+        # —— Configurable window averages ——
+        cheap_window_avg = _safe_float(raw.get(SENSOR_RCE_CHEAP_WINDOW_AVG))
+        expensive_window_avg = _safe_float(raw.get(SENSOR_RCE_EXPENSIVE_WINDOW_AVG))
+        data["rce_cheap_window_avg"] = round(cheap_window_avg / 1000, 4) if cheap_window_avg else 0.0
+        data["rce_expensive_window_avg"] = round(expensive_window_avg / 1000, 4) if expensive_window_avg else 0.0
+        # Real arbitrage margin from actual window data
+        if cheap_window_avg > 0 and expensive_window_avg > 0:
+            data["rce_window_arbitrage_margin"] = round(
+                (expensive_window_avg - cheap_window_avg) / 1000, 4
+            )
+        else:
+            data["rce_window_arbitrage_margin"] = 0.0
+
+        # —— Spread: G13 buy - RCE sell ——
         g13_price = g13_data.get("g13_buy_price", 0.63)
         data["g13_rce_spread"] = round(g13_price - rce_sell, 4)
 
-        # Trend
+        # —— Trend ——
         if rce_kwh > 0 and rce_next > 0:
             change_pct = (rce_next - rce_kwh) / rce_kwh * 100
             if change_pct > 10:
@@ -534,7 +759,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             data["rce_price_trend"] = RCETrend.STABLE
 
-        # Good sell evaluation
+        # —— Good sell evaluation ——
         thresholds = RCE_PRICE_THRESHOLDS
         if rce_mwh >= thresholds["very_expensive"]:
             data["rce_good_sell"] = RCEPriceLevel.EXCELLENT

@@ -742,6 +742,93 @@ AUTOPILOT_PLAN_KEY: Final = "ai_autopilot_plan"
 AUTOPILOT_ACTIONS_STATE_KEY: Final = "autopilot_actions_state"
 AUTOPILOT_ACTIONS_OVERRIDES_KEY: Final = "autopilot_action_sensor_overrides"
 
+# =============================================================================
+# Schedule Manager — Manual Mode & Autopilot Scheduler
+# =============================================================================
+
+
+class ManualMode(StrEnum):
+    """Manual operating modes for user-defined hourly schedule."""
+
+    SELF_CONSUMPTION = "self_consumption"   # PV→home→battery, surplus→grid
+    SELL_TO_GRID = "sell_to_grid"           # Battery discharges to grid
+    CHARGE_BATTERY = "charge_battery"       # PV→battery priority
+    CHARGE_FROM_GRID = "charge_from_grid"   # Battery charges from grid (arbitrage)
+    PEAK_SAVE = "peak_save"                 # Block grid charge, battery powers home
+    ZERO_EXPORT = "zero_export"             # All PV to home/battery, nothing to grid
+    BATTERY_HOLD = "battery_hold"           # Battery idle — no charge, no discharge
+    OFF = "off"                             # No management, inverter defaults
+
+
+MANUAL_MODE_LABELS: Final = {
+    ManualMode.SELF_CONSUMPTION: "🏠 Autokonsumpcja",
+    ManualMode.SELL_TO_GRID: "💰 Sprzedaż do sieci",
+    ManualMode.CHARGE_BATTERY: "🔋 Ładuj baterię (PV)",
+    ManualMode.CHARGE_FROM_GRID: "⚡🔋 Ładuj z sieci",
+    ManualMode.PEAK_SAVE: "🛡️ Oszczędzaj na szczyt",
+    ManualMode.ZERO_EXPORT: "🚫 Zero eksport",
+    ManualMode.BATTERY_HOLD: "⏸️ Bateria hold",
+    ManualMode.OFF: "⭕ System OFF",
+}
+
+MANUAL_MODE_DESCRIPTIONS: Final = {
+    ManualMode.SELF_CONSUMPTION: "Produkcja PV zasila dom, nadwyżka do baterii, reszta do sieci.",
+    ManualMode.SELL_TO_GRID: "Bateria rozładowuje do sieci — maksymalny eksport, optymalnie w szczycie.",
+    ManualMode.CHARGE_BATTERY: "Priorytet PV → bateria. Ładuj baterię z paneli fotowoltaicznych.",
+    ManualMode.CHARGE_FROM_GRID: "Ładuj baterię z sieci — wykorzystaj tanią energię (arbitraż nocny).",
+    ManualMode.PEAK_SAVE: "Zablokuj ładowanie z sieci, bateria zasila dom przed szczytem.",
+    ManualMode.ZERO_EXPORT: "Cała energia w domu + bateria. Zerowy eksport do sieci.",
+    ManualMode.BATTERY_HOLD: "Bateria wstrzymana — nie ładuj, nie rozładowuj. Stan czuwania.",
+    ManualMode.OFF: "Brak zarządzania energią. Falownik działa w trybie domyślnym.",
+}
+
+MANUAL_MODE_ICONS: Final = {
+    ManualMode.SELF_CONSUMPTION: "mdi:home-lightning-bolt",
+    ManualMode.SELL_TO_GRID: "mdi:cash-plus",
+    ManualMode.CHARGE_BATTERY: "mdi:battery-charging",
+    ManualMode.CHARGE_FROM_GRID: "mdi:battery-charging-wireless",
+    ManualMode.PEAK_SAVE: "mdi:shield-sun",
+    ManualMode.ZERO_EXPORT: "mdi:cancel",
+    ManualMode.BATTERY_HOLD: "mdi:pause-circle",
+    ManualMode.OFF: "mdi:power-off",
+}
+
+# Schedule persistence keys (settings.json)
+SCHEDULE_ENABLED_KEY: Final = "schedule_enabled"
+SCHEDULE_MODE_KEY: Final = "schedule_mode"       # "weekday_weekend" or "single"
+SCHEDULE_WEEKDAY_KEY: Final = "schedule_weekday"  # 24-slot weekday schedule
+SCHEDULE_WEEKEND_KEY: Final = "schedule_weekend"  # 24-slot weekend schedule
+SCHEDULE_ACTIVE_SLOT_KEY: Final = "schedule_active_slot"
+SCHEDULE_LAST_TRANSITION_KEY: Final = "schedule_last_transition"
+SCHEDULE_TEMPLATES_KEY: Final = "schedule_templates"
+
+# Schedule services
+SERVICE_SAVE_SCHEDULE: Final = "save_schedule"
+SERVICE_GET_SCHEDULE_STATUS: Final = "get_schedule_status"
+SERVICE_APPLY_MANUAL_MODE: Final = "apply_manual_mode"
+
+# Default schedule: all autopilot with max_self_consumption
+DEFAULT_SCHEDULE_SLOT: Final = {
+    "mode": "autopilot",
+    "strategy": AutopilotStrategy.MAX_SELF_CONSUMPTION.value,
+}
+
+# Default weekday schedule — optimized for G13 tariff
+DEFAULT_SCHEDULE_WEEKDAY: Final = {
+    str(h).zfill(2): (
+        {"mode": "autopilot", "strategy": "max_profit"}
+        if 7 <= h < 13 or 16 <= h < 21
+        else {"mode": "autopilot", "strategy": "max_self_consumption"}
+    )
+    for h in range(24)
+}
+
+# Default weekend schedule — all self-consumption (off-peak all day)
+DEFAULT_SCHEDULE_WEEKEND: Final = {
+    str(h).zfill(2): {"mode": "autopilot", "strategy": "max_self_consumption"}
+    for h in range(24)
+}
+
 # Peak Sell — active energy export during expensive afternoon peak
 # User sets what % of battery SOC to sell to grid during AFTERNOON_PEAK
 DEFAULT_PEAK_SELL_SOC_PERCENT: Final = 50   # % of battery SOC allocated for grid sell
@@ -778,7 +865,9 @@ PV_SURPLUS_MIN_SOC_TIER2: Final = 85
 PV_SURPLUS_MIN_SOC_TIER3: Final = 90
 
 # SOC Safety thresholds (%)
-SOC_EMERGENCY: Final = 20
+SOC_EMERGENCY: Final = 5  # Próg krytyczny — identyczny z DEFAULT_BATTERY_MIN_SOC
+SOC_GRID_IMPORT_THRESHOLD: Final = 5  # % — poniżej tego progu dozwolone pobieranie z sieci
+GRID_IMPORT_DETECT_THRESHOLD_W: Final = 100  # W — próg wykrycia importu z sieci
 SOC_CHECK_11_THRESHOLD: Final = 50
 SOC_CHECK_12_THRESHOLD: Final = 70
 SOC_NIGHT_CHARGE_TARGET: Final = 90
@@ -833,16 +922,41 @@ SENSOR_LOAD_TODAY: Final = "sensor.today_load"
 SENSOR_WORK_MODE: Final = "sensor.work_mode"
 SENSOR_INVERTER_TEMP: Final = "sensor.inverter_temperature_air"
 
-# RCE PSE sensors
+# RCE PSE sensors — migrated to v2.0.0 entity names
+# See docs/MIGRACJA-V2.md for full changelog
 SENSOR_RCE_PRICE: Final = "sensor.rce_pse_cena"
-SENSOR_RCE_PRICE_KWH: Final = "sensor.rce_pse_cena_za_kwh"
 SENSOR_RCE_SELL_PROSUMER: Final = "sensor.rce_pse_cena_sprzedazy_prosument"
-SENSOR_RCE_NEXT_HOUR: Final = "sensor.rce_pse_cena_nastepnej_godziny"
-SENSOR_RCE_2H: Final = "sensor.rce_pse_cena_za_2_godziny"
-SENSOR_RCE_3H: Final = "sensor.rce_pse_cena_za_3_godziny"
+SENSOR_RCE_NEXT_PERIOD: Final = "sensor.rce_pse_cena_nastepny_okres"  # v2: was cena_nastepnej_godziny
+SENSOR_RCE_PREV_PERIOD: Final = "sensor.rce_pse_cena_poprzedni_okres"  # v2 new
 SENSOR_RCE_AVG_TODAY: Final = "sensor.rce_pse_srednia_cena_dzisiaj"
 SENSOR_RCE_MIN_TODAY: Final = "sensor.rce_pse_minimalna_cena_dzisiaj"
 SENSOR_RCE_MAX_TODAY: Final = "sensor.rce_pse_maksymalna_cena_dzisiaj"
+SENSOR_RCE_MEDIAN_TODAY: Final = "sensor.rce_pse_mediana_cen_dzisiaj"  # v2 new
+SENSOR_RCE_PRICE_TOMORROW: Final = "sensor.rce_pse_cena_jutro"  # v2 — full 96-point grid for tomorrow
+SENSOR_RCE_AVG_TOMORROW: Final = "sensor.rce_pse_srednia_cena_jutro"  # v2 new
+SENSOR_RCE_TOMORROW_VS_TODAY: Final = "sensor.rce_pse_jutro_vs_dzisiaj_srednia"  # v2 new (%)
+
+# v2 Energy Compass (PDGSZ) — PSE grid demand recommendation
+SENSOR_RCE_COMPASS_TODAY: Final = "sensor.rce_pse_kompas_energetyczny_dzisiaj"
+SENSOR_RCE_COMPASS_TOMORROW: Final = "sensor.rce_pse_kompas_energetyczny_jutro"
+
+# v2 Configurable window average prices
+SENSOR_RCE_CHEAP_WINDOW_AVG: Final = "sensor.rce_pse_tanie_okno_srednia_cena_dzisiaj"
+SENSOR_RCE_EXPENSIVE_WINDOW_AVG: Final = "sensor.rce_pse_drogie_okno_srednia_cena_dzisiaj"
+
+# v2 Window timestamps
+SENSOR_RCE_CHEAP_WINDOW_START: Final = "sensor.rce_pse_tanie_okno_dzisiaj_poczatek"
+SENSOR_RCE_CHEAP_WINDOW_END: Final = "sensor.rce_pse_tanie_okno_dzisiaj_koniec"
+SENSOR_RCE_EXPENSIVE_WINDOW_START: Final = "sensor.rce_pse_drogie_okno_dzisiaj_poczatek"
+SENSOR_RCE_EXPENSIVE_WINDOW_END: Final = "sensor.rce_pse_drogie_okno_dzisiaj_koniec"
+
+# v2 Threshold binary triggers
+BINARY_RCE_BELOW_THRESHOLD: Final = "binary_sensor.rce_pse_cena_ponizej_progu_aktywna"
+BINARY_RCE_ABOVE_THRESHOLD: Final = "binary_sensor.rce_pse_cena_powyzej_progu_aktywna"
+
+# v1 compatibility aliases (REMOVED in v2 — computed from prices attribute)
+# SENSOR_RCE_2H, SENSOR_RCE_3H, SENSOR_RCE_PRICE_KWH — no longer exist
+# SENSOR_RCE_NEXT_HOUR — renamed to SENSOR_RCE_NEXT_PERIOD
 
 # ENTSO-E Dynamic Pricing sensors
 SENSOR_ENTSOE_PRICE_NOW: Final = "sensor.entso_e_aktualna_cena_energii"
@@ -878,9 +992,9 @@ NUMBER_SOFAR_EXPORT_LIMIT: Final = "number.sofar_grid_export_limit"
 NUMBER_SOFAR_CHARGE_POWER: Final = "number.sofar_charge_power_limit"
 NUMBER_SOFAR_DISCHARGE_POWER: Final = "number.sofar_discharge_power_limit"
 
-# Binary sensors from RCE PSE
-BINARY_RCE_CHEAPEST: Final = "binary_sensor.rce_pse_aktywne_najtansze_okno_dzisiaj"
-BINARY_RCE_EXPENSIVE: Final = "binary_sensor.rce_pse_aktywne_najdrozsze_okno_dzisiaj"
+# Binary sensors from RCE PSE — v2 names
+BINARY_RCE_CHEAPEST: Final = "binary_sensor.rce_pse_tanie_okno_aktywne"
+BINARY_RCE_EXPENSIVE: Final = "binary_sensor.rce_pse_drogie_okno_aktywne"
 
 # Controllable devices
 SWITCH_BOILER: Final = "switch.bojler_3800"

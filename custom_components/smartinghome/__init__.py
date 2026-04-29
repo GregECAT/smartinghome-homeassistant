@@ -28,6 +28,7 @@ from .license import LicenseManager
 from .services import async_setup_services, async_unload_services
 from .strategy_controller import StrategyController
 from .energy_manager import EnergyManager
+from .schedule_manager import ScheduleManager
 from .const import AutopilotStrategy as AutopilotStrategy, CONF_DEVICE_ID, DEFAULT_GOODWE_DEVICE_ID, CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE
 
 _LOGGER = logging.getLogger(__name__)
@@ -172,9 +173,13 @@ async def async_setup_entry(
     except Exception:
         pass
 
+    # Create Schedule Manager
+    schedule_mgr = ScheduleManager(hass, strategy_ctrl, energy_mgr)
+    coordinator.set_schedule_manager(schedule_mgr)
+
     # Register services (returns AI cron scheduler)
     cron_scheduler = await async_setup_services(
-        hass, coordinator, license_mgr, strategy_ctrl,
+        hass, coordinator, license_mgr, strategy_ctrl, schedule_mgr,
     )
 
     # Restore saved autopilot state from settings.json
@@ -184,9 +189,16 @@ async def async_setup_entry(
     except Exception as err:
         _LOGGER.debug("Could not restore autopilot state: %s", err)
 
+    # Restore schedule state from settings.json
+    try:
+        await schedule_mgr.restore_schedule()
+    except Exception as err:
+        _LOGGER.debug("Could not restore schedule state: %s", err)
+
     # Store references for cleanup
     hass.data[DOMAIN][entry.entry_id]["cron_scheduler"] = cron_scheduler
     hass.data[DOMAIN][entry.entry_id]["strategy_controller"] = strategy_ctrl
+    hass.data[DOMAIN][entry.entry_id]["schedule_manager"] = schedule_mgr
 
     # Register custom panel in sidebar
     try:
