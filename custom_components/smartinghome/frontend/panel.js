@@ -3544,7 +3544,7 @@ class SmartingHomePanel extends HTMLElement {
       // Off-peak importing is OK = 100
     }
     // Bonus: if we're exporting during high RCE, great
-    const rceSell = parseFloat(this._s("sensor.rce_pse_cena_sprzedazy") || "0");
+    const rceSell = parseFloat(this._s("sensor.rce_pse_cena_sprzedazy_prosument") || "0");
     if (rceSell > 0.5 && expToday > 0) tariffScore = Math.min(100, tariffScore + 20);
 
     // ── Factor 5: PV yield vs forecast (15%)
@@ -3629,12 +3629,12 @@ class SmartingHomePanel extends HTMLElement {
     const v3 = this._nm("voltage_l3") || 0;
     const vMax = Math.max(v1, v2, v3);
 
-    // RCE data
+    // RCE data — v2.0 entity names (NC-RCE PSE migration)
     const rceMwh = parseFloat(this._s("sensor.rce_pse_cena") || "0");
-    const rceKwh = parseFloat(this._s("sensor.rce_pse_cena_za_kwh") || "0");
-    const rceNext = parseFloat(this._s("sensor.rce_pse_cena_nastepnej_godziny") || "0");
-    const rceCheapWin = this._s("binary_sensor.rce_pse_aktywne_najtansze_okno_dzisiaj");
-    const rceExpWin = this._s("binary_sensor.rce_pse_aktywne_najdrozsze_okno_dzisiaj");
+    const rceKwh = rceMwh > 0 ? rceMwh / 1000 : 0;  // v2: cena_za_kwh removed, compute from MWh
+    const rceNext = parseFloat(this._s("sensor.rce_pse_cena_nastepny_okres") || "0");  // v2: was cena_nastepnej_godziny
+    const rceCheapWin = this._s("binary_sensor.rce_pse_tanie_okno_aktywne");  // v2: was aktywne_najtansze_okno_dzisiaj
+    const rceExpWin = this._s("binary_sensor.rce_pse_drogie_okno_aktywne");  // v2: was aktywne_najdrozsze_okno_dzisiaj
 
     // Forecast & Weather
     const fcstTmrw1 = parseFloat(this._s("sensor.energy_production_tomorrow") || "0");
@@ -7144,8 +7144,12 @@ class SmartingHomePanel extends HTMLElement {
     const g13Price = this._n("sensor.smartinghome_g13_buy_price") ?? this._n("sensor.g13_buy_price");
     this._setText("v-g13-price-tab", g13Price !== null ? `${g13Price.toFixed(2)} zł/kWh` : "— zł/kWh");
     
-    // RCE Sell price
-    const rceSell = this._n("sensor.smartinghome_rce_sell_price") ?? this._n("sensor.rce_sell_price");
+    // RCE Sell price — v2: compute fallback from rce_pse_cena if coordinator sensor unavailable
+    let rceSell = this._n("sensor.smartinghome_rce_sell_price") ?? this._n("sensor.rce_sell_price");
+    if (rceSell === null || rceSell === 0) {
+      const rceMwhRaw = this._n("sensor.rce_pse_cena");
+      if (rceMwhRaw !== null && rceMwhRaw > 0) rceSell = rceMwhRaw / 1000 * 1.23;
+    }
     this._setText("v-rce-sell", rceSell !== null ? `${rceSell.toFixed(4)} zł/kWh` : "— zł/kWh");
     
     // Spread G13↔RCE
@@ -7158,9 +7162,9 @@ class SmartingHomePanel extends HTMLElement {
       }
     }
 
-    // RCE Now (big card, zł/kWh)
-    const rceNowKwh = this._n("sensor.rce_pse_cena_za_kwh") ?? rceSell;
+    // RCE Now (big card, zł/kWh) — v2: cena_za_kwh removed, compute from MWh
     const rceNowMwh = this._n("sensor.rce_pse_cena");
+    const rceNowKwh = (rceNowMwh !== null && rceNowMwh !== 0) ? rceNowMwh / 1000 : rceSell;
     const rceNowEl = this.shadowRoot.getElementById("v-rce-now");
     if (rceNowEl && rceNowKwh !== null) {
       rceNowEl.textContent = `${rceNowKwh.toFixed(2)} zł`;
@@ -7202,9 +7206,19 @@ class SmartingHomePanel extends HTMLElement {
       else { trendEl.textContent = "➖"; this._setText("v-rce-trend-label", "Stabilny"); }
     }
 
-    // Time Windows
-    this._setText("v-cheapest-window", this._s("sensor.rce_pse_najtansze_okno_czasowe_dzisiaj") || "—");
-    this._setText("v-expensive-window", this._s("sensor.rce_pse_najdrozsze_okno_czasowe_dzisiaj") || "—");
+    // Time Windows — v2: use start/end timestamps, fallback to formatted sensor
+    {
+      const cheapStart = this._s("sensor.rce_pse_tanie_okno_dzisiaj_poczatek");
+      const cheapEnd = this._s("sensor.rce_pse_tanie_okno_dzisiaj_koniec");
+      const cheapFormatted = this._s("sensor.rce_pse_najtansze_okno_czasowe_dzisiaj");
+      this._setText("v-cheapest-window", (cheapStart && cheapEnd) ? `${cheapStart} – ${cheapEnd}` : cheapFormatted || "—");
+    }
+    {
+      const expStart = this._s("sensor.rce_pse_drogie_okno_dzisiaj_poczatek");
+      const expEnd = this._s("sensor.rce_pse_drogie_okno_dzisiaj_koniec");
+      const expFormatted = this._s("sensor.rce_pse_najdrozsze_okno_czasowe_dzisiaj");
+      this._setText("v-expensive-window", (expStart && expEnd) ? `${expStart} – ${expEnd}` : expFormatted || "—");
+    }
     this._setText("v-kompas", this._s("sensor.rce_pse_kompas_energetyczny_dzisiaj") || "—");
 
     // RCE Grade
@@ -7223,8 +7237,8 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-rce-avg-tomorrow", rceAvgTomorrowMwh !== null ? `${(rceAvgTomorrowMwh / 1000 * 1.23).toFixed(4)} zł` : "— zł");
     const rceTomorrowVs = this._n("sensor.rce_pse_jutro_vs_dzisiaj_srednia");
     this._setText("v-rce-tomorrow-vs", rceTomorrowVs !== null ? `${rceTomorrowVs > 0 ? '+' : ''}${rceTomorrowVs.toFixed(1)}%` : "—%");
-    this._setText("v-cheapest-tomorrow", this._s("sensor.rce_pse_najtansze_okno_czasowe_jutro") || "—");
-    this._setText("v-expensive-tomorrow", this._s("sensor.rce_pse_najdrozsze_okno_czasowe_jutro") || "—");
+    this._setText("v-cheapest-tomorrow", this._s("sensor.rce_pse_najtansze_okno_czasowe_jutro") || this._s("sensor.rce_pse_tanie_okno_jutro_poczatek") || "—");
+    this._setText("v-expensive-tomorrow", this._s("sensor.rce_pse_najdrozsze_okno_czasowe_jutro") || this._s("sensor.rce_pse_drogie_okno_jutro_poczatek") || "—");
 
     // HEMS Recommendation (tariff tab) — skip if AI content already loaded
     if (!this._aiTariffLoaded) {
