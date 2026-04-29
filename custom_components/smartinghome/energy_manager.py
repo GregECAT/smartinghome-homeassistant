@@ -487,7 +487,7 @@ class EnergyManager:
             "actions": [],
         }
 
-        # Emergency: SOC < 20%
+        # Emergency: SOC < 5% (próg krytyczny)
         if soc < SOC_EMERGENCY:
             await self._enable_charging()
             self._current_mode = HEMSMode.EMERGENCY

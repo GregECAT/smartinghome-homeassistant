@@ -345,23 +345,56 @@ class AutopilotEngine:
         g13_zone: G13Zone, g13_price: float, rce_mwh: float, rce_sell: float,
         hour: int,
     ) -> HourlyAction:
-        """Max profit: buy low, sell high. Arbitrage-focused."""
-        is_cheap = g13_zone == G13Zone.OFF_PEAK or rce_mwh < 150
-        is_expensive = g13_zone == G13Zone.AFTERNOON_PEAK or rce_mwh > 400
+        """Max profit: 3-fazowa — sell morning, charge midday PV, sell peak."""
 
-        if is_cheap and soc < 90:
-            # Cheap time → charge battery (even from grid)
-            charge_kw = min(max_charge, (90 - soc) / 100 * bat_cap)
-            total_charge = surplus + charge_kw * 1000 if surplus > 0 else charge_kw * 1000
-            ha.battery_delta = min(total_charge, max_charge * 1000)
-            grid_needed = max(0, ha.battery_delta + ha.estimated_load - ha.estimated_pv)
-            ha.grid_delta = grid_needed
-            ha.cost = (grid_needed / 1000) * g13_price
-            ha.action = "charge"
-            ha.reason = f"Tania energia ({g13_price:.2f} zł) → ładuj!"
-        elif is_expensive and soc > 20:
-            # Expensive time → discharge + export
-            discharge_kw = min(max_discharge, (soc - 20) / 100 * bat_cap)
+        # FAZA 1: MORNING_PEAK (7-13) — SPRZEDAWAJ!
+        if g13_zone == G13Zone.MORNING_PEAK:
+            if soc > 15:
+                # Sprzedawaj z baterii + PV nadwyżkę
+                discharge_kw = min(max_discharge, (soc - 15) / 100 * bat_cap)
+                ha.battery_delta = -discharge_kw * 1000
+                available = ha.estimated_pv + discharge_kw * 1000
+                self_use = min(available, ha.estimated_load)
+                export = available - self_use
+                ha.grid_delta = -export if export > 0 else (ha.estimated_load - available)
+                ha.revenue = (export / 1000) * rce_sell if export > 0 else 0
+                ha.savings = (self_use / 1000) * g13_price
+                if ha.grid_delta > 0:
+                    ha.cost = (ha.grid_delta / 1000) * g13_price
+                ha.action = "sell"
+                ha.reason = f"FAZA1: Poranna sprzedaż ({g13_price:.2f} zł) — NIE ładuj baterii!"
+            else:
+                # SOC too low — self-consumption
+                return self._apply_max_self_consumption(
+                    ha, surplus, soc, bat_cap, max_charge, max_discharge,
+                    g13_price, rce_sell,
+                )
+
+        # FAZA 2: OFF_PEAK po 12 — ŁADUJ Z PV
+        elif g13_zone == G13Zone.OFF_PEAK and hour >= 12:
+            if surplus > 0 and soc < 95:
+                # PV nadwyżka → ładuj baterię
+                charge_kw = min(surplus / 1000, max_charge, (95 - soc) / 100 * bat_cap)
+                ha.battery_delta = charge_kw * 1000
+                remaining = surplus - ha.battery_delta
+                if remaining > 0:
+                    ha.grid_delta = -remaining  # eksport nadwyżki
+                    ha.revenue = (remaining / 1000) * rce_sell
+                ha.action = "charge"
+                ha.reason = "FAZA2: PV ładuje baterię (po 12:00, czas na ładowanie!)"
+                ha.savings = (min(surplus, ha.estimated_load) / 1000) * g13_price
+            else:
+                # Brak nadwyżki lub bateria pełna — self-consumption
+                return self._apply_max_self_consumption(
+                    ha, surplus, soc, bat_cap, max_charge, max_discharge,
+                    g13_price, rce_sell,
+                )
+
+        # FAZA 3: AFTERNOON_PEAK — SELL PEAK + DOM
+        elif g13_zone == G13Zone.AFTERNOON_PEAK and soc > 15:
+            # Sprzedaj ~40% SOC w szczycie, reszta na dom
+            sell_amount = min(40, soc - 15)  # max 40% SOC do sprzedaży
+            discharge_kw = min(max_discharge, sell_amount / 100 * bat_cap)
             ha.battery_delta = -discharge_kw * 1000
             available = ha.estimated_pv + discharge_kw * 1000
             self_use = min(available, ha.estimated_load)
@@ -372,9 +405,10 @@ class AutopilotEngine:
             if ha.grid_delta > 0:
                 ha.cost = (ha.grid_delta / 1000) * g13_price
             ha.action = "sell"
-            ha.reason = f"Droga energia ({g13_price:.2f} zł) → sprzedawaj!"
+            ha.reason = f"FAZA3: Peak sell ({g13_price:.2f} zł) + zasilanie domu z baterii"
+
+        # OFF_PEAK nocny/przed 12 — self-consumption
         else:
-            # Normal time → self-consumption
             return self._apply_max_self_consumption(
                 ha, surplus, soc, bat_cap, max_charge, max_discharge,
                 g13_price, rce_sell,
@@ -808,21 +842,31 @@ STRATEGY_AI_INSTRUCTIONS: dict[str, str] = {
         "  SOC limits: min=10%, max=100%."
     ),
     "max_profit": (
-        "STRATEGIA: 💰 Max Zysk (Arbitraż Cenowy)\n"
-        "  Priorytet: kupuj tanio, sprzedawaj drogo. Arbitraż G13 + RCE.\n"
-        "  🚫 ZASADA DZIENNA: W ciągu dnia (gdy PV > 0) NIE ładuj z sieci!\n"
-        "  Pozwól PV naturalnie naładować baterię. Grid charge TYLKO max 2h przed szczytem,\n"
-        "  i TYLKO jeśli prognoza PV nie pokrywa potrzeb baterii.\n"
-        "  Off-peak NOCNY (22:00-07:00): force_charge z sieci → naładuj baterię.\n"
-        "  Afternoon_peak (1.50): set_general → bateria zasila dom (autokonsumpcja).\n"
-        "  💰 PEAK SELL: W AFTERNOON_PEAK aktywnie sprzedawaj energię do sieci!\n"
-        "  Podziel baterię: peak_sell_soc_percent% na sprzedaż (force_discharge),\n"
-        "  reszta na zasilanie domu (set_general). TYLKO gdy RCE sell > cheapest buy.\n"
-        "  Ostatnie 30 min szczytu → set_general (rezerwa na dom).\n"
-        "  Jeśli RCE sell > 0.63: force_discharge → sprzedaj nadwyżkę do sieci.\n"
-        "  SPRZEDAWAJ TYLKO gdy RCE sell > 0.63 PLN/kWh (koszt zakupu). Inaczej zachowaj.\n"
-        "  W szczycie popołudniowym (1.50 PLN) rozładuj baterię do sell_target SOC!\n"
-        "  Poza szczytem: zostaw min 20% SOC.\n"
+        "STRATEGIA: 💰 Max Zysk (Sell Morning → Charge Midday → Sell Peak)\n"
+        "  FILOZOFIA: Rano sprzedawaj, po południu ładuj, wieczorem sprzedaj peak.\n"
+        "  \n"
+        "  FAZA 1: MORNING_PEAK (7:00-13:00) — SPRZEDAWAJ!\n"
+        "    PV + bateria → eksport do sieci. NIE ładuj baterii!\n"
+        "    Bateria służy TYLKO jako backup gdy PV < load (dosiła dom, NIE sieć).\n"
+        "    Sprzedawaj WSZYSTKO co się da — rano energia ma wartość 0.91 PLN/kWh.\n"
+        "    Jeśli ładujesz baterię rano, MARNUJESZ potencjał sprzedażowy!\n"
+        "  \n"
+        "  FAZA 2: OFF_PEAK po 12:00 (13:00-16/19:00) — ŁADUJ Z PV!\n"
+        "    Dopiero TERAZ ładuj baterię z PV (NIGDY z sieci!).\n"
+        "    PV jest najsilniejsze (12-16h), bateria naładuje się do 100%.\n"
+        "    NIE ładuj baterii PRZED 12:00 — to marnowanie potencjału sprzedażowego!\n"
+        "  \n"
+        "  FAZA 3: AFTERNOON_PEAK (16/19-21/22:00) — PEAK SELL!\n"
+        "    Znajdź godzinę z NAJWYŻSZYM RCE w szczycie.\n"
+        "    W tej godzinie: force_discharge → sprzedaj ~40% SOC do sieci.\n"
+        "    Reszta szczytu: set_general → bateria zasiła dom (zero grid import).\n"
+        "    Ostatnie 30 min → ZAWSZE set_general (rezerwa bezpieczeństwa).\n"
+        "  \n"
+        "  ZASADY:\n"
+        "  - NIGDY nie ładuj z sieci gdy SOC > 5% (zasada zero-grid)\n"
+        "  - Rano: każdy wat sprzedany = zysk. Nie marnuj na ładowanie baterii.\n"
+        "  - Po 12: PV za darmo ładuje baterię. To najlepszy moment.\n"
+        "  - Peak: net-billing → odkładaj na zimę!\n"
         "  SOC limits: min=5% (peak) / 15% (off-peak), max=100%."
     ),
     "battery_protection": (
@@ -854,18 +898,23 @@ STRATEGY_AI_INSTRUCTIONS: dict[str, str] = {
     "ai_full_autonomy": (
         "STRATEGIA: 🧠 AI Pełna Autonomia\n"
         "  Masz pełną swobodę decyzji. Mieszaj techniki per godzina.\n"
-        "  🚫 KRYTYCZNA ZASADA DZIENNA: W ciągu dnia (gdy PV > 0) NIE ładuj z sieci!\n"
-        "  Pozwól PV naturalnie naładować baterię. Grid charge TYLKO max 2h przed szczytem,\n"
-        "  i TYLKO jeśli prognoza PV nie pokrywa potrzeb baterii.\n"
-        "  Ładowanie z sieci o 13:00 gdy szczyt zaczyna się o 19:00 = STRATA (PV ma 6h na ładowanie).\n"
-        "  💰 PEAK SELL: W AFTERNOON_PEAK aktywnie sprzedawaj energię do sieci!\n"
-        "  Podziel baterię: peak_sell_soc_percent% na sprzedaż (force_discharge),\n"
-        "  reszta na zasilanie domu. TYLKO gdy RCE sell > cheapest buy.\n"
-        "  Ostatnie 30 min szczytu → set_general (rezerwa bezpieczeństwa).\n"
-        "  Możesz: arbitraż, autokonsumpcja, sprzedaż, ładowanie z sieci (tylko nocne lub pre-peak 2h).\n"
+        "  \n"
+        "  💰 ZALECANA FILOZOFIA 3-FAZOWA (Sell Morning → Charge Midday → Sell Peak):\n"
+        "  FAZA 1 MORNING_PEAK (7-13): SPRZEDAWAJ z baterii + PV do sieci!\n"
+        "    NIE ładuj baterii rano — każdy wat sprzedany = zysk po 0.91 PLN/kWh.\n"
+        "    Bateria TYLKO jako backup gdy PV < load (dosiła dom, nie sieć).\n"
+        "  FAZA 2 OFF_PEAK po 12 (13-16/19): ŁADUJ z PV!\n"
+        "    PV najsilniejsze o południu → darmowe ładowanie baterii do 100%.\n"
+        "    NIGDY nie ładuj z sieci! NIE ładuj baterii PRZED 12:00!\n"
+        "  FAZA 3 AFTERNOON_PEAK (16/19-21/22): PEAK SELL + DOM!\n"
+        "    Znajdź godzinę z najwyższym RCE → force_discharge ~40% SOC.\n"
+        "    Reszta: set_general → bateria zasiła dom. Ostatnie 30 min → set_general.\n"
+        "  \n"
+        "  🚫 ZASADA ZERO-GRID: NIGDY nie pobieraj z sieci gdy SOC > 5%!\n"
+        "  Możesz: arbitraż cenowy, sprzedaż, autokonsumpcja.\n"
         "  PAMIĘTAJ o stop_force po zakończeniu wymuszania!\n"
         "  NIGDY nie zostawiaj falownika w trybie wymuszonym na dłużej niż 6h.\n"
-        "  SOC limits: min=10%, max=100%."
+        "  SOC limits: min=5% (peak) / 15% (off-peak), max=100%."
     ),
 }
 
@@ -1282,37 +1331,44 @@ Net savings: {estimation.get('net_savings', 0):.2f} PLN
 {tariff_rules}
 
 ═══ STRATEGIC RULES ═══
-1. ARBITRAGE: charge at cheapest ({tariff_ctx.cheapest_price:.2f}) → discharge at most expensive ({tariff_ctx.most_expensive_price:.2f}) = {tariff_ctx.arbitrage_margin:.2f} PLN/kWh
-2. 🚫 DAYTIME GRID CHARGE PROHIBITION: During hours with active PV production (sunrise–sunset),
-   do NOT charge battery from grid if PV forecast remaining can cover battery needs.
-   Pre-peak grid charging is allowed ONLY in last 2 hours before expensive zone,
-   AND ONLY if PV forecast is insufficient (< energy needed with 30% margin).
-   Charging from grid at 13:00 when peak starts at 19:00 is WASTEFUL — PV has 6h to charge!
-   Exception: RCE < 100 PLN/MWh (essentially free energy).
-3. Night charge at cheapest rate is CRITICAL for morning coverage.
-4. During expensive zones: ZERO grid import. Battery + PV must cover all load.
-5. Managed loads (boiler, AC) should run ONLY during cheap zones or PV surplus > 2kW.
-6. AUTO-STOP CHARGE: plan stop_force_charge when SOC reaches 95%.
-7. AUTO-STOP DISCHARGE: plan stop when SOC reaches 5% during expensive zone, or 20% otherwise.
-8. ZONE TRADING:
-   - Tania strefa NOCNA ({tariff_ctx.cheapest_price:.2f}) + zła pogoda → force_charge z sieci
-   - Tania strefa DZIENNA (PV > 0) → NIE ładuj z sieci, pozwól PV ładować baterię
-   - Droga strefa ({tariff_ctx.most_expensive_price:.2f}) + SOC > 5% → set_general (zasil dom z baterii)
-   - Droga strefa + RCE sell > {tariff_ctx.cheapest_price:.2f} + SOC > 30% → force_discharge
-   - W najdroższej strefie: bateria rozładowuje się do 5%!
-   - Poza szczytem: zostaw min 20% SOC
-9. SELL PROFITABILITY: sprzedawaj TYLKO gdy RCE sell ({rce_sell:.4f}) > cheapest ({tariff_ctx.cheapest_price:.2f})
-10. NEVER discharge below 5% SOC (absolute hardware minimum).
-11. NOCNE ŁADOWANIE vs PV: Sprawdź sekcję NOCNE ŁADOWANIE.
-12. CHECK DEVICE STATUS — don't repeat commands already executing.
-13. ALWAYS include stop_force commands when forced state should end.
-14. ⚠️ Use ONLY the tariff schedule from the section above. DO NOT use training data for zone times!
-15. 💰 PEAK SELL: W najdroższym szczycie (AFTERNOON_PEAK) ZAPLANUJ aktywną sprzedaż energii:
-   - force_discharge dla porcji {peak_sell_percent}% SOC baterii (eksport do sieci po RCE)
-   - Pozostałą część SOC zarezerwuj na zasilanie domu (set_general)
-   - TYLKO gdy RCE sell > cheapest buy ({tariff_ctx.cheapest_price:.2f} PLN/kWh)
-   - Ostatnie 30 min szczytu → ZAWSZE set_general
-   - To jedyna okazja na net-billing — odkładaj pieniądze na zimę!
+1. 💰 FILOZOFIA 3-FAZOWA (Sell Morning → Charge Midday → Sell Peak):
+   FAZA 1 MORNING_PEAK (7-13): SPRZEDAWAJ z baterii + PV do sieci!
+     Każdy wat sprzedany rano = zysk po 0.91 PLN/kWh. NIE ładuj baterii!
+     Bateria dosiła dom TYLKO gdy PV < load (set_general).
+   FAZA 2 OFF_PEAK po 12 (13-16/19): ŁADUJ baterię z PV!
+     PV najsilniejsze o południu → darmowe ładowanie do 100%.
+     NIE ładuj baterii PRZED 12:00 — marnujesz potencjał sprzedażowy!
+   FAZA 3 AFTERNOON_PEAK (16/19-21/22): PEAK SELL!
+     Znajdź godzinę z najwyższym RCE → force_discharge ~40% SOC.
+     Reszta: set_general. Ostatnie 30 min → ZAWSZE set_general.
+2. ARBITRAGE: charge at cheapest ({tariff_ctx.cheapest_price:.2f}) → discharge at most expensive ({tariff_ctx.most_expensive_price:.2f}) = {tariff_ctx.arbitrage_margin:.2f} PLN/kWh
+3. 🚫 ZERO GRID IMPORT: NIGDY nie pobieraj energii z sieci gdy SOC > 5%!
+   Bateria MUSI zasilać dom. Wyjątek: ręczne wymuszenie ładowania.
+4. 🚫 NIE ŁADUJ BATERII RANO (7-12): Cała energia poranna idzie na sprzedaż!
+   Ładowanie baterii rano = STRATA. PV i tak naładuje ją po 12:00.
+5. Night charge at cheapest rate is allowed ONLY when SOC < 5% (critical).
+6. During expensive zones: ZERO grid import. Battery + PV must cover all load.
+7. Managed loads (boiler, AC) should run ONLY during cheap zones or PV surplus > 2kW.
+8. AUTO-STOP CHARGE: plan stop_force_charge when SOC reaches 95%.
+9. AUTO-STOP DISCHARGE: plan stop when SOC reaches 5% during expensive zone, or 15% otherwise.
+10. ZONE TRADING:
+    - Morning peak (0.91): force_discharge → SPRZEDAWAJ z baterii + PV!
+    - Off-peak po 12 (PV > 0): force_charge → PV ładuje baterię
+    - Afternoon peak (1.50) + najdroższe RCE: force_discharge → sprzedaj ~40% SOC
+    - Afternoon peak + reszta: set_general → bateria zasiła dom
+    - W najdroższej strefie: bateria rozładowuje się do 5%!
+    - Poza szczytem: zostaw min 15% SOC
+11. SELL PROFITABILITY: sprzedawaj TYLKO gdy RCE sell ({rce_sell:.4f}) > cheapest ({tariff_ctx.cheapest_price:.2f})
+12. NEVER discharge below 5% SOC (absolute hardware minimum).
+13. CHECK DEVICE STATUS — don't repeat commands already executing.
+14. ALWAYS include stop_force commands when forced state should end.
+15. ⚠️ Use ONLY the tariff schedule from the section above. DO NOT use training data for zone times!
+16. 💰 PEAK SELL: W najdroższym szczycie (AFTERNOON_PEAK) ZAPLANUJ aktywną sprzedaż energii:
+    - force_discharge dla porcji {peak_sell_percent}% SOC baterii (eksport do sieci po RCE)
+    - Pozostałą część SOC zarezerwuj na zasilanie domu (set_general)
+    - TYLKO gdy RCE sell > cheapest buy ({tariff_ctx.cheapest_price:.2f} PLN/kWh)
+    - Ostatnie 30 min szczytu → ZAWSZE set_general
+    - To jedyna okazja na net-billing — odkładaj pieniądze na zimę!
 
 ═══ FORMAT ODPOWIEDZI ═══
 KRYTYCZNE: Odpowiedz WYŁĄCZNIE poprawnym JSON. Bez markdown, bez tekstu przed/po.

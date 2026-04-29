@@ -272,3 +272,67 @@ analyze_roi:
       required: true
       selector:
         text:
+
+save_schedule:
+  name: Save HEMS Schedule
+  description: >-
+    Save the hourly energy management schedule to settings.json.
+    Supports weekday (Mon-Fri) and weekend (Sat-Sun) schedules.
+    Each hour can be set to autopilot (with strategy) or manual mode.
+  fields:
+    schedule_weekday:
+      name: Weekday Schedule
+      description: "JSON string with 24-hour weekday schedule (keys '00'-'23')"
+      required: false
+      selector:
+        text:
+    schedule_weekend:
+      name: Weekend Schedule
+      description: "JSON string with 24-hour weekend schedule (keys '00'-'23')"
+      required: false
+      selector:
+        text:
+    schedule_enabled:
+      name: Schedule Enabled
+      description: "Whether the schedule system is active"
+      required: false
+      selector:
+        boolean:
+    schedule_mode:
+      name: Schedule Mode
+      description: "Schedule mode (weekday_weekend or single)"
+      required: false
+      selector:
+        select:
+          options:
+            - "weekday_weekend"
+            - "single"
+
+get_schedule_status:
+  name: Get Schedule Status
+  description: >-
+    Get the current schedule status.
+    Fires a smartinghome_schedule_status event with the full schedule state.
+
+apply_manual_mode:
+  name: Apply Manual Mode
+  description: >-
+    Instantly apply a manual energy management mode.
+    Overrides the current schedule slot until the next hour change.
+  fields:
+    mode:
+      name: Manual Mode
+      description: "Manual mode to apply"
+      required: true
+      example: "self_consumption"
+      selector:
+        select:
+          options:
+            - "self_consumption"
+            - "sell_to_grid"
+            - "charge_battery"
+            - "charge_from_grid"
+            - "peak_save"
+            - "zero_export"
+            - "battery_hold"
+            - "off"

@@ -287,6 +287,31 @@ HEMS_SENSOR_DESCRIPTIONS: list[SensorEntityDescription] = [
         name="System Status",
         icon=ICON_HEMS,
     ),
+    # —— Day/Night Energy (server-side, 24/7) ——
+    SensorEntityDescription(
+        key="load_day_kwh",
+        name="Load Day",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL,
+        icon=ICON_LOAD,
+    ),
+    SensorEntityDescription(
+        key="load_night_kwh",
+        name="Load Night",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL,
+        icon=ICON_LOAD,
+    ),
+    SensorEntityDescription(
+        key="load_pv_to_home_kwh",
+        name="PV to Home Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL,
+        icon=ICON_PV,
+    ),
     # —— License ——
     SensorEntityDescription(
         key="license_tier",

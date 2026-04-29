@@ -24,8 +24,12 @@ from .const import (
     SERVICE_ASK_AI,
     SERVICE_GENERATE_REPORT,
     SERVICE_RUN_AUTOPILOT,
+    SERVICE_SAVE_SCHEDULE,
+    SERVICE_GET_SCHEDULE_STATUS,
+    SERVICE_APPLY_MANUAL_MODE,
     HEMSMode,
     AutopilotStrategy,
+    ManualMode,
     CONF_GEMINI_API_KEY,
     CONF_ANTHROPIC_API_KEY,
     CONF_ECOWITT_ENABLED,
@@ -202,12 +206,28 @@ SET_PEAK_SELL_SCHEMA = vol.Schema(
     }
 )
 
+SAVE_SCHEDULE_SCHEMA = vol.Schema(
+    {
+        vol.Optional("schedule_weekday"): cv.string,
+        vol.Optional("schedule_weekend"): cv.string,
+        vol.Optional("schedule_enabled"): cv.boolean,
+        vol.Optional("schedule_mode"): vol.In(["weekday_weekend", "single"]),
+    }
+)
+
+APPLY_MANUAL_MODE_SCHEMA = vol.Schema(
+    {
+        vol.Required("mode"): vol.In([m.value for m in ManualMode]),
+    }
+)
+
 
 async def async_setup_services(
     hass: HomeAssistant,
     coordinator: SmartingHomeCoordinator,
     license_mgr: LicenseManager,
     strategy_controller: StrategyController | None = None,
+    schedule_manager=None,
 ) -> AICronScheduler:
     """Register Smarting HOME services. Returns the AI cron scheduler."""
     entry = coordinator.entry
@@ -829,6 +849,81 @@ async def async_setup_services(
         await strategy_controller.set_peak_sell_soc_percent(percent)
         _LOGGER.info("Peak sell SOC percent set to: %d%%", percent)
 
+    # ── Schedule Manager services ──
+
+    async def handle_save_schedule(call: ServiceCall) -> None:
+        """Handle save_schedule — save hourly schedule to settings.json."""
+        if not schedule_manager:
+            _LOGGER.warning("Schedule manager not available")
+            return
+
+        weekday_raw = call.data.get("schedule_weekday")
+        weekend_raw = call.data.get("schedule_weekend")
+        enabled = call.data.get("schedule_enabled")
+        mode = call.data.get("schedule_mode")
+
+        weekday_schedule = None
+        weekend_schedule = None
+
+        if weekday_raw:
+            try:
+                weekday_schedule = json.loads(weekday_raw)
+            except Exception as err:
+                _LOGGER.error("Invalid weekday schedule JSON: %s", err)
+                return
+
+        if weekend_raw:
+            try:
+                weekend_schedule = json.loads(weekend_raw)
+            except Exception as err:
+                _LOGGER.error("Invalid weekend schedule JSON: %s", err)
+                return
+
+        await schedule_manager.save_schedule(
+            weekday_schedule=weekday_schedule,
+            weekend_schedule=weekend_schedule,
+            enabled=enabled,
+            schedule_mode=mode,
+        )
+
+        hass.bus.async_fire(
+            f"{DOMAIN}_schedule_saved",
+            {"status": "ok"},
+        )
+        _LOGGER.info("Schedule saved via service")
+
+    async def handle_get_schedule_status(call: ServiceCall) -> None:
+        """Handle get_schedule_status — fire event with current status."""
+        if not schedule_manager:
+            _LOGGER.warning("Schedule manager not available")
+            return
+
+        status = schedule_manager.get_status()
+        hass.bus.async_fire(
+            f"{DOMAIN}_schedule_status",
+            status,
+        )
+
+    async def handle_apply_manual_mode(call: ServiceCall) -> None:
+        """Handle apply_manual_mode — instantly apply a manual mode."""
+        if not schedule_manager:
+            _LOGGER.warning("Schedule manager not available")
+            return
+
+        mode_str = call.data["mode"]
+        try:
+            mode = ManualMode(mode_str)
+        except ValueError:
+            _LOGGER.error("Unknown manual mode: %s", mode_str)
+            return
+
+        result = await schedule_manager.apply_manual_override(mode)
+        hass.bus.async_fire(
+            f"{DOMAIN}_manual_mode_applied",
+            result,
+        )
+        _LOGGER.info("Manual mode applied: %s", mode_str)
+
     # ── Analyze ROI — AI Interpreter for tariff comparison ──
 
     SERVICE_ANALYZE_ROI = "analyze_roi"
@@ -1250,8 +1345,19 @@ Długość: 400-600 słów."""
         DOMAIN, SERVICE_SET_PEAK_SELL_PERCENT, handle_set_peak_sell_percent,
         schema=SET_PEAK_SELL_SCHEMA,
     )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SAVE_SCHEDULE, handle_save_schedule,
+        schema=SAVE_SCHEDULE_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_GET_SCHEDULE_STATUS, handle_get_schedule_status,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_APPLY_MANUAL_MODE, handle_apply_manual_mode,
+        schema=APPLY_MANUAL_MODE_SCHEMA,
+    )
 
-    _LOGGER.info("Registered %d Smarting HOME services", 21)
+    _LOGGER.info("Registered %d Smarting HOME services", 24)
 
     # Start AI Cron Scheduler
     cron = AICronScheduler(
@@ -1291,5 +1397,8 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         "analyze_roi",
         SERVICE_SEND_ALERT_NOTIFICATION,
         SERVICE_SET_PEAK_SELL_PERCENT,
+        SERVICE_SAVE_SCHEDULE,
+        SERVICE_GET_SCHEDULE_STATUS,
+        SERVICE_APPLY_MANUAL_MODE,
     ]:
         hass.services.async_remove(DOMAIN, service)

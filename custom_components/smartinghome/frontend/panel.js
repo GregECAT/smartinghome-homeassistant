@@ -54,12 +54,8 @@ class SmartingHomePanel extends HTMLElement {
     this._activeTab = "overview";
     this._isFullscreen = false;
     this._settings = {};
-    // Day/Night energy accumulator (session-based, persisted to settings)
-    this._energyDayWs = 0;    // watt-seconds accumulated during day
-    this._energyNightWs = 0;  // watt-seconds accumulated during night
-    this._lastAccumTs = null;  // timestamp of last accumulation
-    this._lastAccumSaveTs = 0; // last time accum was saved to settings
-    this._accumDate = null;    // date string (YYYY-MM-DD) for reset detection
+    // Day/Night energy: now computed server-side in coordinator.py
+    // (previously browser-based accumulators — removed)
   }
 
   set hass(hass) {
@@ -129,17 +125,7 @@ class SmartingHomePanel extends HTMLElement {
       }
     };
     document.addEventListener('visibilitychange', this._visHandler);
-    // Persist day/night accumulators when page is being closed
-    this._unloadHandler = () => {
-      if (this._energyDayWs > 0 || this._energyNightWs > 0) {
-        this._savePanelSettings({
-          _accum_day_ws: Math.round(this._energyDayWs),
-          _accum_night_ws: Math.round(this._energyNightWs),
-          _accum_date: new Date().toISOString().slice(0, 10)
-        });
-      }
-    };
-    window.addEventListener('beforeunload', this._unloadHandler);
+    // Day/night energy tracking is now server-side — no browser persistence needed
   }
   disconnectedCallback() {
     if (this._interval) clearInterval(this._interval);
@@ -473,19 +459,7 @@ class SmartingHomePanel extends HTMLElement {
       if (r.ok) {
         this._settings = await r.json();
         this._settingsLoaded = true;
-        // Restore day/night energy accumulators from settings immediately
-        {
-          const todayStr = new Date().toISOString().slice(0, 10);
-          if (this._settings._accum_date === todayStr) {
-            this._energyDayWs = this._settings._accum_day_ws || 0;
-            this._energyNightWs = this._settings._accum_night_ws || 0;
-          } else {
-            this._energyDayWs = 0;
-            this._energyNightWs = 0;
-          }
-          this._accumDate = todayStr;
-          this._lastAccumTs = null; // reset so first interval doesn't produce huge delta
-        }
+        // Day/night energy: computed server-side — no browser restore needed
         this._updateKeyStatus();
         // Restore model selections
         const gSel = this.shadowRoot.getElementById('sel-gemini-model');
@@ -6698,74 +6672,13 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-load-l2", `L2: ${this._fm("power_l2", 0)} W`);
     this._setText("v-load-l3", `L3: ${this._fm("power_l3", 0)} W`);
 
-    // ── Day/Night energy accumulation ──
-    if (!this._settingsLoaded) {
-      // Wait for settings to load before restoring/accumulating — show placeholders
-      this._setText("v-load-day", "—");
-      this._setText("v-load-night", "—");
-      this._setText("v-load-from-pv", "— kWh");
-      this._setText("v-load-from-pv-pct", "");
-    } else {
-      const sunState = this._hass?.states?.["sun.sun"];
-      const isDay = sunState?.state === "above_horizon";
-      const nowTs = Date.now();
-      const todayStr = new Date().toISOString().slice(0, 10);
+    // ── Day/Night energy from backend (server-side, 24/7) ──
+    {
+      const dayKwh = this._n('sensor.smartinghome_load_day_kwh') || 0;
+      const nightKwh = this._n('sensor.smartinghome_load_night_kwh') || 0;
+      const pvToHome = this._n('sensor.smartinghome_load_pv_to_home_kwh') || 0;
 
-      // Midnight reset: if date changed, reset accumulators
-      if (this._accumDate && this._accumDate !== todayStr) {
-        this._energyDayWs = 0;
-        this._energyNightWs = 0;
-        this._accumDate = todayStr;
-        this._savePanelSettings({ _accum_day_ws: 0, _accum_night_ws: 0, _accum_date: todayStr });
-      }
-
-      if (this._lastAccumTs && load > 0) {
-        let dtSec = (nowTs - this._lastAccumTs) / 1000;
-        if (dtSec > 0 && dtSec < 60) { // cap at 60s to avoid spikes after sleep
-          const wattSec = load * dtSec;
-          if (isDay) this._energyDayWs += wattSec;
-          else this._energyNightWs += wattSec;
-        }
-      }
-      this._lastAccumTs = nowTs;
-
-      // Persist accumulators every 5 minutes
-      if (nowTs - this._lastAccumSaveTs > 300000) {
-        this._lastAccumSaveTs = nowTs;
-        this._savePanelSettings({
-          _accum_day_ws: Math.round(this._energyDayWs),
-          _accum_night_ws: Math.round(this._energyNightWs),
-          _accum_date: todayStr
-        });
-      }
-
-      // Compute calibrated day/night kWh from load_today
       const loadTodayNum = typeof loadTodayVal === 'number' ? loadTodayVal : parseFloat(loadTodayVal);
-      const totalAccumWs = this._energyDayWs + this._energyNightWs;
-      let dayKwh = 0, nightKwh = 0;
-      if (totalAccumWs > 0 && !isNaN(loadTodayNum) && loadTodayNum > 0) {
-        const dayRatio = this._energyDayWs / totalAccumWs;
-        dayKwh = loadTodayNum * dayRatio;
-        nightKwh = loadTodayNum * (1 - dayRatio);
-      } else if (totalAccumWs > 0) {
-        dayKwh = this._energyDayWs / 3600000;
-        nightKwh = this._energyNightWs / 3600000;
-      }
-
-      // PV to home — capped at load_today (can't consume more PV than total load)
-      const pvTodayForHome = this._nm("pv_today") || parseFloat(this._fm("pv_today")) || 0;
-      const expTodayForHome = this._nm("grid_export_today") || 0;
-      const pvToHomeRaw = Math.max(0, pvTodayForHome - expTodayForHome);
-      const loadTodayCap = !isNaN(loadTodayNum) && loadTodayNum > 0 ? loadTodayNum : Infinity;
-      const pvToHome = Math.min(pvToHomeRaw, loadTodayCap);
-
-      // PV-based fallback: if accumulators missed daytime (e.g. restart after sunset)
-      // PV self-consumption is the physical minimum for day consumption
-      if (dayKwh === 0 && pvToHome > 0 && !isNaN(loadTodayNum) && loadTodayNum > 0) {
-        dayKwh = Math.min(loadTodayNum, pvToHome);
-        nightKwh = Math.max(0, loadTodayNum - dayKwh);
-      }
-
       const loadTotalForPct = !isNaN(loadTodayNum) && loadTodayNum > 0 ? loadTodayNum : (dayKwh + nightKwh);
       const pvToHomePct = loadTotalForPct > 0 ? Math.min(100, (pvToHome / loadTotalForPct) * 100) : 0;
 
@@ -7742,25 +7655,10 @@ class SmartingHomePanel extends HTMLElement {
       enNetGridEl.style.color = enNetGrid >= 0 ? "#2ecc71" : "#e74c3c";
     }
 
-    // ROW 1b: Day/Night breakdown in Energy tab
+    // ROW 1b: Day/Night breakdown in Energy tab (from backend)
     {
-      const totalAccumWs = this._energyDayWs + this._energyNightWs;
-      const enLoadToday = this._nm("load_today") || parseFloat(this._hass?.states?.["sensor.today_load"]?.state) || 0;
-      let enDayKwh = 0, enNightKwh = 0;
-      if (totalAccumWs > 0 && enLoadToday > 0) {
-        const dayRatio = this._energyDayWs / totalAccumWs;
-        enDayKwh = enLoadToday * dayRatio;
-        enNightKwh = enLoadToday * (1 - dayRatio);
-      } else if (totalAccumWs > 0) {
-        enDayKwh = this._energyDayWs / 3600000;
-        enNightKwh = this._energyNightWs / 3600000;
-      }
-
-      // PV-based fallback: if accumulators missed daytime, use PV self-consumption
-      if (enDayKwh === 0 && enHomeFromPv > 0 && enLoadToday > 0) {
-        enDayKwh = Math.min(enLoadToday, enHomeFromPv);
-        enNightKwh = Math.max(0, enLoadToday - enDayKwh);
-      }
+      const enDayKwh = this._n('sensor.smartinghome_load_day_kwh') || 0;
+      const enNightKwh = this._n('sensor.smartinghome_load_night_kwh') || 0;
 
       const enTotalLoad = enDayKwh + enNightKwh;
       const enDayPct = enTotalLoad > 0 ? (enDayKwh / enTotalLoad) * 100 : 50;
@@ -13230,7 +13128,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.51.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.52.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
