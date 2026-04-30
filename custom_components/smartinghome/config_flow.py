@@ -369,8 +369,10 @@ class SmartingHomeConfigFlow(
         for key, _desc in SENSOR_MAP_KEYS.items():
             default_val = defaults.get(key, "")
             schema_dict[vol.Optional(key, default=default_val)] = (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="sensor")
+                selector.TextSelector(
+                    selector.TextSelectorConfig(
+                        type=selector.TextSelectorType.TEXT
+                    )
                 )
             )
 
@@ -490,8 +492,10 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
         for key, _desc in SENSOR_MAP_KEYS.items():
             current_val = current_map.get(key, brand_defaults.get(key, ""))
             schema_dict[vol.Optional(key, default=current_val)] = (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="sensor")
+                selector.TextSelector(
+                    selector.TextSelectorConfig(
+                        type=selector.TextSelectorType.TEXT
+                    )
                 )
             )
 
