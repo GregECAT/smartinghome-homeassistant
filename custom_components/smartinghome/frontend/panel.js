@@ -7616,13 +7616,13 @@ class SmartingHomePanel extends HTMLElement {
 
     // RCE Now (big card, zł/kWh) — v2: cena_za_kwh removed, compute from MWh
     const rceNowMwh = this._n("sensor.rce_pse_cena");
-    const rceNowKwh = (rceNowMwh !== null && rceNowMwh !== 0) ? rceNowMwh / 1000 : rceSell;
+    const rceNowKwh = (rceNowMwh !== null) ? rceNowMwh / 1000 : rceSell;
     const rceNowEl = this.shadowRoot.getElementById("v-rce-now");
     if (rceNowEl && rceNowKwh !== null) {
-      rceNowEl.textContent = `${rceNowKwh.toFixed(2)} zł`;
-      rceNowEl.style.color = rceNowKwh > 0.6 ? "#2ecc71" : rceNowKwh > 0.3 ? "#f7b731" : "#e74c3c";
+      rceNowEl.textContent = `${rceNowKwh.toFixed(4)} zł`;
+      rceNowEl.style.color = rceNowKwh > 0.6 ? "#2ecc71" : rceNowKwh > 0.3 ? "#f7b731" : rceNowKwh < 0 ? "#a855f7" : "#e74c3c";
     }
-    this._setText("v-rce-now-mwh", rceNowMwh !== null ? `${rceNowMwh.toFixed(0)} PLN/MWh` : "— PLN/MWh");
+    this._setText("v-rce-now-mwh", rceNowMwh !== null ? `${rceNowMwh.toFixed(1)} PLN/MWh` : "— PLN/MWh");
 
     // RCE +1h, +2h, +3h
     const rce1h = this._n("sensor.rce_sell_price_next_hour") ?? this._n("sensor.smartinghome_rce_sell_price_next_hour");
@@ -7673,11 +7673,11 @@ class SmartingHomePanel extends HTMLElement {
       const hourMap = {};
       for (const p of pricesAttr) {
         try {
-          const dt = p.dtime || p.period || "";
+          const dt = p.dtime || p.period || p.time || "";
           const hour = parseInt(String(dt).substring(11, 13), 10);
           if (isNaN(hour)) continue;
           if (!hourMap[hour]) hourMap[hour] = [];
-          hourMap[hour].push(parseFloat(p.rce_pln) || 0);
+          hourMap[hour].push(parseFloat(p.rce_pln || p.price || p.value) || 0);
         } catch(e) { continue; }
       }
       let minHour = -1, maxHour = -1, minAvg = Infinity, maxAvg = -Infinity;
@@ -7693,10 +7693,11 @@ class SmartingHomePanel extends HTMLElement {
         expensive: maxHour >= 0 ? `${fmt(maxHour)} (${fmtPrice(maxAvg)})` : "—",
       };
     };
-    // Today windows
+    // Today windows — try multiple attribute names for v2 compatibility
     {
       const rcePriceState = this.hass && this.hass.states ? this.hass.states["sensor.rce_pse_cena"] : null;
-      const todayPrices = rcePriceState && rcePriceState.attributes ? rcePriceState.attributes.prices : null;
+      const attrs = rcePriceState && rcePriceState.attributes ? rcePriceState.attributes : {};
+      const todayPrices = attrs.prices || attrs.forecast || attrs.price_list || null;
       const todayWindows = _findWindows(todayPrices);
       this._setText("v-cheapest-window", todayWindows.cheap);
       this._setText("v-expensive-window", todayWindows.expensive);
@@ -13761,7 +13762,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.52.5</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.52.6</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
