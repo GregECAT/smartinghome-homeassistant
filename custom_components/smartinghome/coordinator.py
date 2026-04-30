@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -714,13 +714,25 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         state = self.hass.states.get(SENSOR_RCE_PRICE)
         if not state or not state.attributes:
+            _LOGGER.debug("RCE lookahead: sensor %s has no state/attributes", SENSOR_RCE_PRICE)
             return {}
 
-        prices = state.attributes.get("prices", [])
+        # Try multiple attribute names (v2 may use 'prices', 'forecast', etc.)
+        prices = (
+            state.attributes.get("prices")
+            or state.attributes.get("forecast")
+            or state.attributes.get("price_list")
+            or []
+        )
         if not prices:
+            _LOGGER.debug(
+                "RCE lookahead: no prices attribute found. Available attrs: %s",
+                list(state.attributes.keys()),
+            )
             return {}
 
-        now = datetime.now()
+        # Use timezone-aware now to match RCE PSE v2 datetime format
+        now = datetime.now(tz=timezone.utc)
         result: dict[str, float] = {}
 
         for offset in range(1, hours_ahead + 1):
@@ -728,16 +740,30 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Find the price entry covering the target time
             for entry in prices:
                 try:
-                    dtime_str = entry.get("dtime", "")
+                    dtime_str = entry.get("dtime", "") or entry.get("period", "")
                     entry_time = datetime.fromisoformat(str(dtime_str))
-                    if entry_time >= target_time:
+                    # If entry_time is naive, assume local timezone
+                    if entry_time.tzinfo is None:
+                        entry_time = entry_time.astimezone()
+                    # Normalize target_time to same tz for comparison
+                    if target_time.tzinfo != entry_time.tzinfo:
+                        target_time_cmp = target_time.astimezone(entry_time.tzinfo)
+                    else:
+                        target_time_cmp = target_time
+                    if entry_time >= target_time_cmp:
                         result[f"rce_lookahead_{offset}h_mwh"] = float(
                             entry.get("rce_pln", 0)
                         )
                         break
-                except (ValueError, TypeError):
+                except (ValueError, TypeError) as exc:
+                    _LOGGER.debug("RCE lookahead parse error: %s (entry=%s)", exc, entry)
                     continue
 
+        if not result:
+            _LOGGER.debug(
+                "RCE lookahead: no future prices found (prices entries: %d, now: %s)",
+                len(prices), now.isoformat(),
+            )
         return result
 
     def _compute_rce(
