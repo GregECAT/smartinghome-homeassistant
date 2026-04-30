@@ -45,7 +45,6 @@ from .const import (
     ICON_ARBITRAGE,
     ICON_LICENSE,
     ICON_TEMPERATURE,
-    ICON_VOLTAGE,
 )
 from .coordinator import SmartingHomeCoordinator
 
