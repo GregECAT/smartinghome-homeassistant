@@ -344,7 +344,8 @@ async def async_setup_services(
 
         ai_data = {
             "pv_power": data.get("sensor.pv_power"),
-            "grid_power": data.get("sensor.meter_active_power_total"),
+            # GoodWe raw: +export/-import → invert to AI convention: +import/-export
+            "grid_power": -1 * float(data.get("sensor.meter_active_power_total") or 0),
             "battery_soc": data.get("sensor.battery_state_of_charge"),
             "battery_power": data.get("sensor.battery_power"),
             "load": data.get("sensor.load"),
@@ -609,7 +610,8 @@ async def async_setup_services(
 
         ai_data = {
             "pv_power": data.get("sensor.pv_power"),
-            "grid_power": data.get("sensor.meter_active_power_total"),
+            # GoodWe raw: +export/-import → invert to AI convention: +import/-export
+            "grid_power": -1 * float(data.get("sensor.meter_active_power_total") or 0),
             "battery_soc": data.get("sensor.battery_state_of_charge"),
             "battery_power": data.get("sensor.battery_power"),
             "load": data.get("sensor.load"),

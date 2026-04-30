@@ -744,7 +744,7 @@ Provide EXACTLY 3 sections:
 - PV Power: {current_data.get('pv_power', 0)} W
 - Load: {current_data.get('load', 0)} W
 - Battery SOC: {current_data.get('battery_soc', 0)}%
-- Grid Power: {current_data.get('grid_power', 0)} W (positive=import)
+- Grid Power: {current_data.get('grid_power', 0)} W (positive=import, negative=export)
 - PV Surplus: {current_data.get('pv_surplus', 0)} W
 - Grid Voltage: L1={current_data.get('voltage_l1', 'N/A')}V
 
@@ -1071,9 +1071,9 @@ def build_ai_controller_prompt(
     bat_cap = current_data.get('battery_capacity') or DEFAULT_BATTERY_CAPACITY
     bat_cap_kwh = float(bat_cap) / 1000
 
-    # Transform raw sensor values to explicit human-readable format
-    # GoodWe convention: battery_power positive=charging, negative=discharging
-    # grid_power: negative=export, positive=import
+    # Transform sensor values to explicit human-readable format
+    # Battery: positive=charging, negative=discharging (GoodWe convention)
+    # grid_power: already inverted upstream → positive=import, negative=export
     raw_bat = float(current_data.get('battery_power', 0))
     raw_grid = float(current_data.get('grid_power', 0))
     bat_state = f"ŁADOWANIE {abs(raw_bat):.0f}W (do baterii z sieci/PV)" if raw_bat > 50 else f"ROZŁADOWYWANIE {abs(raw_bat):.0f}W (z baterii do domu)" if raw_bat < -50 else "BEZCZYNNA (idle)"

@@ -225,9 +225,9 @@ class AIAdvisor:
         month_names_pl = ['', 'styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec',
                           'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień']
         season = 'zima' if now.month in (12, 1, 2) else 'wiosna' if now.month in (3, 4, 5) else 'lato' if now.month in (6, 7, 8) else 'jesień'
-        # GoodWe convention: positive=import, negative=export (grid)
+        # GoodWe convention: positive=EXPORT, negative=IMPORT (raw sensor)
         # GoodWe convention: NEGATIVE=charging (into battery), POSITIVE=discharging (from battery)
-        # grid_power: NEGATIVE=export, POSITIVE=import
+        # grid_power after inversion: POSITIVE=import, NEGATIVE=export (AI convention)
         raw_grid = data.get('grid_power', 0)
         try:
             grid_for_ai = float(raw_grid) if raw_grid is not None else 0
