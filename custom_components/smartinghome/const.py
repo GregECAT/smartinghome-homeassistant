@@ -52,7 +52,7 @@ INVERTER_BRAND_OTHER: Final = "other"
 SENSOR_MAP_CORE: Final = {
     "pv_power": "Total PV power (W)",
     "load_power": "House load / consumption (W)",
-    "grid_power": "Grid power (W, + import / − export)",
+    "grid_power": "Grid power (W, raw: + export / − import, inverted for AI: + import / − export)",
     "battery_power": "Battery power (W, + charge / − discharge)",
     "battery_soc": "Battery state of charge (%)",
 }

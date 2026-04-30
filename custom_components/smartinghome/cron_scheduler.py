@@ -107,12 +107,14 @@ class AICronScheduler:
             finance_data["export_revenue"] = None
             finance_data["savings"] = 0
 
-        # GoodWe: positive = import, negative = export — same as AI convention
+        # GoodWe: positive = EXPORT, negative = IMPORT (raw sensor convention)
+        # AI expects: positive = import, negative = export
+        # → invert sign (× -1) to match AI convention
         grid_raw = raw.get("sensor.meter_active_power_total")
         grid_for_ai = None
         if grid_raw is not None:
             try:
-                grid_for_ai = float(grid_raw)  # No inversion needed
+                grid_for_ai = -1 * float(grid_raw)  # Invert: GoodWe +export → AI +import
             except (ValueError, TypeError):
                 grid_for_ai = None
 
@@ -161,13 +163,15 @@ class AICronScheduler:
             # Battery score
             batt = 100 if 20 <= soc <= 90 else (100 - (soc - 90) * 5 if soc > 90 else soc * 5)
 
-            # Tariff score
+            # Tariff score — penalize only IMPORT during peak hours (export = revenue, not cost)
             hour = datetime.now().hour
             weekday = datetime.now().weekday()
             is_off_peak = (hour >= 22 or hour < 6) or weekday >= 5
-            grid_power = abs(float(raw.get("sensor.meter_active_power_total") or 0))
+            # GoodWe raw: +export/-import → invert to +import/-export
+            grid_power_ai = -1 * float(raw.get("sensor.meter_active_power_total") or 0)
+            grid_import_w = max(0, grid_power_ai)  # only positive values = import
             tariff = 100
-            if grid_power > 100 and not is_off_peak:
+            if grid_import_w > 100 and not is_off_peak:
                 if 7 <= hour < 13:
                     tariff = 40
                 elif 15 <= hour < 22:
