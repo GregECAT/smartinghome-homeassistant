@@ -774,8 +774,8 @@ MANUAL_MODE_LABELS: Final = {
 MANUAL_MODE_DESCRIPTIONS: Final = {
     ManualMode.SELF_CONSUMPTION: "Produkcja PV zasila dom, nadwyżka do baterii, reszta do sieci.",
     ManualMode.SELL_TO_GRID: "Bateria rozładowuje do sieci — maksymalny eksport, optymalnie w szczycie.",
-    ManualMode.CHARGE_BATTERY: "Priorytet PV → bateria. Ładuj baterię z paneli fotowoltaicznych.",
-    ManualMode.CHARGE_FROM_GRID: "Ładuj baterię z sieci — wykorzystaj tanią energię (arbitraż nocny).",
+    ManualMode.CHARGE_BATTERY: "Priorytet PV → dom → bateria. Nadwyżka PV ładuje baterię. NIE pobiera z sieci do ładowania. Bezpieczne w dzień.",
+    ManualMode.CHARGE_FROM_GRID: "Agresywne ładowanie z PV + sieci (eco_charge). ⚠️ Pobiera z sieci! Używaj TYLKO: arbitraż nocny, ujemna cena RCE.",
     ManualMode.PEAK_SAVE: "Zablokuj ładowanie z sieci, bateria zasila dom przed szczytem.",
     ManualMode.ZERO_EXPORT: "Cała energia w domu + bateria. Zerowy eksport do sieci.",
     ManualMode.BATTERY_HOLD: "Bateria wstrzymana — nie ładuj, nie rozładowuj. Stan czuwania.",

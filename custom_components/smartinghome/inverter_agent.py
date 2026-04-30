@@ -313,8 +313,13 @@ class InverterAgent:
         Returns ExecutionResult with details of what happened.
         """
         try:
-            if tool == "force_charge":
-                return await self._exec_force_charge()
+            if tool == "charge_pv_only":
+                return await self._exec_charge_pv_only()
+            elif tool == "charge_from_grid":
+                return await self._exec_charge_from_grid()
+            elif tool == "force_charge":
+                # Backwards compat → charge_from_grid
+                return await self._exec_charge_from_grid()
             elif tool == "force_discharge":
                 return await self._exec_force_discharge()
             elif tool == "set_dod":
@@ -367,46 +372,68 @@ class InverterAgent:
     #  Individual command executors
     # ------------------------------------------------------------------
 
-    async def _exec_force_charge(self) -> ExecutionResult:
-        """Force charging — skip if already charging."""
+    async def _exec_charge_pv_only(self) -> ExecutionResult:
+        """Charge battery from PV only — PV → dom → bateria."""
+        # Check: is already in general mode (PV charging)?
+        work_mode_state = self.hass.states.get(SELECT_WORK_MODE)
+        current_mode = work_mode_state.state if work_mode_state else "unknown"
+
+        if current_mode == "general" and self._is_on_cooldown("charge_pv_only"):
+            return ExecutionResult(
+                tool="charge_pv_only",
+                skipped=True,
+                reason="already in general mode (PV charging)",
+                previous_state=current_mode,
+                new_state="general (PV → dom → bateria)",
+            )
+
+        prefix = "🧠 AI CTRL" if not self._dry_run else "🧠 AI DRY-RUN"
+        if not self._dry_run:
+            await self._em.charge_pv_only()
+        self._commanded_charging = True
+        self._mark_executed("charge_pv_only")
+
+        return ExecutionResult(
+            tool="charge_pv_only",
+            executed=True,
+            message=f"{prefix}: charge_pv_only → PV → dom → bateria (bez sieci)",
+            previous_state=current_mode,
+            new_state="general (PV-only charging)",
+        )
+
+    async def _exec_charge_from_grid(self) -> ExecutionResult:
+        """Charge battery from grid + PV (eco_charge)."""
         # Check: is charging already commanded?
         if self._commanded_charging is True:
-            # Also check cooldown
-            if self._is_on_cooldown("force_charge"):
+            if self._is_on_cooldown("charge_from_grid"):
                 return ExecutionResult(
-                    tool="force_charge",
+                    tool="charge_from_grid",
                     skipped=True,
-                    reason="already charging (commanded)",
+                    reason="already charging from grid (commanded)",
                     previous_state="charging",
                     new_state="charging",
                 )
 
-        # Check HA state: battery power > 50W = already charging
         bat_power = self._read_state("sensor.battery_power", 0.0)
-        if self._commanded_charging is True and bat_power > 50:
-            if self._is_on_cooldown("force_charge"):
-                return ExecutionResult(
-                    tool="force_charge",
-                    skipped=True,
-                    reason=f"already charging ({bat_power:.0f}W)",
-                    previous_state=f"charging ({bat_power:.0f}W)",
-                    new_state=f"charging ({bat_power:.0f}W)",
-                )
-
-        # Execute
         prefix = "🧠 AI CTRL" if not self._dry_run else "🧠 AI DRY-RUN"
         if not self._dry_run:
-            await self._em.force_charge()
+            await self._em.charge_from_grid()
         self._commanded_charging = True
-        self._mark_executed("force_charge")
+        self._mark_executed("charge_from_grid")
 
         return ExecutionResult(
-            tool="force_charge",
+            tool="charge_from_grid",
             executed=True,
-            message=f"{prefix}: force_charge → ładowanie baterii",
-            previous_state="not charging" if bat_power <= 50 else f"charging ({bat_power:.0f}W)",
-            new_state="charging (commanded)",
+            message=f"{prefix}: charge_from_grid → ładowanie z sieci + PV (eco_charge)",
+            previous_state=f"battery: {bat_power:.0f}W",
+            new_state="charging from grid (commanded)",
         )
+
+    async def _exec_force_charge(self) -> ExecutionResult:
+        """Force charging — DEPRECATED, redirects to charge_from_grid."""
+        result = await self._exec_charge_from_grid()
+        result.tool = "force_charge"
+        return result
 
     async def _exec_force_discharge(self) -> ExecutionResult:
         """Force discharge — skip if already discharging."""
