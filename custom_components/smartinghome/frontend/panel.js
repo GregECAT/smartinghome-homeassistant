@@ -12828,29 +12828,9 @@ class SmartingHomePanel extends HTMLElement {
           <!-- §5b PV SYSTEM CONFIG -->
           <div class="card" style="margin-bottom:12px">
             <div class="card-title">⚙️ Parametry Instalacji PV</div>
-            <div style="font-size:10px; color:#94a3b8; margin-bottom:12px">Uzupełnij dane instalacji — wpływa na dokładność prognozy produkcji</div>
-            <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:12px">
-              <div>
-                <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">Moc instalacji (kWp)</div>
-                <input type="number" id="fc-cfg-kwp" min="0.5" max="100" step="0.1" value="9" style="width:100%; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:10px; color:#fff; font-size:16px; font-weight:700; text-align:center; outline:none; transition:border 0.3s" onfocus="this.style.borderColor='#f7b731'" onblur="this.style.borderColor='rgba(255,255,255,0.12)'; this.getRootNode().host._saveForecastConfig()" />
-              </div>
-              <div>
-                <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">Kąt nachylenia (°)</div>
-                <input type="number" id="fc-cfg-tilt" min="0" max="90" step="1" value="35" style="width:100%; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:10px; color:#fff; font-size:16px; font-weight:700; text-align:center; outline:none; transition:border 0.3s" onfocus="this.style.borderColor='#00d4ff'" onblur="this.style.borderColor='rgba(255,255,255,0.12)'; this.getRootNode().host._saveForecastConfig()" />
-              </div>
-              <div>
-                <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">Kierunek (azymut)</div>
-                <select id="fc-cfg-azimuth" style="width:100%; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:10px; color:#fff; font-size:14px; font-weight:600; text-align:center; outline:none; cursor:pointer; transition:border 0.3s; appearance:none; -webkit-appearance:none" onfocus="this.style.borderColor='#2ecc71'" onblur="this.style.borderColor='rgba(255,255,255,0.12)'; this.getRootNode().host._saveForecastConfig()" onchange="this.getRootNode().host._saveForecastConfig()">
-                  <option value="0" style="background:#1a1a2e">N — Północ</option>
-                  <option value="45" style="background:#1a1a2e">NE — Płn-Wsch</option>
-                  <option value="90" style="background:#1a1a2e">E — Wschód</option>
-                  <option value="135" style="background:#1a1a2e">SE — Płd-Wsch</option>
-                  <option value="180" selected style="background:#1a1a2e">S — Południe ✓</option>
-                  <option value="225" style="background:#1a1a2e">SW — Płd-Zach</option>
-                  <option value="270" style="background:#1a1a2e">W — Zachód</option>
-                  <option value="315" style="background:#1a1a2e">NW — Płn-Zach</option>
-                </select>
-              </div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:12px" id="fc-pv-config-subtitle">Konfiguracja pobrana z Przeglądu → Produkcja PV</div>
+            <div id="fc-pv-config-area">
+              <!-- Dynamically populated by _renderForecastPvConfig() -->
             </div>
             <div style="margin-top:10px; display:flex; align-items:center; gap:12px">
               <div style="font-size:10px; color:#94a3b8; flex:1" id="fc-cfg-summary">Szacunkowa roczna produkcja: — kWh</div>
@@ -14805,6 +14785,9 @@ class SmartingHomePanel extends HTMLElement {
     const mode = this._settings.forecast_strategy || 'AUTARKIA';
     this._setForecastStrategy(mode, true);
 
+    // Render PV config cards (from pv_string_config or manual fallback)
+    this._renderForecastPvConfig();
+
     // Fetch solar forecast
     try {
       await this._fetchSolarForecast();
@@ -14882,10 +14865,10 @@ class SmartingHomePanel extends HTMLElement {
 
     const totalWp = pvStrings.reduce((s, p) => s + p.wp, 0);
 
-    // Update config UI with string breakdown
+    // Update config UI — refresh string cards and manual fallback fields
+    this._renderForecastPvConfig();
     const kwpInput = this.shadowRoot.getElementById('fc-cfg-kwp');
     if (kwpInput) kwpInput.value = (totalWp / 1000).toFixed(1);
-    // Show weighted average tilt/azimuth for display
     const wTilt = pvStrings.reduce((s, p) => s + p.tilt * p.wp, 0) / totalWp;
     const wAz = pvStrings.reduce((s, p) => s + p.azimuth * p.wp, 0) / totalWp;
     const tiltInput = this.shadowRoot.getElementById('fc-cfg-tilt');
@@ -15215,19 +15198,28 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   _saveForecastConfig(recompute) {
-    const kwp = parseFloat(this.shadowRoot.getElementById('fc-cfg-kwp')?.value) || 9;
-    const tilt = parseInt(this.shadowRoot.getElementById('fc-cfg-tilt')?.value) || 35;
-    const azimuth = parseInt(this.shadowRoot.getElementById('fc-cfg-azimuth')?.value) || 180;
-    this._savePanelSettings({
-      forecast_pv_kwp: kwp,
-      forecast_pv_tilt: tilt,
-      forecast_pv_azimuth: azimuth,
-      // Sync kWp with Zima na plusie for consistency
-      winter_pv_kwp: kwp,
+    // If pv_string_config is active, skip saving manual fallback values — just recompute
+    const cfg = this._settings.pv_string_config || {};
+    const hasStringConfig = Object.keys(cfg).some(k => {
+      const sc = cfg[k];
+      return sc && sc.substrings && sc.substrings.some(sub => (sub.panel_count || 0) * (sub.panel_power || 0) > 0);
     });
-    this._updateForecastCfgSummary(kwp);
+
+    if (!hasStringConfig) {
+      const kwp = parseFloat(this.shadowRoot.getElementById('fc-cfg-kwp')?.value) || 9;
+      const tilt = parseInt(this.shadowRoot.getElementById('fc-cfg-tilt')?.value) || 35;
+      const azimuth = parseInt(this.shadowRoot.getElementById('fc-cfg-azimuth')?.value) || 180;
+      this._savePanelSettings({
+        forecast_pv_kwp: kwp,
+        forecast_pv_tilt: tilt,
+        forecast_pv_azimuth: azimuth,
+        // Sync kWp with Zima na plusie for consistency
+        winter_pv_kwp: kwp,
+      });
+      this._updateForecastCfgSummary(kwp);
+    }
     if (recompute) {
-      // Refresh forecast with new params
+      // Refresh forecast with new/existing params
       this._fetchSolarForecast().catch(e => console.warn('[SH] recompute error:', e));
     }
   }
@@ -15254,6 +15246,132 @@ class SmartingHomePanel extends HTMLElement {
       html += ` <span style="font-size:9px; color:#64748b">· ${ps.label}: ${dir} ${ps.tilt}°</span>`;
     }
     el.innerHTML = html;
+  }
+
+  _renderForecastPvConfig() {
+    const container = this.shadowRoot.getElementById('fc-pv-config-area');
+    if (!container) return;
+
+    const cfg = this._settings.pv_string_config || {};
+    const pvLabels = this._settings.pv_labels || {};
+    const dirLabels = { N:'Północ', NE:'Pn-Wsch', E:'Wschód', SE:'Pd-Wsch', S:'Południe', SW:'Pd-Zach', W:'Zachód', NW:'Pn-Zach' };
+    const dirIcons = { N:'⬆️', NE:'↗️', E:'🌅', SE:'↘️', S:'☀️', SW:'↙️', W:'🌇', NW:'↖️' };
+    const dirMap = { N:0, NE:45, E:90, SE:135, S:180, SW:225, W:270, NW:315 };
+
+    // Collect all configured strings/substrings
+    let allStrings = [];
+    for (let i = 1; i <= 4; i++) {
+      const sc = cfg[`pv${i}`];
+      if (sc && sc.substrings) {
+        sc.substrings.forEach((sub, si) => {
+          const wp = (sub.panel_count || 0) * (sub.panel_power || 405);
+          if (wp > 0) {
+            allStrings.push({
+              stringIdx: i, subIdx: si,
+              label: pvLabels[`pv${i}`] || `PV${i}`,
+              hasSubstrings: sc.has_substrings && sc.substrings.length > 1,
+              subLabel: (sc.has_substrings && sc.substrings.length > 1) ? `Podstring ${si + 1}` : null,
+              wp, direction: sub.direction || 'S',
+              tilt: sub.tilt || 35,
+              panelCount: sub.panel_count || 0,
+              panelPower: sub.panel_power || 405
+            });
+          }
+        });
+      }
+    }
+
+    const subtitle = this.shadowRoot.getElementById('fc-pv-config-subtitle');
+
+    if (allStrings.length > 0) {
+      // === MULTI-STRING MODE: show cards ===
+      if (subtitle) subtitle.textContent = 'Konfiguracja pobrana z Przeglądu → Produkcja PV';
+      const totalWp = allStrings.reduce((s, p) => s + p.wp, 0);
+
+      const cardsHtml = allStrings.map(s => {
+        const dir = s.direction || 'S';
+        const icon = dirIcons[dir] || '☀️';
+        const dirLabel = dirLabels[dir] || dir;
+        const kwp = (s.wp / 1000).toFixed(2);
+        const displayLabel = s.subLabel ? `${s.label} — ${s.subLabel}` : s.label;
+        const pct = totalWp > 0 ? ((s.wp / totalWp) * 100).toFixed(0) : 0;
+
+        return `<div style="background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:12px; display:flex; flex-direction:column; gap:6px; position:relative; transition:border-color 0.3s, background 0.3s; cursor:default"
+          onmouseenter="this.style.borderColor='rgba(247,183,49,0.3)'; this.style.background='rgba(255,255,255,0.06)'"
+          onmouseleave="this.style.borderColor='rgba(255,255,255,0.08)'; this.style.background='rgba(255,255,255,0.04)'">
+          <div style="display:flex; align-items:center; justify-content:space-between">
+            <div style="display:flex; align-items:center; gap:6px">
+              <span style="font-size:18px">${icon}</span>
+              <span style="font-size:11px; font-weight:700; color:#f8fafc">${displayLabel}</span>
+            </div>
+            <span style="font-size:10px; color:#f7b731; cursor:pointer; padding:2px 6px; border-radius:4px; background:rgba(247,183,49,0.1); transition:background 0.2s"
+              onmouseenter="this.style.background='rgba(247,183,49,0.2)'"
+              onmouseleave="this.style.background='rgba(247,183,49,0.1)'"
+              onclick="this.getRootNode().host._openPvStringConfig(${s.stringIdx})"
+              title="Edytuj parametry stringa">⚙️ Edytuj</span>
+          </div>
+          <div style="display:flex; align-items:baseline; gap:4px">
+            <span style="font-size:20px; font-weight:800; color:#2ecc71">${kwp}</span>
+            <span style="font-size:11px; color:#94a3b8">kWp</span>
+            <span style="font-size:10px; color:#475569; margin-left:auto">${pct}%</span>
+          </div>
+          <div style="display:flex; gap:8px; font-size:10px; color:#64748b">
+            <span>📐 ${s.tilt}°</span>
+            <span>🧭 ${dirLabel}</span>
+          </div>
+          <div style="font-size:9px; color:#475569">${s.panelCount} × ${s.panelPower} Wp</div>
+        </div>`;
+      }).join('');
+
+      // Determine grid columns based on count
+      const cols = allStrings.length <= 2 ? 'repeat(2, 1fr)' : allStrings.length === 3 ? 'repeat(3, 1fr)' : 'repeat(auto-fill, minmax(180px, 1fr))';
+
+      container.innerHTML = `
+        <div style="display:grid; grid-template-columns:${cols}; gap:10px; margin-bottom:8px">
+          ${cardsHtml}
+        </div>
+        <div style="display:flex; align-items:center; gap:8px; padding:8px 10px; background:rgba(46,204,113,0.06); border:1px solid rgba(46,204,113,0.12); border-radius:8px; margin-top:4px">
+          <span style="font-size:16px">Σ</span>
+          <span style="font-size:12px; color:#f8fafc; font-weight:700">${(totalWp / 1000).toFixed(1)} kWp</span>
+          <span style="font-size:10px; color:#94a3b8">· ${allStrings.length} ${allStrings.length === 1 ? 'string' : allStrings.length < 5 ? 'stringi' : 'stringów'}</span>
+          <span style="font-size:9px; color:#64748b; margin-left:auto">Dane z Przeglądu → ⚙️ przy stringach PV</span>
+        </div>
+      `;
+
+    } else {
+      // === MANUAL FALLBACK MODE: show input fields ===
+      if (subtitle) subtitle.textContent = 'Uzupełnij dane instalacji — wpływa na dokładność prognozy produkcji';
+
+      container.innerHTML = `
+        <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:12px">
+          <div>
+            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">Moc instalacji (kWp)</div>
+            <input type="number" id="fc-cfg-kwp" min="0.5" max="100" step="0.1" value="${this._settings.forecast_pv_kwp || 9}" style="width:100%; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:10px; color:#fff; font-size:16px; font-weight:700; text-align:center; outline:none; transition:border 0.3s" onfocus="this.style.borderColor='#f7b731'" onblur="this.style.borderColor='rgba(255,255,255,0.12)'; this.getRootNode().host._saveForecastConfig()" />
+          </div>
+          <div>
+            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">Kąt nachylenia (°)</div>
+            <input type="number" id="fc-cfg-tilt" min="0" max="90" step="1" value="${this._settings.forecast_pv_tilt || 35}" style="width:100%; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:10px; color:#fff; font-size:16px; font-weight:700; text-align:center; outline:none; transition:border 0.3s" onfocus="this.style.borderColor='#00d4ff'" onblur="this.style.borderColor='rgba(255,255,255,0.12)'; this.getRootNode().host._saveForecastConfig()" />
+          </div>
+          <div>
+            <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">Kierunek (azymut)</div>
+            <select id="fc-cfg-azimuth" style="width:100%; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:10px; color:#fff; font-size:14px; font-weight:600; text-align:center; outline:none; cursor:pointer; transition:border 0.3s; appearance:none; -webkit-appearance:none" onfocus="this.style.borderColor='#2ecc71'" onblur="this.style.borderColor='rgba(255,255,255,0.12)'; this.getRootNode().host._saveForecastConfig()" onchange="this.getRootNode().host._saveForecastConfig()">
+              <option value="0" style="background:#1a1a2e" ${(this._settings.forecast_pv_azimuth || 180) == 0 ? 'selected' : ''}>N — Północ</option>
+              <option value="45" style="background:#1a1a2e" ${(this._settings.forecast_pv_azimuth || 180) == 45 ? 'selected' : ''}>NE — Płn-Wsch</option>
+              <option value="90" style="background:#1a1a2e" ${(this._settings.forecast_pv_azimuth || 180) == 90 ? 'selected' : ''}>E — Wschód</option>
+              <option value="135" style="background:#1a1a2e" ${(this._settings.forecast_pv_azimuth || 180) == 135 ? 'selected' : ''}>SE — Płd-Wsch</option>
+              <option value="180" style="background:#1a1a2e" ${(this._settings.forecast_pv_azimuth || 180) == 180 ? 'selected' : ''}>S — Południe ✓</option>
+              <option value="225" style="background:#1a1a2e" ${(this._settings.forecast_pv_azimuth || 180) == 225 ? 'selected' : ''}>SW — Płd-Zach</option>
+              <option value="270" style="background:#1a1a2e" ${(this._settings.forecast_pv_azimuth || 180) == 270 ? 'selected' : ''}>W — Zachód</option>
+              <option value="315" style="background:#1a1a2e" ${(this._settings.forecast_pv_azimuth || 180) == 315 ? 'selected' : ''}>NW — Płn-Zach</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:8px; padding:8px 10px; background:rgba(247,183,49,0.06); border:1px solid rgba(247,183,49,0.12); border-radius:8px; display:flex; align-items:center; gap:8px">
+          <span style="font-size:14px">💡</span>
+          <span style="font-size:10px; color:#f7b731">Dla dokładniejszej prognozy skonfiguruj stringi PV w zakładce <strong>Przegląd</strong> przyciskiem ⚙️ przy każdym stringu. Prognoza automatycznie pobierze parametry z konfiguracji.</span>
+        </div>
+      `;
+    }
   }
 
   _updateIntegrationStatus() {
