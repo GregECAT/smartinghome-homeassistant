@@ -44,6 +44,8 @@ from .const import (
     ICON_FREQUENCY,
     ICON_ARBITRAGE,
     ICON_LICENSE,
+    ICON_TEMPERATURE,
+    ICON_VOLTAGE,
 )
 from .coordinator import SmartingHomeCoordinator
 
@@ -334,6 +336,87 @@ HEMS_SENSOR_DESCRIPTIONS: list[SensorEntityDescription] = [
         key="license_tier",
         name="License Tier",
         icon=ICON_LICENSE,
+    ),
+    # —— Battery Health (Phase 1) ——
+    SensorEntityDescription(
+        key="battery_soh",
+        name="Battery State of Health",
+        native_unit_of_measurement=PERCENTAGE,
+        icon=ICON_BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key="battery_health_score",
+        name="Battery Health Score",
+        icon=ICON_BATTERY,
+    ),
+    SensorEntityDescription(
+        key="battery_charge_limit_a",
+        name="Battery Charge Limit",
+        native_unit_of_measurement="A",
+        icon=ICON_BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key="battery_discharge_limit_a",
+        name="Battery Discharge Limit",
+        native_unit_of_measurement="A",
+        icon=ICON_BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    # —— Inverter Thermal (Phase 1) ——
+    SensorEntityDescription(
+        key="inverter_temp_radiator",
+        name="Inverter Temperature (Radiator)",
+        native_unit_of_measurement="°C",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon=ICON_TEMPERATURE,
+    ),
+    SensorEntityDescription(
+        key="inverter_thermal_status",
+        name="Inverter Thermal Status",
+        icon=ICON_TEMPERATURE,
+    ),
+    # —— Grid Quality (Phase 1) ——
+    SensorEntityDescription(
+        key="grid_power_factor",
+        name="Grid Power Factor",
+        icon=ICON_GRID,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key="grid_quality",
+        name="Grid Quality",
+        icon=ICON_GRID,
+    ),
+    # —— Backup / UPS (Phase 1) ——
+    SensorEntityDescription(
+        key="backup_load_w",
+        name="Backup Load",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:power-plug-off-outline",
+    ),
+    SensorEntityDescription(
+        key="ups_load_pct",
+        name="UPS Load",
+        native_unit_of_measurement=PERCENTAGE,
+        icon="mdi:power-plug-off-outline",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    # —— Diagnostics (Phase 1) ——
+    SensorEntityDescription(
+        key="diag_status_code",
+        name="Diagnostic Status Code",
+        icon="mdi:alert-circle-outline",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key="ems_mode",
+        name="EMS Mode",
+        icon="mdi:home-battery",
     ),
 ]
 

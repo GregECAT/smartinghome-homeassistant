@@ -75,6 +75,9 @@ SENSOR_MAP_BATTERY: Final = {
     "battery_current": "Battery current (A)",
     "battery_temp": "Battery temperature (°C)",
     "battery_capacity_kwh": "Battery capacity (kWh)",
+    "battery_soh": "Battery state of health (%)",
+    "battery_charge_limit": "Battery max charge current (A)",
+    "battery_discharge_limit": "Battery max discharge current (A)",
 }
 
 # ── Grid extended ──
@@ -103,7 +106,17 @@ SENSOR_MAP_DAILY: Final = {
 # ── Inverter ──
 SENSOR_MAP_INVERTER: Final = {
     "inverter_power": "Inverter output power (W)",
-    "inverter_temp": "Inverter temperature (°C)",
+    "inverter_temp": "Inverter temperature — air (°C)",
+    "inverter_temp_radiator": "Inverter temperature — radiator (°C)",
+}
+
+# ── Diagnostics & Backup ──
+SENSOR_MAP_DIAGNOSTICS: Final = {
+    "diag_status_code": "Diagnostic status bitmask",
+    "meter_power_factor": "Grid meter power factor (cos φ)",
+    "backup_load": "Backup / UPS total load (W)",
+    "ups_load_pct": "UPS load percentage (%)",
+    "ems_mode": "EMS operating mode",
 }
 
 # ── Weather — Cloud API (AccuWeather, OpenWeatherMap, Forecast.Solar) ──
@@ -141,6 +154,7 @@ SENSOR_MAP_KEYS: Final = {
     **SENSOR_MAP_GRID,
     **SENSOR_MAP_DAILY,
     **SENSOR_MAP_INVERTER,
+    **SENSOR_MAP_DIAGNOSTICS,
     **SENSOR_MAP_WEATHER_CLOUD,
     **SENSOR_MAP_WEATHER_LOCAL,
 }
@@ -167,6 +181,9 @@ DEFAULT_SENSOR_MAP: Final = {
     "battery_current": "sensor.battery_current",
     "battery_temp": "sensor.battery_temperature",
     "battery_capacity_kwh": "",
+    "battery_soh": "sensor.battery_state_of_health",
+    "battery_charge_limit": "sensor.battery_charge_limit",
+    "battery_discharge_limit": "sensor.battery_discharge_limit",
     # Grid extended
     "voltage_l1": "sensor.on_grid_l1_voltage",
     "voltage_l2": "sensor.on_grid_l2_voltage",
@@ -187,6 +204,13 @@ DEFAULT_SENSOR_MAP: Final = {
     # Inverter
     "inverter_power": "sensor.active_power",
     "inverter_temp": "sensor.inverter_temperature_air",
+    "inverter_temp_radiator": "sensor.inverter_temperature_radiator",
+    # Diagnostics & Backup
+    "diag_status_code": "sensor.diag_status_code",
+    "meter_power_factor": "sensor.meter_power_factor",
+    "backup_load": "sensor.back_up_load",
+    "ups_load_pct": "sensor.ups_load",
+    "ems_mode": "sensor.ems_mode",
     # Weather — cloud (user fills in)
     "weather_temp": "",
     "weather_humidity": "",
@@ -921,6 +945,17 @@ SENSOR_LOAD_TODAY: Final = "sensor.today_load"
 
 SENSOR_WORK_MODE: Final = "sensor.work_mode"
 SENSOR_INVERTER_TEMP: Final = "sensor.inverter_temperature_air"
+
+# GoodWe extended sensors (Phase 1 — diagnostics & health)
+SENSOR_BATTERY_SOH: Final = "sensor.battery_state_of_health"
+SENSOR_BATTERY_CHARGE_LIMIT: Final = "sensor.battery_charge_limit"
+SENSOR_BATTERY_DISCHARGE_LIMIT: Final = "sensor.battery_discharge_limit"
+SENSOR_INVERTER_TEMP_RADIATOR: Final = "sensor.inverter_temperature_radiator"
+SENSOR_DIAG_STATUS_CODE: Final = "sensor.diag_status_code"
+SENSOR_METER_POWER_FACTOR: Final = "sensor.meter_power_factor"
+SENSOR_BACKUP_LOAD: Final = "sensor.back_up_load"
+SENSOR_UPS_LOAD: Final = "sensor.ups_load"
+SENSOR_EMS_MODE: Final = "sensor.ems_mode"
 
 # RCE PSE sensors — migrated to v2.0.0 entity names
 # See docs/MIGRACJA-V2.md for full changelog
