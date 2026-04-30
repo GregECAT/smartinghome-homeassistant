@@ -312,6 +312,23 @@ HEMS_SENSOR_DESCRIPTIONS: list[SensorEntityDescription] = [
         state_class=SensorStateClass.TOTAL,
         icon=ICON_PV,
     ),
+    # —— Grid Daily (midnight-corrected) ——
+    SensorEntityDescription(
+        key="grid_import_daily",
+        name="Grid Import Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL,
+        icon="mdi:transmission-tower-import",
+    ),
+    SensorEntityDescription(
+        key="grid_export_daily",
+        name="Grid Export Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL,
+        icon="mdi:transmission-tower-export",
+    ),
     # —— License ——
     SensorEntityDescription(
         key="license_tier",
