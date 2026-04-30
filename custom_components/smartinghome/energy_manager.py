@@ -116,24 +116,65 @@ class EnergyManager:
         elif mode == HEMSMode.MANUAL:
             pass  # No automatic actions
 
-    async def force_charge(self) -> None:
-        """Force battery charging.
+    async def charge_pv_only(self) -> None:
+        """Ładuj baterię TYLKO z PV — priorytet: dom → bateria.
+
+        Tryb General / Self Use — falownik naturalnie priorytetyzuje:
+        1. PV → dom (pokrycie zużycia)
+        2. Nadwyżka PV → bateria (ładowanie)
+        3. Sieć → NIE używana do ładowania baterii
+
+        Użyj w dzień, gdy PV jest aktywne. Bezpieczny tryb —
+        nigdy nie spowoduje importu z sieci na baterię.
+
+        GoodWe: General mode + enable_charging + eco_mode_soc=100.
+        Sofar: Self Use + charge_power=max, discharge_power=auto.
+        """
+        if self._inverter_brand == INVERTER_BRAND_SOFAR:
+            _LOGGER.info("[Sofar] charge_pv_only — Self Use (PV → dom → bateria, bez sieci)")
+            await self._sofar_set_charge_power(6000)  # Allow full PV charging
+            await self._sofar_set_discharge_power(3000)  # Allow normal discharge
+            await self._set_work_mode("Self Use")
+        else:
+            _LOGGER.info("charge_pv_only — General mode (PV → dom → bateria, bez importu z sieci)")
+            await self._set_eco_mode_soc(100)
+            await self._set_eco_mode_power(0)  # power=0 → no forced eco operation
+            await self._set_work_mode("general")
+            await self._enable_charging()
+            await self._set_dod(DEFAULT_DOD_ON_GRID)
+        self._current_mode = HEMSMode.CHARGE
+
+    async def charge_from_grid(self) -> None:
+        """Ładuj baterię z sieci + PV (agresywnie).
+
+        ⚠️ UWAGA: Ten tryb POBIERA energię z sieci!
+        Użyj TYLKO gdy:
+        - Noc (brak PV) — arbitraż nocny
+        - Cena RCE ujemna (darmowa energia)
+        - SOC krytycznie niski + brak PV
 
         GoodWe: Eco Mode (eco_charge) — soc=100, power=100, charge_current=max.
         Sofar: Self Use — charge_power=max, discharge_power=0.
         """
         if self._inverter_brand == INVERTER_BRAND_SOFAR:
-            _LOGGER.info("[Sofar] Forcing battery charge (Self Use, max charge, zero discharge)")
+            _LOGGER.info("[Sofar] charge_from_grid — Self Use (PV + sieć → bateria)")
             await self._sofar_set_charge_power(6000)  # Max charge power
             await self._sofar_set_discharge_power(0)   # Block discharge
             await self._set_work_mode("Self Use")
         else:
-            _LOGGER.info("Forcing battery charge (eco_charge, soc=100, power=100)")
+            _LOGGER.info("charge_from_grid — eco_charge (PV + sieć → bateria, soc=100, power=100)")
             await self._set_eco_mode_soc(100)
             await self._set_eco_mode_power(100)
             await self._enable_charging()
             await self._set_work_mode("eco_charge")
         self._current_mode = HEMSMode.CHARGE
+
+    async def force_charge(self) -> None:
+        """Backwards-compatible alias → charge_from_grid().
+
+        ⚠️ DEPRECATED: Użyj charge_pv_only() (dzień) lub charge_from_grid() (noc).
+        """
+        await self.charge_from_grid()
 
     async def force_discharge(self) -> None:
         """Force battery discharge to grid.

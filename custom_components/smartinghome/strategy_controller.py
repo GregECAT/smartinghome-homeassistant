@@ -770,15 +770,28 @@ class StrategyController:
         # Poniżej tego progu dozwolone ładowanie z sieci (jedyny automatyczny wyjątek).
         soc_emergency_threshold = DEFAULT_BATTERY_MIN_SOC  # Zawsze 5%
         if soc < soc_emergency_threshold:
-            # We must execute force_charge frequently (every 60s) to fight the integration auto-reset
+            # We must execute frequently (every 60s) to fight the integration auto-reset
             if await self._throttled_action("soc_emergency_execute", cooldown=60):
-                await self._em.force_charge()
-                self._charging_enabled = True
-                actions_taken.append(f"W3: ⚠️ SOC emergency — wymuszono ładowanie (próg: {soc_emergency_threshold}%)")
+                if pv > 100:
+                    # Dzień: PV jest — użyj general mode, PV naładuje baterię
+                    # BEZ pobierania z sieci na baterię. Dom ma priorytet.
+                    await self._em.charge_pv_only()
+                    self._charging_enabled = True
+                    actions_taken.append(
+                        f"W3: ⚠️ SOC emergency — charge_pv_only (PV={pv:.0f}W, SOC={soc:.0f}%)"
+                    )
+                else:
+                    # Noc/brak PV — jedyne źródło to sieć
+                    await self._em.charge_from_grid()
+                    self._charging_enabled = True
+                    actions_taken.append(
+                        f"W3: ⚠️ SOC emergency — charge_from_grid (PV={pv:.0f}W, brak PV → sieć)"
+                    )
                 
                 # But only log to the UI every 15 minutes to avoid spam
                 if await self._throttled_action("soc_emergency_log", cooldown=900):
-                    self._log_decision("soc_emergency", f"SOC={soc:.0f}% < {soc_emergency_threshold}% — ładowanie awaryjne")
+                    source = "PV-only" if pv > 100 else "sieć"
+                    self._log_decision("soc_emergency", f"SOC={soc:.0f}% < {soc_emergency_threshold}% — ładowanie awaryjne [{source}]")
 
         # W0: Grid Import Guard
         w0_actions = await self._execute_w0_grid_import_guard(
@@ -908,14 +921,18 @@ class StrategyController:
         soc_emergency_threshold = DEFAULT_BATTERY_MIN_SOC  # Zawsze 5% — spójny próg awaryjny
         if soc < soc_emergency_threshold:
             if await self._throttled_action("soc_emergency_execute", cooldown=60):
-                await self._em.force_charge()
+                if pv > 100:
+                    await self._em.charge_pv_only()
+                else:
+                    await self._em.charge_from_grid()
+                source = "PV-only" if pv > 100 else "sieć"
                 actions_taken.append(
-                    f"W3: ⚠️ SOC emergency — ładowanie (próg: {soc_emergency_threshold}%)"
+                    f"W3: ⚠️ SOC emergency — ładowanie [{source}] (SOC={soc:.0f}%)"
                 )
                 if await self._throttled_action("soc_emergency_log", cooldown=900):
                     self._log_decision(
                         "soc_emergency",
-                        f"SOC={soc:.0f}% < {soc_emergency_threshold}% — ładowanie awaryjne (manual mode)",
+                        f"SOC={soc:.0f}% < {soc_emergency_threshold}% — ładowanie awaryjne [{source}] (manual mode)",
                     )
 
         # W0: Grid Import Guard
@@ -1194,14 +1211,15 @@ class StrategyController:
 
         if battery_available and grid_importing and pv_insufficient:
             # System pobiera z sieci mimo dostępnej baterii!
-            # Wymuś rozładowanie baterii, by pokryć zapotrzebowanie
+            # Przełącz na general mode — bateria zasili dom naturalnie
+            # NIE używamy force_discharge bo to SPRZEDAJE do sieci!
             if await self._throttled_action("w0_zero_grid", cooldown=30):
-                await self._em.force_discharge()
+                await self._em.set_general_mode()
                 self._charging_enabled = False
                 msg = (
                     f"W0: 🛡️ ZERO GRID — SOC={soc:.0f}% > {SOC_GRID_IMPORT_THRESHOLD}%, "
-                    f"grid_import={grid:.0f}W → force_discharge "
-                    f"(bateria MUSI zasilać dom, NIE sieć)"
+                    f"grid_import={grid:.0f}W → set_general_mode "
+                    f"(bateria zasila dom, BEZ sprzedaży do sieci)"
                 )
                 actions.append(msg)
                 self._log_decision("w0_zero_grid", msg)
@@ -1225,12 +1243,12 @@ class StrategyController:
                         actions.append(msg)
                         self._log_decision("w0_block", msg)
         elif is_expensive and rce_cheap_exception:
-            # Expensive G13 but RCE is very cheap → allow
+            # Expensive G13 but RCE is very cheap → allow grid charging
             if self._charging_enabled is False:
                 if await self._throttled_action("w0_rce_exception"):
-                    await self._em.force_charge()
+                    await self._em.charge_from_grid()
                     self._charging_enabled = True
-                    msg = f"W0: RCE wyjątek ({rce_mwh:.0f} PLN/MWh) — ładowanie dozwolone mimo drogiej taryfy"
+                    msg = f"W0: RCE wyjątek ({rce_mwh:.0f} PLN/MWh) — ładowanie z sieci dozwolone (tania energia mimo drogiej taryfy)"
                     actions.append(msg)
                     self._log_decision("w0_rce_exception", msg)
 
@@ -1480,12 +1498,12 @@ class StrategyController:
         actions: list[str] = []
 
         if surplus > 200 and soc < 95:
-            # PV excess → charge battery
+            # PV excess → charge battery (PV only, no grid!)
             if self._charging_enabled is not True:
                 if await self._throttled_action("msc_charge"):
-                    await self._em.force_charge()
+                    await self._em.charge_pv_only()
                     self._charging_enabled = True
-                    msg = f"🟢 MSC: PV nadwyżka {surplus:.0f}W → ładowanie baterii (SOC={soc:.0f}%)"
+                    msg = f"🟢 MSC: PV nadwyżka {surplus:.0f}W → charge_pv_only (SOC={soc:.0f}%)"
                     actions.append(msg)
                     self._log_decision("msc_charge", msg)
 
@@ -1579,7 +1597,7 @@ class StrategyController:
                 # PV nadwyżka → ładuj baterię do pełna
                 if self._charging_enabled is not True:
                     if await self._throttled_action("mp_midday_pv_charge"):
-                        await self._em.force_charge()
+                        await self._em.charge_pv_only()
                         self._charging_enabled = True
                         msg = (
                             f"💰 MP FAZA2: PV ładuje baterię → force_charge "
@@ -1660,7 +1678,7 @@ class StrategyController:
             if surplus > 200 and soc < 95:
                 if self._charging_enabled is not True:
                     if await self._throttled_action("mp_early_pv_charge"):
-                        await self._em.force_charge()
+                        await self._em.charge_pv_only()
                         self._charging_enabled = True
                         msg = (
                             f"💰 MP: Wczesna nadwyżka PV ({surplus:.0f}W) "
@@ -1681,9 +1699,9 @@ class StrategyController:
         # Ujemna cena RCE → ładuj wszystko (darmowa energia!)
         if rce_mwh < 0:
             if await self._throttled_action("mp_negative_rce"):
-                await self._em.force_charge()
+                await self._em.charge_from_grid()
                 self._charging_enabled = True
-                msg = f"💰 MP: Ujemna cena RCE ({rce_mwh:.0f}) — darmowa energia! Ładuj + wszystko ON"
+                msg = f"💰 MP: Ujemna cena RCE ({rce_mwh:.0f}) — darmowa energia! Ładuj z sieci + wszystko ON"
                 actions.append(msg)
                 self._log_decision("mp_negative_rce", msg)
 
@@ -1709,24 +1727,33 @@ class StrategyController:
                     self._log_decision("bp_high", msg)
 
         elif soc <= limits["min"]:
-            # SOC too low — charge (PV only, grid only if SOC < critical 5%)
-            if soc < SOC_GRID_IMPORT_THRESHOLD or surplus > 100:
+            # SOC too low — charge (PV only if possible, grid only if SOC < critical 5%)
+            if soc < SOC_GRID_IMPORT_THRESHOLD:
+                # Krytycznie niski SOC — musisz ładować z sieci
                 if self._charging_enabled is not True:
                     if await self._throttled_action("bp_soc_low"):
-                        await self._em.force_charge()
+                        await self._em.charge_from_grid()
                         self._charging_enabled = True
-                        source = "PV" if surplus > 100 else "sieć (SOC krytyczny)"
-                        msg = f"🔋 BP: SOC={soc:.0f}% <= {limits['min']:.0f}% — ładowanie ochronne [{source}]"
+                        msg = f"🔋 BP: SOC={soc:.0f}% < {SOC_GRID_IMPORT_THRESHOLD}% — charge_from_grid (SOC krytyczny)"
                         actions.append(msg)
                         self._log_decision("bp_low", msg)
+            elif surplus > 100:
+                # Jest PV — ładuj tylko z PV
+                if self._charging_enabled is not True:
+                    if await self._throttled_action("bp_soc_low_pv"):
+                        await self._em.charge_pv_only()
+                        self._charging_enabled = True
+                        msg = f"🔋 BP: SOC={soc:.0f}% <= {limits['min']:.0f}% — charge_pv_only (PV surplus={surplus:.0f}W)"
+                        actions.append(msg)
+                        self._log_decision("bp_low_pv", msg)
 
         elif surplus > 300 and soc < limits["max"]:
-            # PV surplus and room to charge
+            # PV surplus and room to charge (PV only!)
             if self._charging_enabled is not True:
                 if await self._throttled_action("bp_pv_charge"):
-                    await self._em.force_charge()
+                    await self._em.charge_pv_only()
                     self._charging_enabled = True
-                    msg = f"🔋 BP: PV nadwyżka {surplus:.0f}W → łagodne ładowanie (SOC={soc:.0f}%)"
+                    msg = f"🔋 BP: PV nadwyżka {surplus:.0f}W → charge_pv_only (SOC={soc:.0f}%)"
                     actions.append(msg)
                     self._log_decision("bp_gentle_charge", msg)
 
@@ -1741,14 +1768,14 @@ class StrategyController:
         actions: list[str] = []
 
         if surplus > 100 and soc < 98:
-            # Any PV surplus → absorb into battery
+            # Any PV surplus → absorb into battery (PV only!)
             if self._charging_enabled is not True:
                 if await self._throttled_action("ze_charge"):
-                    await self._em.force_charge()
+                    await self._em.charge_pv_only()
                     self._charging_enabled = True
                     # Also set zero export limit
                     await self._em.set_export_limit(0)
-                    msg = f"⚡ ZE: Nadwyżka {surplus:.0f}W → ładuj baterię (zero eksport)"
+                    msg = f"⚡ ZE: Nadwyżka {surplus:.0f}W → charge_pv_only (zero eksport)"
                     actions.append(msg)
                     self._log_decision("ze_charge", msg)
 
@@ -1813,10 +1840,10 @@ class StrategyController:
             and self._should_grid_charge_before_peak(soc, pv, load, data)
         ):
             if await self._throttled_action("wa_prepeak_fill"):
-                await self._em.force_charge()
+                await self._em.charge_from_grid()
                 self._charging_enabled = True
                 msg = (
-                    f"🌧️ WA: Pre-peak fill ({hours_to_peak:.0f}h do szczytu, "
+                    f"🌧️ WA: Pre-peak fill z sieci ({hours_to_peak:.0f}h do szczytu, "
                     f"SOC={soc:.0f}%, prognoza={forecast_today_remaining:.1f}kWh)"
                 )
                 actions.append(msg)
@@ -2249,11 +2276,28 @@ class StrategyController:
                 return f"{prefix}: ❌ action({action}) failed: {err}"
 
         try:
-            if tool == "force_charge":
+            if tool == "charge_pv_only":
                 if not self._ai_dry_run:
-                    await self._em.force_charge()
+                    await self._em.charge_pv_only()
                     self._charging_enabled = True
-                msg = f"{prefix}: force_charge → ładowanie baterii"
+                msg = f"{prefix}: charge_pv_only → PV → dom → bateria (bez sieci)"
+                self._log_decision("ai_cmd", msg)
+                return msg
+
+            elif tool == "charge_from_grid":
+                if not self._ai_dry_run:
+                    await self._em.charge_from_grid()
+                    self._charging_enabled = True
+                msg = f"{prefix}: charge_from_grid → ładowanie z sieci + PV (eco_charge)"
+                self._log_decision("ai_cmd", msg)
+                return msg
+
+            elif tool == "force_charge":
+                # Backwards compat — redirect to charge_from_grid
+                if not self._ai_dry_run:
+                    await self._em.charge_from_grid()
+                    self._charging_enabled = True
+                msg = f"{prefix}: force_charge [DEPRECATED → charge_from_grid] → ładowanie z sieci"
                 self._log_decision("ai_cmd", msg)
                 return msg
 

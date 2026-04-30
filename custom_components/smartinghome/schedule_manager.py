@@ -446,12 +446,12 @@ class ScheduleManager:
                 await self._em.force_discharge()
 
             elif mode == ManualMode.CHARGE_BATTERY:
-                # Force charge — PV priority to battery
-                await self._em.force_charge()
+                # PV-only charge — PV → dom → bateria. NIE pobiera z sieci!
+                await self._em.charge_pv_only()
 
             elif mode == ManualMode.CHARGE_FROM_GRID:
-                # Eco charge — battery charges from grid
-                await self._em.force_charge()
+                # Grid + PV charge — eco_charge. ⚠️ Pobiera z sieci!
+                await self._em.charge_from_grid()
 
             elif mode == ManualMode.PEAK_SAVE:
                 # Block grid import, battery powers home

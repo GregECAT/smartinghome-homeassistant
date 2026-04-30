@@ -829,7 +829,11 @@ Use tables for comparisons. Be concise but comprehensive. Focus on actionable in
 
 # Available tools the AI can call — these map to EnergyManager methods
 AI_CONTROLLER_TOOLS = {
-    "force_charge": "Force battery charge from grid via Eco Mode (eco_charge, soc=100%, power=100%, current=18.5A)",
+    "charge_pv_only": "🌞 Ładuj baterię TYLKO z PV (tryb General). PV → dom → nadwyżka → bateria. "
+                      "NIE pobiera z sieci! Użyj W DZIEŃ gdy PV > 0. Bezpieczne zawsze.",
+    "charge_from_grid": "⚡ Ładuj baterię z sieci + PV (eco_charge). ⚠️ UWAGA: CIĄGNIE z sieci! "
+                        "Użyj TYLKO: nocą (PV=0), ujemna cena RCE, lub SOC krytycznie niski + brak PV.",
+    "force_charge": "[DEPRECATED → użyj charge_pv_only (dzień) lub charge_from_grid (noc)]",
     "force_discharge": "⚠️ Force battery discharge TO GRID (SPRZEDAŻ!) via eco_discharge. Użyj TYLKO gdy chcesz SPRZEDAWAĆ energię do sieci!",
     "set_general": "Przełącz na tryb General — bateria zasila dom (AUTOKONSUMPCJA). Użyj gdy chcesz rozładować baterię przez zasilanie domu, BEZ sprzedaży do sieci.",
     "stop_force_charge": "STOP forced charging — restore general mode",
@@ -1420,10 +1424,21 @@ PREFERUJ używanie "actions" (lista ID akcji z katalogu) zamiast surowych "comma
 }}
 
 KRYTYCZNE — MAPOWANIE STRATEGII NA KOMENDY (strategy→tool):
-- "aggressive_charge" / "charge" / "night_charge" → {{"tool": "force_charge"}} (eco_charge mode, ładuj z sieci/PV)
+- "pv_charge" / "pv_optimize" → {{"tool": "charge_pv_only"}} (tryb General — PV → dom → bateria, BEZ sieci!)
+- "aggressive_charge" / "night_charge" → {{"tool": "charge_from_grid"}} (eco_charge mode, ładuj z sieci+PV — TYLKO NOC/RCE ujemne!)
+- "charge" → w DZIEŃ: {{"tool": "charge_pv_only"}}, w NOCY: {{"tool": "charge_from_grid"}}
 - "discharge_self_consume" → {{"tool": "set_general"}} (tryb General — bateria zasila DOM, BEZ sprzedaży do sieci!)
 - "discharge" → {{"tool": "force_discharge"}} (eco_discharge mode — SPRZEDAŻ do sieci!)
-- "pv_optimize" / "no_action" → {{"tool": "no_action"}}
+- "no_action" → {{"tool": "no_action"}}
+
+⚠️ KLUCZOWA ZASADA PV-FIRST:
+- W DZIEŃ (PV > 0): ZAWSZE charge_pv_only! NIGDY charge_from_grid!
+  charge_from_grid w dzień = import z sieci na baterię = dom żyje z sieci = STRATA!
+- W NOCY (PV = 0): charge_from_grid dozwolone TYLKO jeśli arbitraż opłacalny.
+
+⚠️ RÓŻNICA MIĘDZY charge_pv_only A charge_from_grid:
+- charge_pv_only = tryb General → PV NAJPIERW zasila dom, NADWYŻKA ładuje baterię. Sieć = 0 import.
+- charge_from_grid = tryb eco_charge → falownik AGRESYWNIE ładuje baterię z KAŻDEGO źródła (PV + sieć)!
 
 ⚠️ RÓŻNICA MIĘDZY set_general A force_discharge:
 - set_general = tryb General → falownik NATURALNIE używa baterii do zasilania domu. NIE sprzedaje do sieci.
