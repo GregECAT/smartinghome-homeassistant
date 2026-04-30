@@ -12,7 +12,7 @@
   <a href="https://hacs.xyz"><img src="https://img.shields.io/badge/HACS-Custom-41BDF5?style=for-the-badge&logo=homeassistantcommunitystore&logoColor=white" alt="HACS" /></a>
   <a href="https://www.home-assistant.io"><img src="https://img.shields.io/badge/Home%20Assistant-2025.1+-18BCF2?style=for-the-badge&logo=homeassistant&logoColor=white" alt="Home Assistant" /></a>
   <a href="https://smartinghome.pl"><img src="https://img.shields.io/badge/License-Commercial-E74C3C?style=for-the-badge&logo=keycdn&logoColor=white" alt="License" /></a>
-  <img src="https://img.shields.io/badge/Version-1.53.1-2ECC71?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/Version-1.53.2-2ECC71?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
 </p>
 
