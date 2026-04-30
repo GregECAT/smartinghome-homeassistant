@@ -339,10 +339,10 @@ class SmartingHomeConfigFlow(
         defaults = _get_defaults_for_brand(brand)
 
         if user_input is not None:
-            # Store sensor map
+            # Store sensor map — missing keys = cleared by user → ""
             sensor_map = {}
             for key in SENSOR_MAP_KEYS:
-                sensor_map[key] = user_input.get(key, defaults.get(key, ""))
+                sensor_map[key] = user_input.get(key, "")
             self._data[CONF_SENSOR_MAP] = sensor_map
 
             # If PRO mode, show AI step; if FREE, create entry now
@@ -365,16 +365,20 @@ class SmartingHomeConfigFlow(
                 data=self._data,
             )
 
+        entity_sel = selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
+        )
         schema_dict = {}
         for key, _desc in SENSOR_MAP_KEYS.items():
             default_val = defaults.get(key, "")
-            schema_dict[vol.Optional(key, default=default_val)] = (
-                selector.TextSelector(
-                    selector.TextSelectorConfig(
-                        type=selector.TextSelectorType.TEXT
-                    )
-                )
-            )
+            if default_val:
+                # Has a real entity ID default — pre-fill the picker
+                schema_dict[
+                    vol.Optional(key, default=default_val)
+                ] = entity_sel
+            else:
+                # Empty default — leave picker empty, field is optional
+                schema_dict[vol.Optional(key)] = entity_sel
 
         return self.async_show_form(
             step_id="sensors",
@@ -478,9 +482,10 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
         current_map = current.get(CONF_SENSOR_MAP, brand_defaults)
 
         if user_input is not None:
+            # Missing keys = cleared by user → ""
             sensor_map = {}
             for key in SENSOR_MAP_KEYS:
-                sensor_map[key] = user_input.get(key, current_map.get(key, ""))
+                sensor_map[key] = user_input.get(key, "")
             # Update entry data with new sensor map
             new_data = {**current, CONF_SENSOR_MAP: sensor_map}
             self.hass.config_entries.async_update_entry(
@@ -488,16 +493,20 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
             )
             return self.async_create_entry(title="", data={})
 
+        entity_sel = selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor")
+        )
         schema_dict = {}
         for key, _desc in SENSOR_MAP_KEYS.items():
             current_val = current_map.get(key, brand_defaults.get(key, ""))
-            schema_dict[vol.Optional(key, default=current_val)] = (
-                selector.TextSelector(
-                    selector.TextSelectorConfig(
-                        type=selector.TextSelectorType.TEXT
-                    )
-                )
-            )
+            if current_val:
+                # Has a mapped entity — pre-fill the picker
+                schema_dict[
+                    vol.Optional(key, default=current_val)
+                ] = entity_sel
+            else:
+                # No entity mapped — leave picker empty, field optional
+                schema_dict[vol.Optional(key)] = entity_sel
 
         return self.async_show_form(
             step_id="sensors",
