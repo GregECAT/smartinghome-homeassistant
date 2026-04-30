@@ -183,24 +183,33 @@ class SmartingHomePanel extends HTMLElement {
 
   /* ── Sensor mapping ─────────────────────── */
   static DM = {
-    pv_power:"sensor.pv_power", load_power:"sensor.load",
-    grid_power:"sensor.meter_active_power_total", battery_power:"sensor.battery_power",
-    battery_soc:"sensor.battery_state_of_charge",
-    pv1_power:"sensor.pv1_power", pv1_voltage:"sensor.pv1_voltage", pv1_current:"sensor.pv1_current",
-    pv2_power:"sensor.pv2_power", pv2_voltage:"sensor.pv2_voltage", pv2_current:"sensor.pv2_current",
+    pv_power:"sensor.goodwe_total_power", load_power:"sensor.goodwe_house_consumption",
+    grid_power:"sensor.goodwe_meter_active_power_total", battery_power:"sensor.goodwe_battery_power",
+    battery_soc:"sensor.goodwe_battery_state_of_charge",
+    pv1_power:"sensor.goodwe_pv1_power", pv1_voltage:"sensor.goodwe_pv1_voltage", pv1_current:"sensor.goodwe_pv1_current",
+    pv2_power:"sensor.goodwe_pv2_power", pv2_voltage:"sensor.goodwe_pv2_voltage", pv2_current:"sensor.goodwe_pv2_current",
     pv3_power:"", pv4_power:"",
-    battery_voltage:"sensor.battery_voltage", battery_current:"sensor.battery_current",
-    battery_temp:"sensor.battery_temperature", battery_capacity_kwh:"",
-    voltage_l1:"sensor.on_grid_l1_voltage", voltage_l2:"sensor.on_grid_l2_voltage", voltage_l3:"sensor.on_grid_l3_voltage",
-    current_l1:"sensor.on_grid_l1_current", current_l2:"sensor.on_grid_l2_current", current_l3:"sensor.on_grid_l3_current",
-    power_l1:"sensor.on_grid_l1_power", power_l2:"sensor.on_grid_l2_power", power_l3:"sensor.on_grid_l3_power",
-    grid_frequency:"sensor.on_grid_frequency",
-    pv_today:"sensor.today_s_pv_generation",
-    grid_import_today:"sensor.grid_export_daily", grid_export_today:"sensor.grid_import_daily",
-    battery_charge_today:"sensor.today_battery_charge", battery_discharge_today:"sensor.today_battery_discharge",
-    inverter_power:"sensor.active_power", inverter_temp:"sensor.inverter_temperature_air",
-    inverter_model:"sensor.inverter_model",
+    battery_voltage:"sensor.goodwe_battery_voltage", battery_current:"sensor.goodwe_battery_current",
+    battery_temp:"sensor.goodwe_battery_temperature", battery_capacity_kwh:"",
+    battery_soh:"sensor.goodwe_battery_state_of_health",
+    battery_charge_limit:"sensor.goodwe_battery_charge_limit", battery_discharge_limit:"sensor.goodwe_battery_discharge_limit",
+    voltage_l1:"sensor.goodwe_on_grid_l1_voltage", voltage_l2:"sensor.goodwe_on_grid_l2_voltage", voltage_l3:"sensor.goodwe_on_grid_l3_voltage",
+    current_l1:"sensor.goodwe_on_grid_l1_current", current_l2:"sensor.goodwe_on_grid_l2_current", current_l3:"sensor.goodwe_on_grid_l3_current",
+    power_l1:"sensor.goodwe_active_power_l1", power_l2:"sensor.goodwe_active_power_l2", power_l3:"sensor.goodwe_active_power_l3",
+    grid_frequency:"sensor.goodwe_meter_frequency",
+    pv_today:"sensor.goodwe_today_s_pv_generation",
+    grid_import_today:"sensor.goodwe_today_energy_import", grid_export_today:"sensor.goodwe_today_energy_export",
+    battery_charge_today:"sensor.goodwe_today_battery_charge", battery_discharge_today:"sensor.goodwe_today_battery_discharge",
+    inverter_power:"sensor.goodwe_active_power", inverter_temp:"sensor.goodwe_inverter_temperature_air",
+    inverter_temp_radiator:"sensor.goodwe_inverter_temperature_radiator",
+    diag_status_code:"sensor.goodwe_diag_status_code", meter_power_factor:"sensor.goodwe_meter_power_factor",
+    backup_load:"sensor.goodwe_back_up_load", ups_load_pct:"sensor.goodwe_ups_load", ems_mode:"sensor.goodwe_ems_mode",
+    inverter_model:"",
     weather_temp:"", weather_humidity:"", weather_cloud_cover:"",
+    weather_wind_speed:"", weather_pressure:"", weather_uv_index:"",
+    local_temp:"", local_humidity:"", local_wind_speed:"", local_rain_rate:"",
+    local_solar_radiation:"", local_dewpoint:"", local_uv_index:"", local_solar_lux:"",
+    local_pressure:"", local_daily_rain:"", local_wind_direction:"", local_wind_gust:"", local_feels_like:"",
   };
   _m(k) {
     // Check local overrides from entity picker first
@@ -13885,7 +13894,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.53.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.53.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
