@@ -224,8 +224,39 @@ class SmartingHomePanel extends HTMLElement {
     return null;
   }
   _f(id, d=1) { const v = this._n(id); return v === null ? "—" : v.toFixed(d); }
-  _fm(k, d=1) { return this._f(this._m(k), d); }
-  _nm(k) { return this._n(this._m(k)); }
+  _fm(k, d=1) {
+    // For grid daily, prefer SmartingHOME corrected sensor (same as _nm)
+    if (k === 'grid_import_today' || k === 'grid_export_today') {
+      const correctedKey = k === 'grid_import_today' ? 'grid_import_daily' : 'grid_export_daily';
+      const corrected = this._findSmartingHomeSensor?.(correctedKey);
+      if (corrected !== null && corrected !== undefined) return corrected.toFixed(d);
+    }
+    return this._f(this._m(k), d);
+  }
+  _nm(k) {
+    // For grid daily values, prefer SmartingHOME midnight-corrected sensors
+    // over raw GoodWe daily sensors (which reset at sunrise, not midnight)
+    if (k === 'grid_import_today' || k === 'grid_export_today') {
+      const correctedKey = k === 'grid_import_today' ? 'grid_import_daily' : 'grid_export_daily';
+      const corrected = this._findSmartingHomeSensor(correctedKey);
+      if (corrected !== null) return corrected;
+    }
+    return this._n(this._m(k));
+  }
+  _findSmartingHomeSensor(key) {
+    // Search for SmartingHOME-generated sensor by key suffix
+    if (!this._hass?.states) return null;
+    const suffixes = [`smartinghome_${key}`, `_${key}`];
+    for (const suf of suffixes) {
+      for (const eid of Object.keys(this._hass.states)) {
+        if (eid.startsWith("sensor.") && eid.endsWith(suf)) {
+          const v = this._n(eid);
+          if (v !== null) return v;
+        }
+      }
+    }
+    return null;
+  }
   _setText(id, val) { const el = this.shadowRoot.getElementById(id); if (el) el.textContent = val; }
   _callService(domain, service, data = {}) { if (this._hass) this._hass.callService(domain, service, data); }
 
@@ -961,7 +992,7 @@ class SmartingHomePanel extends HTMLElement {
         const totalPv = this._nm('pv_power') || 1;
         const stringKwh = pvTodayVal * (parentPower / (totalPv || 1));
         const dirLabels = { 'N': 'Pn', 'NE': 'PnE', 'E': 'Wsch', 'SE': 'PdE', 'S': 'Pd', 'SW': 'PdZ', 'W': 'Zach', 'NW': 'PnZ' };
-        const pvLabel = pvLabels[`pv${i}`] || `PV${i}`;
+        const pvParentLabel = pvLabels[`pv${i}`] || `PV${i}`;
 
         sc.substrings.forEach((sub, si) => {
           const ratio = ratios ? ratios[si] : (1 / sc.substrings.length);
@@ -970,11 +1001,15 @@ class SmartingHomePanel extends HTMLElement {
           const subCurrent = parentCurrent * ratio;
           const subKwh = stringKwh * ratio;
 
+          // Independent per-substring label: check pv_labels["pv{i}_sub{si}"] first
+          const subLabelKey = `pv${i}_sub${si}`;
+          const subLabel = pvLabels[subLabelKey] || `${pvParentLabel} — ${dirLabels[sub.direction] || sub.direction}`;
+
           const box = document.createElement('div');
           box.className = 'pv-string pv-substring-box';
           box.dataset.parentIdx = i;
           box.innerHTML = `
-            <div class="pv-name" style="cursor:pointer" onclick="this.getRootNode().host._editPvLabel(${i})" title="Kliknij aby zmienić nazwę">${pvLabel} — ${dirLabels[sub.direction] || sub.direction}
+            <div class="pv-name" style="cursor:pointer" onclick="this.getRootNode().host._editSubstringLabel(${i}, ${si})" title="Kliknij aby zmienić nazwę podstringa"><span id="pv${i}-sub${si}-label-text">${subLabel}</span>
               <span class="pv-config-btn" onclick="event.stopPropagation(); this.getRootNode().host._openPvStringConfig(${i})" title="Konfiguracja stringa">⚙️</span>
             </div>
             <div class="pv-val">${this._pw(subPower)}</div>
@@ -985,6 +1020,52 @@ class SmartingHomePanel extends HTMLElement {
         });
       }
     }
+  }
+
+  _editSubstringLabel(pvIdx, subIdx) {
+    const pvLabels = this._settings.pv_labels || {};
+    const dirLabels = { 'N': 'Pn', 'NE': 'PnE', 'E': 'Wsch', 'SE': 'PdE', 'S': 'Pd', 'SW': 'PdZ', 'W': 'Zach', 'NW': 'PnZ' };
+    const cfg = this._settings.pv_string_config || {};
+    const sc = cfg[`pv${pvIdx}`];
+    const sub = sc?.substrings?.[subIdx];
+    const pvParentLabel = pvLabels[`pv${pvIdx}`] || `PV${pvIdx}`;
+    const subLabelKey = `pv${pvIdx}_sub${subIdx}`;
+    const current = pvLabels[subLabelKey] || `${pvParentLabel} — ${dirLabels[sub?.direction] || sub?.direction || ''}`;
+    const dirHint = sub?.direction ? ` (${dirLabels[sub.direction] || sub.direction})` : '';
+    const html = `
+      <div class="sh-modal-title">✏️ Zmień nazwę podstringa PV${pvIdx}.${subIdx + 1}${dirHint}</div>
+      <div class="sh-modal-label">Etykieta podstringa</div>
+      <input class="sh-modal-input" type="text" id="sh-input-sub-label" value="${current.replace(/"/g, '&quot;')}" />
+      <div style="font-size:10px; color:#64748b; margin-top:4px;">Możesz nadać każdemu podstringowi osobną nazwę, niezależną od stringa nadrzędnego.</div>
+      <div class="sh-modal-actions">
+        <button class="sh-modal-btn" onclick="this.getRootNode().host._closeModal()">Anuluj</button>
+        <button class="sh-modal-btn primary" onclick="this.getRootNode().host._saveSubstringLabel(${pvIdx}, ${subIdx})">OK</button>
+      </div>
+    `;
+    this._showModal(html);
+    setTimeout(() => {
+      const inp = this.shadowRoot.getElementById('sh-input-sub-label');
+      if (inp) {
+        inp.focus();
+        inp.select();
+        inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') this._saveSubstringLabel(pvIdx, subIdx); });
+      }
+    }, 120);
+  }
+
+  _saveSubstringLabel(pvIdx, subIdx) {
+    const inp = this.shadowRoot.getElementById('sh-input-sub-label');
+    if (!inp) return;
+    const newLabel = inp.value.trim();
+    if (newLabel) {
+      const labels = this._settings.pv_labels || {};
+      labels[`pv${pvIdx}_sub${subIdx}`] = newLabel;
+      this._savePanelSettings({ pv_labels: labels });
+      // Update the sub-string label in the DOM
+      const el = this.shadowRoot.getElementById(`pv${pvIdx}-sub${subIdx}-label-text`);
+      if (el) el.textContent = newLabel;
+    }
+    this._closeModal();
   }
 
   _roiPeriod = "day";
@@ -7007,10 +7088,30 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-load-l3", `L3: ${this._fm("power_l3", 0)} W`);
 
     // ── Day/Night energy from backend (server-side, 24/7) ──
+    // Discovery: HA entity IDs depend on device name slugification — search by suffix
     {
-      const dayKwh = this._n('sensor.smartinghome_load_day') || this._n('sensor.smartinghome_load_day_kwh') || 0;
-      const nightKwh = this._n('sensor.smartinghome_load_night') || this._n('sensor.smartinghome_load_night_kwh') || 0;
-      const pvToHome = this._n('sensor.smartinghome_pv_to_home_today') || this._n('sensor.smartinghome_load_pv_to_home_kwh') || 0;
+      const _findSensor = (suffixes) => {
+        for (const suf of suffixes) {
+          // Try direct entity IDs
+          const direct = this._n(`sensor.${suf}`);
+          if (direct !== null) return direct;
+        }
+        // Fallback: search all states for matching suffix
+        if (this._hass?.states) {
+          for (const suf of suffixes) {
+            for (const eid of Object.keys(this._hass.states)) {
+              if (eid.startsWith("sensor.") && eid.endsWith(suf)) {
+                const v = this._n(eid);
+                if (v !== null) return v;
+              }
+            }
+          }
+        }
+        return null;
+      };
+      const dayKwh = _findSensor(['smartinghome_load_day', 'smartinghome_load_day_kwh', '_load_day', '_load_day_kwh']) ?? 0;
+      const nightKwh = _findSensor(['smartinghome_load_night', 'smartinghome_load_night_kwh', '_load_night', '_load_night_kwh']) ?? 0;
+      const pvToHome = _findSensor(['smartinghome_pv_to_home_today', 'smartinghome_load_pv_to_home_kwh', '_pv_to_home_today', '_load_pv_to_home_kwh']) ?? 0;
 
       const loadTodayNum = typeof loadTodayVal === 'number' ? loadTodayVal : parseFloat(loadTodayVal);
       const loadTotalForPct = !isNaN(loadTodayNum) && loadTodayNum > 0 ? loadTodayNum : (dayKwh + nightKwh);
@@ -7037,8 +7138,25 @@ class SmartingHomePanel extends HTMLElement {
     // Grid
     this._setText("v-grid", this._pw(Math.abs(grid)));
     this._setText("v-grid-dir", grid > 0 ? "POBÓR Z SIECI" : grid < -10 ? "ODDAWANIE DO SIECI" : "");
-    this._setText("v-grid-import", `${this._fm("grid_import_today")} kWh`);
-    this._setText("v-grid-export", `${this._fm("grid_export_today")} kWh`);
+    // Grid — prefer SmartingHOME midnight-corrected sensors over raw GoodWe daily
+    const _gridDaily = (suffixes) => {
+      // Try SmartingHOME corrected sensors first
+      if (this._hass?.states) {
+        for (const suf of suffixes) {
+          for (const eid of Object.keys(this._hass.states)) {
+            if (eid.startsWith("sensor.") && eid.endsWith(suf)) {
+              const v = this._n(eid);
+              if (v !== null) return v.toFixed(1);
+            }
+          }
+        }
+      }
+      return null;
+    };
+    const gridImpCorrected = _gridDaily(['_grid_import_daily', 'smartinghome_grid_import_today', '_grid_import_today']);
+    const gridExpCorrected = _gridDaily(['_grid_export_daily', 'smartinghome_grid_export_today', '_grid_export_today']);
+    this._setText("v-grid-import", `${gridImpCorrected ?? this._fm("grid_import_today")} kWh`);
+    this._setText("v-grid-export", `${gridExpCorrected ?? this._fm("grid_export_today")} kWh`);
     this._setText("v-grid-v1", `${this._fm("voltage_l1")} V`);
     this._setText("v-grid-v2", `${this._fm("voltage_l2")} V`);
     this._setText("v-grid-v3", `${this._fm("voltage_l3")} V`);
@@ -7522,36 +7640,66 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-rce-min", rceMin !== null ? rceMin.toFixed(2) : "—");
     this._setText("v-rce-max", rceMax !== null ? rceMax.toFixed(2) : "—");
 
-    // vs Średnia
-    const rceVsAvg = this._n("sensor.rce_pse_aktualna_vs_srednia_dzisiaj");
-    const vsAvgEl = this.shadowRoot.getElementById("v-rce-vs-avg");
-    if (vsAvgEl && rceVsAvg !== null) {
-      vsAvgEl.textContent = `${rceVsAvg > 0 ? '+' : ''}${rceVsAvg.toFixed(1)}%`;
-      vsAvgEl.style.color = rceVsAvg > 10 ? "#2ecc71" : rceVsAvg < -10 ? "#e74c3c" : "#f7b731";
-      this._setText("v-rce-vs-label", rceVsAvg > 0 ? "powyżej średniej" : "poniżej średniej");
+    // vs Średnia — computed locally: (current - avg) / avg * 100
+    {
+      const vsAvgEl = this.shadowRoot.getElementById("v-rce-vs-avg");
+      let rceVsAvg = null;
+      if (rceNowMwh !== null && rceAvg !== null && rceAvg !== 0) {
+        // rceNowMwh is PLN/MWh, rceAvg is already in zł/kWh (prosumer). Convert rceNow to same unit
+        const rceNowSell = rceNowMwh / 1000 * 1.23;
+        rceVsAvg = ((rceNowSell - rceAvg) / rceAvg) * 100;
+      }
+      if (vsAvgEl && rceVsAvg !== null) {
+        vsAvgEl.textContent = `${rceVsAvg > 0 ? '+' : ''}${rceVsAvg.toFixed(1)}%`;
+        vsAvgEl.style.color = rceVsAvg > 10 ? "#2ecc71" : rceVsAvg < -10 ? "#e74c3c" : "#f7b731";
+        this._setText("v-rce-vs-label", rceVsAvg > 0 ? "powyżej średniej" : "poniżej średniej");
+      }
     }
 
-    // Trend
-    const rceTrend = this._s("sensor.smartinghome_rce_price_trend") || this._s("sensor.rce_price_trend") || "—";
+    // Trend — enum values: "rising", "falling", "stable"
+    const rceTrend = this._s("sensor.smartinghome_rce_price_trend") || this._s("sensor.rce_price_trend") || "stable";
     const trendEl = this.shadowRoot.getElementById("v-rce-trend2");
     if (trendEl) {
-      if (rceTrend === "rosnie") { trendEl.textContent = "📈"; this._setText("v-rce-trend-label", "Rośnie — warto czekać"); }
-      else if (rceTrend === "spada") { trendEl.textContent = "📉"; this._setText("v-rce-trend-label", "Spada"); }
+      if (rceTrend === "rising") { trendEl.textContent = "📈"; this._setText("v-rce-trend-label", "Rośnie — warto czekać"); }
+      else if (rceTrend === "falling") { trendEl.textContent = "📉"; this._setText("v-rce-trend-label", "Spada"); }
       else { trendEl.textContent = "➖"; this._setText("v-rce-trend-label", "Stabilny"); }
     }
 
-    // Time Windows — v2: use start/end timestamps, fallback to formatted sensor
+    // Time Windows — compute from 96-point prices attribute (v2)
+    // Helper: find cheapest/most expensive consecutive hour block from price entries
+    const _findWindows = (pricesAttr) => {
+      if (!pricesAttr || !Array.isArray(pricesAttr) || pricesAttr.length === 0) return { cheap: "—", expensive: "—" };
+      // Group by hour and find min/max average price
+      const hourMap = {};
+      for (const p of pricesAttr) {
+        try {
+          const dt = p.dtime || p.period || "";
+          const hour = parseInt(String(dt).substring(11, 13), 10);
+          if (isNaN(hour)) continue;
+          if (!hourMap[hour]) hourMap[hour] = [];
+          hourMap[hour].push(parseFloat(p.rce_pln) || 0);
+        } catch(e) { continue; }
+      }
+      let minHour = -1, maxHour = -1, minAvg = Infinity, maxAvg = -Infinity;
+      for (const [h, vals] of Object.entries(hourMap)) {
+        const avg = vals.reduce((a,b) => a+b, 0) / vals.length;
+        if (avg < minAvg) { minAvg = avg; minHour = parseInt(h); }
+        if (avg > maxAvg) { maxAvg = avg; maxHour = parseInt(h); }
+      }
+      const fmt = (h) => `${String(h).padStart(2,'0')}:00 – ${String((h+1)%24).padStart(2,'0')}:00`;
+      const fmtPrice = (v) => `${(v/1000*1.23).toFixed(2)} zł`;
+      return {
+        cheap: minHour >= 0 ? `${fmt(minHour)} (${fmtPrice(minAvg)})` : "—",
+        expensive: maxHour >= 0 ? `${fmt(maxHour)} (${fmtPrice(maxAvg)})` : "—",
+      };
+    };
+    // Today windows
     {
-      const cheapStart = this._s("sensor.rce_pse_tanie_okno_dzisiaj_poczatek");
-      const cheapEnd = this._s("sensor.rce_pse_tanie_okno_dzisiaj_koniec");
-      const cheapFormatted = this._s("sensor.rce_pse_najtansze_okno_czasowe_dzisiaj");
-      this._setText("v-cheapest-window", (cheapStart && cheapEnd) ? `${cheapStart} – ${cheapEnd}` : cheapFormatted || "—");
-    }
-    {
-      const expStart = this._s("sensor.rce_pse_drogie_okno_dzisiaj_poczatek");
-      const expEnd = this._s("sensor.rce_pse_drogie_okno_dzisiaj_koniec");
-      const expFormatted = this._s("sensor.rce_pse_najdrozsze_okno_czasowe_dzisiaj");
-      this._setText("v-expensive-window", (expStart && expEnd) ? `${expStart} – ${expEnd}` : expFormatted || "—");
+      const rcePriceState = this.hass && this.hass.states ? this.hass.states["sensor.rce_pse_cena"] : null;
+      const todayPrices = rcePriceState && rcePriceState.attributes ? rcePriceState.attributes.prices : null;
+      const todayWindows = _findWindows(todayPrices);
+      this._setText("v-cheapest-window", todayWindows.cheap);
+      this._setText("v-expensive-window", todayWindows.expensive);
     }
     this._setText("v-kompas", this._s("sensor.rce_pse_kompas_energetyczny_dzisiaj") || "—");
 
@@ -7571,8 +7719,14 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-rce-avg-tomorrow", rceAvgTomorrowMwh !== null ? `${(rceAvgTomorrowMwh / 1000 * 1.23).toFixed(4)} zł` : "— zł");
     const rceTomorrowVs = this._n("sensor.rce_pse_jutro_vs_dzisiaj_srednia");
     this._setText("v-rce-tomorrow-vs", rceTomorrowVs !== null ? `${rceTomorrowVs > 0 ? '+' : ''}${rceTomorrowVs.toFixed(1)}%` : "—%");
-    this._setText("v-cheapest-tomorrow", this._s("sensor.rce_pse_najtansze_okno_czasowe_jutro") || this._s("sensor.rce_pse_tanie_okno_jutro_poczatek") || "—");
-    this._setText("v-expensive-tomorrow", this._s("sensor.rce_pse_najdrozsze_okno_czasowe_jutro") || this._s("sensor.rce_pse_drogie_okno_jutro_poczatek") || "—");
+    // Tomorrow windows — compute from rce_pse_cena_jutro prices attribute
+    {
+      const rceTomorrowState = this.hass && this.hass.states ? this.hass.states["sensor.rce_pse_cena_jutro"] : null;
+      const tomorrowPrices = rceTomorrowState && rceTomorrowState.attributes ? rceTomorrowState.attributes.prices : null;
+      const tomorrowWindows = _findWindows(tomorrowPrices);
+      this._setText("v-cheapest-tomorrow", tomorrowWindows.cheap);
+      this._setText("v-expensive-tomorrow", tomorrowWindows.expensive);
+    }
 
     // HEMS Recommendation (tariff tab) — skip if AI content already loaded
     if (!this._aiTariffLoaded) {
@@ -8005,8 +8159,25 @@ class SmartingHomePanel extends HTMLElement {
 
     // ROW 1b: Day/Night breakdown in Energy tab (from backend)
     {
-      const enDayKwh = this._n('sensor.smartinghome_load_day') || this._n('sensor.smartinghome_load_day_kwh') || 0;
-      const enNightKwh = this._n('sensor.smartinghome_load_night') || this._n('sensor.smartinghome_load_night_kwh') || 0;
+      const _findSensor2 = (suffixes) => {
+        for (const suf of suffixes) {
+          const direct = this._n(`sensor.${suf}`);
+          if (direct !== null) return direct;
+        }
+        if (this._hass?.states) {
+          for (const suf of suffixes) {
+            for (const eid of Object.keys(this._hass.states)) {
+              if (eid.startsWith("sensor.") && eid.endsWith(suf)) {
+                const v = this._n(eid);
+                if (v !== null) return v;
+              }
+            }
+          }
+        }
+        return null;
+      };
+      const enDayKwh = _findSensor2(['smartinghome_load_day', 'smartinghome_load_day_kwh', '_load_day', '_load_day_kwh']) ?? 0;
+      const enNightKwh = _findSensor2(['smartinghome_load_night', 'smartinghome_load_night_kwh', '_load_night', '_load_night_kwh']) ?? 0;
 
       const enTotalLoad = enDayKwh + enNightKwh;
       const enDayPct = enTotalLoad > 0 ? (enDayKwh / enTotalLoad) * 100 : 50;

@@ -83,6 +83,7 @@ from .const import (
     DEFAULT_BATTERY_MIN_SOC,
     CONF_ECOWITT_ENABLED,
     CONF_SENSOR_MAP,
+    DEFAULT_SENSOR_MAP,
     CONF_ENERGY_PROVIDER,
     DEFAULT_ENERGY_PROVIDER,
     DYNAMIC_PRICE_THRESHOLDS,
@@ -176,6 +177,11 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._load_night_ws: float = 0.0  # watt-seconds during nighttime
         self._last_load_ts: float | None = None  # monotonic timestamp
         self._accum_date: str = ""        # YYYY-MM-DD for midnight reset
+
+        # ── Grid daily midnight reset (GoodWe "daily" sensors reset at sunrise, not midnight) ──
+        self._grid_baseline_date: str = ""  # date for which baselines are valid
+        self._grid_import_baseline: float = 0.0  # snapshot at midnight
+        self._grid_export_baseline: float = 0.0  # snapshot at midnight
 
     def set_strategy_controller(self, controller) -> None:
         """Set the strategy controller for autonomous HEMS control."""
@@ -427,8 +433,59 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # —— Autarky & self-consumption ——
         load_today = _safe_float(raw.get(SENSOR_LOAD_TODAY))
-        grid_import = data.get("grid_import_daily", 0.0)
-        grid_export = data.get("grid_export_daily", 0.0)
+
+        # Grid import/export daily — read from sensor_map (inverter-specific)
+        grid_import_entity = (
+            self._sensor_map.get("grid_import_today")
+            or DEFAULT_SENSOR_MAP.get("grid_import_today", "")
+        )
+        grid_export_entity = (
+            self._sensor_map.get("grid_export_today")
+            or DEFAULT_SENSOR_MAP.get("grid_export_today", "")
+        )
+
+        def _read_entity(entity_id: str) -> float:
+            if not entity_id:
+                return 0.0
+            state = self.hass.states.get(entity_id)
+            if state and state.state not in ("unknown", "unavailable"):
+                return _safe_float(state.state)
+            return 0.0
+
+        grid_import_raw = _read_entity(grid_import_entity)
+        grid_export_raw = _read_entity(grid_export_entity)
+
+        # ── Midnight correction for GoodWe "daily" sensors ──
+        # GoodWe resets daily sensors at inverter wake-up (sunrise), not midnight.
+        # We snapshot values at midnight and subtract to get true "today" values.
+        today_str = now.strftime("%Y-%m-%d")
+        if self._grid_baseline_date and self._grid_baseline_date != today_str:
+            # New day detected — set baselines to last known raw values
+            # (these are yesterday's end-of-day totals still reported by GoodWe)
+            self._grid_import_baseline = grid_import_raw
+            self._grid_export_baseline = grid_export_raw
+            self._grid_baseline_date = today_str
+            _LOGGER.debug(
+                "Grid midnight baseline set: import=%.1f, export=%.1f",
+                self._grid_import_baseline, self._grid_export_baseline,
+            )
+        elif not self._grid_baseline_date:
+            self._grid_baseline_date = today_str
+            # First run — no baseline, assume raw values are correct for today
+            self._grid_import_baseline = 0.0
+            self._grid_export_baseline = 0.0
+
+        # Detect GoodWe natural reset: raw value drops significantly below baseline
+        if grid_import_raw < self._grid_import_baseline * 0.5:
+            self._grid_import_baseline = 0.0
+        if grid_export_raw < self._grid_export_baseline * 0.5:
+            self._grid_export_baseline = 0.0
+
+        # Apply correction: today = raw - baseline
+        grid_import = max(0.0, grid_import_raw - self._grid_import_baseline)
+        grid_export = max(0.0, grid_export_raw - self._grid_export_baseline)
+        data["grid_import_daily"] = round(grid_import, 2)
+        data["grid_export_daily"] = round(grid_export, 2)
 
         if load_today > 0:
             home_from_pv = max(pv_gen - grid_export, 0) if pv_gen > 0 else 0
