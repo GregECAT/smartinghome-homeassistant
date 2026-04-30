@@ -6817,7 +6817,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateAlertsVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); this._updateAlertsTab(); this._updateForecastCharts().catch(e => console.error('[SH] charts err:', e)); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateAlertsVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); this._updateAlertsTab(); this._updateSystemHealth(); this._updateForecastCharts().catch(e => console.error('[SH] charts err:', e)); }
 
 
   /* ── Overview Autopilot banner (runs every 5s via _updateAll) ── */
@@ -6857,6 +6857,89 @@ class SmartingHomePanel extends HTMLElement {
         }
       })
       .catch(() => {});
+  }
+
+  /* ── System Health Card ─────────────────── */
+  _updateSystemHealth() {
+    const _findHealth = (suffixes) => {
+      if (this._hass?.states) {
+        for (const suf of suffixes) {
+          for (const eid of Object.keys(this._hass.states)) {
+            if (eid.startsWith('sensor.') && eid.endsWith(suf)) {
+              return this._hass.states[eid]?.state;
+            }
+          }
+        }
+      }
+      return null;
+    };
+
+    // Battery SOH
+    const soh = _findHealth(['_battery_soh', 'smartinghome_battery_soh', 'battery_state_of_health']);
+    const sohEl = this.shadowRoot.getElementById('sh-soh-val');
+    const sohLabel = this.shadowRoot.getElementById('sh-soh-label');
+    if (sohEl && soh !== null && soh !== 'unavailable' && soh !== 'unknown') {
+      const v = parseFloat(soh);
+      sohEl.textContent = isNaN(v) ? '—' : v.toFixed(0);
+      if (!isNaN(v)) {
+        sohEl.style.color = v >= 90 ? '#2ecc71' : v >= 70 ? '#f59e0b' : '#e74c3c';
+        if (sohLabel) {
+          sohLabel.textContent = v >= 90 ? '✅ Zdrowa' : v >= 70 ? '⚠️ Obserwuj' : '🔴 Krytyczna';
+          sohLabel.style.color = v >= 90 ? '#2ecc71' : v >= 70 ? '#f59e0b' : '#e74c3c';
+        }
+      }
+    }
+
+    // Inverter Thermal
+    const radTemp = _findHealth(['_inverter_temp_radiator', 'smartinghome_inverter_temp_radiator', 'radiator_temperature']);
+    const airTemp = _findHealth(['_inverter_temp_air', 'smartinghome_inverter_temp_air', 'inverter_temperature_air']);
+    const tempEl = this.shadowRoot.getElementById('sh-inv-temp');
+    const thermalLabel = this.shadowRoot.getElementById('sh-inv-thermal');
+    const dispTemp = radTemp || airTemp;
+    if (tempEl && dispTemp !== null && dispTemp !== 'unavailable' && dispTemp !== 'unknown') {
+      const t = parseFloat(dispTemp);
+      tempEl.textContent = isNaN(t) ? '—' : t.toFixed(1);
+      if (!isNaN(t)) {
+        tempEl.style.color = t < 55 ? '#2ecc71' : t < 65 ? '#f59e0b' : '#e74c3c';
+        if (thermalLabel) {
+          thermalLabel.textContent = t < 55 ? '✅ Norma' : t < 65 ? '🌡️ Ciepło' : '🔥 Gorąco!';
+          thermalLabel.style.color = t < 55 ? '#2ecc71' : t < 65 ? '#f59e0b' : '#e74c3c';
+        }
+      }
+    }
+
+    // Grid Power Factor
+    const pf = _findHealth(['_grid_power_factor', 'smartinghome_grid_power_factor', 'meter_power_factor1']);
+    const pfEl = this.shadowRoot.getElementById('sh-pf-val');
+    const pfLabel = this.shadowRoot.getElementById('sh-pf-label');
+    if (pfEl && pf !== null && pf !== 'unavailable' && pf !== 'unknown') {
+      const v = parseFloat(pf);
+      pfEl.textContent = isNaN(v) ? '—' : v.toFixed(2);
+      if (!isNaN(v)) {
+        const absV = Math.abs(v);
+        pfEl.style.color = absV >= 0.95 ? '#2ecc71' : absV >= 0.85 ? '#f59e0b' : '#e74c3c';
+        if (pfLabel) {
+          pfLabel.textContent = absV >= 0.95 ? '✅ Doskonała' : absV >= 0.85 ? '⚠️ Słaba' : '🔴 Krytyczna';
+          pfLabel.style.color = absV >= 0.95 ? '#2ecc71' : absV >= 0.85 ? '#f59e0b' : '#e74c3c';
+        }
+      }
+    }
+
+    // Diagnostics
+    const hasErrors = _findHealth(['_has_active_errors', 'smartinghome_has_active_errors']);
+    const diagEl = this.shadowRoot.getElementById('sh-diag-icon');
+    const diagLabel = this.shadowRoot.getElementById('sh-diag-label');
+    if (diagEl) {
+      if (hasErrors === 'True' || hasErrors === 'true' || hasErrors === '1') {
+        diagEl.textContent = '⚠️';
+        diagEl.style.color = '#e74c3c';
+        if (diagLabel) { diagLabel.textContent = 'Wykryto błędy'; diagLabel.style.color = '#e74c3c'; }
+      } else if (hasErrors !== null && hasErrors !== 'unavailable' && hasErrors !== 'unknown') {
+        diagEl.textContent = '✅';
+        diagEl.style.color = '#2ecc71';
+        if (diagLabel) { diagLabel.textContent = 'OK — brak błędów'; diagLabel.style.color = '#2ecc71'; }
+      }
+    }
   }
 
   /* ── Moon phase calculation ─────────────────── */
@@ -10469,6 +10552,46 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
+          <!-- 🩺 System Health -->
+          <div class="card" style="margin-top:10px">
+            <div class="card-title">🩺 Zdrowie systemu</div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:4px 0" id="sh-health-grid">
+              <!-- Battery SOH -->
+              <div style="background:rgba(255,255,255,0.03); border-radius:10px; padding:12px; border:1px solid rgba(255,255,255,0.06)">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px">🔋 Bateria SOH</div>
+                <div style="display:flex; align-items:baseline; gap:4px">
+                  <div style="font-size:22px; font-weight:800" id="sh-soh-val">—</div>
+                  <div style="font-size:11px; color:#94a3b8">%</div>
+                </div>
+                <div style="font-size:10px; margin-top:4px; font-weight:600" id="sh-soh-label">—</div>
+              </div>
+              <!-- Inverter Thermal -->
+              <div style="background:rgba(255,255,255,0.03); border-radius:10px; padding:12px; border:1px solid rgba(255,255,255,0.06)">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px">🌡️ Falownik</div>
+                <div style="display:flex; align-items:baseline; gap:4px">
+                  <div style="font-size:22px; font-weight:800" id="sh-inv-temp">—</div>
+                  <div style="font-size:11px; color:#94a3b8">°C</div>
+                </div>
+                <div style="font-size:10px; margin-top:4px; font-weight:600" id="sh-inv-thermal">—</div>
+              </div>
+              <!-- Grid Quality -->
+              <div style="background:rgba(255,255,255,0.03); border-radius:10px; padding:12px; border:1px solid rgba(255,255,255,0.06)">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px">⚡ Jakość sieci</div>
+                <div style="display:flex; align-items:baseline; gap:4px">
+                  <div style="font-size:22px; font-weight:800" id="sh-pf-val">—</div>
+                  <div style="font-size:11px; color:#94a3b8">PF</div>
+                </div>
+                <div style="font-size:10px; margin-top:4px; font-weight:600" id="sh-pf-label">—</div>
+              </div>
+              <!-- Diagnostics -->
+              <div style="background:rgba(255,255,255,0.03); border-radius:10px; padding:12px; border:1px solid rgba(255,255,255,0.06)">
+                <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px">🔧 Diagnostyka</div>
+                <div style="font-size:22px; font-weight:800" id="sh-diag-icon">—</div>
+                <div style="font-size:10px; margin-top:4px; font-weight:600" id="sh-diag-label">—</div>
+              </div>
+            </div>
+          </div>
+
           <!-- ±12h Mini Forecast Chart -->
           <div class="card" style="margin-top:10px">
             <div class="sh-chart-header" style="margin-bottom:4px">
@@ -13762,7 +13885,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.52.6</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.53.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

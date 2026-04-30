@@ -173,6 +173,24 @@ def _build_ai_data(data: dict[str, Any]) -> dict[str, Any]:
         # Tariff config (for dynamic prompt rendering)
         "tariff_type": data.get("tariff_type", "g13"),
         "energy_provider": data.get("energy_provider", "tauron"),
+        # Phase 1: Battery health & diagnostics
+        "battery_soh": data.get("battery_soh"),
+        "battery_health": data.get("battery_health_score"),
+        "battery_charge_limit_a": data.get("battery_charge_limit_a"),
+        "battery_discharge_limit_a": data.get("battery_discharge_limit_a"),
+        # Phase 1: Inverter thermal
+        "inverter_thermal": data.get("inverter_thermal_status"),
+        "inverter_temp_radiator": data.get("inverter_temp_radiator"),
+        # Phase 1: Grid quality
+        "grid_power_factor": data.get("grid_power_factor"),
+        "grid_quality": data.get("grid_quality"),
+        # Phase 1: Backup / UPS
+        "backup_load_w": data.get("backup_load_w"),
+        "ups_load_pct": data.get("ups_load_pct"),
+        # Phase 1: Diagnostics
+        "has_errors": data.get("has_active_errors"),
+        "diag_status_code": data.get("diag_status_code"),
+        "ems_mode": data.get("ems_mode"),
     }
 
 
@@ -807,6 +825,42 @@ class StrategyController:
         # W4: PV Surplus cascade
         surplus_actions = await self._execute_w4_pv_surplus_cascade(surplus, soc)
         actions_taken.extend(surplus_actions)
+
+        # W6: Thermal Throttling — protect inverter from overheating
+        thermal_status = data.get("inverter_thermal_status", "ok")
+        if thermal_status in ("hot", "critical"):
+            if await self._throttled_action("thermal_throttle", cooldown=300):
+                radiator_temp = data.get("inverter_temp_radiator", 0)
+                if thermal_status == "critical":
+                    # Critical: stop all forced operations, go to general
+                    await self._em.set_general()
+                    actions_taken.append(
+                        f"W6: 🔥 THERMAL CRITICAL ({radiator_temp}°C) — emergency set_general, all force ops stopped"
+                    )
+                    self._log_decision("thermal_critical", f"Radiator {radiator_temp}°C — awaryjne zatrzymanie")
+                else:
+                    # Hot: only block force_discharge, allow gentle charging
+                    actions_taken.append(
+                        f"W6: 🌡️ THERMAL HOT ({radiator_temp}°C) — force_discharge blocked, gentle mode"
+                    )
+                    self._log_decision("thermal_hot", f"Radiator {radiator_temp}°C — ograniczenie mocy")
+
+        # W7: SOH Battery Protection — gentle cycling for degraded batteries
+        battery_health = data.get("battery_health_score", "good")
+        if battery_health in ("warning", "critical"):
+            if await self._throttled_action("soh_protection", cooldown=600):
+                soh_val = data.get("battery_soh", 0)
+                if battery_health == "critical":
+                    # Critical SOH: restrict DOD to 70, avoid force operations
+                    await self._em.set_dod(70)
+                    actions_taken.append(
+                        f"W7: ⚠️ SOH CRITICAL ({soh_val}%) — DOD limited to 70%, gentle cycling only"
+                    )
+                    self._log_decision("soh_critical", f"SOH={soh_val}% — ochrona baterii, DOD=70")
+                else:
+                    actions_taken.append(
+                        f"W7: 🔋 SOH WARNING ({soh_val}%) — monitoring, prefer gentle cycles"
+                    )
 
         # ═══════════════════════════════════════════════════════
         # STRATEGY-SPECIFIC LAYERS

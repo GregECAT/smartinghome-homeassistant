@@ -362,6 +362,13 @@ async def async_setup_services(
             "forecast_remaining": data.get("pv_forecast_remaining_today_total"),
             "forecast_tomorrow": data.get("pv_forecast_tomorrow_total"),
             "autarky": data.get("goodwe_autarky_today"),
+            # Phase 1: Battery health & diagnostics
+            "battery_soh": data.get("battery_soh"),
+            "battery_health": data.get("battery_health_score"),
+            "inverter_thermal": data.get("inverter_thermal_status"),
+            "grid_power_factor": data.get("grid_power_factor"),
+            "has_errors": data.get("has_active_errors"),
+            "ems_mode": data.get("ems_mode"),
         }
 
         if provider == "gemini" or (
@@ -648,6 +655,20 @@ async def async_setup_services(
             # Tariff config (for dynamic prompt rendering)
             "tariff_type": data.get("tariff_type", "g13"),
             "energy_provider": data.get("energy_provider", "tauron"),
+            # Phase 1: Battery health & diagnostics
+            "battery_soh": data.get("battery_soh"),
+            "battery_health": data.get("battery_health_score"),
+            "battery_charge_limit_a": data.get("battery_charge_limit_a"),
+            "battery_discharge_limit_a": data.get("battery_discharge_limit_a"),
+            "inverter_thermal": data.get("inverter_thermal_status"),
+            "inverter_temp_radiator": data.get("inverter_temp_radiator"),
+            "grid_power_factor": data.get("grid_power_factor"),
+            "grid_quality": data.get("grid_quality"),
+            "backup_load_w": data.get("backup_load_w"),
+            "ups_load_pct": data.get("ups_load_pct"),
+            "has_errors": data.get("has_active_errors"),
+            "diag_status_code": data.get("diag_status_code"),
+            "ems_mode": data.get("ems_mode"),
         }
 
         # Try to get weather data (AccuWeather / weather.dom)

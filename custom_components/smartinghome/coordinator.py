@@ -45,6 +45,15 @@ from .const import (
     SENSOR_LOAD_TODAY,
     SENSOR_WORK_MODE,
     SENSOR_INVERTER_TEMP,
+    SENSOR_BATTERY_SOH,
+    SENSOR_BATTERY_CHARGE_LIMIT,
+    SENSOR_BATTERY_DISCHARGE_LIMIT,
+    SENSOR_INVERTER_TEMP_RADIATOR,
+    SENSOR_DIAG_STATUS_CODE,
+    SENSOR_METER_POWER_FACTOR,
+    SENSOR_BACKUP_LOAD,
+    SENSOR_UPS_LOAD,
+    SENSOR_EMS_MODE,
     SENSOR_RCE_PRICE,
     SENSOR_RCE_SELL_PROSUMER,
     SENSOR_RCE_NEXT_PERIOD,
@@ -115,6 +124,11 @@ SOURCE_SENSORS: list[str] = [
     SENSOR_LOAD_TOTAL, SENSOR_LOAD_L1, SENSOR_LOAD_L2, SENSOR_LOAD_L3,
     SENSOR_LOAD_TODAY,
     SENSOR_WORK_MODE, SENSOR_INVERTER_TEMP,
+    # GoodWe extended (Phase 1 — health & diagnostics)
+    SENSOR_BATTERY_SOH, SENSOR_BATTERY_CHARGE_LIMIT, SENSOR_BATTERY_DISCHARGE_LIMIT,
+    SENSOR_INVERTER_TEMP_RADIATOR, SENSOR_DIAG_STATUS_CODE,
+    SENSOR_METER_POWER_FACTOR, SENSOR_BACKUP_LOAD, SENSOR_UPS_LOAD,
+    SENSOR_EMS_MODE,
     SENSOR_RCE_PRICE, SENSOR_RCE_SELL_PROSUMER,
     SENSOR_RCE_NEXT_PERIOD, SENSOR_RCE_PREV_PERIOD,
     SENSOR_RCE_AVG_TODAY, SENSOR_RCE_MIN_TODAY, SENSOR_RCE_MAX_TODAY,
@@ -507,6 +521,61 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # —— Day/Night energy accumulation (server-side) ——
         day_night = self._accumulate_day_night(load, load_today, home_from_pv)
         data.update(day_night)
+
+        # —— Battery health (SOH + limits) ——
+        soh = _safe_float(raw.get(SENSOR_BATTERY_SOH), 100.0)
+        charge_limit = _safe_float(raw.get(SENSOR_BATTERY_CHARGE_LIMIT))
+        discharge_limit = _safe_float(raw.get(SENSOR_BATTERY_DISCHARGE_LIMIT))
+        data["battery_soh"] = soh
+        data["battery_charge_limit_a"] = charge_limit
+        data["battery_discharge_limit_a"] = discharge_limit
+        if soh >= 90:
+            data["battery_health_score"] = "good"
+        elif soh >= 70:
+            data["battery_health_score"] = "warning"
+        else:
+            data["battery_health_score"] = "critical"
+
+        # —— Inverter thermal (dual sensor) ——
+        temp_air = _safe_float(raw.get(SENSOR_INVERTER_TEMP))
+        temp_radiator = _safe_float(raw.get(SENSOR_INVERTER_TEMP_RADIATOR))
+        data["inverter_temp_radiator"] = temp_radiator
+        max_temp = max(temp_air, temp_radiator)
+        if max_temp >= 65:
+            data["inverter_thermal_status"] = "critical"
+        elif max_temp >= 55:
+            data["inverter_thermal_status"] = "hot"
+        elif max_temp >= 45:
+            data["inverter_thermal_status"] = "warm"
+        else:
+            data["inverter_thermal_status"] = "normal"
+
+        # —— Grid power factor ——
+        pf = _safe_float(raw.get(SENSOR_METER_POWER_FACTOR))
+        data["grid_power_factor"] = round(pf, 3) if pf > 0 else None
+        if pf >= 0.95:
+            data["grid_quality"] = "excellent"
+        elif pf >= 0.90:
+            data["grid_quality"] = "good"
+        elif pf > 0:
+            data["grid_quality"] = "poor"
+        else:
+            data["grid_quality"] = "unknown"
+
+        # —— Backup / UPS status ——
+        backup_load_w = _safe_float(raw.get(SENSOR_BACKUP_LOAD))
+        ups_pct = _safe_float(raw.get(SENSOR_UPS_LOAD))
+        data["backup_load_w"] = backup_load_w
+        data["ups_load_pct"] = ups_pct
+
+        # —— Diagnostics ——
+        diag_code = int(_safe_float(raw.get(SENSOR_DIAG_STATUS_CODE)))
+        data["diag_status_code"] = diag_code
+        data["has_active_errors"] = diag_code != 0
+
+        # —— EMS Mode (pass-through) ——
+        ems_raw = raw.get(SENSOR_EMS_MODE)
+        data["ems_mode"] = ems_raw if ems_raw else "unknown"
 
         # —— System status ——
         data["goodwe_system_status"] = self._compute_system_status(raw, soc)

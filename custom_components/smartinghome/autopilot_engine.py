@@ -782,6 +782,13 @@ PV Forecast:
 - Tomorrow: {current_data.get('forecast_tomorrow', 0)} kWh
 {_render_ecowitt(current_data)}{_render_forecast(current_data)}
 
+═══ SYSTEM HEALTH ═══
+- Battery SOH: {current_data.get('battery_soh', 'N/A')}% (stan: {current_data.get('battery_health', 'N/A')})
+- Inverter thermal: {current_data.get('inverter_thermal', 'N/A')} (radiator: {current_data.get('inverter_temp_radiator', 'N/A')}°C)
+- Grid power factor: {current_data.get('grid_power_factor', 'N/A')} (jakość: {current_data.get('grid_quality', 'N/A')})
+- EMS mode: {current_data.get('ems_mode', 'N/A')}
+- Diagnostic errors: {'⚠️ TAK (kod ' + str(current_data.get('diag_status_code', 0)) + ')' if current_data.get('has_errors') else '✅ Brak błędów'}
+
 ═══ CURRENT ESTIMATION (MATHEMATICAL MODEL) ═══
 {chr(10).join(plan_lines)}
 
@@ -816,6 +823,7 @@ RESPOND IN POLISH. Format as structured markdown with:
 ## 📊 Analiza bieżącej sytuacji
 ## 🔋 Bateria
 ## ⚡ Sieć i zużycie
+## 🩺 Zdrowie systemu
 ## 🎯 Rekomendacje na najbliższe 4 godziny
 
 Use tables for comparisons. Be concise but comprehensive. Focus on actionable insights."""
@@ -889,6 +897,8 @@ STRATEGY_AI_INSTRUCTIONS: dict[str, str] = {
         "  SOC ZAWSZE w zakresie 30-80%. NIGDY poniżej 30%, NIGDY powyżej 80%.\n"
         "  set_dod(70). Unikaj force_charge/force_discharge.\n"
         "  Preferuj PV → dom. Bateria tylko jako bufor.\n"
+        "  ⚠️ W6/W7 active: thermal throttling + SOH protection enforced automatically.\n"
+        "  If battery_health=critical → DOD auto-limited to 70%.\n"
         "  SOC limits: min=30%, max=80%."
     ),
     "zero_export": (
@@ -1144,6 +1154,18 @@ Odpowiedz WYŁĄCZNIE poprawnym JSON.
 {_render_weather_detailed(current_data)}
   PV forecast remaining today: {current_data.get('forecast_remaining', 0)} kWh
   PV forecast tomorrow: {current_data.get('forecast_tomorrow', 0)} kWh
+
+═══ SYSTEM HEALTH & DIAGNOSTICS ═══
+  Battery SOH: {current_data.get('battery_soh', 'N/A')}% (health: {current_data.get('battery_health', 'N/A')})
+  Battery charge limit: {current_data.get('battery_charge_limit_a', 'N/A')} A | discharge limit: {current_data.get('battery_discharge_limit_a', 'N/A')} A
+  Inverter thermal: {current_data.get('inverter_thermal', 'N/A')} (radiator: {current_data.get('inverter_temp_radiator', 'N/A')}°C)
+  Grid power factor: {current_data.get('grid_power_factor', 'N/A')} (quality: {current_data.get('grid_quality', 'N/A')})
+  Backup load: {current_data.get('backup_load_w', 'N/A')} W | UPS: {current_data.get('ups_load_pct', 'N/A')}%
+  EMS mode: {current_data.get('ems_mode', 'N/A')}
+  Diagnostic errors: {'⚠️ YES (code ' + str(current_data.get('diag_status_code', 0)) + ')' if current_data.get('has_errors') else '✅ No errors'}
+
+  ⚠️ THERMAL RULES: If inverter_thermal = "hot" or "critical" → REDUCE load! Use set_general instead of force_discharge.
+  ⚠️ BATTERY HEALTH: If battery_health = "warning" or "critical" → use gentle cycling (set_dod 70), avoid force operations.
 
 ═══ HISTORIA ZUŻYCIA (3 DNI) ═══
 {_render_energy_history(current_data)}

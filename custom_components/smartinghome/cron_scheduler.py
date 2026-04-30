@@ -137,6 +137,24 @@ class AICronScheduler:
             "forecast_remaining": raw.get("pv_forecast_remaining_today_total"),
             "forecast_tomorrow": raw.get("pv_forecast_tomorrow_total"),
             "autarky": raw.get("goodwe_autarky_today"),
+            # Phase 1: Battery health & diagnostics
+            "battery_soh": raw.get("battery_soh"),
+            "battery_health": raw.get("battery_health_score"),
+            "battery_charge_limit_a": raw.get("battery_charge_limit_a"),
+            "battery_discharge_limit_a": raw.get("battery_discharge_limit_a"),
+            # Phase 1: Inverter thermal
+            "inverter_thermal": raw.get("inverter_thermal_status"),
+            "inverter_temp_radiator": raw.get("inverter_temp_radiator"),
+            # Phase 1: Grid quality
+            "grid_power_factor": raw.get("grid_power_factor"),
+            "grid_quality": raw.get("grid_quality"),
+            # Phase 1: Backup / UPS
+            "backup_load_w": raw.get("backup_load_w"),
+            "ups_load_pct": raw.get("ups_load_pct"),
+            # Phase 1: Diagnostics
+            "has_errors": raw.get("has_active_errors"),
+            "diag_status_code": raw.get("diag_status_code"),
+            "ems_mode": raw.get("ems_mode"),
             **finance_data,
             **weather_data,
             **self._calc_hems_score(raw),
