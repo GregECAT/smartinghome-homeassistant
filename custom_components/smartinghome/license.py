@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.const import __version__ as HA_VERSION
 
 from .api import (
     SmartingHomeAPI,
@@ -283,7 +284,7 @@ class LicenseManager:
 
             # Get HA instance UUID as device_id
             device_id = self.hass.data.get("core.uuid", "unknown")
-            ha_version = self.hass.config.version or "unknown"
+            ha_version = HA_VERSION
 
             payload = {
                 "device_id": str(device_id),
@@ -314,7 +315,7 @@ class LicenseManager:
             from .const import VERSION, DOMAIN
 
             device_id = self.hass.data.get("core.uuid", "unknown")
-            ha_version = self.hass.config.version or "unknown"
+            ha_version = HA_VERSION
 
             # Extract config entry data (inverter brand, tariff, provider)
             entry_data = {}

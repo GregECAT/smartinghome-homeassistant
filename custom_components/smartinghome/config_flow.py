@@ -7,6 +7,7 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant import config_entries
+from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -147,7 +148,7 @@ class SmartingHomeConfigFlow(
             # Validate license key
             session = async_get_clientsession(self.hass)
             device_id = str(self.hass.data.get("core.uuid", ""))
-            ha_version = self.hass.config.version or "unknown"
+            ha_version = HA_VERSION
             api = SmartingHomeAPI(
                 session, self._license_key,
                 device_id=device_id,
@@ -530,7 +531,7 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
                 # Validate the license key
                 session = async_get_clientsession(self.hass)
                 device_id = str(self.hass.data.get("core.uuid", ""))
-                ha_version = self.hass.config.version or "unknown"
+                ha_version = HA_VERSION
                 api = SmartingHomeAPI(
                     session, license_key,
                     device_id=device_id,
