@@ -80,6 +80,7 @@ class SmartingHomePanel extends HTMLElement {
       return;
     }
     this._hass = hass;
+    this._sensorMapAttrs = null; // Invalidate — will re-discover on next _m() call
     this._ensureSubscriptions();
     if (!this.shadowRoot.querySelector(".panel-container")) {
       // DOM lost (HA navigated away and back) — re-render
@@ -215,7 +216,20 @@ class SmartingHomePanel extends HTMLElement {
     // Check local overrides from entity picker first
     const override = this._sensorMapOverrides?.[k];
     if (override) return override;
-    const m = this._hass?.states['sensor.smartinghome_sensor_map']?.attributes;
+    // Dynamic discovery: find sensor_map entity by suffix (HA slugifies device name)
+    if (!this._sensorMapAttrs && this._hass?.states) {
+      for (const eid of Object.keys(this._hass.states)) {
+        if (eid.startsWith('sensor.') && eid.endsWith('_sensor_map')) {
+          const st = this._hass.states[eid];
+          if (st?.attributes && Object.keys(st.attributes).length > 3) {
+            this._sensorMapAttrs = st.attributes;
+            this._sensorMapEntity = eid;
+            break;
+          }
+        }
+      }
+    }
+    const m = this._sensorMapAttrs;
     return m?.[k] || SmartingHomePanel.DM[k] || '';
   }
   _s(id) { return id && this._hass?.states[id] ? this._hass.states[id].state : null; }
@@ -374,7 +388,8 @@ class SmartingHomePanel extends HTMLElement {
     // Priority: 1) local override from entity picker, 2) HA sensor_map attribute, 3) DM defaults
     const override = this._sensorMapOverrides?.[k];
     if (override) return override;
-    const m = this._hass?.states['sensor.smartinghome_sensor_map']?.attributes;
+    // Reuse cached sensor_map attributes from _m() discovery
+    const m = this._sensorMapAttrs;
     return m?.[k] || SmartingHomePanel.DM[k] || '';
   }
 
@@ -13894,7 +13909,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.54.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.54.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
