@@ -254,8 +254,8 @@ async def async_setup_services(
     def _get_settings_path(h: HomeAssistant) -> Path:
         return _get_settings_path_io(h)
 
-    def _read_settings(h: HomeAssistant) -> dict:
-        return _read_settings_io(h)
+    async def _read_settings_async(h: HomeAssistant) -> dict:
+        return await h.async_add_executor_job(_read_settings_io, h)
 
     async def _update_settings_file(h: HomeAssistant, updates: dict) -> None:
         await _update_settings_file_io(h, updates)
@@ -263,7 +263,7 @@ async def async_setup_services(
     energy_mgr = EnergyManager(hass, device_id)
 
     # Try to load keys from settings.json first (more reliable than config_entry)
-    _settings_keys = _read_settings(hass)
+    _settings_keys = await _read_settings_async(hass)
     _gemini_key_init = entry.data.get(CONF_GEMINI_API_KEY, "") or _settings_keys.get("gemini_api_key", "")
     _anthropic_key_init = entry.data.get(CONF_ANTHROPIC_API_KEY, "") or _settings_keys.get("anthropic_api_key", "")
 
@@ -488,7 +488,7 @@ async def async_setup_services(
 
         # If no key provided in the call, try reading from stored settings
         if not test_key:
-            stored = _read_settings(hass)
+            stored = await _read_settings_async(hass)
             def _clean(k: str) -> str:
                 """Return empty string for masked or empty keys."""
                 return "" if not k or "***" in k else k
@@ -511,7 +511,7 @@ async def async_setup_services(
             )
 
         # Also refresh model from settings (user may have changed it in panel)
-        stored_for_model = _read_settings(hass)
+        stored_for_model = await _read_settings_async(hass)
         gm = stored_for_model.get("gemini_model", "")
         am = stored_for_model.get("anthropic_model", "")
         if gm:
@@ -740,7 +740,7 @@ async def async_setup_services(
             try:
                 # Resolve provider from settings if auto
                 if provider == "auto":
-                    stored = _read_settings(hass)
+                    stored = await _read_settings_async(hass)
                     provider = stored.get("default_ai_provider", "gemini")
 
                 prompt = build_autopilot_ai_prompt(strategy, ai_data, estimation)
@@ -1130,7 +1130,7 @@ Odpowiedz w formacie markdown z sekcjami (##), listami, **bold** i tabelą |...|
 Długość: 400-600 słów."""
 
         try:
-            stored = _read_settings(hass)
+            stored = await _read_settings_async(hass)
             provider = stored.get("default_ai_provider", "gemini")
 
             # Direct API call without system context (no _build_context)
@@ -1178,7 +1178,7 @@ Długość: 400-600 słów."""
         message = call.data["message"]
         diag_action = call.data.get("diag_action", "")
 
-        settings = _read_settings(hass)
+        settings = await _read_settings_async(hass)
         notif_cfg = settings.get("notification_config", {})
 
         if not notif_cfg.get("enabled", False):
