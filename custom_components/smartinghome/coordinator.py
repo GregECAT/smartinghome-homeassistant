@@ -148,6 +148,49 @@ SOURCE_SENSORS: list[str] = [
     SENSOR_ENTSOE_RANK, SENSOR_ENTSOE_PERCENTILE,
 ]
 
+# Map sensor_map keys → canonical SENSOR_* constant entity_ids
+# This lets _read_source_sensors() bridge user-configured entity_ids
+# (e.g. "sensor.sofarsolar_pv_power") to the hardcoded SENSOR_* constants
+# that _compute_derived() uses (e.g. SENSOR_PV_POWER = "sensor.pv_power").
+_SENSOR_MAP_TO_CANONICAL: dict[str, str] = {
+    # Core
+    "pv_power": SENSOR_PV_POWER,
+    "load_power": SENSOR_LOAD_TOTAL,
+    "grid_power": SENSOR_GRID_POWER_TOTAL,
+    "battery_power": SENSOR_BATTERY_POWER,
+    "battery_soc": SENSOR_BATTERY_SOC,
+    # PV Strings
+    "pv1_power": SENSOR_PV1_POWER,
+    "pv2_power": SENSOR_PV2_POWER,
+    # Battery extended
+    "battery_voltage": SENSOR_BATTERY_VOLTAGE,
+    "battery_current": SENSOR_BATTERY_CURRENT,
+    "battery_temp": SENSOR_BATTERY_TEMPERATURE,
+    "battery_soh": SENSOR_BATTERY_SOH,
+    "battery_charge_limit": SENSOR_BATTERY_CHARGE_LIMIT,
+    "battery_discharge_limit": SENSOR_BATTERY_DISCHARGE_LIMIT,
+    # Grid extended
+    "voltage_l1": SENSOR_GRID_VOLTAGE_L1,
+    "voltage_l2": SENSOR_GRID_VOLTAGE_L2,
+    "voltage_l3": SENSOR_GRID_VOLTAGE_L3,
+    "power_l1": SENSOR_GRID_POWER_L1,
+    "power_l2": SENSOR_GRID_POWER_L2,
+    "power_l3": SENSOR_GRID_POWER_L3,
+    # Daily totals
+    "pv_today": SENSOR_PV_GENERATION_TODAY,
+    "battery_charge_today": SENSOR_BATTERY_CHARGE_TODAY,
+    "battery_discharge_today": SENSOR_BATTERY_DISCHARGE_TODAY,
+    # Inverter
+    "inverter_temp": SENSOR_INVERTER_TEMP,
+    "inverter_temp_radiator": SENSOR_INVERTER_TEMP_RADIATOR,
+    # Diagnostics
+    "diag_status_code": SENSOR_DIAG_STATUS_CODE,
+    "meter_power_factor": SENSOR_METER_POWER_FACTOR,
+    "backup_load": SENSOR_BACKUP_LOAD,
+    "ups_load_pct": SENSOR_UPS_LOAD,
+    "ems_mode": SENSOR_EMS_MODE,
+}
+
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
     """Convert a value to float safely."""
@@ -308,14 +351,43 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Error updating Smarting HOME data: {err}") from err
 
     def _read_source_sensors(self) -> dict[str, Any]:
-        """Read current values from HA state machine."""
+        """Read current values from HA state machine.
+
+        Two-pass approach:
+        1. Read all fixed SOURCE_SENSORS (RCE, forecast, ENTSO-E, etc.)
+        2. Read all sensor_map entries (brand-specific entity IDs)
+
+        Sensor_map entries are stored with their canonical key (e.g. "pv_power")
+        AND with the actual entity_id for backward compatibility.
+        """
         data: dict[str, Any] = {}
+
+        # Pass 1: Fixed sensors (non-inverter: RCE, forecast, ENTSO-E, etc.)
         for entity_id in SOURCE_SENSORS:
             state = self.hass.states.get(entity_id)
             if state is not None and state.state not in ("unknown", "unavailable"):
                 data[entity_id] = state.state
             else:
                 data[entity_id] = None
+
+        # Pass 2: sensor_map — brand-specific entity IDs
+        # This overrides fixed sensors when a sensor_map entry maps to the
+        # same canonical key. E.g. sensor_map["pv_power"] = "sensor.sofarsolar_pv_power"
+        # will be accessible as data["sensor.sofarsolar_pv_power"] AND as
+        # the canonical SENSOR_* constant if it matches.
+        for key, entity_id in self._sensor_map.items():
+            if not entity_id:
+                continue
+            state = self.hass.states.get(entity_id)
+            val = state.state if state and state.state not in ("unknown", "unavailable") else None
+            # Store under the mapped entity_id
+            data[entity_id] = val
+            # Also store under the canonical SENSOR_* constant so that
+            # _compute_derived() works without changes.
+            canonical = _SENSOR_MAP_TO_CANONICAL.get(key)
+            if canonical:
+                data[canonical] = val
+
         return data
 
     def _read_ecowitt_sensors(self) -> dict[str, Any]:
