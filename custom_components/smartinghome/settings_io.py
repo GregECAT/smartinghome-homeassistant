@@ -56,6 +56,11 @@ def write_sync(hass: HomeAssistant, updates: dict[str, Any]) -> None:
     _LOGGER.debug("Settings updated: %s", list(updates.keys()))
 
 
+async def read_async(hass: HomeAssistant) -> dict[str, Any]:
+    """Read settings from JSON (async-safe wrapper)."""
+    return await hass.async_add_executor_job(read_sync, hass)
+
+
 async def write_async(hass: HomeAssistant, updates: dict[str, Any]) -> None:
     """Merge updates into settings.json (async-safe wrapper)."""
     await hass.async_add_executor_job(write_sync, hass, updates)
