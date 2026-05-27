@@ -78,6 +78,10 @@ SENSOR_MAP_BATTERY: Final = {
     "battery_soh": "Battery state of health (%)",
     "battery_charge_limit": "Battery max charge current (A)",
     "battery_discharge_limit": "Battery max discharge current (A)",
+    "battery_dod": "Battery depth of discharge setting (%)",
+    "battery_eod": "Battery end of discharge setting (%)",
+    "battery_cycles": "Battery number of charge/discharge cycles",
+    "battery_eps_buffer": "Battery EPS buffer reserve (%)",
 }
 
 # ── Grid extended ──
@@ -117,6 +121,28 @@ SENSOR_MAP_DIAGNOSTICS: Final = {
     "backup_load": "Backup / UPS total load (W)",
     "ups_load_pct": "UPS load percentage (%)",
     "ems_mode": "EMS operating mode",
+    "device_fault": "Device fault status (enum/text)",
+}
+
+# ── Energy Totals (lifetime cumulative) ──
+SENSOR_MAP_TOTALS: Final = {
+    "total_production": "Total PV production (kWh, lifetime)",
+    "total_load_consumption": "Total load consumption (kWh, lifetime)",
+    "total_losses": "Total inverter losses (kWh, lifetime)",
+    "total_battery_charge": "Total battery charge (kWh, lifetime)",
+    "total_battery_discharge": "Total battery discharge (kWh, lifetime)",
+    "total_energy_import": "Total energy import from grid (kWh, lifetime)",
+    "total_energy_export": "Total energy export to grid (kWh, lifetime)",
+}
+
+# ── EPS / Backup output (per phase) ──
+SENSOR_MAP_EPS: Final = {
+    "eps_voltage_r": "EPS output voltage R/L1 (V)",
+    "eps_voltage_s": "EPS output voltage S/L2 (V)",
+    "eps_voltage_t": "EPS output voltage T/L3 (V)",
+    "eps_current_r": "EPS load current R/L1 (A)",
+    "eps_current_s": "EPS load current S/L2 (A)",
+    "eps_current_t": "EPS load current T/L3 (A)",
 }
 
 # ── Weather — Cloud API (AccuWeather, OpenWeatherMap, Forecast.Solar) ──
@@ -155,6 +181,8 @@ SENSOR_MAP_KEYS: Final = {
     **SENSOR_MAP_DAILY,
     **SENSOR_MAP_INVERTER,
     **SENSOR_MAP_DIAGNOSTICS,
+    **SENSOR_MAP_TOTALS,
+    **SENSOR_MAP_EPS,
     **SENSOR_MAP_WEATHER_CLOUD,
     **SENSOR_MAP_WEATHER_LOCAL,
 }
@@ -185,6 +213,10 @@ DEFAULT_SENSOR_MAP: Final = {
     "battery_soh": "sensor.goodwe_battery_state_of_health",
     "battery_charge_limit": "sensor.goodwe_battery_charge_limit",
     "battery_discharge_limit": "sensor.goodwe_battery_discharge_limit",
+    "battery_dod": "",
+    "battery_eod": "",
+    "battery_cycles": "",
+    "battery_eps_buffer": "",
     # Grid extended
     "voltage_l1": "sensor.goodwe_on_grid_l1_voltage",
     "voltage_l2": "sensor.goodwe_on_grid_l2_voltage",
@@ -212,6 +244,22 @@ DEFAULT_SENSOR_MAP: Final = {
     "backup_load": "sensor.goodwe_back_up_load",
     "ups_load_pct": "sensor.goodwe_ups_load",
     "ems_mode": "sensor.goodwe_ems_mode",
+    "device_fault": "",
+    # Energy totals (lifetime)
+    "total_production": "",
+    "total_load_consumption": "",
+    "total_losses": "",
+    "total_battery_charge": "",
+    "total_battery_discharge": "",
+    "total_energy_import": "",
+    "total_energy_export": "",
+    # EPS / Backup output
+    "eps_voltage_r": "",
+    "eps_voltage_s": "",
+    "eps_voltage_t": "",
+    "eps_current_r": "",
+    "eps_current_s": "",
+    "eps_current_t": "",
     # Weather — cloud (user fills in)
     "weather_temp": "",
     "weather_humidity": "",
@@ -257,6 +305,13 @@ DEFAULT_SENSOR_MAP_DEYE: Final = {
     "battery_current": "sensor.deye_battery_current",
     "battery_temp": "sensor.deye_battery_temperature",
     "battery_capacity_kwh": "",
+    "battery_soh": "",
+    "battery_charge_limit": "",
+    "battery_discharge_limit": "",
+    "battery_dod": "",
+    "battery_eod": "",
+    "battery_cycles": "",
+    "battery_eps_buffer": "",
     # Grid extended
     "voltage_l1": "sensor.deye_grid_l1_voltage",
     "voltage_l2": "sensor.deye_grid_l2_voltage",
@@ -277,6 +332,29 @@ DEFAULT_SENSOR_MAP_DEYE: Final = {
     # Inverter
     "inverter_power": "sensor.deye_active_power",
     "inverter_temp": "sensor.deye_dc_temperature",
+    "inverter_temp_radiator": "",
+    # Diagnostics & Backup
+    "diag_status_code": "",
+    "meter_power_factor": "",
+    "backup_load": "",
+    "ups_load_pct": "",
+    "ems_mode": "",
+    "device_fault": "",
+    # Energy totals (lifetime)
+    "total_production": "",
+    "total_load_consumption": "",
+    "total_losses": "",
+    "total_battery_charge": "",
+    "total_battery_discharge": "",
+    "total_energy_import": "",
+    "total_energy_export": "",
+    # EPS / Backup output
+    "eps_voltage_r": "",
+    "eps_voltage_s": "",
+    "eps_voltage_t": "",
+    "eps_current_r": "",
+    "eps_current_s": "",
+    "eps_current_t": "",
     # Weather — cloud (user fills in)
     "weather_temp": "",
     "weather_humidity": "",
@@ -322,6 +400,13 @@ DEFAULT_SENSOR_MAP_GROWATT: Final = {
     "battery_current": "sensor.growatt_battery_current",
     "battery_temp": "sensor.growatt_battery_temperature",
     "battery_capacity_kwh": "",
+    "battery_soh": "",
+    "battery_charge_limit": "",
+    "battery_discharge_limit": "",
+    "battery_dod": "",
+    "battery_eod": "",
+    "battery_cycles": "",
+    "battery_eps_buffer": "",
     # Grid extended
     "voltage_l1": "sensor.growatt_grid_l1_voltage",
     "voltage_l2": "sensor.growatt_grid_l2_voltage",
@@ -342,6 +427,29 @@ DEFAULT_SENSOR_MAP_GROWATT: Final = {
     # Inverter
     "inverter_power": "sensor.growatt_active_power",
     "inverter_temp": "sensor.growatt_inverter_temperature",
+    "inverter_temp_radiator": "",
+    # Diagnostics & Backup
+    "diag_status_code": "",
+    "meter_power_factor": "",
+    "backup_load": "",
+    "ups_load_pct": "",
+    "ems_mode": "",
+    "device_fault": "",
+    # Energy totals (lifetime)
+    "total_production": "",
+    "total_load_consumption": "",
+    "total_losses": "",
+    "total_battery_charge": "",
+    "total_battery_discharge": "",
+    "total_energy_import": "",
+    "total_energy_export": "",
+    # EPS / Backup output
+    "eps_voltage_r": "",
+    "eps_voltage_s": "",
+    "eps_voltage_t": "",
+    "eps_current_r": "",
+    "eps_current_s": "",
+    "eps_current_t": "",
     # Weather — cloud (user fills in)
     "weather_temp": "",
     "weather_humidity": "",
@@ -365,48 +473,81 @@ DEFAULT_SENSOR_MAP_GROWATT: Final = {
     "local_feels_like": "",
 }
 
-# ── Sofar defaults ──
+# ── Sofar defaults (Solarman integration) ──
+# Entity IDs match the sofarsolar_ prefix used by Solarman HA integration.
+# NOTE: Some sensors (load_power, grid_power, battery_soc, daily totals)
+# may not exist in Solarman — user must map manually or they are computed.
 DEFAULT_SENSOR_MAP_SOFAR: Final = {
     # Core
-    "pv_power": "sensor.sofar_pv_power",
-    "load_power": "sensor.sofar_load_power",
-    "grid_power": "sensor.sofar_grid_power",
-    "battery_power": "sensor.sofar_battery_power",
-    "battery_soc": "sensor.sofar_battery_soc",
+    "pv_power": "sensor.sofarsolar_pv_power",
+    "load_power": "",  # Solarman: no dedicated load sensor — computed by coordinator
+    "grid_power": "",  # Solarman: no total grid power — has per-phase PCC current only
+    "battery_power": "sensor.sofarsolar_battery_power",
+    "battery_soc": "sensor.sofarsolar_battery",  # Solarman: entity_id=sofarsolar_battery, device_class=battery, value=58%
     # PV Strings
-    "pv1_power": "sensor.sofar_pv1_power",
-    "pv1_voltage": "sensor.sofar_pv1_voltage",
-    "pv1_current": "sensor.sofar_pv1_current",
-    "pv2_power": "sensor.sofar_pv2_power",
-    "pv2_voltage": "sensor.sofar_pv2_voltage",
-    "pv2_current": "sensor.sofar_pv2_current",
+    "pv1_power": "sensor.sofarsolar_pv1_power",
+    "pv1_voltage": "sensor.sofarsolar_pv1_voltage",
+    "pv1_current": "sensor.sofarsolar_pv1_current",
+    "pv2_power": "sensor.sofarsolar_pv2_power",
+    "pv2_voltage": "sensor.sofarsolar_pv2_voltage",
+    "pv2_current": "sensor.sofarsolar_pv2_current",
     "pv3_power": "",
     "pv4_power": "",
     # Battery extended
-    "battery_voltage": "sensor.sofar_battery_voltage",
-    "battery_current": "sensor.sofar_battery_current",
-    "battery_temp": "sensor.sofar_battery_temperature",
+    "battery_voltage": "sensor.sofarsolar_battery_voltage",
+    "battery_current": "sensor.sofarsolar_battery_current",
+    "battery_temp": "sensor.sofarsolar_battery_temperature",
     "battery_capacity_kwh": "",
-    # Grid extended
-    "voltage_l1": "sensor.sofar_grid_voltage_r",
-    "voltage_l2": "sensor.sofar_grid_voltage_s",
-    "voltage_l3": "sensor.sofar_grid_voltage_t",
-    "current_l1": "sensor.sofar_grid_current_r",
-    "current_l2": "sensor.sofar_grid_current_s",
-    "current_l3": "sensor.sofar_grid_current_t",
-    "power_l1": "",
+    "battery_soh": "sensor.sofarsolar_battery_soh",
+    "battery_charge_limit": "",
+    "battery_discharge_limit": "",
+    "battery_dod": "sensor.sofarsolar_battery_dod",
+    "battery_eod": "sensor.sofarsolar_battery_eod",
+    "battery_cycles": "sensor.sofarsolar_battery_number_of_cycles",
+    "battery_eps_buffer": "sensor.sofarsolar_battery_eps_buffer",
+    # Grid extended (Sofar uses R/S/T phase naming)
+    "voltage_l1": "sensor.sofarsolar_voltage_phase_r",
+    "voltage_l2": "sensor.sofarsolar_voltage_phase_s",
+    "voltage_l3": "sensor.sofarsolar_voltage_phase_t",
+    "current_l1": "sensor.sofarsolar_current_pcc_r",
+    "current_l2": "sensor.sofarsolar_current_pcc_s",
+    "current_l3": "sensor.sofarsolar_current_pcc_t",
+    "power_l1": "",  # Solarman: no per-phase power — has reactive power only
     "power_l2": "",
     "power_l3": "",
-    "grid_frequency": "sensor.sofar_grid_frequency",
-    # Daily totals
-    "pv_today": "sensor.sofar_today_generation",
-    "grid_import_today": "sensor.sofar_today_import",
-    "grid_export_today": "sensor.sofar_today_export",
-    "battery_charge_today": "sensor.sofar_today_battery_charge",
-    "battery_discharge_today": "sensor.sofar_today_battery_discharge",
+    "grid_frequency": "",  # Solarman: not in dump
+    # Daily totals — battery daily sensors confirmed in Solarman
+    "pv_today": "",  # not in dump — use total_production delta
+    "grid_import_today": "",  # not in dump — use total_energy_import delta
+    "grid_export_today": "",  # not in dump — use total_energy_export delta
+    "battery_charge_today": "sensor.sofarsolar_today_battery_charge",
+    "battery_discharge_today": "sensor.sofarsolar_today_battery_discharge",
     # Inverter
-    "inverter_power": "sensor.sofar_inverter_power",
-    "inverter_temp": "sensor.sofar_inverter_temperature",
+    "inverter_power": "",  # Solarman: no dedicated inverter power sensor
+    "inverter_temp": "sensor.sofarsolar_radiator_temperature_1",
+    "inverter_temp_radiator": "sensor.sofarsolar_radiator_temperature_2",
+    # Diagnostics & Backup
+    "diag_status_code": "",
+    "meter_power_factor": "sensor.sofarsolar_powerfactor_pcc_s",
+    "backup_load": "",
+    "ups_load_pct": "",
+    "ems_mode": "",
+    "device_fault": "sensor.sofarsolar_device_fault",
+    # Energy totals (lifetime) — Sofar has full lifetime counters
+    "total_production": "sensor.sofarsolar_total_production",
+    "total_load_consumption": "sensor.sofarsolar_total_load_consumption",
+    "total_losses": "sensor.sofarsolar_total_losses",
+    "total_battery_charge": "sensor.sofarsolar_total_battery_charge",
+    "total_battery_discharge": "sensor.sofarsolar_total_battery_discharge",
+    "total_energy_import": "sensor.sofarsolar_total_energy_import",
+    "total_energy_export": "sensor.sofarsolar_total_energy_export",
+    # EPS / Backup output — Sofar has full 3-phase EPS monitoring
+    "eps_voltage_r": "sensor.sofarsolar_voltage_output_r_eps",
+    "eps_voltage_s": "sensor.sofarsolar_voltage_output_s_eps",
+    "eps_voltage_t": "sensor.sofarsolar_voltage_output_t_eps",
+    "eps_current_r": "sensor.sofarsolar_current_load_r_eps",
+    "eps_current_s": "sensor.sofarsolar_current_load_s_eps",
+    "eps_current_t": "sensor.sofarsolar_current_load_t_eps",
     # Weather — cloud (user fills in)
     "weather_temp": "",
     "weather_humidity": "",
@@ -1021,12 +1162,44 @@ NUMBER_DOD_ON_GRID: Final = "number.goodwe_depth_of_discharge_on_grid"
 NUMBER_ECO_MODE_POWER: Final = "number.goodwe_eco_mode_power"
 NUMBER_ECO_MODE_SOC: Final = "number.goodwe_eco_mode_soc"
 
-# Sofar Solar control entities
-SELECT_SOFAR_WORK_MODE: Final = "select.sofar_energy_storage_mode"
-NUMBER_SOFAR_DOD: Final = "number.sofar_depth_of_discharge"
-NUMBER_SOFAR_EXPORT_LIMIT: Final = "number.sofar_grid_export_limit"
-NUMBER_SOFAR_CHARGE_POWER: Final = "number.sofar_charge_power_limit"
-NUMBER_SOFAR_DISCHARGE_POWER: Final = "number.sofar_discharge_power_limit"
+# Sofar Solar control entities (Solarman integration)
+# ALL entity_id values confirmed from client HA dump.
+
+# ── Select entities (mode switching) ──
+SELECT_SOFAR_WORK_MODE: Final = "select.sofarsolar_storage_control_mode"
+# Storage modes: Self Use, Time of Use, Optimized Revenue, Passive,
+#                Peak Shaving, Off-Grid, Generator, Export Priority
+SELECT_SOFAR_EXPORT_SURPLUS: Final = "select.sofarsolar_export_surplus_limitation"
+# Export surplus: Disabled, Enabled, Balanced
+SELECT_SOFAR_TIMED_CONTROL: Final = "select.sofarsolar_timed_control"
+# Timed control: Disable, Charge, Discharge, Both
+
+# ── Number entities (power control) ──
+# NOTE: Sofar has NO number.sofarsolar_depth_of_discharge — DOD is read-only
+# via sensor.sofarsolar_battery_dod. DOD is set implicitly by storage mode.
+NUMBER_SOFAR_DOD: Final = ""  # Not available — DOD is sensor-only on Sofar
+NUMBER_SOFAR_EXPORT_LIMIT: Final = "number.sofarsolar_export_surplus_power"
+# Export surplus power: 0–6553500W (replaces grid_export_limit)
+NUMBER_SOFAR_CHARGE_POWER: Final = "number.sofarsolar_timed_charge_power"
+# Timed charge power: 0–4294967296W (current: 1001W)
+NUMBER_SOFAR_DISCHARGE_POWER: Final = "number.sofarsolar_timed_discharge_power"
+# Timed discharge power: 0–4294967296W (current: 1000W)
+NUMBER_SOFAR_TIMED_PROGRAM: Final = "number.sofarsolar_timed_program"
+# Timed program: 0=Disable, 1=Charge, 2=Discharge, 3=Both
+
+# ── Passive mode entities (advanced grid/battery targeting) ──
+NUMBER_SOFAR_PASSIVE_GRID_POWER: Final = "number.sofarsolar_passive_grid_power"
+# Target grid power in Passive mode (W, signed: + import / - export)
+NUMBER_SOFAR_PASSIVE_MAX_BATTERY: Final = "number.sofarsolar_passive_maximum_battery_power"
+# Max battery power in Passive mode (W, signed: + charge / - discharge)
+NUMBER_SOFAR_PASSIVE_MIN_BATTERY: Final = "number.sofarsolar_passive_minimum_battery_power"
+# Min battery power in Passive mode (W, signed)
+
+# ── Time entities (timed charge/discharge scheduling) ──
+TIME_SOFAR_CHARGE_START: Final = "time.sofarsolar_timed_charge_start"
+TIME_SOFAR_CHARGE_END: Final = "time.sofarsolar_timed_charge_end"
+TIME_SOFAR_DISCHARGE_START: Final = "time.sofarsolar_timed_discharge_start"
+TIME_SOFAR_DISCHARGE_END: Final = "time.sofarsolar_timed_discharge_end"
 
 # Binary sensors from RCE PSE — v2 names
 BINARY_RCE_CHEAPEST: Final = "binary_sensor.rce_pse_tanie_okno_aktywne"

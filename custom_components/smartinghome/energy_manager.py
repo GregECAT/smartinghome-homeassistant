@@ -44,10 +44,20 @@ from .const import (
     INVERTER_BRAND_GOODWE,
     INVERTER_BRAND_SOFAR,
     SELECT_SOFAR_WORK_MODE,
+    SELECT_SOFAR_EXPORT_SURPLUS,
+    SELECT_SOFAR_TIMED_CONTROL,
     NUMBER_SOFAR_DOD,
     NUMBER_SOFAR_EXPORT_LIMIT,
     NUMBER_SOFAR_CHARGE_POWER,
     NUMBER_SOFAR_DISCHARGE_POWER,
+    NUMBER_SOFAR_TIMED_PROGRAM,
+    NUMBER_SOFAR_PASSIVE_GRID_POWER,
+    NUMBER_SOFAR_PASSIVE_MAX_BATTERY,
+    NUMBER_SOFAR_PASSIVE_MIN_BATTERY,
+    TIME_SOFAR_CHARGE_START,
+    TIME_SOFAR_CHARGE_END,
+    TIME_SOFAR_DISCHARGE_START,
+    TIME_SOFAR_DISCHARGE_END,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -128,13 +138,11 @@ class EnergyManager:
         nigdy nie spowoduje importu z sieci na baterię.
 
         GoodWe: General mode + enable_charging + eco_mode_soc=100.
-        Sofar: Self Use + charge_power=max, discharge_power=auto.
+        Sofar:  Passive mode — grid_power=0 (zero grid), battery=max charge.
         """
         if self._inverter_brand == INVERTER_BRAND_SOFAR:
-            _LOGGER.info("[Sofar] charge_pv_only — Self Use (PV → dom → bateria, bez sieci)")
-            await self._sofar_set_charge_power(6000)  # Allow full PV charging
-            await self._sofar_set_discharge_power(3000)  # Allow normal discharge
-            await self._set_work_mode("Self Use")
+            _LOGGER.info("[Sofar] charge_pv_only — Passive (grid=0, battery=+6000 max charge)")
+            await self._sofar_set_passive(grid_power=0, max_battery=6000, min_battery=0)
         else:
             _LOGGER.info("charge_pv_only — General mode (PV → dom → bateria, bez importu z sieci)")
             await self._set_eco_mode_soc(100)
@@ -154,13 +162,11 @@ class EnergyManager:
         - SOC krytycznie niski + brak PV
 
         GoodWe: Eco Mode (eco_charge) — soc=100, power=100, charge_current=max.
-        Sofar: Self Use — charge_power=max, discharge_power=0.
+        Sofar:  Passive mode — grid_power=+6000 (import), battery=max charge.
         """
         if self._inverter_brand == INVERTER_BRAND_SOFAR:
-            _LOGGER.info("[Sofar] charge_from_grid — Self Use (PV + sieć → bateria)")
-            await self._sofar_set_charge_power(6000)  # Max charge power
-            await self._sofar_set_discharge_power(0)   # Block discharge
-            await self._set_work_mode("Self Use")
+            _LOGGER.info("[Sofar] charge_from_grid — Passive (grid=+6000 import, battery=+6000 charge)")
+            await self._sofar_set_passive(grid_power=6000, max_battery=6000, min_battery=6000)
         else:
             _LOGGER.info("charge_from_grid — eco_charge (PV + sieć → bateria, soc=100, power=100)")
             await self._set_eco_mode_soc(100)
@@ -180,14 +186,11 @@ class EnergyManager:
         """Force battery discharge to grid.
 
         GoodWe: Eco Mode (eco_discharge) — grid export ON, charge_current=0.
-        Sofar: Self Use — charge_power=0, discharge_power=max, export_limit=max.
+        Sofar:  Passive mode — grid_power=-6000 (export), battery=-6000 (discharge).
         """
         if self._inverter_brand == INVERTER_BRAND_SOFAR:
-            _LOGGER.info("[Sofar] Forcing battery discharge (Self Use, max discharge, zero charge)")
-            await self._sofar_set_charge_power(0)       # Block charge
-            await self._sofar_set_discharge_power(6000)  # Max discharge
-            await self._sofar_set_export_limit(16000)    # Allow grid export
-            await self._set_work_mode("Self Use")
+            _LOGGER.info("[Sofar] force_discharge — Passive (grid=-6000 export, battery=-6000 discharge)")
+            await self._sofar_set_passive(grid_power=-6000, max_battery=-6000, min_battery=-6000)
         else:
             _LOGGER.info("Forcing battery discharge (eco_discharge, DOD=95%%, soc=5, power=100, grid_export=ON)")
             # Enable grid export (47509=1) — critical for BT!
@@ -214,10 +217,8 @@ class EnergyManager:
     async def stop_force_charge(self) -> None:
         """Stop forced charging — restore general/self-use mode."""
         if self._inverter_brand == INVERTER_BRAND_SOFAR:
-            _LOGGER.info("[Sofar] STOP force charge — restoring Self Use auto mode")
-            await self._sofar_set_charge_power(3000)     # Restore auto charge
-            await self._sofar_set_discharge_power(3000)   # Restore auto discharge
-            await self._set_work_mode("Self Use")
+            _LOGGER.info("[Sofar] STOP force charge — restoring Self Use (safe idle)")
+            await self._sofar_restore_self_use()
         else:
             _LOGGER.info("STOP force charge — restoring general mode")
             await self._set_eco_mode_power(0)
@@ -239,11 +240,8 @@ class EnergyManager:
     async def stop_force_discharge(self) -> None:
         """Stop forced discharge — restore general/self-use mode."""
         if self._inverter_brand == INVERTER_BRAND_SOFAR:
-            _LOGGER.info("[Sofar] STOP force discharge — restoring Self Use auto mode")
-            await self._sofar_set_charge_power(3000)
-            await self._sofar_set_discharge_power(3000)
-            await self._sofar_set_export_limit(16000)
-            await self._set_work_mode("Self Use")
+            _LOGGER.info("[Sofar] STOP force discharge — restoring Self Use (safe idle)")
+            await self._sofar_restore_self_use()
         else:
             _LOGGER.info("STOP force discharge — restoring general mode")
             await self._set_eco_mode_power(0)
@@ -266,11 +264,8 @@ class EnergyManager:
     async def set_general_mode(self) -> None:
         """Switch to General/Self Use mode — battery self-consumption."""
         if self._inverter_brand == INVERTER_BRAND_SOFAR:
-            _LOGGER.info("[Sofar] SET Self Use MODE — battery self-consumption")
-            await self._sofar_set_charge_power(3000)
-            await self._sofar_set_discharge_power(3000)
-            await self._sofar_set_export_limit(16000)
-            await self._set_work_mode("Self Use")
+            _LOGGER.info("[Sofar] SET Self Use MODE — battery self-consumption (safe idle)")
+            await self._sofar_restore_self_use()
         else:
             _LOGGER.info("SET GENERAL MODE — battery self-consumption (house powered by battery)")
             await self._set_eco_mode_power(0)
@@ -285,10 +280,7 @@ class EnergyManager:
         """Emergency stop — kill all forced operations immediately."""
         _LOGGER.warning("EMERGENCY STOP — killing all force operations")
         if self._inverter_brand == INVERTER_BRAND_SOFAR:
-            await self._sofar_set_charge_power(3000)
-            await self._sofar_set_discharge_power(3000)
-            await self._sofar_set_export_limit(16000)
-            await self._set_work_mode("Self Use")
+            await self._sofar_restore_self_use()
         else:
             await self._set_eco_mode_power(0)
             await self._set_eco_mode_soc(100)
@@ -632,7 +624,8 @@ class EnergyManager:
     async def _enable_charging(self) -> None:
         """Enable battery charging."""
         if self._is_sofar:
-            await self._sofar_set_charge_power(3000)  # Default auto charge
+            # In Passive mode: set battery max to allow charge
+            await self._sofar_set_passive(grid_power=0, max_battery=6000, min_battery=0)
         else:
             await self.hass.services.async_call(
                 "goodwe",
@@ -647,7 +640,8 @@ class EnergyManager:
     async def _block_charging(self) -> None:
         """Block battery charging."""
         if self._is_sofar:
-            await self._sofar_set_charge_power(0)
+            # In Passive mode: set battery max to 0 (no charge)
+            await self._sofar_set_passive(grid_power=0, max_battery=0, min_battery=0)
         else:
             await self.hass.services.async_call(
                 "goodwe",
@@ -699,6 +693,11 @@ class EnergyManager:
         """Set depth of discharge on grid."""
         if self._is_sofar:
             entity = NUMBER_SOFAR_DOD
+            if not entity:
+                # Sofar: DOD is read-only (sensor.sofarsolar_battery_dod),
+                # set implicitly by storage mode — nothing to do here.
+                _LOGGER.debug("[Sofar] DOD is read-only — skipping set to %d%%", dod)
+                return
         else:
             entity = NUMBER_DOD_ON_GRID
         state = self.hass.states.get(entity)
@@ -786,70 +785,87 @@ class EnergyManager:
     # Sofar Solar — specific control helpers
     # =========================================================================
 
-    async def _sofar_set_charge_power(self, power_w: int) -> None:
-        """Set Sofar battery charge power limit (W).
+    async def _sofar_set_passive(
+        self,
+        grid_power: int,
+        max_battery: int,
+        min_battery: int,
+    ) -> None:
+        """Set Sofar to Passive mode with precise power targets.
 
-        Uses number.set_value on the Sofar charge power limit entity.
-        Typical range: 0–6000W depending on model.
+        Passive mode gives HEMS direct, watt-level control over:
+        - grid_power:  target grid flow (W). + = import, - = export, 0 = zero exchange
+        - max_battery:  max battery power (W). + = charge, - = discharge
+        - min_battery:  min battery power (W). + = charge, - = discharge
+
+        Typical usage patterns:
+        - charge_pv_only:  grid=0,     max=+6000, min=0      (PV→bat, no grid)
+        - charge_from_grid: grid=+6000, max=+6000, min=+6000  (grid→bat, force)
+        - force_discharge:  grid=-6000, max=-6000, min=-6000  (bat→grid, force)
+        - hold (no flow):   grid=0,     max=0,     min=0      (freeze)
         """
-        if not self.hass.states.get(NUMBER_SOFAR_CHARGE_POWER):
+        # Set power targets FIRST, then switch mode
+        await self._sofar_set_number(NUMBER_SOFAR_PASSIVE_GRID_POWER, grid_power)
+        await self._sofar_set_number(NUMBER_SOFAR_PASSIVE_MAX_BATTERY, max_battery)
+        await self._sofar_set_number(NUMBER_SOFAR_PASSIVE_MIN_BATTERY, min_battery)
+        # Activate Passive mode
+        await self._set_work_mode("Passive")
+        _LOGGER.info(
+            "[Sofar] Passive mode: grid=%+dW, battery=[%+d, %+d]W",
+            grid_power, min_battery, max_battery,
+        )
+
+    async def _sofar_restore_self_use(self) -> None:
+        """Restore Sofar to Self Use mode — safe autonomous operation.
+
+        Self Use is the safe fallback: inverter manages charge/discharge
+        automatically to maximize self-consumption. No HEMS intervention needed.
+        """
+        await self._set_work_mode("Self Use")
+        _LOGGER.info("[Sofar] Restored to Self Use (safe idle)")
+
+    async def _sofar_set_number(self, entity_id: str, value: int) -> None:
+        """Set a Sofar number entity value with safety checks."""
+        if not entity_id:
+            return
+        if not self.hass.states.get(entity_id):
             _LOGGER.debug(
-                "[Sofar] Entity %s not available — skipping charge power set",
-                NUMBER_SOFAR_CHARGE_POWER,
+                "[Sofar] Entity %s not available — skipping set to %d",
+                entity_id, value,
             )
             return
-        power_w = max(0, min(power_w, 6000))
         await self.hass.services.async_call(
             "number",
             "set_value",
             {
-                "entity_id": NUMBER_SOFAR_CHARGE_POWER,
-                "value": power_w,
+                "entity_id": entity_id,
+                "value": value,
             },
         )
-        _LOGGER.debug("[Sofar] Charge power set to %dW", power_w)
+        _LOGGER.debug("[Sofar] %s → %d", entity_id, value)
+
+    async def _sofar_set_charge_power(self, power_w: int) -> None:
+        """Set Sofar timed charge power limit (W).
+
+        Uses number.set_value on the Sofar timed charge power entity.
+        Typical range: 0–6000W depending on model.
+        """
+        power_w = max(0, min(power_w, 6000))
+        await self._sofar_set_number(NUMBER_SOFAR_CHARGE_POWER, power_w)
 
     async def _sofar_set_discharge_power(self, power_w: int) -> None:
-        """Set Sofar battery discharge power limit (W).
+        """Set Sofar timed discharge power limit (W).
 
-        Uses number.set_value on the Sofar discharge power limit entity.
+        Uses number.set_value on the Sofar timed discharge power entity.
         Typical range: 0–6000W depending on model.
         """
-        if not self.hass.states.get(NUMBER_SOFAR_DISCHARGE_POWER):
-            _LOGGER.debug(
-                "[Sofar] Entity %s not available — skipping discharge power set",
-                NUMBER_SOFAR_DISCHARGE_POWER,
-            )
-            return
         power_w = max(0, min(power_w, 6000))
-        await self.hass.services.async_call(
-            "number",
-            "set_value",
-            {
-                "entity_id": NUMBER_SOFAR_DISCHARGE_POWER,
-                "value": power_w,
-            },
-        )
-        _LOGGER.debug("[Sofar] Discharge power set to %dW", power_w)
+        await self._sofar_set_number(NUMBER_SOFAR_DISCHARGE_POWER, power_w)
 
     async def _sofar_set_export_limit(self, limit_w: int) -> None:
-        """Set Sofar grid export limit (W).
+        """Set Sofar export surplus power (W).
 
-        Uses number.set_value on the Sofar export limit entity.
+        Uses number.set_value on the Sofar export surplus power entity.
         """
-        if not self.hass.states.get(NUMBER_SOFAR_EXPORT_LIMIT):
-            _LOGGER.debug(
-                "[Sofar] Entity %s not available — skipping export limit set",
-                NUMBER_SOFAR_EXPORT_LIMIT,
-            )
-            return
         limit_w = max(0, min(limit_w, 16000))
-        await self.hass.services.async_call(
-            "number",
-            "set_value",
-            {
-                "entity_id": NUMBER_SOFAR_EXPORT_LIMIT,
-                "value": limit_w,
-            },
-        )
-        _LOGGER.debug("[Sofar] Export limit set to %dW", limit_w)
+        await self._sofar_set_number(NUMBER_SOFAR_EXPORT_LIMIT, limit_w)
