@@ -6859,21 +6859,24 @@ class SmartingHomePanel extends HTMLElement {
     const container = this.shadowRoot.getElementById('cfg-brand-content');
     const titleEl = this.shadowRoot.getElementById('cfg-brand-title');
     if (!container) return;
-    // Prevent unnecessary re-renders
-    if (this._cfgGuideRendered) return;
 
     // Detect brand: from settings, sensor_map entity, or HA states
     const settingsBrand = (this._settings.inverter_brand || '').toLowerCase();
     const smapEntity = this._sensorMapEntity;
     const smapState = smapEntity ? this._s(smapEntity) : null;
     let brand = settingsBrand || 'goodwe';
+    let hasBrandData = !!settingsBrand;
     // Auto-detect from sensor_map attributes
     if (!settingsBrand && this._sensorMapAttrs) {
       const pvEntity = this._sensorMapAttrs.pv_power || '';
-      if (pvEntity.includes('sofar') || pvEntity.includes('solarman')) brand = 'sofar';
-      else if (pvEntity.includes('deye')) brand = 'deye';
-      else if (pvEntity.includes('growatt')) brand = 'growatt';
+      if (pvEntity.includes('sofar') || pvEntity.includes('solarman')) { brand = 'sofar'; hasBrandData = true; }
+      else if (pvEntity.includes('deye')) { brand = 'deye'; hasBrandData = true; }
+      else if (pvEntity.includes('growatt')) { brand = 'growatt'; hasBrandData = true; }
     }
+    // Prevent unnecessary re-renders: only re-render if brand changed
+    if (this._cfgGuideRendered && this._cfgGuideBrand === brand) return;
+    // If no brand data yet (no settings, no sensorMapAttrs), wait for data
+    if (!hasBrandData && !this._sensorMapAttrs) return;
 
     const brandLabels = { goodwe: 'GoodWe', sofar: 'Sofar Solar / Solarman', deye: 'Deye', growatt: 'Growatt', other: 'Inny falownik' };
     const brandLabel = brandLabels[brand] || brandLabels.other;
@@ -7047,8 +7050,8 @@ class SmartingHomePanel extends HTMLElement {
         ['sensor.sofarsolar_pv_power', 'wartość W'],
         ['sensor.sofarsolar_battery_soc', '0–100%'],
         ['sensor.sofarsolar_battery_power', 'wartość W'],
-        ['sensor.sofarsolar_grid_power', 'wartość W'],
-        ['sensor.sofarsolar_load_power', 'wartość W'],
+        ['sensor.sofarsolar_voltage_phase_r', 'wartość V (sieć)'],
+        ['sensor.sofarsolar_current_pcc_r', 'wartość A (PCC)'],
       ];
     } else if (brand === 'deye') {
       checkEntities = [
@@ -7095,6 +7098,7 @@ class SmartingHomePanel extends HTMLElement {
 
     container.innerHTML = sec1 + sec2 + sec3;
     this._cfgGuideRendered = true;
+    this._cfgGuideBrand = brand;
   }
 
   /* ── Update all ─────────────────────────── */
@@ -13964,7 +13968,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.56.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.56.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
