@@ -135,6 +135,25 @@ async def async_setup_entry(
     except Exception as err:
         _LOGGER.debug("FREE registration skipped: %s", err)
 
+    # ── Sofar sensor_map migration: sofar_ → sofarsolar_ ──
+    # Users who configured before v1.54.0 have wrong entity prefix.
+    inverter_brand = entry.data.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE)
+    if inverter_brand in ("sofar", "sofarsolar"):
+        from .const import CONF_SENSOR_MAP, INVERTER_BRAND_SOFAR
+        sensor_map = dict(entry.data.get(CONF_SENSOR_MAP, {}))
+        migrated = False
+        for key, entity_id in sensor_map.items():
+            if entity_id and "sensor.sofar_" in entity_id and "sofarsolar_" not in entity_id:
+                sensor_map[key] = entity_id.replace("sensor.sofar_", "sensor.sofarsolar_")
+                migrated = True
+        if migrated:
+            new_data = {**entry.data, CONF_SENSOR_MAP: sensor_map}
+            hass.config_entries.async_update_entry(entry, data=new_data)
+            _LOGGER.warning(
+                "Migrated Sofar sensor_map: sofar_ → sofarsolar_ (%d keys updated)",
+                sum(1 for v in sensor_map.values() if v and "sofarsolar_" in v),
+            )
+
     # Initialize data update coordinator
     update_interval = entry.data.get(
         CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
