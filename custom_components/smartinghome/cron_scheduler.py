@@ -212,9 +212,14 @@ class AICronScheduler:
         return get_path(self.hass)
 
     def _read_settings(self) -> dict:
-        """Read settings from JSON (sync — safe for executor context)."""
+        """Read settings from JSON (sync — ONLY for executor/thread contexts)."""
         from .settings_io import read_sync
         return read_sync(self.hass)
+
+    async def _read_settings_async(self) -> dict:
+        """Read settings from JSON (async-safe — for event loop contexts)."""
+        from .settings_io import read_async
+        return await read_async(self.hass)
 
     def _write_settings_sync(self, updates: dict) -> None:
         """Merge updates into settings.json (sync — thread-safe via settings_io)."""
@@ -229,7 +234,7 @@ class AICronScheduler:
     async def async_start(self) -> None:
         """Start all enabled cron jobs."""
         self._running = True
-        settings = self._read_settings()
+        settings = await self._read_settings_async()
 
         # HEMS Optimization
         if settings.get(CRON_HEMS_ENABLED, True):
@@ -379,7 +384,7 @@ class AICronScheduler:
         while self._running:
             try:
                 # Refresh AI keys from settings.json (may have changed via panel)
-                settings = self._read_settings()
+                settings = await self._read_settings_async()
                 gk = settings.get("gemini_api_key", "")
                 ak = settings.get("anthropic_api_key", "")
                 if gk and gk != self._ai._gemini_key:
@@ -436,7 +441,7 @@ class AICronScheduler:
                 if result and result_key:
                     now_str = datetime.now().strftime("%H:%M")
                     now_date = datetime.now().strftime("%Y-%m-%d")
-                    settings = self._read_settings()
+                    settings = await self._read_settings_async()
                     default_prov = settings.get("default_ai_provider", "gemini")
                     if default_prov == "anthropic" and self._ai.anthropic_available:
                         provider = "anthropic"
@@ -494,7 +499,7 @@ class AICronScheduler:
                 _LOGGER.error("AI Cron '%s' error: %s", job_type, err)
                 # Log errors too
                 try:
-                    settings = self._read_settings()
+                    settings = await self._read_settings_async()
                     logs = settings.get("ai_logs", [])
                     logs.append({
                         "date": datetime.now().strftime("%Y-%m-%d"),
