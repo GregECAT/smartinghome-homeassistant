@@ -56,7 +56,7 @@ _BRAND_PATTERNS: dict[str, list[str]] = {
     INVERTER_BRAND_GOODWE: ["goodwe", "gw_"],
     INVERTER_BRAND_DEYE: ["deye", "sun_", "sunsynk"],
     INVERTER_BRAND_GROWATT: ["growatt", "grw_"],
-    INVERTER_BRAND_SOFAR: ["sofar", "sfr_", "solarman"],
+    INVERTER_BRAND_SOFAR: ["sofar", "sofarsolar", "sfr_", "solarman"],
 }
 
 # Well-known capability mappings (entity pattern → capability name)
@@ -67,10 +67,16 @@ _CAPABILITY_HINTS: dict[str, str] = {
     "grid_export": "export_limit_control",
     "work_mode": "work_mode_control",
     "tryb_pracy": "work_mode_control",
+    "energy_storage_mode": "work_mode_control",
     "battery_charge_current": "charge_current_control",
     "battery_discharge_current": "discharge_current_control",
+    "charge_power": "charge_power_control",
+    "discharge_power": "discharge_power_control",
     "backup_soc": "backup_soc_control",
     "eco_mode": "eco_mode_control",
+    "timed_charge": "timed_charge_control",
+    "timed_discharge": "timed_discharge_control",
+    "access_point": "wifi_control",
 }
 
 
@@ -262,7 +268,25 @@ class InverterAgent:
         This is what gets injected into the AI prompt so the AI knows
         the current state before deciding what to do.
         """
+        from .const import (
+            SELECT_SOFAR_WORK_MODE,
+            NUMBER_SOFAR_DOD,
+        )
+
         states = self.hass.states
+
+        # Brand-aware entity selection
+        is_sofar = self._inverter_brand == INVERTER_BRAND_SOFAR
+        work_mode_entity = SELECT_SOFAR_WORK_MODE if is_sofar else SELECT_WORK_MODE
+
+        # DOD entity selection — Sofar has no number entity for DOD,
+        # DOD is read-only via sensor.sofarsolar_battery_dod
+        if is_sofar and not NUMBER_SOFAR_DOD:
+            dod_entity = "sensor.sofarsolar_battery_dod"
+        elif is_sofar:
+            dod_entity = NUMBER_SOFAR_DOD
+        else:
+            dod_entity = NUMBER_DOD_ON_GRID
 
         # Battery charge current → determine if charging is enabled
         # We infer this from battery_power: positive = charging, negative = discharging
@@ -270,13 +294,13 @@ class InverterAgent:
         bat_soc = self._read_state(SENSOR_BATTERY_SOC, 0.0)
 
         # Work mode
-        work_mode_state = states.get(SELECT_WORK_MODE)
+        work_mode_state = states.get(work_mode_entity)
         work_mode = work_mode_state.state if work_mode_state else "unknown"
         if work_mode in ("unavailable", "unknown"):
             work_mode = "unknown"
 
         # DOD on grid
-        dod_state = states.get(NUMBER_DOD_ON_GRID)
+        dod_state = states.get(dod_entity)
         dod = float(dod_state.state) if dod_state and dod_state.state not in ("unknown", "unavailable") else DEFAULT_DOD_ON_GRID
 
         # Switch states
