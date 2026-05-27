@@ -388,7 +388,73 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if canonical:
                 data[canonical] = val
 
+        # Pass 3: Synthetic sensors — compute missing grid/load from available data
+        # Sofar/Solarman has no dedicated grid_power or load_power sensor.
+        # grid_power = sum(V_phase * I_pcc) per phase (PCC = Point of Common Coupling)
+        # load_power = pv_power + battery_power - grid_power (energy balance)
+        self._synthesize_missing_sensors(data)
+
         return data
+
+    def _synthesize_missing_sensors(self, data: dict[str, Any]) -> None:
+        """Compute synthetic sensors when native sensors are unavailable.
+
+        Called after Pass 2 (sensor_map). Fills in:
+        - SENSOR_GRID_POWER_TOTAL from per-phase V×I (Sofar PCC sensors)
+        - SENSOR_LOAD_TOTAL from energy balance
+        - Per-phase power (power_l1/l2/l3)
+        - Grid frequency from any available source
+        """
+        # ── Synthetic grid_power from V × I per phase ──
+        if data.get(SENSOR_GRID_POWER_TOTAL) is None:
+            v_keys = ["voltage_l1", "voltage_l2", "voltage_l3"]
+            i_keys = ["current_l1", "current_l2", "current_l3"]
+            grid_total = 0.0
+            has_any_phase = False
+            phase_powers = []
+            for vk, ik in zip(v_keys, i_keys):
+                v_eid = self._sensor_map.get(vk, "")
+                i_eid = self._sensor_map.get(ik, "")
+                v_val = _safe_float(data.get(v_eid)) if v_eid else 0.0
+                i_val = _safe_float(data.get(i_eid)) if i_eid else 0.0
+                if v_val > 0 and abs(i_val) > 0.01:
+                    phase_p = v_val * i_val
+                    grid_total += phase_p
+                    has_any_phase = True
+                    phase_powers.append(phase_p)
+                else:
+                    phase_powers.append(0.0)
+
+            if has_any_phase:
+                # Sofar PCC current: positive = export, negative = import
+                # Our convention: positive = export, negative = import
+                data[SENSOR_GRID_POWER_TOTAL] = str(round(grid_total))
+                _LOGGER.debug(
+                    "Synthetic grid_power from V×I: %.0f W (phases: %s)",
+                    grid_total, phase_powers,
+                )
+                # Also fill per-phase power if missing
+                phase_canonical = [SENSOR_GRID_POWER_L1, SENSOR_GRID_POWER_L2, SENSOR_GRID_POWER_L3]
+                for canon, pp in zip(phase_canonical, phase_powers):
+                    if data.get(canon) is None:
+                        data[canon] = str(round(pp))
+
+        # ── Synthetic load_power from energy balance ──
+        if data.get(SENSOR_LOAD_TOTAL) is None:
+            pv = _safe_float(data.get(SENSOR_PV_POWER))
+            batt = _safe_float(data.get(SENSOR_BATTERY_POWER))
+            grid = _safe_float(data.get(SENSOR_GRID_POWER_TOTAL))
+            # Energy balance: load = pv + battery_discharge - battery_charge + grid_import - grid_export
+            # With sign convention: battery_power > 0 = discharge, grid_power > 0 = export
+            # load = pv + batt_discharge - grid_export = pv + max(batt,0) - max(grid,0)
+            # OR more accurately: load = pv + batt - grid (where batt+ = discharge, grid+ = export)
+            load = pv + batt - grid
+            if load > 0 or (pv > 0 or abs(batt) > 10):
+                data[SENSOR_LOAD_TOTAL] = str(round(max(load, 0)))
+                _LOGGER.debug(
+                    "Synthetic load_power: %.0f W (pv=%.0f, batt=%.0f, grid=%.0f)",
+                    max(load, 0), pv, batt, grid,
+                )
 
     def _read_ecowitt_sensors(self) -> dict[str, Any]:
         """Read Ecowitt local weather sensors via sensor_map."""
@@ -433,6 +499,15 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         meter = _safe_float(raw.get(SENSOR_GRID_POWER_TOTAL))
         data["grid_import_power"] = max(meter, 0)
         data["grid_export_power"] = max(-meter, 0)
+
+        # —— Synthetic sensors for brands without native load/grid ——
+        # These become HA entities: sensor.smarting_home_*_load_power_computed etc.
+        load_raw = _safe_float(raw.get(SENSOR_LOAD_TOTAL))
+        data["synthetic_load_power"] = round(load_raw) if load_raw > 0 else None
+        data["synthetic_grid_power"] = round(meter) if meter != 0 else None
+        # Grid frequency — pass through if we computed it
+        f_avg = _safe_float(raw.get(SENSOR_GRID_FREQUENCY_L1))
+        data["synthetic_grid_frequency"] = round(f_avg, 2) if f_avg > 0 else None
 
         # —— PV surplus ——
         pv_power = _safe_float(raw.get(SENSOR_PV_POWER))
