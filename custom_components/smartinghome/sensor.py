@@ -417,6 +417,31 @@ HEMS_SENSOR_DESCRIPTIONS: list[SensorEntityDescription] = [
         name="EMS Mode",
         icon="mdi:home-battery",
     ),
+    # —— Synthetic sensors (computed by coordinator when native unavailable) ——
+    SensorEntityDescription(
+        key="synthetic_load_power",
+        name="Load Power (Computed)",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon=ICON_LOAD,
+    ),
+    SensorEntityDescription(
+        key="synthetic_grid_power",
+        name="Grid Power (Computed)",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon=ICON_GRID,
+    ),
+    SensorEntityDescription(
+        key="synthetic_grid_frequency",
+        name="Grid Frequency (Computed)",
+        native_unit_of_measurement=UnitOfFrequency.HERTZ,
+        device_class=SensorDeviceClass.FREQUENCY,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon=ICON_FREQUENCY,
+    ),
 ]
 
 

@@ -264,7 +264,21 @@ class SmartingHomePanel extends HTMLElement {
       const corrected = this._findSmartingHomeSensor(correctedKey);
       if (corrected !== null) return corrected;
     }
-    return this._n(this._m(k));
+    // Try native entity from sensor_map first
+    const native = this._n(this._m(k));
+    if (native !== null) return native;
+    // Fallback: for critical sensors missing in some brands (Sofar),
+    // try SmartingHOME computed/synthetic sensors
+    const syntheticMap = {
+      'load_power': 'synthetic_load_power',
+      'grid_power': 'synthetic_grid_power',
+      'grid_frequency': 'synthetic_grid_frequency',
+    };
+    if (syntheticMap[k]) {
+      const synth = this._findSmartingHomeSensor(syntheticMap[k]);
+      if (synth !== null) return synth;
+    }
+    return native;
   }
   _findSmartingHomeSensor(key) {
     // Search for SmartingHOME-generated sensor by key suffix
@@ -13950,7 +13964,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.55.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.56.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
