@@ -403,8 +403,24 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         - SENSOR_GRID_POWER_TOTAL from per-phase V×I (Sofar PCC sensors)
         - SENSOR_LOAD_TOTAL from energy balance
         - Per-phase power (power_l1/l2/l3)
-        - Grid frequency from any available source
+
+        Sign conventions (matching GoodWe / panel.js expectations):
+        - grid_power: +export / -import (panel.js inverts with -1×)
+        - battery_power: +charging / -discharging
+            Sofar uses opposite: -charging / +discharging → we invert
+        - load_power: always positive
         """
+        pv = _safe_float(data.get(SENSOR_PV_POWER))
+        batt = _safe_float(data.get(SENSOR_BATTERY_POWER))
+
+        # ── Detect brand for grid V×I sign convention ──
+        is_sofar = any(
+            "sofarsolar" in str(self._sensor_map.get(k, ""))
+            for k in ("pv_power", "battery_power", "battery_soc")
+        )
+        # Note: Sofar battery_power uses SAME convention as GoodWe:
+        # positive = discharge, negative = charge
+
         # ── Synthetic grid_power from V × I per phase ──
         if data.get(SENSOR_GRID_POWER_TOTAL) is None:
             v_keys = ["voltage_l1", "voltage_l2", "voltage_l3"]
@@ -417,7 +433,8 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 i_eid = self._sensor_map.get(ik, "")
                 v_val = _safe_float(data.get(v_eid)) if v_eid else 0.0
                 i_val = _safe_float(data.get(i_eid)) if i_eid else 0.0
-                if v_val > 0 and abs(i_val) > 0.01:
+                # Minimum 100V to filter garbage data (0.7V etc.)
+                if v_val > 100 and abs(i_val) > 0.01:
                     phase_p = v_val * i_val
                     grid_total += phase_p
                     has_any_phase = True
@@ -426,12 +443,12 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     phase_powers.append(0.0)
 
             if has_any_phase:
-                # Sofar PCC current: positive = export, negative = import
-                # Our convention: positive = export, negative = import
-                data[SENSOR_GRID_POWER_TOTAL] = str(round(grid_total))
+                # Sofar PCC: positive I = import → negate for GoodWe convention (+export)
+                grid_for_store = -grid_total if is_sofar else grid_total
+                data[SENSOR_GRID_POWER_TOTAL] = str(round(grid_for_store))
                 _LOGGER.debug(
-                    "Synthetic grid_power from V×I: %.0f W (phases: %s)",
-                    grid_total, phase_powers,
+                    "Synthetic grid_power from V×I: %.0f W (phases: %s, sofar=%s)",
+                    grid_for_store, phase_powers, is_sofar,
                 )
                 # Also fill per-phase power if missing
                 phase_canonical = [SENSOR_GRID_POWER_L1, SENSOR_GRID_POWER_L2, SENSOR_GRID_POWER_L3]
@@ -441,19 +458,17 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # ── Synthetic load_power from energy balance ──
         if data.get(SENSOR_LOAD_TOTAL) is None:
-            pv = _safe_float(data.get(SENSOR_PV_POWER))
-            batt = _safe_float(data.get(SENSOR_BATTERY_POWER))
             grid = _safe_float(data.get(SENSOR_GRID_POWER_TOTAL))
-            # Energy balance: load = pv + battery_discharge - battery_charge + grid_import - grid_export
-            # With sign convention: battery_power > 0 = discharge, grid_power > 0 = export
-            # load = pv + batt_discharge - grid_export = pv + max(batt,0) - max(grid,0)
-            # OR more accurately: load = pv + batt - grid (where batt+ = discharge, grid+ = export)
+            # GoodWe convention: grid+ = export, grid- = import
+            # Energy balance: load = PV + battery_discharge + grid_import - grid_export
+            #   battery+ = discharge, grid+ = export
+            #   load = pv + batt - grid
             load = pv + batt - grid
-            if load > 0 or (pv > 0 or abs(batt) > 10):
+            if pv > 0 or abs(batt) > 10 or abs(grid) > 10:
                 data[SENSOR_LOAD_TOTAL] = str(round(max(load, 0)))
                 _LOGGER.debug(
-                    "Synthetic load_power: %.0f W (pv=%.0f, batt=%.0f, grid=%.0f)",
-                    max(load, 0), pv, batt, grid,
+                    "Synthetic load_power: %.0f W (pv=%.0f, batt=%.0f, grid=%.0f, sofar=%s)",
+                    max(load, 0), pv, batt, grid, is_sofar,
                 )
 
     def _read_ecowitt_sensors(self) -> dict[str, Any]:
