@@ -38,6 +38,7 @@ from .const import (
     DEFAULT_MODBUS_SLAVE,
     DEFAULT_UPDATE_INTERVAL,
     DEFAULT_SENSOR_MAP,
+    get_sensor_map_defaults,
     DEFAULT_SENSOR_MAP_DEYE,
     DEFAULT_SENSOR_MAP_GROWATT,
     DEFAULT_SENSOR_MAP_SOFAR,
@@ -61,18 +62,6 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-
-def _get_defaults_for_brand(brand: str) -> dict:
-    """Return sensor map defaults based on inverter brand."""
-    if brand == INVERTER_BRAND_DEYE:
-        return DEFAULT_SENSOR_MAP_DEYE
-    if brand == INVERTER_BRAND_GROWATT:
-        return DEFAULT_SENSOR_MAP_GROWATT
-    if brand == INVERTER_BRAND_SOFAR:
-        return DEFAULT_SENSOR_MAP_SOFAR
-    return DEFAULT_SENSOR_MAP
-
 
 def _get_tariff_options(provider: str) -> dict[str, str]:
     """Return tariff selection options based on energy provider."""
@@ -281,7 +270,7 @@ class SmartingHomeConfigFlow(
 
             # Auto-fill sensor_map with brand defaults (skip manual sensor step)
             brand = self._data.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE)
-            defaults = _get_defaults_for_brand(brand)
+            defaults = get_sensor_map_defaults(brand)
             self._data[CONF_SENSOR_MAP] = defaults
 
             # If PRO mode, show AI step; if FREE, create entry now
@@ -336,7 +325,7 @@ class SmartingHomeConfigFlow(
     ) -> FlowResult:
         """Step 4: Sensor mapping — select entities for each logical sensor."""
         brand = self._data.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE)
-        defaults = _get_defaults_for_brand(brand)
+        defaults = get_sensor_map_defaults(brand)
 
         if user_input is not None:
             # Store sensor map — missing keys = cleared by user → ""
@@ -478,7 +467,7 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
         """Sensor mapping step in Options Flow."""
         current = self._config_entry.data
         brand = current.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE)
-        brand_defaults = _get_defaults_for_brand(brand)
+        brand_defaults = get_sensor_map_defaults(brand)
         current_map = current.get(CONF_SENSOR_MAP, brand_defaults)
 
         if user_input is not None:
@@ -679,7 +668,7 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
             )
             new_data = {**current, CONF_INVERTER_BRAND: new_brand}
             # Update sensor map defaults for the new brand
-            brand_defaults = _get_defaults_for_brand(new_brand)
+            brand_defaults = get_sensor_map_defaults(new_brand)
             current_map = dict(new_data.get(CONF_SENSOR_MAP, {}))
             for key in SENSOR_MAP_KEYS:
                 if not current_map.get(key):

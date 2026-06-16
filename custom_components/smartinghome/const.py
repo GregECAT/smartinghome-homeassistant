@@ -1271,3 +1271,13 @@ ICON_AUTARKY: Final = "mdi:shield-sun"
 ICON_FORECAST: Final = "mdi:weather-sunny"
 ICON_RCE: Final = "mdi:chart-line"
 ICON_ARBITRAGE: Final = "mdi:swap-horizontal"
+
+def get_sensor_map_defaults(brand: str) -> dict[str, str]:
+    """Return sensor map defaults based on inverter brand."""
+    if brand == INVERTER_BRAND_DEYE:
+        return DEFAULT_SENSOR_MAP_DEYE
+    if brand == INVERTER_BRAND_GROWATT:
+        return DEFAULT_SENSOR_MAP_GROWATT
+    if brand == INVERTER_BRAND_SOFAR:
+        return DEFAULT_SENSOR_MAP_SOFAR
+    return DEFAULT_SENSOR_MAP

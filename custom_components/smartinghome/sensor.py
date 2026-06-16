@@ -27,6 +27,10 @@ from .const import (
     MANUFACTURER,
     INTEGRATION_NAME,
     VERSION,
+    CONF_INVERTER_BRAND,
+    INVERTER_BRAND_GOODWE,
+    SENSOR_MAP_KEYS,
+    get_sensor_map_defaults,
     CONF_SENSOR_MAP,
     DEFAULT_SENSOR_MAP,
     ICON_PV,
@@ -557,7 +561,16 @@ class SmartingHomeSensorMapSensor(SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the sensor mapping as attributes."""
-        return self._entry.data.get(CONF_SENSOR_MAP) or DEFAULT_SENSOR_MAP
+        user_map = self._entry.data.get(CONF_SENSOR_MAP) or {}
+        brand = self._entry.data.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE)
+        brand_defaults = get_sensor_map_defaults(brand)
+        
+        merged = {}
+        for key in SENSOR_MAP_KEYS:
+            val = user_map.get(key)
+            merged[key] = val if val else brand_defaults.get(key, "")
+            
+        return merged
 
     @property
     def available(self) -> bool:
