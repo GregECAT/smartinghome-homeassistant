@@ -224,7 +224,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._tariff = entry.data.get(CONF_TARIFF, TariffType.G13)
         self._rce_enabled = entry.data.get(CONF_RCE_ENABLED, True)
         self._ecowitt_enabled = entry.data.get(CONF_ECOWITT_ENABLED, False)
-        self._sensor_map = entry.data.get(CONF_SENSOR_MAP, {})
+        self._sensor_map = entry.data.get(CONF_SENSOR_MAP) or DEFAULT_SENSOR_MAP
         self._strategy_controller = None
         self._schedule_manager = None
         self._wind_calendar = None
@@ -1297,6 +1297,24 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             updates["autopilot_decision_log"] = (
                 self._strategy_controller.decision_log[-15:]
             )
+
+        # DEBOUNCE: prevent excessive I/O writes (fixes HA freeze/crash)
+        def _get_hashable(u: dict) -> str:
+            live = dict(u.get("autopilot_live", {}))
+            live.pop("timestamp", None)
+            return str(live) + str(u.get("autopilot_decision_log", []))
+
+        import time
+        current_hash = _get_hashable(updates)
+        now_ts = time.time()
+
+        if hasattr(self, "_last_autopilot_hash") and getattr(self, "_last_autopilot_hash") == current_hash:
+            last_ts = getattr(self, "_last_autopilot_ts", 0)
+            if now_ts - last_ts < 300:
+                return  # Skip write if state hasn't changed and 5 mins haven't passed
+
+        self._last_autopilot_hash = current_hash
+        self._last_autopilot_ts = now_ts
 
         def _do_write() -> None:
             try:

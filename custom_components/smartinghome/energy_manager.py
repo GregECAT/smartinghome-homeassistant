@@ -87,6 +87,8 @@ class EnergyManager:
         self._current_mode = HEMSMode.AUTO
         self._voltage_cascade_active = False
         self._surplus_cascade_active = False
+        self._last_charge_current = None
+        self._last_export_limit = None
 
     @property
     def inverter_brand(self) -> str:
@@ -653,8 +655,13 @@ class EnergyManager:
                 },
             )
 
-    async def _set_charge_current(self, value: str) -> None:
-        """Set battery charge current (GoodWe only, Sofar uses power limits)."""
+    async def _set_charge_current(self, value: int | str) -> None:
+        """Set battery charge current."""
+        value_str = str(value)
+        if self._last_charge_current == value_str:
+            return
+        self._last_charge_current = value_str
+
         if self._is_sofar:
             # Sofar doesn't use current — convert to approximate power
             try:
@@ -676,6 +683,10 @@ class EnergyManager:
 
     async def _set_export_limit(self, limit: int) -> None:
         """Set grid export limit."""
+        if self._last_export_limit == limit:
+            return
+        self._last_export_limit = limit
+
         if self._is_sofar:
             await self._sofar_set_export_limit(limit)
         else:

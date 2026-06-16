@@ -557,7 +557,7 @@ class SmartingHomeSensorMapSensor(SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the sensor mapping as attributes."""
-        return self._entry.data.get(CONF_SENSOR_MAP, DEFAULT_SENSOR_MAP)
+        return self._entry.data.get(CONF_SENSOR_MAP) or DEFAULT_SENSOR_MAP
 
     @property
     def available(self) -> bool:
