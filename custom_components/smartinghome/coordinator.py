@@ -90,9 +90,16 @@ from .const import (
     RCETrend,
     DEFAULT_BATTERY_CAPACITY,
     DEFAULT_BATTERY_MIN_SOC,
+    CONF_INVERTER_BRAND,
+    INVERTER_BRAND_GOODWE,
+    SENSOR_MAP_KEYS,
+    CONF_INVERTER_BRAND,
+    INVERTER_BRAND_GOODWE,
+    SENSOR_MAP_KEYS,
     CONF_ECOWITT_ENABLED,
     CONF_SENSOR_MAP,
     DEFAULT_SENSOR_MAP,
+    get_sensor_map_defaults,
     CONF_ENERGY_PROVIDER,
     DEFAULT_ENERGY_PROVIDER,
     DYNAMIC_PRICE_THRESHOLDS,
@@ -224,7 +231,16 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._tariff = entry.data.get(CONF_TARIFF, TariffType.G13)
         self._rce_enabled = entry.data.get(CONF_RCE_ENABLED, True)
         self._ecowitt_enabled = entry.data.get(CONF_ECOWITT_ENABLED, False)
-        self._sensor_map = entry.data.get(CONF_SENSOR_MAP) or DEFAULT_SENSOR_MAP
+        
+        user_map = entry.data.get(CONF_SENSOR_MAP) or {}
+        brand = entry.data.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE)
+        brand_defaults = get_sensor_map_defaults(brand)
+        
+        self._sensor_map = {}
+        for key in SENSOR_MAP_KEYS:
+            val = user_map.get(key)
+            self._sensor_map[key] = val if val else brand_defaults.get(key, "")
+            
         self._strategy_controller = None
         self._schedule_manager = None
         self._wind_calendar = None
