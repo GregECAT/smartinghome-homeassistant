@@ -17,7 +17,8 @@ from homeassistant.const import (
     UnitOfFrequency,
     UnitOfPower,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -533,12 +534,50 @@ class SmartingHomeSensorMapSensor(SensorEntity):
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:map-legend"
+    _unrecorded_attributes = frozenset({"entity_ids"})
 
     def __init__(self, entry: ConfigEntry) -> None:
         """Initialize sensor map entity."""
         self._entry = entry
         self._attr_unique_id = f"{DOMAIN}_{entry.entry_id}_sensor_map"
         self._attr_name = "Sensor Map"
+        self._entity_ids: dict[str, str] = {}
+
+    def _resolve_entity_ids(self) -> dict[str, str]:
+        """Map description key → actual entity_id via unique_id.
+
+        Entity IDs are slugified from device + entity name (e.g.
+        sensor.smarting_home_energy_management_rce_sell_price_1h), so they
+        differ from description keys and change when the user renames them.
+        Panel.js uses this map to always read the integration's own sensors.
+        """
+        registry = er.async_get(self.hass)
+        result: dict[str, str] = {}
+        for description in HEMS_SENSOR_DESCRIPTIONS:
+            entity_id = registry.async_get_entity_id(
+                "sensor", DOMAIN, f"{DOMAIN}_{self._entry.entry_id}_{description.key}"
+            )
+            if entity_id:
+                result[description.key] = entity_id
+        return result
+
+    async def async_added_to_hass(self) -> None:
+        """Track entity registry so entity_ids stays current (startup, renames)."""
+        await super().async_added_to_hass()
+        self._entity_ids = self._resolve_entity_ids()
+
+        @callback
+        def _registry_updated(event: Event) -> None:
+            entity_ids = self._resolve_entity_ids()
+            if entity_ids != self._entity_ids:
+                self._entity_ids = entity_ids
+                self.async_write_ha_state()
+
+        self.async_on_remove(
+            self.hass.bus.async_listen(
+                er.EVENT_ENTITY_REGISTRY_UPDATED, _registry_updated
+            )
+        )
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -569,7 +608,8 @@ class SmartingHomeSensorMapSensor(SensorEntity):
         for key in SENSOR_MAP_KEYS:
             val = user_map.get(key)
             merged[key] = val if val else brand_defaults.get(key, "")
-            
+
+        merged["entity_ids"] = self._entity_ids
         return merged
 
     @property

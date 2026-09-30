@@ -216,6 +216,11 @@ class SmartingHomePanel extends HTMLElement {
     // Check local overrides from entity picker first
     const override = this._sensorMapOverrides?.[k];
     if (override) return override;
+    this._discoverSensorMap();
+    const m = this._sensorMapAttrs;
+    return m?.[k] || SmartingHomePanel.DM[k] || '';
+  }
+  _discoverSensorMap() {
     // Dynamic discovery: find sensor_map entity by suffix (HA slugifies device name)
     if (!this._sensorMapAttrs && this._hass?.states) {
       for (const eid of Object.keys(this._hass.states)) {
@@ -229,8 +234,6 @@ class SmartingHomePanel extends HTMLElement {
         }
       }
     }
-    const m = this._sensorMapAttrs;
-    return m?.[k] || SmartingHomePanel.DM[k] || '';
   }
   _s(id) { return id && this._hass?.states[id] ? this._hass.states[id].state : null; }
   _n(id) {
@@ -293,6 +296,42 @@ class SmartingHomePanel extends HTMLElement {
       }
     }
     return null;
+  }
+  /* ── Smarting HOME integration entities ─────────
+     Entity IDs are slugified from the device name (sensor.smarting_home_energy_management_…)
+     and some differ from description keys — resolve via sensor_map.entity_ids (by unique_id). */
+  static SH_NAME_ALIASES = {
+    rce_sell_price_next_hour: "rce_sell_price_1h",
+    g13_rce_spread: "g13_vs_rce_spread",
+    rce_good_sell: "rce_sell_evaluation",
+    hems_rce_recommendation: "hems_recommendation",
+  };
+  _shId(key) {
+    const states = this._hass?.states;
+    if (!states) return null;
+    this._discoverSensorMap();
+    const mapped = this._sensorMapEntity && states[this._sensorMapEntity]?.attributes?.entity_ids?.[key];
+    if (mapped && states[mapped]) return mapped;
+    // Fallback for backends without entity_ids: scan registry for our platform by name-derived suffix
+    if (!this._shIdCache) this._shIdCache = {};
+    const cached = this._shIdCache[key];
+    if (cached && states[cached]) return cached;
+    const ents = this._hass.entities;
+    if (!ents) return null;
+    const suffix = `_${SmartingHomePanel.SH_NAME_ALIASES[key] || key}`;
+    for (const eid in ents) {
+      if (ents[eid].platform === "smartinghome" && eid.startsWith("sensor.") && eid.endsWith(suffix) && states[eid]) {
+        this._shIdCache[key] = eid;
+        return eid;
+      }
+    }
+    return null;
+  }
+  _shN(key) { const id = this._shId(key); return id ? this._n(id) : null; }
+  _shS(key) {
+    const id = this._shId(key);
+    const v = id ? this._s(id) : null;
+    return (v === null || v === "unavailable" || v === "unknown") ? null : v;
   }
   _setText(id, val) { const el = this.shadowRoot.getElementById(id); if (el) el.textContent = val; }
   _callService(domain, service, data = {}) { if (this._hass) this._hass.callService(domain, service, data); }
@@ -1121,13 +1160,6 @@ class SmartingHomePanel extends HTMLElement {
     const v = parseFloat(val) || 0;
     this._savePanelSettings({ roi_investment: v });
     this._updateRoi();
-  }
-
-  _n(entityId) {
-    const state = this._hass?.states[entityId];
-    if (!state || state.state === "unavailable" || state.state === "unknown") return null;
-    const v = parseFloat(state.state);
-    return isNaN(v) ? null : v;
   }
 
   // ═══════ ROI SIMULATION ENGINE ═══════
@@ -4001,7 +4033,7 @@ class SmartingHomePanel extends HTMLElement {
     if (rceSell > 0.5 && expToday > 0) tariffScore = Math.min(100, tariffScore + 20);
 
     // ── Factor 5: PV yield vs forecast (15%)
-    const forecastToday = this._n("sensor.smartinghome_pv_forecast_today_total") || 0;
+    const forecastToday = this._shN("pv_forecast_today_total") || 0;
     let pvYieldScore = 50; // neutral default
     if (forecastToday > 0 && pvToday > 0) {
       pvYieldScore = Math.min(100, (pvToday / forecastToday) * 100);
@@ -5827,7 +5859,7 @@ class SmartingHomePanel extends HTMLElement {
     // PV underperformance (solar hours only, needs irradiance or forecast)
     if (isSolarHours && pvPower !== null) {
       // Use forecast as expected if available
-      const forecastState = this._hass?.states?.['sensor.smartinghome_pv_forecast_power_now_total'];
+      const forecastState = this._hass?.states?.[this._shId('pv_forecast_power_now_total')];
       const expectedPv = forecastState ? parseFloat(forecastState.state) : null;
 
       if (expectedPv && expectedPv > 500 && pvPower < expectedPv * 0.65) {
@@ -6157,7 +6189,7 @@ class SmartingHomePanel extends HTMLElement {
     const pv2 = this._nm('pv2_power');
     this._setText('at-pv-power', pvPower !== null ? this._pw(pvPower) : '—');
     // Expected from forecast
-    const fcState = this._hass?.states?.['sensor.smartinghome_pv_forecast_power_now_total'];
+    const fcState = this._hass?.states?.[this._shId('pv_forecast_power_now_total')];
     const expected = fcState ? parseFloat(fcState.state) : null;
     this._setText('at-pv-expected', expected ? this._pw(expected) : '—');
     // String delta (now shows absolute diff, informational only)
@@ -7906,7 +7938,7 @@ class SmartingHomePanel extends HTMLElement {
   _updateStats() {
     // HEMS recommendation — only overwrite if no AI content loaded
     if (!this._aiHemsLoaded) {
-      this._setText("v-hems-rec", this._s("sensor.smartinghome_hems_recommendation") || "Brak danych");
+      this._setText("v-hems-rec", this._shS("hems_rce_recommendation") || this._s("sensor.hems_rce_recommendation") || "Brak danych");
     }
     // License
     const badge = this.shadowRoot.getElementById("v-license");
@@ -7951,27 +7983,44 @@ class SmartingHomePanel extends HTMLElement {
     const ovBalText = this.shadowRoot.getElementById("ov-balance");
     if (ovBalCard) { ovBalCard.style.borderColor = ovBal >= 0 ? "#2ecc71" : "#e74c3c"; ovBalCard.style.background = ovBal >= 0 ? "rgba(46,204,113,0.08)" : "rgba(231,76,60,0.08)"; }
     if (ovBalText) ovBalText.style.color = ovBal >= 0 ? "#2ecc71" : "#e74c3c";
-    // RCE / Tariff — G13 Zone Badge
-    const g13Zone = this._s("sensor.smartinghome_g13_current_zone") || this._s("sensor.g13_current_zone") || "—";
-    const g13Badge = this.shadowRoot.getElementById("v-g13-zone-badge");
-    if (g13Badge) {
-      g13Badge.textContent = g13Zone.toUpperCase();
-      const isPeak = g13Zone.toLowerCase().includes("szczytow") && !g13Zone.toLowerCase().includes("poza");
-      g13Badge.className = `status-badge ${isPeak ? 'peak' : 'offpeak'}`;
-    }
-    
+    // ═══ RCE / Tariff ═══
+    // Source of truth: Smarting HOME integration sensors (resolved via _shId).
+    // Fallback: raw RCE PSE v2 sensors. Legacy YAML template sensors (sensor.rce_*) are NOT
+    // used — they are frozen at HA start on many installs and showed stale values.
+    // All zł/kWh values are prosumer sell prices (RCE × 1.23), incl. the big "RCE teraz" tile.
+    const RCE_COEF = 1.23;
+    const toSell = (mwh) => (mwh === null ? null : mwh / 1000 * RCE_COEF);
+    const rcePseState = this._hass?.states?.["sensor.rce_pse_cena"];
+    const rcePrices = Array.isArray(rcePseState?.attributes?.prices) ? rcePseState.attributes.prices : null;
+    // RCE PSE v2 entry: { dtime: period END "YYYY-MM-DD HH:MM:SS", period: "HH:MM - HH:MM", rce_pln }
+    const _entryStartHour = (p) => {
+      const h = parseInt(String(p.period || "").substring(0, 2), 10);
+      if (!isNaN(h)) return h;
+      const d = new Date(String(p.dtime || "").replace(" ", "T"));
+      return isNaN(d) ? NaN : new Date(d.getTime() - 60000).getHours();
+    };
+    const _priceMwhAt = (ts) => {
+      if (!rcePrices) return null;
+      for (const p of rcePrices) {
+        const end = new Date(String(p.dtime || "").replace(" ", "T"));
+        if (!isNaN(end) && end.getTime() > ts) {
+          const v = parseFloat(p.rce_pln);
+          return isNaN(v) ? null : v;
+        }
+      }
+      return null;
+    };
+
     // G13 Price
-    const g13Price = this._n("sensor.smartinghome_g13_buy_price") ?? this._n("sensor.g13_buy_price");
+    const g13Price = this._shN("g13_buy_price") ?? this._n("sensor.g13_buy_price");
     this._setText("v-g13-price-tab", g13Price !== null ? `${g13Price.toFixed(2)} zł/kWh` : "— zł/kWh");
-    
-    // RCE Sell price — v2: compute fallback from rce_pse_cena if coordinator sensor unavailable
-    let rceSell = this._n("sensor.smartinghome_rce_sell_price") ?? this._n("sensor.rce_sell_price");
-    if (rceSell === null || rceSell === 0) {
-      const rceMwhRaw = this._n("sensor.rce_pse_cena");
-      if (rceMwhRaw !== null && rceMwhRaw > 0) rceSell = rceMwhRaw / 1000 * 1.23;
-    }
+
+    // RCE now — sell price (zł/kWh) + raw market price (PLN/MWh)
+    const rceNowMwh = this._n("sensor.rce_pse_cena");
+    let rceSell = this._shN("rce_sell_price");
+    if (rceSell === null || (rceSell === 0 && rceNowMwh)) rceSell = toSell(rceNowMwh);
     this._setText("v-rce-sell", rceSell !== null ? `${rceSell.toFixed(4)} zł/kWh` : "— zł/kWh");
-    
+
     // Spread G13↔RCE
     if (g13Price !== null && rceSell !== null) {
       const spread = g13Price - rceSell;
@@ -7982,40 +8031,36 @@ class SmartingHomePanel extends HTMLElement {
       }
     }
 
-    // RCE Now (big card, zł/kWh) — v2: cena_za_kwh removed, compute from MWh
-    const rceNowMwh = this._n("sensor.rce_pse_cena");
-    const rceNowKwh = (rceNowMwh !== null) ? rceNowMwh / 1000 : rceSell;
     const rceNowEl = this.shadowRoot.getElementById("v-rce-now");
-    if (rceNowEl && rceNowKwh !== null) {
-      rceNowEl.textContent = `${rceNowKwh.toFixed(4)} zł`;
-      rceNowEl.style.color = rceNowKwh > 0.6 ? "#2ecc71" : rceNowKwh > 0.3 ? "#f7b731" : rceNowKwh < 0 ? "#a855f7" : "#e74c3c";
+    if (rceNowEl) {
+      rceNowEl.textContent = rceSell !== null ? `${rceSell.toFixed(2)} zł` : "—";
+      if (rceSell !== null) rceNowEl.style.color = rceSell > 0.6 ? "#2ecc71" : rceSell > 0.3 ? "#f7b731" : rceSell < 0 ? "#a855f7" : "#e74c3c";
     }
-    this._setText("v-rce-now-mwh", rceNowMwh !== null ? `${rceNowMwh.toFixed(1)} PLN/MWh` : "— PLN/MWh");
+    this._setText("v-rce-now-mwh", rceNowMwh !== null ? `zł/kWh · rynek ${rceNowMwh.toFixed(1)} PLN/MWh` : "zł/kWh");
 
     // RCE +1h, +2h, +3h
-    const rce1h = this._n("sensor.rce_sell_price_next_hour") ?? this._n("sensor.smartinghome_rce_sell_price_next_hour");
-    const rce2h = this._n("sensor.rce_sell_price_2h") ?? this._n("sensor.smartinghome_rce_sell_price_2h");
-    const rce3h = this._n("sensor.rce_sell_price_3h") ?? this._n("sensor.smartinghome_rce_sell_price_3h");
+    const nowTs = Date.now();
+    const rce1h = this._shN("rce_sell_price_next_hour") ?? toSell(this._n("sensor.rce_pse_cena_nastepny_okres"));
+    const rce2h = this._shN("rce_sell_price_2h") ?? toSell(_priceMwhAt(nowTs + 2 * 3600000));
+    const rce3h = this._shN("rce_sell_price_3h") ?? toSell(_priceMwhAt(nowTs + 3 * 3600000));
     this._setText("v-rce-1h", rce1h !== null ? rce1h.toFixed(2) : "—");
     this._setText("v-rce-2h", rce2h !== null ? rce2h.toFixed(2) : "—");
     this._setText("v-rce-3h", rce3h !== null ? rce3h.toFixed(2) : "—");
 
-    // RCE Statistics
-    const rceAvg = this._n("sensor.rce_average_today") ?? this._n("sensor.smartinghome_rce_average_today");
-    const rceMin = this._n("sensor.rce_min_today") ?? this._n("sensor.smartinghome_rce_min_today");
-    const rceMax = this._n("sensor.rce_max_today") ?? this._n("sensor.smartinghome_rce_max_today");
+    // RCE Statistics (zł/kWh, sell price)
+    const rceAvg = this._shN("rce_average_today") ?? toSell(this._n("sensor.rce_pse_srednia_cena_dzisiaj"));
+    const rceMin = this._shN("rce_min_today") ?? toSell(this._n("sensor.rce_pse_minimalna_cena_dzisiaj"));
+    const rceMax = this._shN("rce_max_today") ?? toSell(this._n("sensor.rce_pse_maksymalna_cena_dzisiaj"));
     this._setText("v-rce-avg2", rceAvg !== null ? rceAvg.toFixed(2) : "—");
     this._setText("v-rce-min", rceMin !== null ? rceMin.toFixed(2) : "—");
     this._setText("v-rce-max", rceMax !== null ? rceMax.toFixed(2) : "—");
 
-    // vs Średnia — computed locally: (current - avg) / avg * 100
+    // vs Średnia — both sides in sell price (zł/kWh)
     {
       const vsAvgEl = this.shadowRoot.getElementById("v-rce-vs-avg");
       let rceVsAvg = null;
-      if (rceNowMwh !== null && rceAvg !== null && rceAvg !== 0) {
-        // rceNowMwh is PLN/MWh, rceAvg is already in zł/kWh (prosumer). Convert rceNow to same unit
-        const rceNowSell = rceNowMwh / 1000 * 1.23;
-        rceVsAvg = ((rceNowSell - rceAvg) / rceAvg) * 100;
+      if (rceSell !== null && rceAvg !== null && rceAvg !== 0) {
+        rceVsAvg = ((rceSell - rceAvg) / Math.abs(rceAvg)) * 100;
       }
       if (vsAvgEl && rceVsAvg !== null) {
         vsAvgEl.textContent = `${rceVsAvg > 0 ? '+' : ''}${rceVsAvg.toFixed(1)}%`;
@@ -8024,8 +8069,13 @@ class SmartingHomePanel extends HTMLElement {
       }
     }
 
-    // Trend — enum values: "rising", "falling", "stable"
-    const rceTrend = this._s("sensor.smartinghome_rce_price_trend") || this._s("sensor.rce_price_trend") || "stable";
+    // Trend — enum values: "rising", "falling", "stable" (fallback: next period vs now, ±10%)
+    let rceTrend = this._shS("rce_price_trend");
+    if (!rceTrend) {
+      const nextMwh = this._n("sensor.rce_pse_cena_nastepny_okres");
+      const chg = (rceNowMwh > 0 && nextMwh !== null) ? (nextMwh - rceNowMwh) / rceNowMwh * 100 : 0;
+      rceTrend = chg > 10 ? "rising" : chg < -10 ? "falling" : "stable";
+    }
     const trendEl = this.shadowRoot.getElementById("v-rce-trend2");
     if (trendEl) {
       if (rceTrend === "rising") { trendEl.textContent = "📈"; this._setText("v-rce-trend-label", "Rośnie — warto czekać"); }
@@ -8033,65 +8083,55 @@ class SmartingHomePanel extends HTMLElement {
       else { trendEl.textContent = "➖"; this._setText("v-rce-trend-label", "Stabilny"); }
     }
 
-    // Time Windows — compute from 96-point prices attribute (v2)
-    // Helper: find cheapest/most expensive consecutive hour block from price entries
+    // Time Windows — cheapest / most expensive full hour from the 96-point prices attribute
     const _findWindows = (pricesAttr) => {
-      if (!pricesAttr || !Array.isArray(pricesAttr) || pricesAttr.length === 0) return { cheap: "—", expensive: "—" };
-      // Group by hour and find min/max average price
+      if (!Array.isArray(pricesAttr) || pricesAttr.length === 0) return { cheap: "—", expensive: "—" };
       const hourMap = {};
       for (const p of pricesAttr) {
-        try {
-          const dt = p.dtime || p.period || p.time || "";
-          const hour = parseInt(String(dt).substring(11, 13), 10);
-          if (isNaN(hour)) continue;
-          if (!hourMap[hour]) hourMap[hour] = [];
-          hourMap[hour].push(parseFloat(p.rce_pln || p.price || p.value) || 0);
-        } catch(e) { continue; }
+        const hour = _entryStartHour(p);
+        const v = parseFloat(p.rce_pln ?? p.price ?? p.value);
+        if (isNaN(hour) || isNaN(v)) continue;
+        (hourMap[hour] = hourMap[hour] || []).push(v);
       }
       let minHour = -1, maxHour = -1, minAvg = Infinity, maxAvg = -Infinity;
       for (const [h, vals] of Object.entries(hourMap)) {
-        const avg = vals.reduce((a,b) => a+b, 0) / vals.length;
-        if (avg < minAvg) { minAvg = avg; minHour = parseInt(h); }
-        if (avg > maxAvg) { maxAvg = avg; maxHour = parseInt(h); }
+        const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+        if (avg < minAvg) { minAvg = avg; minHour = parseInt(h, 10); }
+        if (avg > maxAvg) { maxAvg = avg; maxHour = parseInt(h, 10); }
       }
-      const fmt = (h) => `${String(h).padStart(2,'0')}:00 – ${String((h+1)%24).padStart(2,'0')}:00`;
-      const fmtPrice = (v) => `${(v/1000*1.23).toFixed(2)} zł`;
+      const fmt = (h) => `${String(h).padStart(2, '0')}:00 – ${String((h + 1) % 24).padStart(2, '0')}:00`;
+      const fmtPrice = (v) => `${toSell(v).toFixed(2)} zł`;
       return {
         cheap: minHour >= 0 ? `${fmt(minHour)} (${fmtPrice(minAvg)})` : "—",
         expensive: maxHour >= 0 ? `${fmt(maxHour)} (${fmtPrice(maxAvg)})` : "—",
       };
     };
-    // Today windows — try multiple attribute names for v2 compatibility
     {
-      const rcePriceState = this.hass && this.hass.states ? this.hass.states["sensor.rce_pse_cena"] : null;
-      const attrs = rcePriceState && rcePriceState.attributes ? rcePriceState.attributes : {};
-      const todayPrices = attrs.prices || attrs.forecast || attrs.price_list || null;
-      const todayWindows = _findWindows(todayPrices);
+      const attrs = rcePseState?.attributes || {};
+      const todayWindows = _findWindows(attrs.prices || attrs.forecast || attrs.price_list || null);
       this._setText("v-cheapest-window", todayWindows.cheap);
       this._setText("v-expensive-window", todayWindows.expensive);
     }
     this._setText("v-kompas", this._s("sensor.rce_pse_kompas_energetyczny_dzisiaj") || "—");
 
     // RCE Grade
-    const rceGrade = this._s("sensor.rce_good_sell") || this._s("sensor.smartinghome_rce_good_sell") || "—";
+    const rceGrade = this._shS("rce_good_sell") || "—";
     const gradeEl = this.shadowRoot.getElementById("v-rce-grade");
     if (gradeEl) {
-      const gradeMap = { excellent: { t: "🟢 EXCELLENT", c: "#2ecc71" }, good: { t: "🟡 GOOD", c: "#f7b731" }, poor: { t: "🟠 POOR", c: "#e67e22" }, terrible: { t: "🔴 TERRIBLE", c: "#e74c3c" } };
+      const gradeMap = { excellent: { t: "🟢 EXCELLENT", c: "#2ecc71" }, good: { t: "🟡 GOOD", c: "#f7b731" }, normal: { t: "⚪ NORMAL", c: "#94a3b8" }, poor: { t: "🟠 POOR", c: "#e67e22" }, terrible: { t: "🔴 TERRIBLE", c: "#e74c3c" } };
       const g = gradeMap[rceGrade.toLowerCase()] || { t: rceGrade.toUpperCase(), c: "#94a3b8" };
       gradeEl.textContent = g.t; gradeEl.style.color = g.c;
     }
 
     // RCE median + tomorrow stats
     const rceMedianMwh = this._n("sensor.rce_pse_mediana_cen_dzisiaj");
-    this._setText("v-rce-median", rceMedianMwh !== null ? `${(rceMedianMwh / 1000 * 1.23).toFixed(4)} zł` : "— zł");
+    this._setText("v-rce-median", rceMedianMwh !== null ? `${toSell(rceMedianMwh).toFixed(4)} zł` : "— zł");
     const rceAvgTomorrowMwh = this._n("sensor.rce_pse_srednia_cena_jutro");
-    this._setText("v-rce-avg-tomorrow", rceAvgTomorrowMwh !== null ? `${(rceAvgTomorrowMwh / 1000 * 1.23).toFixed(4)} zł` : "— zł");
+    this._setText("v-rce-avg-tomorrow", rceAvgTomorrowMwh !== null ? `${toSell(rceAvgTomorrowMwh).toFixed(4)} zł` : "— zł");
     const rceTomorrowVs = this._n("sensor.rce_pse_jutro_vs_dzisiaj_srednia");
     this._setText("v-rce-tomorrow-vs", rceTomorrowVs !== null ? `${rceTomorrowVs > 0 ? '+' : ''}${rceTomorrowVs.toFixed(1)}%` : "—%");
-    // Tomorrow windows — compute from rce_pse_cena_jutro prices attribute
     {
-      const rceTomorrowState = this.hass && this.hass.states ? this.hass.states["sensor.rce_pse_cena_jutro"] : null;
-      const tomorrowPrices = rceTomorrowState && rceTomorrowState.attributes ? rceTomorrowState.attributes.prices : null;
+      const tomorrowPrices = this._hass?.states?.["sensor.rce_pse_cena_jutro"]?.attributes?.prices;
       const tomorrowWindows = _findWindows(tomorrowPrices);
       this._setText("v-cheapest-tomorrow", tomorrowWindows.cheap);
       this._setText("v-expensive-tomorrow", tomorrowWindows.expensive);
@@ -8099,7 +8139,7 @@ class SmartingHomePanel extends HTMLElement {
 
     // HEMS Recommendation (tariff tab) — skip if AI content already loaded
     if (!this._aiTariffLoaded) {
-      this._setText("v-hems-rec-tariff", this._s("sensor.hems_rce_recommendation") || this._s("sensor.smartinghome_hems_recommendation") || "—");
+      this._setText("v-hems-rec-tariff", this._shS("hems_rce_recommendation") || this._s("sensor.hems_rce_recommendation") || "—");
     }
 
     // Economics
@@ -8115,11 +8155,11 @@ class SmartingHomePanel extends HTMLElement {
     const netEl = this.shadowRoot.getElementById("v-net-balance");
     if (netEl) { netEl.textContent = netBal.toFixed(2); netEl.style.color = netBal >= 0 ? "#2ecc71" : "#e74c3c"; }
     
-    const ftoday = this._n("sensor.smartinghome_pv_forecast_today_total")
+    const ftoday = this._shN("pv_forecast_today_total")
       ?? this._n("sensor.energy_production_today")
       ?? this._n("sensor.solcast_pv_forecast_today")
       ?? this._n("sensor.forecast_solar_energy_production_today");
-    const ftomor = this._n("sensor.smartinghome_pv_forecast_tomorrow_total")
+    const ftomor = this._shN("pv_forecast_tomorrow_total")
       ?? this._n("sensor.energy_production_tomorrow")
       ?? this._n("sensor.solcast_pv_forecast_tomorrow")
       ?? this._n("sensor.forecast_solar_energy_production_tomorrow");
@@ -8421,7 +8461,7 @@ class SmartingHomePanel extends HTMLElement {
     
     // AI Rec Tab — skip if AI content already loaded
     if (!this._aiHemsTabLoaded) {
-      this._setText("v-hems-rec-hems", this._s("sensor.smartinghome_hems_recommendation") || "Brak danych z asystenta AI.");
+      this._setText("v-hems-rec-hems", this._shS("hems_rce_recommendation") || this._s("sensor.hems_rce_recommendation") || "Brak danych z asystenta AI.");
     }
     
     // Voltage Bars update
@@ -8566,7 +8606,7 @@ class SmartingHomePanel extends HTMLElement {
       if (pvHomeBar) pvHomeBar.style.width = `${enPvHomePct}%`;
     }
     // Forecast accuracy: actual / forecast * 100
-    const fTodayVal = this._n("sensor.smartinghome_pv_forecast_today_total")
+    const fTodayVal = this._shN("pv_forecast_today_total")
       ?? this._n("sensor.energy_production_today")
       ?? this._n("sensor.solcast_pv_forecast_today")
       ?? this._n("sensor.forecast_solar_energy_production_today");
@@ -13968,7 +14008,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.56.5</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.56.6</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -14571,7 +14611,7 @@ class SmartingHomePanel extends HTMLElement {
     const reserveKwh = Math.max(0, (sellTarget - 5) / 100 * batCapKwh); // 5% = hardware min
 
     // Revenue estimate — use current RCE
-    const rceState = this._hass?.states['sensor.smartinghome_rce_price'];
+    const rceState = this._hass?.states['sensor.rce_pse_cena'];
     const rceMwh = rceState ? parseFloat(rceState.state) || 500 : 500;
     const rceSellKwh = rceMwh / 1000 * 1.23; // prosumer coefficient
     const revenue = sellKwh * rceSellKwh;
