@@ -108,7 +108,7 @@ class AIAdvisor:
     # ── Setup / config ────────────────────────────────────────────────
 
     async def async_setup(self) -> None:
-        """Load secrets, migrate keys out of www/settings.json, load config."""
+        """Load secrets, migrate keys out of settings.json, load config."""
         await self.secrets.async_load()
         from .settings_io import read_async, write_async
 
@@ -126,11 +126,11 @@ class AIAdvisor:
             or legacy_file.get("anthropic_api_key")
             or self._legacy_keys[PROVIDER_ANTHROPIC],
         })
-        # www/ is served without authentication — never keep secrets there
+        # Secrets belong in AISecrets only (settings were public in www/ before v1.58.0)
         leaked = [k for k in ("gemini_api_key", "anthropic_api_key", "openrouter_api_key") if settings.get(k)]
         if leaked:
             await write_async(self.hass, {k: "" for k in leaked})
-            _LOGGER.warning("Moved AI API keys out of www/smartinghome/settings.json: %s", leaked)
+            _LOGGER.warning("Moved AI API keys out of settings.json: %s", leaked)
         if imported:
             _LOGGER.info("AI keys imported into private storage")
         self.apply_settings(settings)
