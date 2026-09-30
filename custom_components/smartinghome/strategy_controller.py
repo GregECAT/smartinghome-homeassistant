@@ -15,6 +15,20 @@ from datetime import datetime, timedelta
 from typing import Any, TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
+
+from .arbitrage import (
+    ACT_CHARGE_GRID,
+    ACT_DISCHARGE,
+    ACT_HOLD,
+    ACT_PV_CHARGE,
+    ACTION_LABELS,
+    ArbitragePlan,
+    ArbitrageParams,
+    build_inputs,
+    optimize,
+    rce_hourly,
+)
 
 if TYPE_CHECKING:
     from .ai_advisor import AIAdvisor
@@ -291,6 +305,21 @@ class StrategyController:
         self._peak_sell_soc_percent: int = DEFAULT_PEAK_SELL_SOC_PERCENT
         self._peak_sell_phase: str = ""  # "sell" or "reserve" — tracks current phase
         self._peak_sell_soc_at_entry: float = 0.0  # SOC when entering peak zone
+
+        # ── Arbitrage planner (💰 Max Zysk) ──
+        self._arb_params = ArbitrageParams()
+        self._arb_plan: ArbitragePlan | None = None
+        self._arb_plan_ts: float = 0.0
+        self._arb_plan_key: tuple = ()
+        self._arb_cmd: tuple[str, int] | None = None
+        self._arb_cmd_ts: float = 0.0
+        self._arb_status: dict[str, Any] = {}
+        self._load_profile: list[float | None] = [None] * 24  # kW per hour of day
+        self._load_profile_loaded: bool = False
+        self._load_profile_hour: int = -1
+
+        # ── Manual hold: panel force buttons pause the autopilot ──
+        self._manual_hold_until: float = 0.0
 
         # InverterAgent — state-aware command executor
         self._inverter_agent = InverterAgent(
@@ -823,6 +852,24 @@ class StrategyController:
                     source = "PV-only" if pv > 100 else "sieć"
                     self._log_decision("soc_emergency", f"SOC={soc:.0f}% < {soc_emergency_threshold}% — ładowanie awaryjne [{source}]")
 
+        # Manual command from the panel → only emergency layers until the hold ends
+        if self.manual_hold_active:
+            mins = int((self._manual_hold_until - time.time()) / 60) + 1
+            actions_taken.append(f"✋ Sterowanie ręczne — autopilot wstrzymany jeszcze ~{mins} min")
+            return {
+                "enabled": True,
+                "strategy": strategy.value,
+                "strategy_label": AUTOPILOT_STRATEGY_LABELS.get(strategy, ""),
+                "actions": actions_taken,
+                "soc": soc, "pv": pv, "load": load, "surplus": surplus,
+                "g13_zone": g13_zone.value, "g13_price": g13_price,
+                "rce_price_mwh": rce_mwh, "ai_reasoning": "",
+                "timestamp": now.strftime("%H:%M:%S"),
+                "action_states": self._get_action_states_for_ai(),
+                "manual_hold_until": self._manual_hold_until,
+                "arbitrage": self._arb_status if strategy == AutopilotStrategy.MAX_PROFIT else None,
+            }
+
         # W0: Grid Import Guard
         w0_actions = await self._execute_w0_grid_import_guard(
             soc, pv, load, grid, g13_zone, g13_price, rce_mwh, hour,
@@ -949,6 +996,8 @@ class StrategyController:
             "ai_reasoning": ai_reasoning,
             "timestamp": now.strftime("%H:%M:%S"),
             "action_states": self._get_action_states_for_ai(),
+            "manual_hold_until": 0,
+            "arbitrage": self._arb_status if strategy == AutopilotStrategy.MAX_PROFIT else None,
         }
 
     async def execute_safety_only(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -1087,7 +1136,7 @@ class StrategyController:
 
             # W2: RCE Dynamic
             "night_arbitrage": (
-                22 <= hour or hour < 7
+                (22 <= hour or hour < 7)
                 and soc < 50
                 and forecast_tomorrow < NIGHT_ARBITRAGE_MIN_FORECAST
             ),
@@ -1268,6 +1317,10 @@ class StrategyController:
         """
         actions: list[str] = []
 
+        # Deliberate grid charging (arbitrage, manual, W3), holding or selling
+        if self._em.intent in ("charge_grid", "hold", "sell") or self.manual_hold_active:
+            return actions
+
         # ══════════════════════════════════════════════════════════
         # GUARD NADRZĘDNY: Zero Grid Import gdy SOC > 5%
         # ══════════════════════════════════════════════════════════
@@ -1424,135 +1477,6 @@ class StrategyController:
     #  PEAK SELL — Active energy export during expensive peak
     # ==================================================================
 
-    async def _execute_peak_sell(
-        self,
-        soc: float, pv: float, load: float,
-        g13_zone: G13Zone, rce_mwh: float,
-        hour: int, minute: int,
-    ) -> list[str]:
-        """Active energy selling to grid during AFTERNOON_PEAK.
-
-        Divides available battery capacity:
-        - Sell portion: force_discharge (export to grid at RCE price)
-        - Reserve portion: set_general (battery powers home)
-
-        User configures `_peak_sell_soc_percent` (default 50%).
-        """
-        actions: list[str] = []
-
-        # Skip if user disabled peak sell
-        if self._peak_sell_soc_percent <= 0:
-            return actions
-
-        # Only active during AFTERNOON_PEAK (most expensive zone)
-        if g13_zone != G13Zone.AFTERNOON_PEAK:
-            # Reset tracking when leaving peak zone
-            if self._peak_sell_phase:
-                self._peak_sell_phase = ""
-                self._peak_sell_soc_at_entry = 0.0
-            return actions
-
-        # Record SOC at peak entry (once)
-        if self._peak_sell_soc_at_entry <= 0:
-            self._peak_sell_soc_at_entry = soc
-            _LOGGER.info(
-                "Peak sell: entering AFTERNOON_PEAK with SOC=%.0f%%, sell_percent=%d%%",
-                soc, self._peak_sell_soc_percent,
-            )
-
-        # Calculate sell target SOC
-        sell_target_soc = max(
-            self._peak_sell_soc_at_entry - self._peak_sell_soc_percent,
-            PEAK_SELL_SOC_FLOOR,
-        )
-
-        # Profitability check: RCE must be high enough to justify selling
-        # Net-billing: RCE sell = RCE/1000 * prosumer_coefficient → PLN credit for winter
-        # We sell during peak because RCE is highest → most PLN deposited in net-billing
-        # Threshold: 300 PLN/MWh minimum (below that, RCE is too low for peak)
-        rce_sell_kwh = rce_mwh / 1000 * RCE_PROSUMER_COEFFICIENT
-        rce_min_sell_threshold = 300  # PLN/MWh — minimum RCE to justify selling
-
-        if rce_mwh < rce_min_sell_threshold:
-            # RCE too low for peak — self-consumption only
-            if self._peak_sell_phase != "reserve_unprofitable":
-                if await self._throttled_action("peak_sell_unprofitable"):
-                    await self._em.set_general_mode()
-                    self._peak_sell_phase = "reserve_unprofitable"
-                    self._charging_enabled = False
-                    msg = (
-                        f"💰 Peak Sell: RCE za niskie ({rce_mwh:.0f} PLN/MWh < {rce_min_sell_threshold}) "
-                        f"→ set_general (autokonsumpcja, brak eksportu)"
-                    )
-                    actions.append(msg)
-                    self._log_decision("peak_sell_unprofitable", msg)
-            return actions
-
-        # Determine peak end time for safety reserve
-        # Summer: peak 19:00-22:00, Winter: peak 16:00-21:00
-        now = datetime.now()
-        schedule = G13_WINTER_SCHEDULE if now.month in WINTER_MONTHS else G13_SUMMER_SCHEDULE
-        peak_end_hour = 22  # default summer
-        for (start, end), zone in schedule.items():
-            if zone == G13Zone.AFTERNOON_PEAK:
-                peak_end_hour = end
-                break
-
-        # Last 30 min of peak → safety reserve, switch to set_general
-        peak_end_approaching = (
-            hour >= peak_end_hour - 1 and minute >= 30
-        ) or hour >= peak_end_hour
-
-        # PHASE 1: SELL — force_discharge while SOC > sell_target
-        if soc > sell_target_soc and not peak_end_approaching:
-            if self._peak_sell_phase != "sell":
-                if await self._throttled_action("peak_sell_discharge"):
-                    await self._em.force_discharge()
-                    self._charging_enabled = False
-                    self._peak_sell_phase = "sell"
-                    energy_to_sell = (soc - sell_target_soc) / 100 * DEFAULT_BATTERY_CAPACITY / 1000
-                    potential_revenue = energy_to_sell * rce_sell_kwh
-                    msg = (
-                        f"💰 Peak Sell: FAZA SPRZEDAŻY → force_discharge do sieci. "
-                        f"SOC={soc:.0f}% → cel: {sell_target_soc:.0f}%, "
-                        f"~{energy_to_sell:.1f}kWh do sprzedania po {rce_sell_kwh:.3f} PLN/kWh "
-                        f"(~{potential_revenue:.2f} PLN). "
-                        f"Rezerwa na dom: {sell_target_soc:.0f}% SOC"
-                    )
-                    actions.append(msg)
-                    self._log_decision("peak_sell_start", msg)
-            else:
-                # Already in sell phase — log progress periodically
-                if await self._throttled_action("peak_sell_progress", cooldown=300):
-                    remaining = (soc - sell_target_soc) / 100 * DEFAULT_BATTERY_CAPACITY / 1000
-                    actions.append(
-                        f"💰 Peak Sell: sprzedaż trwa... SOC={soc:.0f}% → {sell_target_soc:.0f}% "
-                        f"(~{remaining:.1f}kWh pozostało)"
-                    )
-
-        # PHASE 2: RESERVE — set_general when SOC reached sell_target or peak ending
-        elif soc <= sell_target_soc or peak_end_approaching:
-            if self._peak_sell_phase != "reserve":
-                if await self._throttled_action("peak_sell_reserve"):
-                    await self._em.set_general_mode()
-                    self._charging_enabled = False
-                    self._peak_sell_phase = "reserve"
-                    reason = (
-                        "koniec szczytu za 30 min" if peak_end_approaching
-                        else f"SOC {soc:.0f}% osiągnął cel {sell_target_soc:.0f}%"
-                    )
-                    energy_sold = max(0, (self._peak_sell_soc_at_entry - soc)) / 100 * DEFAULT_BATTERY_CAPACITY / 1000
-                    revenue = energy_sold * rce_sell_kwh
-                    msg = (
-                        f"💰 Peak Sell: FAZA REZERWY → set_general ({reason}). "
-                        f"Sprzedano ~{energy_sold:.1f}kWh za ~{revenue:.2f} PLN. "
-                        f"Rezerwa SOC={soc:.0f}% na zasilanie domu"
-                    )
-                    actions.append(msg)
-                    self._log_decision("peak_sell_reserve", msg)
-
-        return actions
-
     # ==================================================================
     #  STRATEGY IMPLEMENTATIONS
     # ==================================================================
@@ -1593,189 +1517,143 @@ class StrategyController:
         g13_zone: G13Zone, g13_price: float, rce_mwh: float,
         hour: int, data: dict,
     ) -> list[str]:
-        """💰 Max Profit: 3-fazowa strategia — Sell Morning → Charge Midday → Sell Peak.
+        """💰 Max Zysk — battery arbitrage planned hour by hour (arbitrage.py).
 
-        FAZA 1 (7-13, MORNING_PEAK): Sprzedawaj PV + baterię do sieci.
-            NIE ładuj baterii! Każdy sprzedany wat = zysk po 0.91 PLN.
-            Bateria dosiła dom gdy PV < load (set_general, nie grid!).
-
-        FAZA 2 (13-16/19, OFF_PEAK po 12): Ładuj baterię z PV.
-            PV jest najsilniejsze, darmowe ładowanie do 100% przed szczytem.
-
-        FAZA 3 (16/19-21/22, AFTERNOON_PEAK): Peak Sell.
-            Znajdź najdroższą godzinę RCE → sprzedaj ~40% SOC.
-            Reszta SOC na zasilanie domu. Net-billing → odkładaj na zimę.
+        Charges in cheap tariff hours (and from PV), keeps the energy instead of
+        spending it at the cheapest rate, and uses it where it is worth most:
+        covering the house in expensive tariff hours or selling at the best RCE
+        hours — only when the margin beats battery wear + the minimum profit.
         """
         actions: list[str] = []
+        now = dt_util.now().replace(tzinfo=None)
+        self._update_load_profile(now.hour, load)
+        await self._refresh_arbitrage_plan(soc, data, now)
+        plan = self._arb_plan
+        first = plan.first if plan else None
+        if first is None:
+            return actions
 
-        # ═══════════════════════════════════════════════════════
-        # FAZA 1: MORNING_PEAK (7:00-13:00) — SPRZEDAWAJ!
-        # ═══════════════════════════════════════════════════════
-        if g13_zone == G13Zone.MORNING_PEAK:
-            # Priorytet: sprzedaż do sieci, NIE ładowanie baterii
-            # Bateria służy TYLKO jako backup gdy PV < load
-
-            if surplus > 200 and soc > 15:
-                # PV nadwyżka + bateria ma zapas → SPRZEDAWAJ agresywnie
-                if self._charging_enabled is not False:
-                    if await self._throttled_action("mp_morning_sell"):
-                        await self._em.force_discharge()
-                        self._charging_enabled = False
-                        rce_sell_kwh = (rce_mwh / 1000) * RCE_PROSUMER_COEFFICIENT
-                        msg = (
-                            f"💰 MP FAZA1: Poranna sprzedaż → force_discharge "
-                            f"(G13={g13_price:.2f}, RCE sell={rce_sell_kwh:.3f} PLN/kWh). "
-                            f"PV={pv:.0f}W, surplus={surplus:.0f}W, SOC={soc:.0f}%"
-                        )
-                        actions.append(msg)
-                        self._log_decision("mp_morning_sell", msg)
-
-            elif pv >= load * 0.8 and soc > 15:
-                # PV pokrywa dom → bateria może eksportować
-                if self._charging_enabled is not False:
-                    if await self._throttled_action("mp_morning_sell_pv"):
-                        await self._em.force_discharge()
-                        self._charging_enabled = False
-                        msg = (
-                            f"💰 MP FAZA1: PV pokrywa dom ({pv:.0f}W vs load {load:.0f}W) "
-                            f"→ force_discharge, bateria sprzedaje (SOC={soc:.0f}%)"
-                        )
-                        actions.append(msg)
-                        self._log_decision("mp_morning_sell_pv", msg)
-
-            elif pv < load * 0.8 and soc > DEFAULT_BATTERY_MIN_SOC:
-                # PV nie pokrywa domu → bateria dosiła dom (set_general)
-                # NIE kupuj z sieci! Bateria zastępuje sieć.
-                if await self._throttled_action("mp_morning_backup"):
-                    await self._em.set_general_mode()
-                    self._charging_enabled = False
-                    msg = (
-                        f"💰 MP FAZA1: PV słabe ({pv:.0f}W < load {load:.0f}W) "
-                        f"→ set_general, bateria dosiła dom (SOC={soc:.0f}%)"
-                    )
-                    actions.append(msg)
-                    self._log_decision("mp_morning_backup", msg)
-
-        # ═══════════════════════════════════════════════════════
-        # FAZA 2: OFF_PEAK po 12:00 — ŁADUJ Z PV!
-        # ═══════════════════════════════════════════════════════
-        elif g13_zone == G13Zone.OFF_PEAK and hour >= 12:
-            # Dopiero TERAZ ładujemy baterię — z PV, NIGDY z sieci!
-            if surplus > 200 and soc < 95:
-                # PV nadwyżka → ładuj baterię do pełna
-                if self._charging_enabled is not True:
-                    if await self._throttled_action("mp_midday_pv_charge"):
-                        await self._em.charge_pv_only()
-                        self._charging_enabled = True
-                        msg = (
-                            f"💰 MP FAZA2: PV ładuje baterię → force_charge "
-                            f"(surplus={surplus:.0f}W, SOC={soc:.0f}% → cel: 95-100%)"
-                        )
-                        actions.append(msg)
-                        self._log_decision("mp_midday_charge", msg)
-
-            elif surplus <= 200 and soc < 80:
-                # PV nie ma dużej nadwyżki, bateria jeszcze nie pełna
-                # Sprawdź czy PV pokrywa load — jeśli tak, pozwól naturalnie ładować
-                if pv > load:
-                    # PV > load ale mała nadwyżka → set_general (naturalne ładowanie)
-                    if await self._throttled_action("mp_midday_natural"):
-                        await self._em.set_general_mode()
-                        self._charging_enabled = False
-                        msg = (
-                            f"💰 MP FAZA2: PV > load ({pv:.0f}W > {load:.0f}W) "
-                            f"→ set_general, naturalne ładowanie (SOC={soc:.0f}%)"
-                        )
-                        actions.append(msg)
-                        self._log_decision("mp_midday_natural", msg)
-                elif soc > DEFAULT_BATTERY_MIN_SOC:
-                    # PV < load → bateria dosiła dom
-                    if await self._throttled_action("mp_midday_backup"):
-                        await self._em.set_general_mode()
-                        self._charging_enabled = False
-                        msg = (
-                            f"💰 MP FAZA2: PV nie pokrywa ({pv:.0f}W < {load:.0f}W) "
-                            f"→ set_general, bateria dosiła dom (SOC={soc:.0f}%)"
-                        )
-                        actions.append(msg)
-                        self._log_decision("mp_midday_backup", msg)
-
-            elif soc >= 95:
-                # Bateria pełna → eksportuj nadwyżkę PV
-                if surplus > 100:
-                    if await self._throttled_action("mp_midday_full_export"):
-                        # Full battery: PV surplus is exported in general mode anyway —
-                        # force_discharge would dump the battery to the grid at noon
-                        await self._em.battery_to_home()
-                        self._charging_enabled = False
-                        msg = (
-                            f"💰 MP FAZA2: Bateria pełna (SOC={soc:.0f}%) "
-                            f"→ force_discharge, eksport nadwyżki PV ({surplus:.0f}W)"
-                        )
-                        actions.append(msg)
-                        self._log_decision("mp_midday_export", msg)
-
-        # ═══════════════════════════════════════════════════════
-        # FAZA 3: AFTERNOON_PEAK — PEAK SELL + DOM
-        # ═══════════════════════════════════════════════════════
-        elif g13_zone == G13Zone.AFTERNOON_PEAK:
-            # Peak sell: podziel baterię na sprzedaż + rezerwę na dom
-            minute = datetime.now().minute
-            peak_actions = await self._execute_peak_sell(
-                soc, pv, load, g13_zone, rce_mwh, hour, minute,
+        cmd = (first.action, int(round(first.power_w / 500.0)) * 500)
+        changed = cmd != self._arb_cmd
+        if changed or time.time() - self._arb_cmd_ts > 900:  # re-assert every 15 min
+            await self._apply_arbitrage(first.action, first.power_w)
+            self._arb_cmd, self._arb_cmd_ts = cmd, time.time()
+            self._charging_enabled = first.action in (ACT_CHARGE_GRID, ACT_PV_CHARGE)
+            power = f" {first.power_w} W" if first.power_w else ""
+            msg = (
+                f"💰 Arbitraż: {ACTION_LABELS.get(first.action, first.action)}{power} — "
+                f"strefa {first.zone}, zakup {first.buy:.2f} / RCE {first.sell:.2f} zł/kWh, "
+                f"SOC {first.soc_start:.0f}→{first.soc_end:.0f}% "
+                f"(plan 30 h: {plan.baseline_cost - plan.total_cost:+.2f} zł vs bateria bez pracy)"
             )
-            actions.extend(peak_actions)
-            if not peak_actions:
-                # Peak sell wyłączony lub nieopłacalny → autokonsumpcja
-                if soc > DEFAULT_BATTERY_MIN_SOC:
-                    if self._charging_enabled is not False:
-                        if await self._throttled_action("mp_peak_general"):
-                            await self._em.set_general_mode()
-                            self._charging_enabled = False
-                            msg = (
-                                f"💰 MP FAZA3: Szczyt ({g13_price:.2f} PLN) "
-                                f"→ set_general, bateria zasiła dom (SOC={soc:.0f}%)"
-                            )
-                            actions.append(msg)
-                            self._log_decision("mp_peak_general", msg)
-
-        # ═══════════════════════════════════════════════════════
-        # OFF_PEAK NOCNY (22-7) i OFF_PEAK przed 12
-        # ═══════════════════════════════════════════════════════
-        elif g13_zone == G13Zone.OFF_PEAK and hour < 12:
-            # Przed 12:00 w OFF_PEAK — NIE ładuj baterii z sieci!
-            # Jeśli jest PV nadwyżka, ładuj. Inaczej — set_general.
-            if surplus > 200 and soc < 95:
-                if self._charging_enabled is not True:
-                    if await self._throttled_action("mp_early_pv_charge"):
-                        await self._em.charge_pv_only()
-                        self._charging_enabled = True
-                        msg = (
-                            f"💰 MP: Wczesna nadwyżka PV ({surplus:.0f}W) "
-                            f"→ ładuj baterię (SOC={soc:.0f}%)"
-                        )
-                        actions.append(msg)
-                        self._log_decision("mp_early_pv", msg)
-            elif pv < load * 0.5 and soc > DEFAULT_BATTERY_MIN_SOC:
-                # Noc/wczesny ranek — bateria dosiła dom
-                if await self._throttled_action("mp_night_general"):
-                    await self._em.set_general_mode()
-                    self._charging_enabled = False
-
-        # ═══════════════════════════════════════════════════════
-        # WYJĄTKI
-        # ═══════════════════════════════════════════════════════
-
-        # Ujemna cena RCE → ładuj wszystko (darmowa energia!)
-        if rce_mwh < 0:
-            if await self._throttled_action("mp_negative_rce"):
-                await self._em.charge_from_grid()
-                self._charging_enabled = True
-                msg = f"💰 MP: Ujemna cena RCE ({rce_mwh:.0f}) — darmowa energia! Ładuj z sieci + wszystko ON"
-                actions.append(msg)
-                self._log_decision("mp_negative_rce", msg)
-
+            actions.append(msg)
+            if changed:
+                self._log_decision("arbitrage", msg)
         return actions
+
+    async def _apply_arbitrage(self, action: str, power_w: int) -> None:
+        if action == ACT_CHARGE_GRID:
+            await self._em.charge_from_grid(power_w=power_w or None)
+        elif action == ACT_DISCHARGE:
+            await self._em.force_discharge(power_w=power_w or None)
+        elif action == ACT_HOLD:
+            await self._em.battery_hold()
+        else:  # home / pv_charge — battery follows the house, PV charges it
+            await self._em.set_general_mode()
+
+    def _update_load_profile(self, hour: int, load_w: float) -> None:
+        """Learn average house load per hour of day (EMA, kW)."""
+        if load_w <= 0:
+            return
+        kw = load_w / 1000
+        prev = self._load_profile[hour]
+        self._load_profile[hour] = kw if prev is None else prev + 0.02 * (kw - prev)
+
+    async def _refresh_arbitrage_plan(self, soc: float, data: dict, now: datetime) -> None:
+        from .settings_io import read_async, write_async
+
+        key = (now.hour, int(soc // 3))
+        if self._arb_plan and key == self._arb_plan_key and time.time() - self._arb_plan_ts < 300:
+            return
+        settings = await read_async(self.hass)
+
+        if not self._load_profile_loaded:
+            saved = settings.get("arbitrage_load_profile") or []
+            for h, v in enumerate(saved[:24]):
+                if self._load_profile[h] is None and isinstance(v, (int, float)) and v > 0:
+                    self._load_profile[h] = float(v)
+            self._load_profile_loaded = True
+        if now.hour != self._load_profile_hour:
+            self._load_profile_hour = now.hour
+            await write_async(self.hass, {
+                "arbitrage_load_profile": [round(v, 3) if v else None for v in self._load_profile],
+            })
+        known = [v for v in self._load_profile if v]
+        default_kw = sum(known) / len(known) if known else 1.0
+        profile = [v if v else default_kw for v in self._load_profile]
+
+        params = ArbitrageParams.from_dict(settings.get("arbitrage_params"))
+        cap = _safe_float(settings.get("battery_capacity_kwh"))
+        params.capacity_kwh = cap if cap > 0 else DEFAULT_BATTERY_CAPACITY / 1000
+        self._arb_params = params
+
+        rce: dict = {}
+        for eid in ("sensor.rce_pse_cena", "sensor.rce_pse_cena_jutro"):
+            state = self.hass.states.get(eid)
+            rce.update(rce_hourly(state.attributes.get("prices") if state else None))
+        sunrise, sunset = self._sun_hours()
+        inputs = build_inputs(
+            now,
+            tariff=str(data.get("tariff_type") or "g13"),
+            provider=str(settings.get("energy_provider") or data.get("energy_provider") or "tauron"),
+            rce=rce,
+            load_profile_kw=profile,
+            pv_today_remaining_kwh=_safe_float(data.get("pv_forecast_remaining_today_total")),
+            pv_tomorrow_kwh=_safe_float(data.get("pv_forecast_tomorrow_total")),
+            sunrise_h=sunrise,
+            sunset_h=sunset,
+            horizon_h=params.horizon_h,
+        )
+        plan = await self.hass.async_add_executor_job(optimize, soc, inputs, params)
+        self._arb_plan, self._arb_plan_ts, self._arb_plan_key = plan, time.time(), key
+        from dataclasses import asdict
+
+        self._arb_status = {
+            **plan.as_dict(limit=30),
+            "params": asdict(params),
+            "updated": now.strftime("%H:%M"),
+            "rce_hours": len(rce),
+        }
+
+    def _sun_hours(self) -> tuple[float, float]:
+        """Local sunrise/sunset hours (float) from sun.sun, default 7:00/17:30."""
+        state = self.hass.states.get("sun.sun")
+        try:
+            rise = dt_util.as_local(dt_util.parse_datetime(state.attributes["next_rising"]))
+            sett = dt_util.as_local(dt_util.parse_datetime(state.attributes["next_setting"]))
+            return rise.hour + rise.minute / 60, sett.hour + sett.minute / 60
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return 7.0, 17.5
+
+    def invalidate_arbitrage_plan(self) -> None:
+        """Force a re-plan on the next tick (parameters changed)."""
+        self._arb_plan_ts = 0.0
+        self._arb_plan_key = ()
+
+    # ── Manual hold ───────────────────────────────────────────────────
+
+    @property
+    def manual_hold_active(self) -> bool:
+        return time.time() < self._manual_hold_until
+
+    def set_manual_hold(self, minutes: int, reason: str = "") -> None:
+        """Pause strategy layers after a manual command (0 = resume now)."""
+        self._manual_hold_until = time.time() + minutes * 60 if minutes > 0 else 0.0
+        self._arb_cmd = None  # re-apply the plan when the hold ends
+        if minutes > 0:
+            self._log_decision("manual_hold", f"✋ {reason or 'Ręczne polecenie'} — autopilot wstrzymany na {minutes} min")
+        else:
+            self._log_decision("manual_hold_end", f"▶️ {reason or 'Koniec sterowania ręcznego'} — autopilot wznowiony")
 
     async def _strategy_battery_protection(
         self,

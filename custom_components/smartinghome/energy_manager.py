@@ -112,6 +112,10 @@ class EnergyManager:
         self._last_charge_current = None
         self._last_export_limit = None
         self._control_error: str | None = None
+        # What the inverter was last told to do: "charge_grid" | "sell" | "hold" |
+        # "home" | "general". Safety layers (W0) must not undo deliberate grid
+        # charging or holding.
+        self.intent: str = "general"
         self._last_goodwe_reload: float = 0.0
 
     @property
@@ -180,8 +184,9 @@ class EnergyManager:
             await self._enable_charging()
             await self._set_dod(DEFAULT_DOD_ON_GRID)
         self._current_mode = HEMSMode.CHARGE
+        self.intent = "general"
 
-    async def charge_from_grid(self) -> None:
+    async def charge_from_grid(self, power_w: int | None = None) -> None:
         """Ładuj baterię z sieci + PV (agresywnie).
 
         ⚠️ UWAGA: Ten tryb POBIERA energię z sieci!
@@ -199,7 +204,7 @@ class EnergyManager:
         elif self._goodwe_ems_select():
             _LOGGER.info("charge_from_grid — GoodWe EMS charge_battery (PV + sieć → bateria)")
             await self._enable_charging()
-            await self._set_work_mode("eco_charge")  # → EMS charge_battery
+            await self._set_work_mode("eco_charge", power_w)  # → EMS charge_battery
         else:
             _LOGGER.info("charge_from_grid — eco_charge (PV + sieć → bateria, soc=100, power=100)")
             await self._set_eco_mode_soc(100)
@@ -207,6 +212,7 @@ class EnergyManager:
             await self._enable_charging()
             await self._set_work_mode("eco_charge")
         self._current_mode = HEMSMode.CHARGE
+        self.intent = "charge_grid"
 
     async def force_charge(self) -> None:
         """Backwards-compatible alias → charge_from_grid().
@@ -215,7 +221,7 @@ class EnergyManager:
         """
         await self.charge_from_grid()
 
-    async def force_discharge(self) -> None:
+    async def force_discharge(self, power_w: int | None = None) -> None:
         """Force battery discharge to grid.
 
         GoodWe: Eco Mode (eco_discharge) — grid export ON, charge_current=0.
@@ -228,7 +234,7 @@ class EnergyManager:
             _LOGGER.info("Forcing battery discharge via GoodWe EMS (discharge_battery)")
             await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
             await self._set_dod(95)
-            await self._set_work_mode("eco_discharge")  # → EMS discharge_battery
+            await self._set_work_mode("eco_discharge", power_w)  # → EMS discharge_battery
         else:
             _LOGGER.info("Forcing battery discharge (eco_discharge, DOD=95%%, soc=5, power=100, grid_export=ON)")
             # Enable grid export (47509=1) — critical for BT! Optional RS485 hub.
@@ -254,6 +260,7 @@ class EnergyManager:
             await self._set_eco_mode_power(100)
             await self._set_work_mode("eco_discharge")
         self._current_mode = HEMSMode.SELL
+        self.intent = "sell"
 
     async def stop_force_charge(self) -> None:
         """Stop forced charging — restore general/self-use mode."""
@@ -277,6 +284,7 @@ class EnergyManager:
             except Exception:
                 _LOGGER.debug("%s turn_off failed", _eid)
         self._current_mode = HEMSMode.AUTO
+        self.intent = "general"
 
     async def stop_force_discharge(self) -> None:
         """Stop forced discharge — restore general/self-use mode."""
@@ -301,6 +309,7 @@ class EnergyManager:
             except Exception:
                 _LOGGER.debug("%s turn_off failed", _eid)
         self._current_mode = HEMSMode.AUTO
+        self.intent = "general"
 
     async def battery_to_home(self) -> None:
         """Battery powers the house — no charging, no forced export.
@@ -317,6 +326,7 @@ class EnergyManager:
             await self.set_general_mode()
             await self._block_charging()
         self._current_mode = HEMSMode.PEAK_SAVE
+        self.intent = "home"
 
     async def battery_hold(self) -> None:
         """Keep the battery idle — no charge, no discharge (house runs on PV/grid)."""
@@ -333,6 +343,7 @@ class EnergyManager:
             await self._block_charging()
             await self._set_dod(0)
         self._current_mode = HEMSMode.MANUAL
+        self.intent = "hold"
 
     async def set_general_mode(self) -> None:
         """Switch to General/Self Use mode — battery self-consumption."""
@@ -348,6 +359,7 @@ class EnergyManager:
             await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
             await self._set_dod(DEFAULT_DOD_ON_GRID)
         self._current_mode = HEMSMode.AUTO
+        self.intent = "general"
 
     async def emergency_stop(self) -> None:
         """Emergency stop — kill all forced operations immediately."""
@@ -380,6 +392,7 @@ class EnergyManager:
                 except Exception:
                     _LOGGER.debug("%s turn_off failed", entity_id)
         self._current_mode = HEMSMode.AUTO
+        self.intent = "general"
 
     async def force_custom(
         self,
@@ -914,7 +927,7 @@ class EnergyManager:
             error, self._control_error = self._control_error, None
             raise HomeAssistantError(error)
 
-    async def _set_work_mode(self, mode: str) -> None:
+    async def _set_work_mode(self, mode: str, power_w: int | None = None) -> None:
         """Set inverter work mode via select entity."""
         if self._is_sofar:
             entity = SELECT_SOFAR_WORK_MODE
@@ -952,8 +965,9 @@ class EnergyManager:
                 power_state = self.hass.states.get(power_entity)
                 # The limit is the charge/discharge power; any other mode must get 0 —
                 # battery_standby with a non-zero limit CHARGED from grid (tested on ET)
-                power = _safe_int(
-                    power_state.attributes.get("max") if power_state else None, 10000
+                max_w = _safe_int(power_state.attributes.get("max") if power_state else None, 10000)
+                power = (
+                    min(int(power_w), max_w) if power_w else max_w
                 ) if ems_mode in ("charge_battery", "discharge_battery") else 0
                 await self.hass.services.async_call(
                     "number", "set_value", {"entity_id": power_entity, "value": power},
