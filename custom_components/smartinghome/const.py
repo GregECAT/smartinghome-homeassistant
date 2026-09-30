@@ -251,8 +251,11 @@ DEFAULT_SENSOR_MAP: Final = {
     "total_losses": "",
     "total_battery_charge": "",
     "total_battery_discharge": "",
-    "total_energy_import": "",
-    "total_energy_export": "",
+    # Grid-meter lifetime counters (GM1000/GM3000) — source of grid import/export
+    # today. NOT goodwe_total_energy_import/export: on ET/EH those are the
+    # inverter's AC side (≈ PV output), not exchange with the grid.
+    "total_energy_import": "sensor.goodwe_meter_total_energy_import",
+    "total_energy_export": "sensor.goodwe_meter_total_energy_export",
     # EPS / Backup output
     "eps_voltage_r": "",
     "eps_voltage_s": "",

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 170" role="img" aria-label="Dom">
+  <defs>
+    <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e8edf3"/><stop offset="1" stop-color="#c9d2dc"/></linearGradient>
+    <linearGradient id="wallS" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b8c2ce"/><stop offset="1" stop-color="#9ba7b5"/></linearGradient>
+    <linearGradient id="roof" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3a4552"/><stop offset="1" stop-color="#262e38"/></linearGradient>
+    <linearGradient id="pv" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2f5d9a"/><stop offset="1" stop-color="#16345e"/></linearGradient>
+    <linearGradient id="win" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe6a8"/><stop offset="1" stop-color="#f6b651"/></linearGradient>
+    <radialGradient id="sh" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#000" stop-opacity=".45"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient>
+  </defs>
+  <ellipse cx="110" cy="158" rx="100" ry="10" fill="url(#sh)"/>
+  <!-- side wall -->
+  <path d="M150 78 L196 60 L196 132 L150 150 Z" fill="url(#wallS)"/>
+  <!-- front wall with gable -->
+  <path d="M28 78 L89 34 L150 78 L150 150 L28 150 Z" fill="url(#wall)"/>
+  <!-- roof: front edge + side plane -->
+  <path d="M89 34 L135 16 L204 62 L196 66 L150 78 Z" fill="url(#roof)"/>
+  <path d="M20 82 L89 30 L94 34 L28 84 Z" fill="#2b343f"/>
+  <path d="M89 30 L135 12 L210 60 L204 64 L135 18 L94 34 Z" fill="#1f262e"/>
+  <!-- PV array on side roof plane -->
+  <g transform="translate(0,0)">
+    <path d="M110 34 L136 24 L178 52 L152 62 Z" fill="url(#pv)" stroke="#9cc3ff" stroke-opacity=".5" stroke-width=".8"/>
+    <path d="M123 29 L165 57" stroke="#9cc3ff" stroke-opacity=".45" stroke-width=".7"/>
+    <path d="M117 44 L143 34 M124 48 L150 38 M131 53 L157 43 M138 57 L164 47 M145 60 L171 50" stroke="#9cc3ff" stroke-opacity=".35" stroke-width=".6"/>
+  </g>
+  <!-- windows -->
+  <rect x="44" y="96" width="34" height="30" rx="2" fill="url(#win)"/>
+  <path d="M61 96 V126 M44 111 H78" stroke="#c9d2dc" stroke-width="2"/>
+  <rect x="94" y="100" width="24" height="50" rx="2" fill="#3b4652"/>
+  <circle cx="113" cy="126" r="1.6" fill="#f7b731"/>
+  <path d="M160 92 L186 82 L186 108 L160 118 Z" fill="url(#win)" opacity=".92"/>
+  <path d="M173 87 V113" stroke="#9ba7b5" stroke-width="1.6"/>
+  <rect x="76" y="56" width="26" height="18" rx="2" fill="url(#win)" opacity=".85"/>
+  <!-- ground line -->
+  <path d="M20 150 H150 L196 132" stroke="#5c6b7a" stroke-width="1.5" fill="none" opacity=".6"/>
+</svg>

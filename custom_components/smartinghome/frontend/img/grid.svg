@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 170" role="img" aria-label="Sieć energetyczna">
+  <defs>
+    <linearGradient id="st" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c9d2dc"/><stop offset="1" stop-color="#8894a2"/></linearGradient>
+    <radialGradient id="sh" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#000" stop-opacity=".45"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient>
+  </defs>
+  <ellipse cx="80" cy="160" rx="52" ry="7" fill="url(#sh)"/>
+  <!-- wires -->
+  <path d="M0 40 Q40 52 80 36 T160 40" fill="none" stroke="#6b7785" stroke-width="1.2"/>
+  <path d="M0 62 Q40 74 80 58 T160 62" fill="none" stroke="#6b7785" stroke-width="1.2"/>
+  <!-- lattice tower -->
+  <g stroke="url(#st)" stroke-width="3" stroke-linecap="round" fill="none">
+    <path d="M80 12 L56 158 M80 12 L104 158"/>
+    <path d="M40 36 H120 M48 58 H112"/>
+  </g>
+  <g stroke="#aab4c0" stroke-width="1.4" fill="none" opacity=".9">
+    <path d="M76 36 L99 58 M84 36 L61 58 M72 58 L94 86 M88 58 L66 86 M66 86 L90 116 M94 86 L70 116 M62 116 L100 116 M70 116 L96 146 M90 116 L60 146 M64 86 H96"/>
+  </g>
+  <!-- insulators -->
+  <g fill="#00d4ff">
+    <rect x="38" y="36" width="4" height="9" rx="1.5"/><rect x="118" y="36" width="4" height="9" rx="1.5"/>
+    <rect x="46" y="58" width="4" height="9" rx="1.5"/><rect x="110" y="58" width="4" height="9" rx="1.5"/>
+  </g>
+</svg>

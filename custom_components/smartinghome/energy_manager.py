@@ -5,6 +5,8 @@ import logging
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     DEFAULT_GOODWE_DEVICE_ID,
@@ -62,6 +64,22 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# GoodWe work modes → EMS modes of the newer GoodWe integration (select "EMS mode"
+# + number "EMS power limit"), used when the "Inverter operation mode" select
+# (general / eco_charge / eco_discharge) is not exposed.
+_GOODWE_EMS_MODE_FOR_WORK_MODE: dict[str, str] = {
+    "general": "auto",
+    "eco_charge": "charge_battery",
+    "eco_discharge": "discharge_battery",
+}
+
+
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
 
 class EnergyManager:
     """HEMS Energy Management engine.
@@ -89,6 +107,7 @@ class EnergyManager:
         self._surplus_cascade_active = False
         self._last_charge_current = None
         self._last_export_limit = None
+        self._control_error: str | None = None
 
     @property
     def inverter_brand(self) -> str:
@@ -114,7 +133,10 @@ class EnergyManager:
         _LOGGER.info("Setting HEMS mode to %s", mode)
         self._current_mode = mode
 
-        if mode == HEMSMode.SELL:
+        if mode == HEMSMode.AUTO:
+            # Back to automatic: undo any forced charge/discharge on the inverter
+            await self.set_general_mode()
+        elif mode == HEMSMode.SELL:
             await self._block_charging()
             await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
         elif mode == HEMSMode.CHARGE:
@@ -195,17 +217,20 @@ class EnergyManager:
             await self._sofar_set_passive(grid_power=-6000, max_battery=-6000, min_battery=-6000)
         else:
             _LOGGER.info("Forcing battery discharge (eco_discharge, DOD=95%%, soc=5, power=100, grid_export=ON)")
-            # Enable grid export (47509=1) — critical for BT!
-            await self.hass.services.async_call(
-                "modbus",
-                "write_register",
-                {
-                    "hub": "goodwe_rs485",
-                    "slave": 247,
-                    "address": 47509,
-                    "value": 1,
-                },
-            )
+            # Enable grid export (47509=1) — critical for BT! Optional RS485 hub.
+            try:
+                await self.hass.services.async_call(
+                    "modbus",
+                    "write_register",
+                    {
+                        "hub": "goodwe_rs485",
+                        "slave": 247,
+                        "address": 47509,
+                        "value": 1,
+                    },
+                )
+            except Exception as err:  # noqa: BLE001 — hub not configured on this install
+                _LOGGER.debug("Modbus 47509 write skipped: %s", err)
             await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
             await self._block_charging()
             # DOD=95% means 95% of battery capacity CAN be discharged (SOC → ~5%)
@@ -710,7 +735,7 @@ class EnergyManager:
                 _LOGGER.debug("[Sofar] DOD is read-only — skipping set to %d%%", dod)
                 return
         else:
-            entity = NUMBER_DOD_ON_GRID
+            entity = self._find_goodwe_number(NUMBER_DOD_ON_GRID, "depth_of_discharge_on_grid") or NUMBER_DOD_ON_GRID
         state = self.hass.states.get(entity)
         if not state:
             _LOGGER.warning("Entity %s not available — skipping DOD set to %d%%", entity, dod)
@@ -730,48 +755,114 @@ class EnergyManager:
             },
         )
 
+    def _goodwe_entity_ids(self, domain: str) -> list[str]:
+        """Enabled entities of the GoodWe integration in a domain."""
+        registry = er.async_get(self.hass)
+        return [
+            entry.entity_id
+            for entry in registry.entities.values()
+            if entry.platform == "goodwe"
+            and entry.domain == domain
+            and entry.disabled_by is None
+        ]
+
+    def _find_goodwe_select(self, option: str) -> str | None:
+        """Find a GoodWe select offering `option` (entity IDs vary by language/setup)."""
+        for entity_id in self._goodwe_entity_ids("select"):
+            state = self.hass.states.get(entity_id)
+            if state and option in (state.attributes.get("options") or []):
+                return entity_id
+        return None
+
+    def _find_goodwe_number(self, preferred: str, suffix: str) -> str | None:
+        """Return `preferred` if present, else a GoodWe number ending with `suffix`."""
+        if preferred and self.hass.states.get(preferred):
+            return preferred
+        for entity_id in self._goodwe_entity_ids("number"):
+            if entity_id.endswith(suffix) and self.hass.states.get(entity_id):
+                return entity_id
+        return None
+
+    def raise_on_control_error(self) -> None:
+        """Raise (for service calls) if the last command could not reach the inverter."""
+        if self._control_error:
+            error, self._control_error = self._control_error, None
+            raise HomeAssistantError(error)
+
     async def _set_work_mode(self, mode: str) -> None:
         """Set inverter work mode via select entity."""
         if self._is_sofar:
             entity = SELECT_SOFAR_WORK_MODE
-        else:
-            entity = SELECT_WORK_MODE
-        if not self.hass.states.get(entity):
-            _LOGGER.debug("Entity %s not available — skipping work mode set", entity)
+            if not self.hass.states.get(entity):
+                _LOGGER.debug("Entity %s not available — skipping work mode set", entity)
+                return
+            await self.hass.services.async_call(
+                "select", "select_option", {"entity_id": entity, "option": mode},
+            )
             return
-        await self.hass.services.async_call(
-            "select",
-            "select_option",
-            {
-                "entity_id": entity,
-                "option": mode,
-            },
+
+        # 1) "Inverter operation mode" select (general / eco_charge / eco_discharge)
+        entity = SELECT_WORK_MODE if self.hass.states.get(SELECT_WORK_MODE) else None
+        entity = entity or self._find_goodwe_select(mode)
+        if entity:
+            await self.hass.services.async_call(
+                "select", "select_option", {"entity_id": entity, "option": mode},
+            )
+            self._control_error = None
+            return
+
+        # 2) Newer GoodWe integration: EMS mode + EMS power limit
+        ems_mode = _GOODWE_EMS_MODE_FOR_WORK_MODE.get(mode)
+        ems_select = self._find_goodwe_select("discharge_battery")
+        if ems_mode and ems_select:
+            power_entity = self._find_goodwe_number("", "ems_power_limit")
+            if power_entity:
+                power_state = self.hass.states.get(power_entity)
+                power = 0 if ems_mode == "auto" else _safe_int(
+                    power_state.attributes.get("max") if power_state else None, 10000
+                )
+                await self.hass.services.async_call(
+                    "number", "set_value", {"entity_id": power_entity, "value": power},
+                )
+            await self.hass.services.async_call(
+                "select", "select_option", {"entity_id": ems_select, "option": ems_mode},
+            )
+            _LOGGER.info("GoodWe EMS mode → %s (work mode %s)", ems_mode, mode)
+            self._control_error = None
+            return
+
+        self._control_error = (
+            f"Nie znaleziono encji trybu pracy falownika GoodWe dla trybu '{mode}' "
+            "(ani 'Inverter operation mode', ani 'EMS mode') — sprawdź integrację GoodWe."
         )
+        _LOGGER.warning(self._control_error)
 
     async def _set_eco_mode_power(self, value: int) -> None:
         """Set Eco Mode power percentage (0-100%)."""
-        if not self.hass.states.get(NUMBER_ECO_MODE_POWER):
+        entity = self._find_goodwe_number(NUMBER_ECO_MODE_POWER, "eco_mode_power")
+        if not entity:
             _LOGGER.debug("Entity %s not available — skipping eco mode power set", NUMBER_ECO_MODE_POWER)
             return
         await self.hass.services.async_call(
             "number",
             "set_value",
             {
-                "entity_id": NUMBER_ECO_MODE_POWER,
+                "entity_id": entity,
                 "value": value,
             },
         )
 
     async def _set_eco_mode_soc(self, value: int) -> None:
         """Set Eco Mode target SOC percentage (0-100%)."""
-        if not self.hass.states.get(NUMBER_ECO_MODE_SOC):
+        entity = self._find_goodwe_number(NUMBER_ECO_MODE_SOC, "eco_mode_soc")
+        if not entity:
             _LOGGER.debug("Entity %s not available — skipping eco mode SOC set", NUMBER_ECO_MODE_SOC)
             return
         await self.hass.services.async_call(
             "number",
             "set_value",
             {
-                "entity_id": NUMBER_ECO_MODE_SOC,
+                "entity_id": entity,
                 "value": value,
             },
         )

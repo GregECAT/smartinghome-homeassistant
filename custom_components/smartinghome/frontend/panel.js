@@ -254,8 +254,8 @@ class SmartingHomePanel extends HTMLElement {
     // For grid daily, prefer SmartingHOME corrected sensor (same as _nm)
     if (k === 'grid_import_today' || k === 'grid_export_today') {
       const correctedKey = k === 'grid_import_today' ? 'grid_import_daily' : 'grid_export_daily';
-      const corrected = this._findSmartingHomeSensor?.(correctedKey);
-      if (corrected !== null && corrected !== undefined) return corrected.toFixed(d);
+      const corrected = this._shN(correctedKey);
+      if (corrected !== null) return corrected.toFixed(d);
     }
     return this._f(this._m(k), d);
   }
@@ -264,7 +264,7 @@ class SmartingHomePanel extends HTMLElement {
     // over raw GoodWe daily sensors (which reset at sunrise, not midnight)
     if (k === 'grid_import_today' || k === 'grid_export_today') {
       const correctedKey = k === 'grid_import_today' ? 'grid_import_daily' : 'grid_export_daily';
-      const corrected = this._findSmartingHomeSensor(correctedKey);
+      const corrected = this._shN(correctedKey);
       if (corrected !== null) return corrected;
     }
     // Try native entity from sensor_map first
@@ -278,24 +278,10 @@ class SmartingHomePanel extends HTMLElement {
       'grid_frequency': 'synthetic_grid_frequency',
     };
     if (syntheticMap[k]) {
-      const synth = this._findSmartingHomeSensor(syntheticMap[k]);
+      const synth = this._shN(syntheticMap[k]);
       if (synth !== null) return synth;
     }
     return native;
-  }
-  _findSmartingHomeSensor(key) {
-    // Search for SmartingHOME-generated sensor by key suffix
-    if (!this._hass?.states) return null;
-    const suffixes = [`smartinghome_${key}`, `_${key}`];
-    for (const suf of suffixes) {
-      for (const eid of Object.keys(this._hass.states)) {
-        if (eid.startsWith("sensor.") && eid.endsWith(suf)) {
-          const v = this._n(eid);
-          if (v !== null) return v;
-        }
-      }
-    }
-    return null;
   }
   /* ── Smarting HOME integration entities ─────────
      Entity IDs are slugified from the device name (sensor.smarting_home_energy_management_…)
@@ -335,6 +321,30 @@ class SmartingHomePanel extends HTMLElement {
   }
   _setText(id, val) { const el = this.shadowRoot.getElementById(id); if (el) el.textContent = val; }
   _callService(domain, service, data = {}) { if (this._hass) this._hass.callService(domain, service, data); }
+  // Show call result on the button itself (⏳ → ✅ / ❌ message), restore after a few seconds
+  _flashButton(btn, ok, msg = "") {
+    if (!btn) return;
+    if (btn._shOrigHtml === undefined) btn._shOrigHtml = btn.innerHTML;
+    clearTimeout(btn._shFlashTimer);
+    btn.innerHTML = ok === null ? "⏳ …" : ok ? "✅ Wykonano" : `❌ ${msg || "Błąd"}`;
+    btn.title = ok === false ? msg : "";
+    if (ok === null) return;
+    btn._shFlashTimer = setTimeout(() => { btn.innerHTML = btn._shOrigHtml; btn._shOrigHtml = undefined; }, ok ? 2500 : 6000);
+  }
+  async _serviceButton(btn, domain, service, data = {}) {
+    if (!this._hass) return;
+    this._flashButton(btn, null);
+    if (btn) btn.disabled = true;
+    try {
+      await this._hass.callService(domain, service, data);
+      this._flashButton(btn, true);
+    } catch (err) {
+      console.error(`[SH] ${domain}.${service} failed:`, err);
+      this._flashButton(btn, false, err?.message || String(err));
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
 
   /* ── Sensor Labels (human-readable, PL) ─────────── */
   static SENSOR_LABELS = {
@@ -481,7 +491,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Force Charge/Discharge Buttons ────────── */
-  _executeForceAction(type) {
+  _executeForceAction(type, srcBtn = null) {
     const serviceMap = {
       charge: 'force_charge', discharge: 'force_discharge',
       stop_charge: 'stop_force_charge', stop_discharge: 'stop_force_discharge',
@@ -497,8 +507,10 @@ class SmartingHomePanel extends HTMLElement {
       stop_charge: 'btn-stop-charge', stop_discharge: 'btn-stop-discharge',
       emergency_stop: 'btn-emergency-stop',
     };
-    const btnEl = this.shadowRoot.getElementById(btnIdMap[type] || `btn-force-${type}`);
-    const statusEl = this.shadowRoot.getElementById(`fc-${type}-status`);
+    const btnEl = srcBtn || this.shadowRoot.getElementById(btnIdMap[type] || `btn-force-${type}`);
+    // Buttons outside "Szybkie akcje" (e.g. HEMS tab) have no status line — flash the button instead
+    const statusEl = srcBtn ? null : this.shadowRoot.getElementById(`fc-${type}-status`);
+    const flash = srcBtn ? (ok, msg) => this._flashButton(srcBtn, ok, msg) : () => {};
     if (!this._hass) return;
 
     const service = serviceMap[type] || `force_${type}`;
@@ -519,6 +531,7 @@ class SmartingHomePanel extends HTMLElement {
     this._hass.callService('smartinghome', service, {}).then(() => {
       const now = new Date().toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       if (statusEl) { statusEl.textContent = `✅ Wykonano ${now}`; statusEl.style.color = '#2ecc71'; }
+      flash(true);
       if (btnEl) {
         btnEl.disabled = false; btnEl.style.opacity = '1';
         btnEl.style.boxShadow = `0 0 20px rgba(${color},0.7)`;
@@ -526,6 +539,7 @@ class SmartingHomePanel extends HTMLElement {
       }
     }).catch(err => {
       if (statusEl) { statusEl.textContent = `❌ Błąd: ${err.message || err}`; statusEl.style.color = '#e74c3c'; }
+      flash(false, err.message || String(err));
       if (btnEl) {
         btnEl.disabled = false; btnEl.style.opacity = '1';
         btnEl.style.boxShadow = '0 0 20px rgba(231,76,60,0.7)';
@@ -4599,7 +4613,9 @@ class SmartingHomePanel extends HTMLElement {
 
   _updateHEMSFromAI() {
     const s = this._settings;
-    if (s.ai_hems_advice && s.ai_hems_advice.text) {
+    // Stored AI results from older versions may be error strings — never render those
+    const _aiOk = (r) => r && r.text && !/^(Gemini error|Anthropic error|No response)/.test(r.text) && !r.text.includes("Rate limit reached");
+    if (_aiOk(s.ai_hems_advice)) {
       const html = this._renderMarkdown(s.ai_hems_advice.text);
       const prov = s.ai_hems_advice.provider || '';
       const ts = s.ai_hems_advice.timestamp || '';
@@ -4614,7 +4630,7 @@ class SmartingHomePanel extends HTMLElement {
       const elH = this.shadowRoot.getElementById("v-hems-rec-hems");
       if (elH) { elH.innerHTML = content; this._aiHemsTabLoaded = true; }
     }
-    if (s.ai_daily_report && s.ai_daily_report.text) {
+    if (_aiOk(s.ai_daily_report)) {
       // Daily report goes to a separate element if exists
       const html = this._renderMarkdown(s.ai_daily_report.text);
       const prov = s.ai_daily_report.provider || '';
@@ -7539,22 +7555,12 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-grid", this._pw(Math.abs(grid)));
     this._setText("v-grid-dir", grid > 0 ? "POBÓR Z SIECI" : grid < -10 ? "ODDAWANIE DO SIECI" : "");
     // Grid — prefer SmartingHOME midnight-corrected sensors over raw GoodWe daily
-    const _gridDaily = (suffixes) => {
-      // Try SmartingHOME corrected sensors first
-      if (this._hass?.states) {
-        for (const suf of suffixes) {
-          for (const eid of Object.keys(this._hass.states)) {
-            if (eid.startsWith("sensor.") && eid.endsWith(suf)) {
-              const v = this._n(eid);
-              if (v !== null) return v.toFixed(1);
-            }
-          }
-        }
-      }
-      return null;
-    };
-    const gridImpCorrected = _gridDaily(['_grid_import_daily', 'smartinghome_grid_import_today', '_grid_import_today']);
-    const gridExpCorrected = _gridDaily(['_grid_export_daily', 'smartinghome_grid_export_today', '_grid_export_today']);
+    // Integration's midnight-corrected grid counters (resolved by unique_id, not by suffix —
+    // suffix matching used to hit legacy YAML utility meters like sensor.grid_import_daily)
+    const gridImpN = this._shN('grid_import_daily');
+    const gridExpN = this._shN('grid_export_daily');
+    const gridImpCorrected = gridImpN !== null ? gridImpN.toFixed(1) : null;
+    const gridExpCorrected = gridExpN !== null ? gridExpN.toFixed(1) : null;
     this._setText("v-grid-import", `${gridImpCorrected ?? this._fm("grid_import_today")} kWh`);
     this._setText("v-grid-export", `${gridExpCorrected ?? this._fm("grid_export_today")} kWh`);
     this._setText("v-grid-v1", `${this._fm("voltage_l1")} V`);
@@ -7773,7 +7779,7 @@ class SmartingHomePanel extends HTMLElement {
     this._flow("fl-batt-inv", batt > 10, batt);
 
     // Dynamic Inverter Image Logic
-    let imgName = "goodwe"; // domyślnie GoodWe
+    let imgName = "generic"; // nieznana marka → neutralna grafika
     const invModel = (this._s(this._m("inverter_model")) || "").toLowerCase();
     const userChoice = (this._s("input_select.smartinghome_inverter_model") || "").toLowerCase();
     const configBrand = (this._settings.inverter_brand || "").toLowerCase();
@@ -7793,12 +7799,13 @@ class SmartingHomePanel extends HTMLElement {
       imgEl.setAttribute("data-model", imgName);
       const iconEl = this.shadowRoot.getElementById("v-inv-icon");
       const remoteFallbackMap = {
-        deye: 'https://smartinghome.pl/wp-content/uploads/2026/03/Deye-1.png',
-        growatt: 'https://smartinghome.pl/wp-content/uploads/2026/03/Growatt.png',
-        goodwe: 'https://smartinghome.pl/wp-content/uploads/2026/03/GoodWe-1.png',
-        sofar: 'https://smartinghome.pl/wp-content/uploads/2026/03/sofar.png',
+        deye: '/local/community/smartinghome/img/deye.svg',
+        growatt: '/local/community/smartinghome/img/growatt.svg',
+        goodwe: '/local/community/smartinghome/img/goodwe.svg',
+        sofar: '/local/community/smartinghome/img/sofar.svg',
+        generic: '/local/community/smartinghome/img/inverter.svg',
       };
-      const remoteFallback = remoteFallbackMap[imgName] || remoteFallbackMap.goodwe;
+      const remoteFallback = remoteFallbackMap[imgName] || remoteFallbackMap.generic;
       // Only try local paths if user has uploaded a custom image
       if (this._settings.custom_inverter_image) {
         const localBrand = `/local/smartinghome/${imgName}.png`;
@@ -7919,7 +7926,7 @@ class SmartingHomePanel extends HTMLElement {
     const imgEl = this.shadowRoot.getElementById("v-home-img");
     if (!imgEl || imgEl.getAttribute("data-loaded") === "1") return;
     imgEl.setAttribute("data-loaded", "1");
-    const remoteFallback = 'https://smartinghome.pl/wp-content/uploads/2026/03/grafika-domu.png';
+    const remoteFallback = '/local/community/smartinghome/img/home.svg';
     // Only try local path if user has uploaded a custom home image
     if (this._settings.custom_home_image) {
       const localPath = '/local/smartinghome/home.png';
@@ -10707,7 +10714,7 @@ class SmartingHomePanel extends HTMLElement {
                       <div style="font-size:11px; color:#2ecc71; margin-top:3px; font-weight:600" id="v-load-today"></div>
                     </div>
                     <div style="flex-shrink:0; text-align:right">
-                      <img id="v-home-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/grafika-domu.png" alt="Dom" style="width:90px; max-height:70px; object-fit:contain; opacity:0.85; border-radius:8px" />
+                      <img id="v-home-img" src="/local/community/smartinghome/img/home.svg" alt="Dom" style="width:90px; max-height:70px; object-fit:contain; opacity:0.85; border-radius:8px" />
                       <div class="node-detail" style="margin-top:4px; text-align:right; font-size:10px">
                         <span id="v-load-l1">L1: — W</span>
                         <span style="color:rgba(255,255,255,0.15)"> · </span>
@@ -10774,7 +10781,7 @@ class SmartingHomePanel extends HTMLElement {
               <div class="inv-area">
                 <div class="node inv-node" style="border-color: rgba(0,212,255,0.15); display:flex; flex-direction:column; align-items:center; padding:16px">
                   <div class="inv-box">
-                    <img id="v-inv-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/GoodWe-1.png" alt="Inverter" style="max-width:120px; max-height:90px; object-fit:contain" />
+                    <img id="v-inv-img" src="/local/community/smartinghome/img/inverter.svg" alt="Inverter" style="max-width:120px; max-height:90px; object-fit:contain" />
                     <div id="v-inv-icon" style="display:none; text-align:center">
                       <div class="inv-icon">⚡</div>
                       <div style="font-size:8px; color:#f39c12; line-height:1.2; margin-top:2px">Wgraj zdjęcie<br>w ⚙️ Ustawieniach</div>
@@ -10807,7 +10814,7 @@ class SmartingHomePanel extends HTMLElement {
                       </div>
                     </div>
                     <div style="flex-shrink:0; max-width:55px">
-                      <img id="v-grid-img" src="https://smartinghome.pl/wp-content/uploads/2026/03/slup-energetyka-1.png" alt="Sieć" style="width:100%; max-height:80px; object-fit:contain; opacity:0.85" />
+                      <img id="v-grid-img" src="/local/community/smartinghome/img/grid.svg" alt="Sieć" style="width:100%; max-height:80px; object-fit:contain; opacity:0.85" />
                     </div>
                   </div>
                 </div>
@@ -11707,15 +11714,15 @@ class SmartingHomePanel extends HTMLElement {
           <div class="card" style="margin-bottom:14px">
             <div class="card-title">⚙️ Sterowanie Ręczne Trybem HEMS</div>
             <div class="actions">
-              <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'auto'})">🔄 Tryb Auto</button>
-              <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'sell'})">💰 Max Sprzedaż</button>
-              <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'charge'})">🔋 Tryb Charge</button>
-              <button class="action-btn" onclick="this.getRootNode().host._callService('smartinghome','set_mode',{mode:'peak_save'})">🏠 Szczyt</button>
+              <button class="action-btn" onclick="this.getRootNode().host._serviceButton(this,'smartinghome','set_mode',{mode:'auto'})">🔄 Tryb Auto</button>
+              <button class="action-btn" onclick="this.getRootNode().host._serviceButton(this,'smartinghome','set_mode',{mode:'sell'})">💰 Max Sprzedaż</button>
+              <button class="action-btn" onclick="this.getRootNode().host._serviceButton(this,'smartinghome','set_mode',{mode:'charge'})">🔋 Tryb Charge</button>
+              <button class="action-btn" onclick="this.getRootNode().host._serviceButton(this,'smartinghome','set_mode',{mode:'peak_save'})">🏠 Szczyt</button>
             </div>
             <div class="actions" style="margin-top:6px">
-              <button class="action-btn hems-force-btn" id="hems-btn-charge" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);color:#94a3b8" onclick="this.getRootNode().host._executeForceAction('charge')">🔋 Wymuś Ładow.</button>
-              <button class="action-btn hems-force-btn" id="hems-btn-discharge" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);color:#94a3b8" onclick="this.getRootNode().host._executeForceAction('discharge')">⚡ Wymuś Rozład.</button>
-              <button class="action-btn hems-force-btn" id="hems-btn-stop" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);color:#94a3b8" onclick="this.getRootNode().host._executeForceAction('emergency_stop')">🚨 STOP</button>
+              <button class="action-btn hems-force-btn" id="hems-btn-charge" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);color:#94a3b8" onclick="this.getRootNode().host._executeForceAction('charge', this)">🔋 Wymuś Ładow.</button>
+              <button class="action-btn hems-force-btn" id="hems-btn-discharge" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);color:#94a3b8" onclick="this.getRootNode().host._executeForceAction('discharge', this)">⚡ Wymuś Rozład.</button>
+              <button class="action-btn hems-force-btn" id="hems-btn-stop" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);color:#94a3b8" onclick="this.getRootNode().host._executeForceAction('emergency_stop', this)">🚨 STOP</button>
             </div>
           </div>
 
@@ -14008,7 +14015,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.56.6</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.56.7</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

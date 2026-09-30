@@ -464,7 +464,10 @@ class AICronScheduler:
                         "provider": provider,
                         "date": now_date,
                     }
-                    await self._update_settings({result_key: entry})
+                    # Keep the last good result on failure (e.g. HTTP 429) — the panel
+                    # would otherwise show "Gemini error (HTTP 429)" instead of advice.
+                    if status not in ("error", "rate_limited"):
+                        await self._update_settings({result_key: entry})
 
                     # --- AI Logs ---
                     log_entry = {
@@ -484,10 +487,11 @@ class AICronScheduler:
                     await self._update_settings({"ai_logs": logs})
 
                     # Fire HA bus event for live frontend update
-                    self.hass.bus.async_fire(
-                        f"{DOMAIN}_ai_cron_update",
-                        {"job": job_type, "result_key": result_key, **entry},
-                    )
+                    if status not in ("error", "rate_limited"):
+                        self.hass.bus.async_fire(
+                            f"{DOMAIN}_ai_cron_update",
+                            {"job": job_type, "result_key": result_key, **entry},
+                        )
                     _LOGGER.info(
                         "AI Cron '%s' complete (%s, %d chars, status=%s)",
                         job_type, provider, len(result), status,
