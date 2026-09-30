@@ -826,12 +826,26 @@ class EnergyManager:
         ]
 
     def _find_goodwe_select(self, option: str) -> str | None:
-        """Find a GoodWe select offering `option` (entity IDs vary by language/setup)."""
+        """Find a GoodWe select offering `option` (entity IDs vary by language/setup).
+
+        Options come from the entity registry capabilities too, so a select that is
+        briefly unavailable (e.g. right after restart) is still recognised — falling
+        back to another control path then would do the wrong thing.
+        """
+        registry = er.async_get(self.hass)
         for entity_id in self._goodwe_entity_ids("select"):
             state = self.hass.states.get(entity_id)
-            if state and option in (state.attributes.get("options") or []):
+            options = (state.attributes.get("options") if state else None) or []
+            if not options:
+                entry = registry.async_get(entity_id)
+                options = ((entry.capabilities or {}).get("options") if entry else None) or []
+            if option in options:
                 return entity_id
         return None
+
+    def _entity_unavailable(self, entity_id: str) -> bool:
+        state = self.hass.states.get(entity_id)
+        return state is None or state.state in ("unavailable", "unknown")
 
     def _find_goodwe_number(self, preferred: str, suffix: str) -> str | None:
         """Return `preferred` if present, else a GoodWe number ending with `suffix`."""
@@ -892,6 +906,13 @@ class EnergyManager:
         ems_mode = _GOODWE_EMS_MODE_FOR_WORK_MODE.get(mode)
         ems_select = self._goodwe_ems_select()
         if ems_mode and ems_select:
+            if self._entity_unavailable(ems_select):
+                self._control_error = (
+                    f"{ems_select} jest chwilowo niedostępny (np. po restarcie) — "
+                    "spróbuj ponownie za minutę."
+                )
+                _LOGGER.warning(self._control_error)
+                return
             if ems_mode == "auto":
                 # Also leave any eco_* operation mode set by older versions/users
                 op_select = self._goodwe_operation_mode_select()
