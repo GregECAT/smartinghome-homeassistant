@@ -180,6 +180,12 @@ async def ws_settings_update(hass: HomeAssistant, connection, msg: dict[str, Any
     updates = {k: v for k, v in msg["settings"].items() if k not in SECRET_KEYS}
     if updates:
         await write_async(hass, updates)
+        if "arbitrage_params" in updates:
+            # Re-plan on the next autopilot tick
+            for entry_data in hass.data.get(DOMAIN, {}).values():
+                ctrl = entry_data.get("strategy_controller") if isinstance(entry_data, dict) else None
+                if ctrl is not None:
+                    ctrl.invalidate_arbitrage_plan()
         advisor = _advisor(hass)
         if advisor is not None and "energy_provider" in updates:
             # Tariff labels/prices in AI prompts follow the panel's provider

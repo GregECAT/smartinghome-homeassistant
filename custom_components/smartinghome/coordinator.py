@@ -1447,6 +1447,8 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "rce_price_mwh": ctrl_result.get("rce_price_mwh"),
                 "ai_reasoning": ctrl_result.get("ai_reasoning", ""),
                 "timestamp": ctrl_result.get("timestamp"),
+                "manual_hold_until": ctrl_result.get("manual_hold_until", 0),
+                "arbitrage_plan": ctrl_result.get("arbitrage"),
                 **arb_data,
             },
         }

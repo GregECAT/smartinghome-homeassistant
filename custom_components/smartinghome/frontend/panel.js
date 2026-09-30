@@ -9659,6 +9659,14 @@ class SmartingHomePanel extends HTMLElement {
         .key-row { display: flex; gap: 8px; align-items: center; }
         .key-row input { flex: 1; }
         .key-status { font-size: 11px; margin-top: 3px; margin-bottom: 8px; }
+        .arb-params { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:8px; align-items:end; }
+        .arb-params label { display:flex; flex-direction:column; gap:4px; font-size:10px; color:#64748b; }
+        .arb-params input { padding:6px 8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:12px; }
+        .arb-table { width:100%; border-collapse:collapse; font-size:11px; }
+        .arb-table th { text-align:left; color:#64748b; font-weight:600; font-size:9px; text-transform:uppercase; padding:4px 6px; border-bottom:1px solid rgba(255,255,255,0.08); }
+        .arb-table td { padding:4px 6px; border-bottom:1px solid rgba(255,255,255,0.04); color:#cbd5e1; white-space:nowrap; }
+        .arb-table tr.now td { background:rgba(0,212,255,0.08); }
+        .arb-wrap { max-height:320px; overflow:auto; border-radius:8px; }
         .ai-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:10px; }
         .ai-prov { padding:10px 12px; border-radius:10px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); }
         .ai-prov-head { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; font-size:12px; font-weight:700; color:#e2e8f0; }
@@ -13188,38 +13196,26 @@ class SmartingHomePanel extends HTMLElement {
             <div style="display:flex; flex-wrap:wrap; gap:6px" id="ap-strategy-presets"></div>
           </div>
 
-          <!-- ═══ PEAK SELL CONFIGURATION ═══ -->
-          <div class="card" style="margin-bottom:14px; border:1px solid rgba(247,183,49,0.2); background:linear-gradient(135deg, rgba(247,183,49,0.04) 0%, rgba(231,76,60,0.03) 100%)">
-            <div class="card-title" style="display:flex; justify-content:space-between; align-items:center">
-              <span>💰 Sprzedaż energii w szczycie (Peak Sell)</span>
-              <span id="ap-peak-sell-badge" style="font-size:11px; padding:3px 10px; border-radius:20px; background:rgba(247,183,49,0.15); color:#f7b731; font-weight:600">50%</span>
+          <!-- ═══ ARBITRAGE (Max Zysk) ═══ -->
+          <div class="card" id="ap-arb-card" style="margin-bottom:14px; border:1px solid rgba(247,183,49,0.2); background:linear-gradient(135deg, rgba(247,183,49,0.04) 0%, rgba(46,204,113,0.03) 100%)">
+            <div class="card-title" style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap">
+              <span>💰 Arbitraż baterii — Max Zysk</span>
+              <span id="ap-arb-badge" style="font-size:11px; padding:3px 10px; border-radius:20px; background:rgba(46,204,113,0.15); color:#2ecc71; font-weight:600">—</span>
             </div>
-            <div style="font-size:11px; color:#94a3b8; margin-bottom:12px; line-height:1.5">
-              Ile % baterii aktywnie sprzedać do sieci w najdroższym szczycie popołudniowym (AFTERNOON_PEAK)?<br>
-              <span style="color:#64748b">Reszta zostanie zarezerwowana na zasilanie domu. 0% = wyłączone.</span>
+            <div style="font-size:11px; color:#94a3b8; margin-bottom:10px; line-height:1.5">
+              Plan na 30 h liczony co 5 min z taryfy, cen RCE (dziś + jutro), prognozy PV i Twojego zużycia.
+              Ładuje w tanich godzinach, trzyma energię zamiast zużywać ją po najniższej stawce, a oddaje tam, gdzie jest warta najwięcej
+              (dom w drogiej strefie albo sprzedaż w najdroższych godzinach RCE) — tylko gdy zysk przewyższa zużycie baterii + minimalny zysk.
+              <span id="ap-arb-hold" style="display:none; color:#f7b731"></span>
             </div>
-            <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px">
-              <span style="font-size:10px; color:#64748b; min-width:20px">0%</span>
-              <input type="range" id="ap-peak-sell-slider" min="0" max="80" step="5" value="50"
-                style="flex:1; accent-color:#f7b731; height:6px; cursor:pointer"
-                oninput="this.getRootNode().host._onPeakSellSliderChange(this.value)"
-                onchange="this.getRootNode().host._savePeakSellPercent(this.value)" />
-              <span style="font-size:10px; color:#64748b; min-width:28px">80%</span>
+            <div class="arb-params">
+              <label>Rezerwa SOC (%)<input type="number" id="arb-reserve_soc" oninput="this.getRootNode().host._arbParamsTouched = true" min="5" max="90" step="1"></label>
+              <label>Maks. SOC ładowania (%)<input type="number" id="arb-max_soc" oninput="this.getRootNode().host._arbParamsTouched = true" min="20" max="100" step="1"></label>
+              <label>Min. zysk (zł/kWh)<input type="number" id="arb-min_profit" oninput="this.getRootNode().host._arbParamsTouched = true" min="0" max="2" step="0.01"></label>
+              <label>Zużycie baterii (zł/kWh)<input type="number" id="arb-wear_cost" oninput="this.getRootNode().host._arbParamsTouched = true" min="0" max="2" step="0.01"></label>
+              <button class="test-btn" onclick="this.getRootNode().host._saveArbitrageParams(this)">💾 Zapisz</button>
             </div>
-            <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; margin-top:8px">
-              <div style="text-align:center; padding:6px; border-radius:8px; background:rgba(255,255,255,0.03)">
-                <div style="font-size:9px; color:#64748b">Na sprzedaż</div>
-                <div id="ap-peak-sell-kwh" style="font-size:14px; font-weight:700; color:#f7b731">—</div>
-              </div>
-              <div style="text-align:center; padding:6px; border-radius:8px; background:rgba(255,255,255,0.03)">
-                <div style="font-size:9px; color:#64748b">Rezerwa dom</div>
-                <div id="ap-peak-sell-reserve" style="font-size:14px; font-weight:700; color:#2ecc71">—</div>
-              </div>
-              <div style="text-align:center; padding:6px; border-radius:8px; background:rgba(255,255,255,0.03)">
-                <div style="font-size:9px; color:#64748b">~Zarobek</div>
-                <div id="ap-peak-sell-revenue" style="font-size:14px; font-weight:700; color:#00d4ff">—</div>
-              </div>
-            </div>
+            <div id="ap-arb-plan" style="margin-top:10px; font-size:11px; color:#64748b">Plan pojawi się po pierwszym cyklu strategii Max Zysk.</div>
           </div>
 
           <!-- ═══ ACTION SECTIONS (W0-W5) — rendered dynamically ═══ -->
@@ -14127,7 +14123,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.58.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.59.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -14686,6 +14682,74 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Peak Sell — slider handlers ── */
+  _renderArbitrage(live) {
+    const box = this.shadowRoot.getElementById('ap-arb-plan');
+    const badge = this.shadowRoot.getElementById('ap-arb-badge');
+    const holdEl = this.shadowRoot.getElementById('ap-arb-hold');
+    const plan = live?.arbitrage_plan;
+    if (holdEl) {
+      const until = live?.manual_hold_until ? new Date(live.manual_hold_until * 1000) : null;
+      const active = until && until > new Date();
+      holdEl.style.display = active ? 'inline' : 'none';
+      if (active) holdEl.textContent = ` ✋ Sterowanie ręczne do ${until.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })} — autopilot wstrzymany.`;
+    }
+    const params = plan?.params;
+    if (params && !this._arbParamsTouched) {
+      ['reserve_soc', 'max_soc', 'min_profit', 'wear_cost'].forEach(k => {
+        const el = this.shadowRoot.getElementById(`arb-${k}`);
+        if (el && document.activeElement !== el && this.shadowRoot.activeElement !== el) el.value = params[k];
+      });
+    }
+    if (!box) return;
+    if (!plan || !plan.hours?.length) {
+      box.innerHTML = live?.strategy === 'max_profit'
+        ? 'Liczenie planu…'
+        : 'Plan działa w strategii 💰 Max Zysk (preset lub harmonogram).';
+      if (badge) badge.textContent = '—';
+      return;
+    }
+    if (badge) {
+      const sv = plan.savings || 0;
+      badge.textContent = `${sv >= 0 ? '+' : ''}${sv.toFixed(2)} zł / 30 h`;
+      badge.style.color = sv >= 0 ? '#2ecc71' : '#e74c3c';
+    }
+    const labels = { charge_grid: '⚡ Ładuj z sieci', pv_charge: '☀️ Ładuj z PV', hold: '⏸️ Trzymaj', home: '🏠 Zasilaj dom', discharge: '💰 Sprzedaż / oddaj' };
+    const colors = { charge_grid: '#00d4ff', pv_charge: '#f7b731', hold: '#94a3b8', home: '#2ecc71', discharge: '#e67e22' };
+    const zones = { off_peak: 'tania', morning_peak: 'przedpoł.', afternoon_peak: 'szczyt', peak: 'szczyt', flat: 'stała' };
+    const rows = plan.hours.slice(0, 26).map((h, i) => {
+      const t = h.start.slice(11, 16);
+      const day = h.start.slice(5, 10) !== plan.hours[0].start.slice(5, 10) ? ' ⁺¹' : '';
+      return `<tr class="${i === 0 ? 'now' : ''}">
+        <td>${t}${day}</td><td>${zones[h.zone] || h.zone}</td>
+        <td>${h.buy.toFixed(2)}</td><td>${h.sell.toFixed(2)}</td>
+        <td style="color:${colors[h.action] || '#fff'}; font-weight:600">${labels[h.action] || h.action}${h.power_w ? ` ${(h.power_w / 1000).toFixed(1)} kW` : ''}</td>
+        <td>${Math.round(h.soc_start)}→${Math.round(h.soc_end)}%</td>
+        <td>${h.grid_import.toFixed(1)} / ${h.grid_export.toFixed(1)}</td>
+      </tr>`;
+    }).join('');
+    box.innerHTML = `<div class="arb-wrap"><table class="arb-table">
+      <thead><tr><th>Godz.</th><th>Strefa</th><th>Zakup zł</th><th>RCE sprz. zł</th><th>Akcja</th><th>SOC</th><th>Pobór / oddanie kWh</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+      <div style="margin-top:6px; font-size:10px; color:#64748b">Koszt energii w planie: ${plan.total_cost.toFixed(2)} zł vs ${plan.baseline_cost.toFixed(2)} zł bez pracy baterii · aktualizacja ${plan.updated || '—'}</div>`;
+  }
+
+  async _saveArbitrageParams(btn) {
+    const params = {};
+    ['reserve_soc', 'max_soc', 'min_profit', 'wear_cost'].forEach(k => {
+      const v = parseFloat(this.shadowRoot.getElementById(`arb-${k}`)?.value);
+      if (!isNaN(v)) params[k] = v;
+    });
+    const orig = btn?.innerHTML;
+    try {
+      await this._hass.connection.sendMessagePromise({ type: 'smartinghome/settings/update', settings: { arbitrage_params: params } });
+      this._arbParamsTouched = false;
+      if (btn) btn.innerHTML = '✅ Zapisano — plan przeliczy się w ciągu minuty';
+    } catch (e) {
+      if (btn) btn.innerHTML = `❌ ${e.message || e.code || e}`;
+    }
+    setTimeout(() => { if (btn) btn.innerHTML = orig; }, 3500);
+  }
+
   _onPeakSellSliderChange(value) {
     const v = parseInt(value);
     const badge = this.shadowRoot.getElementById('ap-peak-sell-badge');
@@ -15030,6 +15094,7 @@ class SmartingHomePanel extends HTMLElement {
 
           // ── Live tick status bar ──
           const live = s.autopilot_live;
+          this._renderArbitrage(live);
           if (live) {
             const setText = (id, val) => {
               const el = this.shadowRoot.getElementById(id);

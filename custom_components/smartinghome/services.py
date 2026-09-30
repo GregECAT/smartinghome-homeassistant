@@ -294,31 +294,43 @@ async def async_setup_services(
         mode = HEMSMode(call.data["mode"])
         await energy_mgr.set_mode(mode)
         energy_mgr.raise_on_control_error()
+        if mode == HEMSMode.AUTO:
+            _manual_hold(0, "Tryb Auto")
+
+    def _manual_hold(minutes: int, reason: str) -> None:
+        """Keep the autopilot from undoing a manual command (0 = resume)."""
+        if strategy_controller is not None:
+            strategy_controller.set_manual_hold(minutes, reason)
 
     async def handle_force_charge(call: ServiceCall) -> None:
         """Handle force_charge service."""
         await energy_mgr.force_charge()
         energy_mgr.raise_on_control_error()
+        _manual_hold(60, "Ręczne ładowanie z sieci")
 
     async def handle_force_discharge(call: ServiceCall) -> None:
         """Handle force_discharge service."""
         await energy_mgr.force_discharge()
         energy_mgr.raise_on_control_error()
+        _manual_hold(60, "Ręczne rozładowanie")
 
     async def handle_stop_force_charge(call: ServiceCall) -> None:
         """Handle stop_force_charge service."""
         await energy_mgr.stop_force_charge()
         energy_mgr.raise_on_control_error()
+        _manual_hold(0, "STOP ładowania")
 
     async def handle_stop_force_discharge(call: ServiceCall) -> None:
         """Handle stop_force_discharge service."""
         await energy_mgr.stop_force_discharge()
         energy_mgr.raise_on_control_error()
+        _manual_hold(0, "STOP rozładowania")
 
     async def handle_emergency_stop(call: ServiceCall) -> None:
         """Handle emergency_stop service."""
         await energy_mgr.emergency_stop()
         energy_mgr.raise_on_control_error()
+        _manual_hold(0, "EMERGENCY STOP")
 
     async def handle_force_custom(call: ServiceCall) -> None:
         """Handle force_custom service — configurable force command."""
