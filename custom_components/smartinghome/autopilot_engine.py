@@ -1090,7 +1090,8 @@ def build_ai_controller_prompt(
     # grid_power: already inverted upstream → positive=import, negative=export
     raw_bat = float(current_data.get('battery_power', 0))
     raw_grid = float(current_data.get('grid_power', 0))
-    bat_state = f"ŁADOWANIE {abs(raw_bat):.0f}W (do baterii z sieci/PV)" if raw_bat > 50 else f"ROZŁADOWYWANIE {abs(raw_bat):.0f}W (z baterii do domu)" if raw_bat < -50 else "BEZCZYNNA (idle)"
+    # battery_power: +discharge / -charge (GoodWe, verified live)
+    bat_state = f"ROZŁADOWYWANIE {abs(raw_bat):.0f}W (z baterii do domu/sieci)" if raw_bat > 50 else f"ŁADOWANIE {abs(raw_bat):.0f}W (do baterii z sieci/PV)" if raw_bat < -50 else "BEZCZYNNA (idle)"
     grid_state = f"IMPORT {abs(raw_grid):.0f}W (pobór z sieci)" if raw_grid > 50 else f"EKSPORT {abs(raw_grid):.0f}W (sprzedaż do sieci)" if raw_grid < -50 else "ZERO (brak przepływu)"
 
     # Tools description
@@ -1279,7 +1280,8 @@ def build_ai_strategist_prompt(
     # Transform raw sensor values to explicit human-readable format
     raw_bat = float(current_data.get('battery_power', 0))
     raw_grid = float(current_data.get('grid_power', 0))
-    bat_state = f"ŁADOWANIE {abs(raw_bat):.0f}W (do baterii z sieci/PV)" if raw_bat > 50 else f"ROZŁADOWYWANIE {abs(raw_bat):.0f}W (z baterii do domu)" if raw_bat < -50 else "BEZCZYNNA (idle)"
+    # battery_power: +discharge / -charge (GoodWe, verified live)
+    bat_state = f"ROZŁADOWYWANIE {abs(raw_bat):.0f}W (z baterii do domu/sieci)" if raw_bat > 50 else f"ŁADOWANIE {abs(raw_bat):.0f}W (do baterii z sieci/PV)" if raw_bat < -50 else "BEZCZYNNA (idle)"
     grid_state = f"IMPORT {abs(raw_grid):.0f}W (pobór z sieci)" if raw_grid > 50 else f"EKSPORT {abs(raw_grid):.0f}W (sprzedaż do sieci)" if raw_grid < -50 else "ZERO (brak przepływu)"
 
     # Hourly plan from mathematical model

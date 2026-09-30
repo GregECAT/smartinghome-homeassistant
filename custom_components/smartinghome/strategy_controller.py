@@ -129,7 +129,8 @@ def _build_ai_data(data: dict[str, Any]) -> dict[str, Any]:
         "load": _safe_float(data.get(SENSOR_LOAD_TOTAL)),
         "battery_soc": _safe_float(data.get(SENSOR_BATTERY_SOC)),
         "battery_power": _safe_float(data.get(SENSOR_BATTERY_POWER)),
-        "grid_power": _safe_float(data.get(SENSOR_GRID_POWER_TOTAL)),
+        # AI convention: +import / -export (meter reports +export) — same as cron_scheduler
+        "grid_power": -_safe_float(data.get(SENSOR_GRID_POWER_TOTAL)),
         "pv_surplus": _safe_float(data.get("hems_pv_surplus_power")),
         "battery_capacity": DEFAULT_BATTERY_CAPACITY,
         # RCE
@@ -844,7 +845,7 @@ class StrategyController:
                 radiator_temp = data.get("inverter_temp_radiator", 0)
                 if thermal_status == "critical":
                     # Critical: stop all forced operations, go to general
-                    await self._em.set_general()
+                    await self._em.set_general_mode()
                     actions_taken.append(
                         f"W6: 🔥 THERMAL CRITICAL ({radiator_temp}°C) — emergency set_general, all force ops stopped"
                     )
@@ -863,7 +864,7 @@ class StrategyController:
                 soh_val = data.get("battery_soh", 0)
                 if battery_health == "critical":
                     # Critical SOH: restrict DOD to 70, avoid force operations
-                    await self._em.set_dod(70)
+                    await self._em._set_dod(70)
                     actions_taken.append(
                         f"W7: ⚠️ SOH CRITICAL ({soh_val}%) — DOD limited to 70%, gentle cycling only"
                     )
@@ -1271,7 +1272,9 @@ class StrategyController:
         # GUARD NADRZĘDNY: Zero Grid Import gdy SOC > 5%
         # ══════════════════════════════════════════════════════════
         battery_available = soc > SOC_GRID_IMPORT_THRESHOLD
-        grid_importing = grid > GRID_IMPORT_DETECT_THRESHOLD_W
+        # Meter convention: +export / -import → import is the negative part
+        grid_import_w = -grid
+        grid_importing = grid_import_w > GRID_IMPORT_DETECT_THRESHOLD_W
         pv_insufficient = pv < load * 0.8  # PV nie pokrywa popytu
 
         if battery_available and grid_importing and pv_insufficient:
@@ -1298,7 +1301,7 @@ class StrategyController:
 
         if is_expensive and not rce_cheap_exception:
             # Expensive tariff zone — block grid charging
-            if grid > 200 and pv < load * 0.5:
+            if grid_import_w > 200 and pv < load * 0.5:
                 # Importing significantly from grid AND low PV
                 if self._charging_enabled is not False:
                     if await self._throttled_action("w0_block_charge"):
