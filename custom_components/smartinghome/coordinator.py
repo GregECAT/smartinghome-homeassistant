@@ -8,10 +8,12 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
+from homeassistant.util import dt as dt_util
 
 from .const import (
     DOMAIN,
@@ -90,9 +92,6 @@ from .const import (
     RCETrend,
     DEFAULT_BATTERY_CAPACITY,
     DEFAULT_BATTERY_MIN_SOC,
-    CONF_INVERTER_BRAND,
-    INVERTER_BRAND_GOODWE,
-    SENSOR_MAP_KEYS,
     CONF_INVERTER_BRAND,
     INVERTER_BRAND_GOODWE,
     SENSOR_MAP_KEYS,
@@ -199,6 +198,38 @@ _SENSOR_MAP_TO_CANONICAL: dict[str, str] = {
 }
 
 
+def _resolve_goodwe_entity(hass: HomeAssistant, entity_id: str) -> str:
+    """Return entity_id, or its goodwe_-prefix variant if only that one exists.
+
+    GoodWe entity IDs depend on how the GoodWe integration was set up: newer
+    installs prefix them with the device name (sensor.goodwe_today_energy_import),
+    older ones don't (sensor.today_energy_import) — often mixed on one install.
+    """
+    if not entity_id or hass.states.get(entity_id) is not None:
+        return entity_id
+    domain, _, object_id = entity_id.partition(".")
+    if object_id.startswith("goodwe_"):
+        alt = f"{domain}.{object_id[len('goodwe_'):]}"
+    else:
+        alt = f"{domain}.goodwe_{object_id}"
+    return alt if hass.states.get(alt) is not None else entity_id
+
+
+def build_sensor_map(
+    hass: HomeAssistant | None, entry_data: dict[str, Any]
+) -> dict[str, str]:
+    """Merge the user's sensor map with brand defaults and resolve missing entities."""
+    user_map = entry_data.get(CONF_SENSOR_MAP) or {}
+    brand = entry_data.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE)
+    brand_defaults = get_sensor_map_defaults(brand)
+    resolve = hass is not None and brand == INVERTER_BRAND_GOODWE
+    result: dict[str, str] = {}
+    for key in SENSOR_MAP_KEYS:
+        entity_id = user_map.get(key) or brand_defaults.get(key, "")
+        result[key] = _resolve_goodwe_entity(hass, entity_id) if resolve else entity_id
+    return result
+
+
 def _safe_float(value: Any, default: float = 0.0) -> float:
     """Convert a value to float safely."""
     if value is None:
@@ -231,16 +262,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._tariff = entry.data.get(CONF_TARIFF, TariffType.G13)
         self._rce_enabled = entry.data.get(CONF_RCE_ENABLED, True)
         self._ecowitt_enabled = entry.data.get(CONF_ECOWITT_ENABLED, False)
-        
-        user_map = entry.data.get(CONF_SENSOR_MAP) or {}
-        brand = entry.data.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE)
-        brand_defaults = get_sensor_map_defaults(brand)
-        
-        self._sensor_map = {}
-        for key in SENSOR_MAP_KEYS:
-            val = user_map.get(key)
-            self._sensor_map[key] = val if val else brand_defaults.get(key, "")
-            
+        self._sensor_map = build_sensor_map(hass, entry.data)
         self._strategy_controller = None
         self._schedule_manager = None
         self._wind_calendar = None
@@ -255,6 +277,14 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._grid_baseline_date: str = ""  # date for which baselines are valid
         self._grid_import_baseline: float = 0.0  # snapshot at midnight
         self._grid_export_baseline: float = 0.0  # snapshot at midnight
+
+        # ── Grid daily from lifetime grid-meter totals (preferred when mapped) ──
+        # {"date", "import_eid", "export_eid", "import", "export"} — persisted so a
+        # restart mid-day doesn't reset today's import/export to zero.
+        self._grid_totals_baseline: dict[str, Any] = {}
+        self._grid_totals_active: bool = False
+        self._grid_store: Store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.grid_baseline")
+        self._grid_store_loaded: bool = False
 
     def set_strategy_controller(self, controller) -> None:
         """Set the strategy controller for autonomous HEMS control."""
@@ -272,11 +302,115 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Update a single sensor mapping in-memory (no restart needed)."""
         self._sensor_map[key] = entity_id
 
+    def _read_total(self, entity_id: str) -> float | None:
+        """Read a lifetime energy counter; None if missing/invalid."""
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if not state or state.state in ("unknown", "unavailable"):
+            return None
+        value = _safe_float(state.state, -1.0)
+        return value if value > 0 else None
+
+    async def _async_totals_at_midnight(
+        self, entity_ids: list[str], midnight: datetime
+    ) -> dict[str, float]:
+        """Look up lifetime counter values at local midnight from the recorder."""
+        try:
+            from homeassistant.components.recorder import get_instance, history
+
+            states = await get_instance(self.hass).async_add_executor_job(
+                history.get_significant_states,
+                self.hass,
+                midnight,
+                midnight + timedelta(seconds=1),
+                entity_ids,
+                None,  # filters
+                True,  # include_start_time_state
+                False,  # significant_changes_only
+                False,  # minimal_response
+                True,  # no_attributes
+            )
+        except Exception as err:  # noqa: BLE001 — recorder optional
+            _LOGGER.debug("Grid baseline: recorder lookup failed: %s", err)
+            return {}
+        result: dict[str, float] = {}
+        for entity_id in entity_ids:
+            for state in states.get(entity_id, []):
+                value = _safe_float(getattr(state, "state", None), -1.0)
+                if value > 0:
+                    result[entity_id] = value
+                    break
+        return result
+
+    async def _async_update_grid_totals_baseline(self) -> None:
+        """Maintain today's midnight snapshot of the grid-meter lifetime totals.
+
+        Daily sensors of some inverters don't measure grid exchange (GoodWe ET
+        today_energy_import/export are the inverter AC side) or reset at sunrise.
+        Grid import/export today = lifetime meter total − value at local midnight.
+        """
+        imp_eid = self._sensor_map.get("total_energy_import", "")
+        exp_eid = self._sensor_map.get("total_energy_export", "")
+        imp = self._read_total(imp_eid)
+        exp = self._read_total(exp_eid)
+        if imp is None or exp is None:
+            self._grid_totals_active = False
+            return
+        self._grid_totals_active = True
+
+        today = dt_util.now().date().isoformat()
+        base = self._grid_totals_baseline
+        same_entities = (
+            base.get("import_eid") == imp_eid and base.get("export_eid") == exp_eid
+        )
+        if base.get("date") == today and same_entities:
+            if imp < base["import"] or exp < base["export"]:
+                # Meter reset / replaced — restart today's count from here
+                base["import"] = min(imp, base["import"])
+                base["export"] = min(exp, base["export"])
+                await self._grid_store.async_save(base)
+            return
+
+        if not self._grid_store_loaded:
+            self._grid_store_loaded = True
+            stored = await self._grid_store.async_load() or {}
+            if (
+                stored.get("date") == today
+                and stored.get("import_eid") == imp_eid
+                and stored.get("export_eid") == exp_eid
+            ):
+                self._grid_totals_baseline = stored
+                return
+
+        # Midnight passed while running → current reading is the new baseline.
+        # Otherwise (startup mid-day) ask the recorder for the midnight values.
+        at_midnight: dict[str, float] = {}
+        if not (base and same_entities):
+            at_midnight = await self._async_totals_at_midnight(
+                [imp_eid, exp_eid], dt_util.start_of_local_day()
+            )
+        new_base = {
+            "date": today,
+            "import_eid": imp_eid,
+            "export_eid": exp_eid,
+            "import": min(at_midnight.get(imp_eid, imp), imp),
+            "export": min(at_midnight.get(exp_eid, exp), exp),
+        }
+        self._grid_totals_baseline = new_base
+        await self._grid_store.async_save(new_base)
+        _LOGGER.debug("Grid totals baseline for %s: %s", today, new_base)
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from HA state machine and compute HEMS values."""
         try:
             # Periodic license check
             await self.license_manager.periodic_check()
+
+            # Re-resolve sensor map each cycle — inverter entities may load after us
+            self._sensor_map = build_sensor_map(self.hass, self.entry.data)
+
+            await self._async_update_grid_totals_baseline()
 
             # Read all source sensors
             raw = self._read_source_sensors()
@@ -676,6 +810,15 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Apply correction: today = raw - baseline
         grid_import = max(0.0, grid_import_raw - self._grid_import_baseline)
         grid_export = max(0.0, grid_export_raw - self._grid_export_baseline)
+
+        # Preferred: grid-meter lifetime totals − midnight snapshot
+        base = self._grid_totals_baseline
+        if self._grid_totals_active and base:
+            imp_now = self._read_total(base["import_eid"])
+            exp_now = self._read_total(base["export_eid"])
+            if imp_now is not None and exp_now is not None:
+                grid_import = max(0.0, imp_now - base["import"])
+                grid_export = max(0.0, exp_now - base["export"])
         data["grid_import_daily"] = round(grid_import, 2)
         data["grid_export_daily"] = round(grid_export, 2)
 

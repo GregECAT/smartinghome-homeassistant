@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 240" role="img" aria-label="Falownik Sofar">
+  <defs>
+    <linearGradient id="f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f7f8fa"/><stop offset="1" stop-color="#e3e7ec"/></linearGradient>
+    <linearGradient id="s" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#aeb6bf"/><stop offset="1" stop-color="#aeb6bf" stop-opacity=".75"/></linearGradient>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".35"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <radialGradient id="sh" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#000" stop-opacity=".45"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient>
+  </defs>
+  <ellipse cx="100" cy="226" rx="78" ry="9" fill="url(#sh)"/>
+  <path d="M150 30 L172 19 L172 199 L150 212 Z" fill="url(#s)"/>
+  <line x1="155.2" y1="34.4" x2="155.2" y2="204.4" stroke="#000" stroke-opacity=".18" stroke-width="1.2"/><line x1="158.4" y1="32.8" x2="158.4" y2="202.8" stroke="#000" stroke-opacity=".18" stroke-width="1.2"/><line x1="161.6" y1="31.2" x2="161.6" y2="201.2" stroke="#000" stroke-opacity=".18" stroke-width="1.2"/><line x1="164.8" y1="29.6" x2="164.8" y2="199.6" stroke="#000" stroke-opacity=".18" stroke-width="1.2"/><line x1="168.0" y1="28.0" x2="168.0" y2="198.0" stroke="#000" stroke-opacity=".18" stroke-width="1.2"/>
+  <path d="M30 30 L52 19 L172 19 L150 30 Z" fill="#f7f8fa" opacity=".92"/>
+  <rect x="30" y="30" width="120" height="182" rx="9" fill="url(#f)"/>
+  <rect x="30" y="30" width="120" height="182" rx="9" fill="url(#g)"/>
+  <rect x="58" y="62" width="64" height="38" rx="4" fill="#0e2338"/><rect x="63" y="68" width="30" height="4" rx="2" fill="#35c3ff" opacity=".9"/><rect x="63" y="77" width="46" height="3" rx="1.5" fill="#35c3ff" opacity=".55"/><rect x="63" y="85" width="38" height="3" rx="1.5" fill="#35c3ff" opacity=".55"/><circle cx="66" cy="118" r="3.2" fill="#2ecc71"/><circle cx="66" cy="118" r="6" fill="#2ecc71" opacity=".18"/><circle cx="82" cy="118" r="3.2" fill="#2ecc71"/><circle cx="82" cy="118" r="6" fill="#2ecc71" opacity=".18"/><circle cx="98" cy="118" r="3.2" fill="#00d4ff"/><circle cx="98" cy="118" r="6" fill="#00d4ff" opacity=".18"/><circle cx="114" cy="118" r="3.2" fill="#f7b731"/><circle cx="114" cy="118" r="6" fill="#f7b731" opacity=".18"/><rect x="30" y="176" width="120" height="36" rx="0" fill="#1e6fd9" opacity=".9"/><path d="M30 176 H150 V203 a9 9 0 0 1 -9 9 H39 a9 9 0 0 1 -9 -9 Z" fill="#1e6fd9"/><text x="90" y="199" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="2.2" fill="#ffffff">SOFAR</text>
+  <rect x="30.5" y="30.5" width="119" height="181" rx="8.5" fill="none" stroke="#000" stroke-opacity=".12"/>
+</svg>

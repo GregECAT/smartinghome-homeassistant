@@ -34,6 +34,8 @@ from .const import (
     CONF_ANTHROPIC_API_KEY,
     CONF_ECOWITT_ENABLED,
     CONF_SENSOR_MAP,
+    CONF_INVERTER_BRAND,
+    INVERTER_BRAND_GOODWE,
     AUTOPILOT_PLAN_KEY,
     AUTOPILOT_SETTINGS_KEY,
 )
@@ -260,7 +262,15 @@ async def async_setup_services(
     async def _update_settings_file(h: HomeAssistant, updates: dict) -> None:
         await _update_settings_file_io(h, updates)
 
-    energy_mgr = EnergyManager(hass, device_id)
+    # Share the EnergyManager of the strategy controller — it carries the configured
+    # inverter brand (a bare EnergyManager(hass, device_id) always assumed GoodWe).
+    if strategy_controller is not None:
+        energy_mgr = strategy_controller.energy_manager
+    else:
+        energy_mgr = EnergyManager(
+            hass, device_id,
+            inverter_brand=entry.data.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE),
+        )
 
     # Try to load keys from settings.json first (more reliable than config_entry)
     _settings_keys = await _read_settings_async(hass)
@@ -281,26 +291,32 @@ async def async_setup_services(
         """Handle set_mode service."""
         mode = HEMSMode(call.data["mode"])
         await energy_mgr.set_mode(mode)
+        energy_mgr.raise_on_control_error()
 
     async def handle_force_charge(call: ServiceCall) -> None:
         """Handle force_charge service."""
         await energy_mgr.force_charge()
+        energy_mgr.raise_on_control_error()
 
     async def handle_force_discharge(call: ServiceCall) -> None:
         """Handle force_discharge service."""
         await energy_mgr.force_discharge()
+        energy_mgr.raise_on_control_error()
 
     async def handle_stop_force_charge(call: ServiceCall) -> None:
         """Handle stop_force_charge service."""
         await energy_mgr.stop_force_charge()
+        energy_mgr.raise_on_control_error()
 
     async def handle_stop_force_discharge(call: ServiceCall) -> None:
         """Handle stop_force_discharge service."""
         await energy_mgr.stop_force_discharge()
+        energy_mgr.raise_on_control_error()
 
     async def handle_emergency_stop(call: ServiceCall) -> None:
         """Handle emergency_stop service."""
         await energy_mgr.emergency_stop()
+        energy_mgr.raise_on_control_error()
 
     async def handle_force_custom(call: ServiceCall) -> None:
         """Handle force_custom service — configurable force command."""

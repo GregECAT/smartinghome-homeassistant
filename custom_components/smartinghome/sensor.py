@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -17,10 +18,11 @@ from homeassistant.const import (
     UnitOfFrequency,
     UnitOfPower,
 )
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
@@ -28,12 +30,7 @@ from .const import (
     MANUFACTURER,
     INTEGRATION_NAME,
     VERSION,
-    CONF_INVERTER_BRAND,
-    INVERTER_BRAND_GOODWE,
-    SENSOR_MAP_KEYS,
-    get_sensor_map_defaults,
     CONF_SENSOR_MAP,
-    DEFAULT_SENSOR_MAP,
     ICON_PV,
     ICON_BATTERY,
     ICON_GRID,
@@ -51,7 +48,7 @@ from .const import (
     ICON_LICENSE,
     ICON_TEMPERATURE,
 )
-from .coordinator import SmartingHomeCoordinator
+from .coordinator import SmartingHomeCoordinator, build_sensor_map
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -541,7 +538,7 @@ class SmartingHomeSensorMapSensor(SensorEntity):
         self._entry = entry
         self._attr_unique_id = f"{DOMAIN}_{entry.entry_id}_sensor_map"
         self._attr_name = "Sensor Map"
-        self._entity_ids: dict[str, str] = {}
+        self._attrs: dict[str, Any] = {}
 
     def _resolve_entity_ids(self) -> dict[str, str]:
         """Map description key → actual entity_id via unique_id.
@@ -561,22 +558,31 @@ class SmartingHomeSensorMapSensor(SensorEntity):
                 result[description.key] = entity_id
         return result
 
+    def _build_attributes(self) -> dict[str, Any]:
+        """Resolved sensor map (see build_sensor_map) + integration entity_ids."""
+        attrs: dict[str, Any] = build_sensor_map(self.hass, self._entry.data)
+        attrs["entity_ids"] = self._resolve_entity_ids()
+        return attrs
+
     async def async_added_to_hass(self) -> None:
-        """Track entity registry so entity_ids stays current (startup, renames)."""
+        """Keep attributes current: entities appear at startup, get renamed."""
         await super().async_added_to_hass()
-        self._entity_ids = self._resolve_entity_ids()
+        self._attrs = self._build_attributes()
 
         @callback
-        def _registry_updated(event: Event) -> None:
-            entity_ids = self._resolve_entity_ids()
-            if entity_ids != self._entity_ids:
-                self._entity_ids = entity_ids
+        def _refresh(*_: Any) -> None:
+            attrs = self._build_attributes()
+            if attrs != self._attrs:
+                self._attrs = attrs
                 self.async_write_ha_state()
 
         self.async_on_remove(
-            self.hass.bus.async_listen(
-                er.EVENT_ENTITY_REGISTRY_UPDATED, _registry_updated
-            )
+            self.hass.bus.async_listen(er.EVENT_ENTITY_REGISTRY_UPDATED, _refresh)
+        )
+        # Inverter integrations may finish loading after us; the entity picker
+        # updates the map without a reload — re-check every minute (cheap).
+        self.async_on_remove(
+            async_track_time_interval(self.hass, _refresh, timedelta(minutes=1))
         )
 
     @property
@@ -599,18 +605,8 @@ class SmartingHomeSensorMapSensor(SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return the sensor mapping as attributes."""
-        user_map = self._entry.data.get(CONF_SENSOR_MAP) or {}
-        brand = self._entry.data.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE)
-        brand_defaults = get_sensor_map_defaults(brand)
-        
-        merged = {}
-        for key in SENSOR_MAP_KEYS:
-            val = user_map.get(key)
-            merged[key] = val if val else brand_defaults.get(key, "")
-
-        merged["entity_ids"] = self._entity_ids
-        return merged
+        """Return the resolved sensor mapping as attributes."""
+        return self._attrs
 
     @property
     def available(self) -> bool:

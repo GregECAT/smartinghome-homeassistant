@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 240" role="img" aria-label="Falownik Deye">
+  <defs>
+    <linearGradient id="f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f2f4f6"/><stop offset="1" stop-color="#d9dee4"/></linearGradient>
+    <linearGradient id="s" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#aab3bd"/><stop offset="1" stop-color="#aab3bd" stop-opacity=".75"/></linearGradient>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".35"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <radialGradient id="sh" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#000" stop-opacity=".45"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient>
+  </defs>
+  <ellipse cx="100" cy="226" rx="78" ry="9" fill="url(#sh)"/>
+  <path d="M150 30 L172 19 L172 199 L150 212 Z" fill="url(#s)"/>
+  <line x1="155.2" y1="34.4" x2="155.2" y2="204.4" stroke="#000" stroke-opacity=".18" stroke-width="1.2"/><line x1="158.4" y1="32.8" x2="158.4" y2="202.8" stroke="#000" stroke-opacity=".18" stroke-width="1.2"/><line x1="161.6" y1="31.2" x2="161.6" y2="201.2" stroke="#000" stroke-opacity=".18" stroke-width="1.2"/><line x1="164.8" y1="29.6" x2="164.8" y2="199.6" stroke="#000" stroke-opacity=".18" stroke-width="1.2"/><line x1="168.0" y1="28.0" x2="168.0" y2="198.0" stroke="#000" stroke-opacity=".18" stroke-width="1.2"/>
+  <path d="M30 30 L52 19 L172 19 L150 30 Z" fill="#f2f4f6" opacity=".92"/>
+  <rect x="30" y="30" width="120" height="182" rx="9" fill="url(#f)"/>
+  <rect x="30" y="30" width="120" height="182" rx="9" fill="url(#g)"/>
+  <rect x="30" y="30" width="10" height="182" fill="#1b75bc" opacity=".9"/><rect x="54" y="56" width="78" height="50" rx="5" fill="#0b1b2b"/><rect x="58" y="60" width="70" height="42" rx="3" fill="#123a5e"/><text x="93" y="86" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#7fd3ff">5.2 kW</text><rect x="60" y="116" width="12" height="7" rx="3.5" fill="#9aa5b1"/><rect x="78" y="116" width="12" height="7" rx="3.5" fill="#9aa5b1"/><rect x="96" y="116" width="12" height="7" rx="3.5" fill="#9aa5b1"/><rect x="114" y="116" width="12" height="7" rx="3.5" fill="#9aa5b1"/><circle cx="68" cy="140" r="3.2" fill="#2ecc71"/><circle cx="68" cy="140" r="6" fill="#2ecc71" opacity=".18"/><circle cx="84" cy="140" r="3.2" fill="#2ecc71"/><circle cx="84" cy="140" r="6" fill="#2ecc71" opacity=".18"/><circle cx="100" cy="140" r="3.2" fill="#00d4ff"/><circle cx="100" cy="140" r="6" fill="#00d4ff" opacity=".18"/><circle cx="116" cy="140" r="3.2" fill="#f7b731"/><circle cx="116" cy="140" r="6" fill="#f7b731" opacity=".18"/><text x="90" y="190" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" font-weight="700" letter-spacing="3" fill="#1b75bc">DEYE</text>
+  <rect x="30.5" y="30.5" width="119" height="181" rx="8.5" fill="none" stroke="#000" stroke-opacity=".12"/>
+</svg>

@@ -272,11 +272,17 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
     www_dir.mkdir(parents=True, exist_ok=True)
     dest_file = www_dir / PANEL_FILENAME
 
+    img_source = Path(__file__).parent / "frontend" / "img"
     try:
         await hass.async_add_executor_job(
             shutil.copy2, str(source_file), str(dest_file)
         )
         _LOGGER.info("Copied panel.js → %s", dest_file)
+        # Bundled graphics (inverters per brand, house, grid) — no external hosting
+        if img_source.is_dir():
+            await hass.async_add_executor_job(
+                lambda: shutil.copytree(img_source, www_dir / "img", dirs_exist_ok=True)
+            )
     except Exception as err:
         _LOGGER.error("Failed to copy panel.js to www/: %s", err)
         return

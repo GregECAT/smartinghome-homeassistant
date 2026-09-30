@@ -312,6 +312,11 @@ class StrategyController:
         self._ai = ai_advisor
         _LOGGER.info("AI Controller: advisor connected (dry_run=%s)", self._ai_dry_run)
 
+    @property
+    def energy_manager(self) -> EnergyManager:
+        """Shared EnergyManager (configured with the inverter brand)."""
+        return self._em
+
     def set_inverter_brand(self, brand: str) -> None:
         """Set inverter brand for entity discovery."""
         self._inverter_agent._inverter_brand = brand
