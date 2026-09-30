@@ -5051,7 +5051,7 @@ class SmartingHomePanel extends HTMLElement {
         const link = { gemini: 'https://aistudio.google.com/apikey', anthropic: 'https://console.anthropic.com/settings/keys', openrouter: 'https://openrouter.ai/settings/keys' }[p];
         return `<div class="ai-prov">
           <div class="ai-prov-head"><span>${this._esc(c.label)}</span><span style="font-weight:400; font-size:10px">${status}</span></div>
-          <input type="password" id="ai-key-${p}" autocomplete="off" placeholder="${c.configured ? 'Wklej nowy klucz, aby zmienić' : 'Wklej klucz API'}" />
+          <input type="text" class="ai-key-input" id="ai-key-${p}" name="sh-ai-key-${p}" autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other" placeholder="${c.configured ? 'Wklej nowy klucz, aby zmienić' : 'Wklej klucz API'}" />
           <div style="display:flex; gap:6px; margin-top:6px; align-items:center">
             <button class="test-btn" id="ai-test-${p}" onclick="this.getRootNode().host._testAiProvider('${p}')">🧪 Testuj</button>
             <a href="${link}" target="_blank" rel="noopener" style="font-size:10px; color:#00d4ff">Skąd klucz?</a>
@@ -9659,6 +9659,7 @@ class SmartingHomePanel extends HTMLElement {
         .ai-prov { padding:10px 12px; border-radius:10px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); }
         .ai-prov-head { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; font-size:12px; font-weight:700; color:#e2e8f0; }
         .ai-prov input, .ai-row select { width:100%; box-sizing:border-box; padding:7px 9px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:12px; }
+        .ai-key-input { -webkit-text-security: disc; }
         .ai-prov-msg { font-size:10px; margin-top:6px; color:#94a3b8; word-break:break-word; }
         .ai-section-title { font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin:16px 0 6px; }
         .ai-row { display:grid; grid-template-columns:minmax(140px, 200px) minmax(140px, 1fr) minmax(180px, 2fr); gap:8px; align-items:center; margin-bottom:6px; }
@@ -14122,7 +14123,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.57.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.57.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
