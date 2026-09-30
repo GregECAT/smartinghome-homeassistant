@@ -1,8 +1,13 @@
 {
   "domain": "smartinghome",
   "name": "Smarting HOME — Energy Management",
-  "after_dependencies": ["lovelace", "recorder"],
-  "codeowners": ["@GregECAT"],
+  "after_dependencies": [
+    "lovelace",
+    "recorder"
+  ],
+  "codeowners": [
+    "@GregECAT"
+  ],
   "config_flow": true,
   "documentation": "https://smartinghome.pl/docs",
   "integration_type": "hub",
@@ -11,5 +16,8 @@
   "requirements": [
     "aiohttp>=3.9.0"
   ],
-  "version": "1.56.11"
+  "version": "1.57.0",
+  "dependencies": [
+    "websocket_api"
+  ]
 }

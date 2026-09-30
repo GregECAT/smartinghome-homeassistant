@@ -14,7 +14,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .ai_advisor import AIAdvisor
+from .ai_advisor import AIAdvisor, is_ai_error
 from .const import DOMAIN
 
 SETTINGS_FILE = "settings.json"
@@ -383,23 +383,9 @@ class AICronScheduler:
 
         while self._running:
             try:
-                # Refresh AI keys from settings.json (may have changed via panel)
+                # Refresh AI model/task settings (keys live in private storage)
                 settings = await self._read_settings_async()
-                gk = settings.get("gemini_api_key", "")
-                ak = settings.get("anthropic_api_key", "")
-                if gk and gk != self._ai._gemini_key:
-                    self._ai._gemini_key = gk
-                    _LOGGER.debug("AI Cron: refreshed Gemini key from settings")
-                if ak and ak != self._ai._anthropic_key:
-                    self._ai._anthropic_key = ak
-                    _LOGGER.debug("AI Cron: refreshed Anthropic key from settings")
-                # Also refresh model selections
-                gm = settings.get("gemini_model", "")
-                am = settings.get("anthropic_model", "")
-                if gm:
-                    self._ai._gemini_model = gm
-                if am:
-                    self._ai._anthropic_model = am
+                self._ai.apply_settings(settings)
 
                 if not self._ai.any_available:
                     _LOGGER.debug(
@@ -442,18 +428,13 @@ class AICronScheduler:
                     now_str = datetime.now().strftime("%H:%M")
                     now_date = datetime.now().strftime("%Y-%m-%d")
                     settings = await self._read_settings_async()
-                    default_prov = settings.get("default_ai_provider", "gemini")
-                    if default_prov == "anthropic" and self._ai.anthropic_available:
-                        provider = "anthropic"
-                    elif self._ai.gemini_available:
-                        provider = "gemini"
-                    elif self._ai.anthropic_available:
-                        provider = "anthropic"
-                    else:
-                        provider = "unknown"
+                    last = self._ai.last_completion
+                    provider = (
+                        f"{last.provider}/{last.model}" if last and last.provider else "unknown"
+                    )
 
                     # Determine status
-                    is_error = result.startswith("Gemini error") or result.startswith("Anthropic error") or result.startswith("No response")
+                    is_error = is_ai_error(result) and "Rate limit reached" not in result
                     is_rate_limited = "Rate limit reached" in result
                     is_truncated = len(result) > 100 and not result.rstrip().endswith((".", "!", "?", ")", "]", "```"))
                     status = "rate_limited" if is_rate_limited else "error" if is_error else "truncated" if is_truncated else "ok"
