@@ -175,7 +175,7 @@ class ModelCatalog:
                 if "generateContent" not in (m.get("supportedGenerationMethods") or []):
                     continue
                 model_id = str(m.get("name", "")).removeprefix("models/")
-                if not model_id or any(x in model_id for x in ("embedding", "aqa", "imagen", "veo", "tts")):
+                if not model_id or any(x in model_id for x in _GEMINI_NON_CHAT):
                     continue
                 models.append({
                     "id": model_id,
@@ -186,8 +186,8 @@ class ModelCatalog:
             page_token = data.get("nextPageToken", "")
             if not page_token:
                 break
-        # Newest families first (ids carry the version, e.g. gemini-3.8-flash)
-        models.sort(key=lambda x: _version_key(x["id"]), reverse=True)
+        # gemini-* first, newest version first, stable before preview
+        models.sort(key=lambda x: _gemini_sort_key(x["id"]), reverse=True)
         return models
 
     async def _fetch_anthropic(self, api_key: str) -> list[dict[str, Any]]:
@@ -415,12 +415,23 @@ def _describe_http_error(status: int, body: Any) -> str:
     return f"{text}: {str(msg)[:300]}" if msg else text
 
 
-def _version_key(model_id: str) -> tuple:
+# Not text chat models (image/audio/video generation, agents, embeddings, …)
+_GEMINI_NON_CHAT = (
+    "embedding", "aqa", "imagen", "veo", "tts", "image", "lyria", "transcribe",
+    "computer-use", "robotics", "deep-research", "antigravity", "nano-banana",
+    "customtools", "audio", "live",
+)
+
+
+def _gemini_sort_key(model_id: str) -> tuple:
     import re
 
-    nums = tuple(int(n) for n in re.findall(r"\d+", model_id)[:3])
-    stable = 0 if any(t in model_id for t in ("preview", "exp", "latest")) else 1
-    return (nums, stable)
+    family = 2 if model_id.startswith("gemini-") else 1 if model_id.startswith("gemma-") else 0
+    match = re.match(r"[a-z]+-(\d+(?:\.\d+)?)", model_id)
+    version = float(match.group(1)) if match else 0.0
+    stable = 0 if ("preview" in model_id or "exp" in model_id) else 1
+    alias = 0 if model_id.endswith("-latest") else 1  # dated ids above floating aliases
+    return (family, alias, version, stable)
 
 
 def _per_million(value: Any) -> float | None:
