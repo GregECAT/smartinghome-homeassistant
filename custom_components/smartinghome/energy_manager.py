@@ -191,6 +191,10 @@ class EnergyManager:
         if self._inverter_brand == INVERTER_BRAND_SOFAR:
             _LOGGER.info("[Sofar] charge_from_grid — Passive (grid=+6000 import, battery=+6000 charge)")
             await self._sofar_set_passive(grid_power=6000, max_battery=6000, min_battery=6000)
+        elif self._goodwe_ems_select():
+            _LOGGER.info("charge_from_grid — GoodWe EMS charge_battery (PV + sieć → bateria)")
+            await self._enable_charging()
+            await self._set_work_mode("eco_charge")  # → EMS charge_battery
         else:
             _LOGGER.info("charge_from_grid — eco_charge (PV + sieć → bateria, soc=100, power=100)")
             await self._set_eco_mode_soc(100)
@@ -215,6 +219,11 @@ class EnergyManager:
         if self._inverter_brand == INVERTER_BRAND_SOFAR:
             _LOGGER.info("[Sofar] force_discharge — Passive (grid=-6000 export, battery=-6000 discharge)")
             await self._sofar_set_passive(grid_power=-6000, max_battery=-6000, min_battery=-6000)
+        elif self._goodwe_ems_select():
+            _LOGGER.info("Forcing battery discharge via GoodWe EMS (discharge_battery)")
+            await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
+            await self._set_dod(95)
+            await self._set_work_mode("eco_discharge")  # → EMS discharge_battery
         else:
             _LOGGER.info("Forcing battery discharge (eco_discharge, DOD=95%%, soc=5, power=100, grid_export=ON)")
             # Enable grid export (47509=1) — critical for BT! Optional RS485 hub.
@@ -783,6 +792,18 @@ class EnergyManager:
                 return entity_id
         return None
 
+    def _goodwe_ems_select(self) -> str | None:
+        """GoodWe "EMS mode" select, if the integration exposes it."""
+        if self._is_sofar:
+            return None
+        return self._find_goodwe_select("discharge_battery")
+
+    def _goodwe_operation_mode_select(self, option: str = "general") -> str | None:
+        """GoodWe "Inverter operation mode" select (general / eco_* ...)."""
+        if self.hass.states.get(SELECT_WORK_MODE):
+            return SELECT_WORK_MODE
+        return self._find_goodwe_select(option)
+
     def raise_on_control_error(self) -> None:
         """Raise (for service calls) if the last command could not reach the inverter."""
         if self._control_error:
@@ -801,20 +822,20 @@ class EnergyManager:
             )
             return
 
-        # 1) "Inverter operation mode" select (general / eco_charge / eco_discharge)
-        entity = SELECT_WORK_MODE if self.hass.states.get(SELECT_WORK_MODE) else None
-        entity = entity or self._find_goodwe_select(mode)
-        if entity:
-            await self.hass.services.async_call(
-                "select", "select_option", {"entity_id": entity, "option": mode},
-            )
-            self._control_error = None
-            return
-
-        # 2) Newer GoodWe integration: EMS mode + EMS power limit
+        # 1) EMS mode (newer GoodWe integration/firmware) — direct and immediate.
+        #    Preferred: on GW8K-ET "eco_discharge" via operation mode left the battery
+        #    idle (house fell back to grid), while EMS "discharge_battery" discharged
+        #    at full power right away (verified 2026-09-30).
         ems_mode = _GOODWE_EMS_MODE_FOR_WORK_MODE.get(mode)
-        ems_select = self._find_goodwe_select("discharge_battery")
+        ems_select = self._goodwe_ems_select()
         if ems_mode and ems_select:
+            if ems_mode == "auto":
+                # Also leave any eco_* operation mode set by older versions/users
+                op_select = self._goodwe_operation_mode_select()
+                if op_select:
+                    await self.hass.services.async_call(
+                        "select", "select_option", {"entity_id": op_select, "option": "general"},
+                    )
             power_entity = self._find_goodwe_number("", "ems_power_limit")
             if power_entity:
                 power_state = self.hass.states.get(power_entity)
@@ -828,6 +849,15 @@ class EnergyManager:
                 "select", "select_option", {"entity_id": ems_select, "option": ems_mode},
             )
             _LOGGER.info("GoodWe EMS mode → %s (work mode %s)", ems_mode, mode)
+            self._control_error = None
+            return
+
+        # 2) "Inverter operation mode" select (general / eco_charge / eco_discharge)
+        entity = self._goodwe_operation_mode_select(mode)
+        if entity:
+            await self.hass.services.async_call(
+                "select", "select_option", {"entity_id": entity, "option": mode},
+            )
             self._control_error = None
             return
 
