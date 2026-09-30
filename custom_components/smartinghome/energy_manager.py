@@ -1,7 +1,9 @@
 """Energy management engine for Smarting HOME."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -110,6 +112,7 @@ class EnergyManager:
         self._last_charge_current = None
         self._last_export_limit = None
         self._control_error: str | None = None
+        self._last_goodwe_reload: float = 0.0
 
     @property
     def inverter_brand(self) -> str:
@@ -847,6 +850,30 @@ class EnergyManager:
         state = self.hass.states.get(entity_id)
         return state is None or state.state in ("unavailable", "unknown")
 
+    async def _ensure_available(self, entity_id: str, timeout: int = 25) -> bool:
+        """Self-heal an unavailable GoodWe control entity.
+
+        After an HA restart the GoodWe integration sometimes never reads the EMS
+        mode and the select stays unavailable (service calls on it are ignored);
+        reloading the GoodWe config entry fixes it (verified on GW8K-ET).
+        """
+        if not self._entity_unavailable(entity_id):
+            return True
+        entry = er.async_get(self.hass).async_get(entity_id)
+        now = time.monotonic()
+        if entry and entry.config_entry_id and now - self._last_goodwe_reload > 600:
+            self._last_goodwe_reload = now
+            _LOGGER.warning("%s unavailable — reloading the GoodWe integration", entity_id)
+            try:
+                await self.hass.config_entries.async_reload(entry.config_entry_id)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.error("GoodWe reload failed: %s", err)
+        for _ in range(timeout):
+            if not self._entity_unavailable(entity_id):
+                return True
+            await asyncio.sleep(1)
+        return False
+
     def _find_goodwe_number(self, preferred: str, suffix: str) -> str | None:
         """Return `preferred` if present, else a GoodWe number ending with `suffix`."""
         if preferred and self.hass.states.get(preferred):
@@ -906,10 +933,10 @@ class EnergyManager:
         ems_mode = _GOODWE_EMS_MODE_FOR_WORK_MODE.get(mode)
         ems_select = self._goodwe_ems_select()
         if ems_mode and ems_select:
-            if self._entity_unavailable(ems_select):
+            if not await self._ensure_available(ems_select):
                 self._control_error = (
-                    f"{ems_select} jest chwilowo niedostępny (np. po restarcie) — "
-                    "spróbuj ponownie za minutę."
+                    f"{ems_select} jest niedostępny mimo przeładowania integracji GoodWe — "
+                    "sprawdź połączenie z falownikiem."
                 )
                 _LOGGER.warning(self._control_error)
                 return
