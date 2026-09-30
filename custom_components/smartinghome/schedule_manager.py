@@ -270,11 +270,16 @@ class ScheduleManager:
 
         Called from the apply_manual_mode service.
         """
-        self._manual_override = mode
         self._log_decision(
             "manual_override",
             f"Natychmiastowy override: {MANUAL_MODE_LABELS.get(mode, mode.value)}",
         )
+        if self._enabled:
+            # Picked up by the next evaluate_tick (keeps schedule bookkeeping)
+            self._manual_override = mode
+        else:
+            # Schedule off → evaluate_tick returns early; apply right away
+            await self._apply_manual_mode(mode, source="override")
         return {
             "success": True,
             "mode": mode.value,
@@ -454,9 +459,8 @@ class ScheduleManager:
                 await self._em.charge_from_grid()
 
             elif mode == ManualMode.PEAK_SAVE:
-                # Block grid import, battery powers home
-                # Use general mode with grid protection (handled by safety layers)
-                await self._em.set_general_mode()
+                # Battery powers home, no charging, no export
+                await self._em.battery_to_home()
 
             elif mode == ManualMode.ZERO_EXPORT:
                 # Zero export — set export limit to 0
@@ -464,9 +468,8 @@ class ScheduleManager:
                 await self._em.set_export_limit(0)
 
             elif mode == ManualMode.BATTERY_HOLD:
-                # Battery idle — general mode, no forced charge/discharge
-                await self._em.stop_force_charge()
-                await self._em.stop_force_discharge()
+                # Battery idle — no charge, no discharge (EMS battery_standby on GoodWe)
+                await self._em.battery_hold()
 
             elif mode == ManualMode.OFF:
                 # Reset to inverter defaults

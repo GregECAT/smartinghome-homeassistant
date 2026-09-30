@@ -257,7 +257,7 @@ def build_all_actions() -> list[AutopilotAction]:
             sensor_slots=[_slot_grid(), _slot_bat_power()],
             default_params={"rce_exception_threshold": 100},
             always_active=True,
-            commands=[{"tool": "force_discharge", "params": {}}],
+            commands=[{"tool": "battery_to_home", "params": {}}],
         ),
         AutopilotAction(
             id="pv_surplus_charge",
@@ -301,7 +301,7 @@ def build_all_actions() -> list[AutopilotAction]:
             category=ActionCategory.W1_G13,
             sensor_slots=[_slot_g13(), _slot_soc()],
             default_params={"zone": "afternoon_peak"},
-            commands=[{"tool": "force_discharge", "params": {}}],
+            commands=[{"tool": "battery_to_home", "params": {}}],
         ),
         AutopilotAction(
             id="weekend",
@@ -344,7 +344,7 @@ def build_all_actions() -> list[AutopilotAction]:
             category=ActionCategory.W2_RCE,
             sensor_slots=[_slot_rce_mwh(), _slot_g13()],
             default_params={},
-            commands=[{"tool": "force_discharge", "params": {}}],
+            commands=[{"tool": "battery_to_home", "params": {}}],
         ),
         AutopilotAction(
             id="low_price_charge",
