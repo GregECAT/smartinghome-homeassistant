@@ -510,6 +510,9 @@ async def async_setup_services(
         for danger_key in _SETTINGS_SECRET_KEYS:
             incoming.pop(danger_key, None)
         await _update_settings_file(hass, incoming)
+        if "energy_provider" in incoming:
+            # Tariff labels/prices in AI prompts follow the panel's provider
+            ai_advisor.apply_settings(await _read_settings_async(hass))
         _LOGGER.info("Panel settings saved: %s", list(incoming.keys()))
 
     # Autopilot engine — instantiated per-request with actual data
