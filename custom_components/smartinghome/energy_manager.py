@@ -942,6 +942,40 @@ class EnergyManager:
                 )
         return None
 
+    def _find_goodwe_number(self, preferred: str, suffix: str) -> str | None:
+        """Return `preferred` if present, else a GoodWe number ending with `suffix`."""
+        if preferred and self.hass.states.get(preferred):
+            return preferred
+        for entity_id in self._goodwe_entity_ids("number"):
+            if entity_id.endswith(suffix) and self.hass.states.get(entity_id):
+                return entity_id
+        return None
+
+    def _goodwe_device_id(self) -> str:
+        """Device ID of the GoodWe inverter (for goodwe.set_parameter).
+
+        The configured ID defaults to a constant from another install; prefer the
+        device that actually owns the GoodWe control entities.
+        """
+        registry = er.async_get(self.hass)
+        for entity_id in self._goodwe_entity_ids("select") + self._goodwe_entity_ids("number"):
+            entry = registry.async_get(entity_id)
+            if entry and entry.device_id:
+                return entry.device_id
+        return self._device_id
+
+    def _goodwe_ems_select(self) -> str | None:
+        """GoodWe "EMS mode" select, if the integration exposes it."""
+        if self._is_sofar:
+            return None
+        return self._find_goodwe_select("discharge_battery")
+
+    def _goodwe_operation_mode_select(self, option: str = "general") -> str | None:
+        """GoodWe "Inverter operation mode" select (general / eco_* ...)."""
+        if self.hass.states.get(SELECT_WORK_MODE):
+            return SELECT_WORK_MODE
+        return self._find_goodwe_select(option)
+
     def raise_on_control_error(self) -> None:
         """Raise (for service calls) if the last command could not reach the inverter."""
         if self._control_error:
