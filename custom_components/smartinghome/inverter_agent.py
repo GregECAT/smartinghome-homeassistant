@@ -313,7 +313,7 @@ class InverterAgent:
         if self._commanded_charging is not None:
             charging_active = self._commanded_charging
         else:
-            charging_active = bat_power > 50  # positive = charging
+            charging_active = bat_power < -50  # battery_power: +discharge / -charge
 
         return {
             "charging_active": charging_active,
