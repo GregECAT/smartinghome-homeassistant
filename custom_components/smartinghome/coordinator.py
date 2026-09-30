@@ -449,6 +449,17 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     schedule_result = {}
                     computed["schedule_status"] = {"error": str(sched_err)}
 
+            # Inverter watchdog — heal a stuck GoodWe integration (always on)
+            if self._strategy_controller:
+                try:
+                    heal = await self._strategy_controller.energy_manager.async_watchdog(
+                        self._sensor_map.get("battery_power", "")
+                    )
+                    if heal:
+                        self._strategy_controller.on_inverter_healed(heal)
+                except Exception as wd_err:  # noqa: BLE001
+                    _LOGGER.debug("Inverter watchdog error: %s", wd_err)
+
             # Execute strategy controller tick (autonomous HEMS control)
             # Schedule manager controls whether full strategy or safety-only runs
             autopilot_should_run = schedule_result.get(

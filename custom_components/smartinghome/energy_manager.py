@@ -117,6 +117,7 @@ class EnergyManager:
         # charging or holding.
         self.intent: str = "general"
         self._last_goodwe_reload: float = 0.0
+        self._control_unavailable_since: float = 0.0
 
     @property
     def inverter_brand(self) -> str:
@@ -863,6 +864,24 @@ class EnergyManager:
         state = self.hass.states.get(entity_id)
         return state is None or state.state in ("unavailable", "unknown")
 
+    async def _reload_goodwe_for(self, entity_id: str, reason: str) -> bool:
+        """Reload the GoodWe config entry owning entity_id (max once per 10 min)."""
+        entry = er.async_get(self.hass).async_get(entity_id)
+        now = time.monotonic()
+        if (
+            not entry or entry.platform != "goodwe" or not entry.config_entry_id
+            or now - self._last_goodwe_reload < 600
+        ):
+            return False
+        self._last_goodwe_reload = now
+        _LOGGER.warning("GoodWe watchdog: %s — reloading the GoodWe integration", reason)
+        try:
+            await self.hass.config_entries.async_reload(entry.config_entry_id)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("GoodWe reload failed: %s", err)
+            return False
+        return True
+
     async def _ensure_available(self, entity_id: str, timeout: int = 25) -> bool:
         """Self-heal an unavailable GoodWe control entity.
 
@@ -872,54 +891,56 @@ class EnergyManager:
         """
         if not self._entity_unavailable(entity_id):
             return True
-        entry = er.async_get(self.hass).async_get(entity_id)
-        now = time.monotonic()
-        if entry and entry.config_entry_id and now - self._last_goodwe_reload > 600:
-            self._last_goodwe_reload = now
-            _LOGGER.warning("%s unavailable — reloading the GoodWe integration", entity_id)
-            try:
-                await self.hass.config_entries.async_reload(entry.config_entry_id)
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.error("GoodWe reload failed: %s", err)
+        await self._reload_goodwe_for(entity_id, f"{entity_id} unavailable")
         for _ in range(timeout):
             if not self._entity_unavailable(entity_id):
                 return True
             await asyncio.sleep(1)
         return False
 
-    def _find_goodwe_number(self, preferred: str, suffix: str) -> str | None:
-        """Return `preferred` if present, else a GoodWe number ending with `suffix`."""
-        if preferred and self.hass.states.get(preferred):
-            return preferred
-        for entity_id in self._goodwe_entity_ids("number"):
-            if entity_id.endswith(suffix) and self.hass.states.get(entity_id):
-                return entity_id
-        return None
+    def ems_state(self) -> str | None:
+        """Current GoodWe EMS mode (None if the integration has no EMS select)."""
+        select = self._goodwe_ems_select()
+        state = self.hass.states.get(select) if select else None
+        return state.state if state else None
 
-    def _goodwe_device_id(self) -> str:
-        """Device ID of the GoodWe inverter (for goodwe.set_parameter).
+    async def async_watchdog(self, battery_power_entity: str = "") -> str | None:
+        """Called every coordinator cycle — heal a stuck GoodWe integration.
 
-        The configured ID defaults to a constant from another install; prefer the
-        device that actually owns the GoodWe control entities.
+        - control select (EMS / operation mode) unavailable for > 2 min
+        - battery power sensor not reporting for > 10 min (frozen data)
+        Returns a message when a reload was triggered.
         """
-        registry = er.async_get(self.hass)
-        for entity_id in self._goodwe_entity_ids("select") + self._goodwe_entity_ids("number"):
-            entry = registry.async_get(entity_id)
-            if entry and entry.device_id:
-                return entry.device_id
-        return self._device_id
-
-    def _goodwe_ems_select(self) -> str | None:
-        """GoodWe "EMS mode" select, if the integration exposes it."""
         if self._is_sofar:
             return None
-        return self._find_goodwe_select("discharge_battery")
+        control = self._goodwe_ems_select() or self._goodwe_operation_mode_select()
+        if not control:
+            return None
+        now = time.monotonic()
+        if self._entity_unavailable(control):
+            if not self._control_unavailable_since:
+                self._control_unavailable_since = now
+            elif now - self._control_unavailable_since > 120:
+                if await self._reload_goodwe_for(control, f"{control} unavailable > 2 min"):
+                    self._control_unavailable_since = 0.0
+                    return f"🔧 Watchdog: {control} niedostępny > 2 min — przeładowano integrację GoodWe"
+            return None
+        self._control_unavailable_since = 0.0
 
-    def _goodwe_operation_mode_select(self, option: str = "general") -> str | None:
-        """GoodWe "Inverter operation mode" select (general / eco_* ...)."""
-        if self.hass.states.get(SELECT_WORK_MODE):
-            return SELECT_WORK_MODE
-        return self._find_goodwe_select(option)
+        state = self.hass.states.get(battery_power_entity) if battery_power_entity else None
+        reported = getattr(state, "last_reported", None) or getattr(state, "last_updated", None)
+        if state is not None and reported is not None:
+            from homeassistant.util import dt as dt_util
+
+            age = (dt_util.utcnow() - reported).total_seconds()
+            if age > 600 and await self._reload_goodwe_for(
+                battery_power_entity, f"{battery_power_entity} not reporting for {age:.0f} s"
+            ):
+                return (
+                    f"🔧 Watchdog: brak nowych danych z falownika od {age / 60:.0f} min "
+                    "— przeładowano integrację GoodWe"
+                )
+        return None
 
     def raise_on_control_error(self) -> None:
         """Raise (for service calls) if the last command could not reach the inverter."""

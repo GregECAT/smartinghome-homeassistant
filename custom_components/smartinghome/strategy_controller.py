@@ -314,6 +314,8 @@ class StrategyController:
         self._arb_cmd: tuple[str, int] | None = None
         self._arb_cmd_ts: float = 0.0
         self._arb_status: dict[str, Any] = {}
+        self._arb_drift_since: float = 0.0
+        self._arb_intent: str = ""  # EnergyManager.intent right after our last command
         self._load_profile: list[float | None] = [None] * 24  # kW per hour of day
         self._load_profile_loaded: bool = False
         self._load_profile_hour: int = -1
@@ -1535,8 +1537,17 @@ class StrategyController:
 
         cmd = (first.action, int(round(first.power_w / 500.0)) * 500)
         changed = cmd != self._arb_cmd
-        if changed or time.time() - self._arb_cmd_ts > 900:  # re-assert every 15 min
+        drifted = self._arbitrage_drifted(first.action) if not changed else False
+        if drifted:
+            self._log_decision(
+                "arbitrage_drift",
+                f"⚠️ Falownik nie wykonał polecenia ({ACTION_LABELS.get(first.action, first.action)}, "
+                f"EMS={self._em.ems_state()}) — ponawiam",
+            )
+        if changed or drifted or time.time() - self._arb_cmd_ts > 900:  # re-assert every 15 min
             await self._apply_arbitrage(first.action, first.power_w)
+            self._arb_intent = self._em.intent
+            self._arb_drift_since = 0.0
             self._arb_cmd, self._arb_cmd_ts = cmd, time.time()
             self._charging_enabled = first.action in (ACT_CHARGE_GRID, ACT_PV_CHARGE)
             power = f" {first.power_w} W" if first.power_w else ""
@@ -1550,6 +1561,39 @@ class StrategyController:
             if changed:
                 self._log_decision("arbitrage", msg)
         return actions
+
+    _EXPECTED_EMS = {
+        ACT_CHARGE_GRID: "charge_battery",
+        ACT_DISCHARGE: "discharge_battery",
+        ACT_HOLD: "battery_standby",
+    }
+
+    def _arbitrage_drifted(self, action: str) -> bool:
+        """EMS mode differs from what the plan commanded for > 90 s."""
+        if self._em.intent != self._arb_intent:
+            self._arb_drift_since = 0.0
+            return False  # another layer (W3, manual) took over — don't fight it
+        actual = self._em.ems_state()
+        if actual in (None, "unavailable", "unknown"):
+            self._arb_drift_since = 0.0
+            return False  # watchdog handles unavailability
+        expected = self._EXPECTED_EMS.get(action, "auto")
+        if actual == expected:
+            self._arb_drift_since = 0.0
+            return False
+        now = time.time()
+        if not self._arb_drift_since:
+            self._arb_drift_since = now
+            return False
+        if now - self._arb_drift_since > 90:
+            self._arb_drift_since = 0.0
+            return True
+        return False
+
+    def on_inverter_healed(self, message: str) -> None:
+        """Watchdog reloaded the inverter integration — log and re-assert the plan."""
+        self._log_decision("inverter_watchdog", message)
+        self._arb_cmd = None
 
     async def _apply_arbitrage(self, action: str, power_w: int) -> None:
         if action == ACT_CHARGE_GRID:
