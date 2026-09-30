@@ -13209,7 +13209,8 @@ class SmartingHomePanel extends HTMLElement {
               <span id="ap-arb-hold" style="display:none; color:#f7b731"></span>
             </div>
             <div class="arb-params">
-              <label>Rezerwa SOC (%)<input type="number" id="arb-reserve_soc" oninput="this.getRootNode().host._arbParamsTouched = true" min="5" max="90" step="1"></label>
+              <label>Min. SOC w szczycie (%)<input type="number" id="arb-peak_floor_soc" oninput="this.getRootNode().host._arbParamsTouched = true" min="5" max="50" step="1"></label>
+              <label>Rezerwa SOC poza szczytem (%)<input type="number" id="arb-reserve_soc" oninput="this.getRootNode().host._arbParamsTouched = true" min="5" max="90" step="1"></label>
               <label>Maks. SOC ładowania (%)<input type="number" id="arb-max_soc" oninput="this.getRootNode().host._arbParamsTouched = true" min="20" max="100" step="1"></label>
               <label>Min. zysk (zł/kWh)<input type="number" id="arb-min_profit" oninput="this.getRootNode().host._arbParamsTouched = true" min="0" max="2" step="0.01"></label>
               <label>Zużycie baterii (zł/kWh)<input type="number" id="arb-wear_cost" oninput="this.getRootNode().host._arbParamsTouched = true" min="0" max="2" step="0.01"></label>
@@ -14123,7 +14124,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.59.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.60.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -14695,7 +14696,7 @@ class SmartingHomePanel extends HTMLElement {
     }
     const params = plan?.params;
     if (params && !this._arbParamsTouched) {
-      ['reserve_soc', 'max_soc', 'min_profit', 'wear_cost'].forEach(k => {
+      ['peak_floor_soc', 'reserve_soc', 'max_soc', 'min_profit', 'wear_cost'].forEach(k => {
         const el = this.shadowRoot.getElementById(`arb-${k}`);
         if (el && document.activeElement !== el && this.shadowRoot.activeElement !== el) el.value = params[k];
       });
@@ -14730,12 +14731,17 @@ class SmartingHomePanel extends HTMLElement {
     box.innerHTML = `<div class="arb-wrap"><table class="arb-table">
       <thead><tr><th>Godz.</th><th>Strefa</th><th>Zakup zł</th><th>RCE sprz. zł</th><th>Akcja</th><th>SOC</th><th>Pobór / oddanie kWh</th></tr></thead>
       <tbody>${rows}</tbody></table></div>
-      <div style="margin-top:6px; font-size:10px; color:#64748b">Koszt energii w planie: ${plan.total_cost.toFixed(2)} zł vs ${plan.baseline_cost.toFixed(2)} zł bez pracy baterii · aktualizacja ${plan.updated || '—'}</div>`;
+      <div style="margin-top:8px; display:flex; gap:14px; flex-wrap:wrap; font-size:11px; color:#cbd5e1">
+        ${plan.next_peak ? `<span>⚡ Najbliższy szczyt: <b>${plan.next_peak}</b></span>` : ''}
+        ${plan.next_peak ? `<span>🔋 Bateria: <b style="color:${plan.battery_until ? '#e74c3c' : '#2ecc71'}">${plan.battery_until ? 'wyczerpie się ok. ' + plan.battery_until : 'wystarczy na cały szczyt'}</b></span>` : ''}
+        ${plan.charge_start ? `<span>⏰ Start ładowania z sieci: <b>${plan.charge_start}</b></span>` : ''}
+      </div>
+      <div style="margin-top:6px; font-size:10px; color:#64748b">W godzinach szczytu dom korzysta wyłącznie z baterii (do min. SOC w szczycie); sprzedawana jest tylko nadwyżka. Koszt energii w planie: ${plan.total_cost.toFixed(2)} zł vs ${plan.baseline_cost.toFixed(2)} zł bez pracy baterii · aktualizacja ${plan.updated || '—'}</div>`;
   }
 
   async _saveArbitrageParams(btn) {
     const params = {};
-    ['reserve_soc', 'max_soc', 'min_profit', 'wear_cost'].forEach(k => {
+    ['peak_floor_soc', 'reserve_soc', 'max_soc', 'min_profit', 'wear_cost'].forEach(k => {
       const v = parseFloat(this.shadowRoot.getElementById(`arb-${k}`)?.value);
       if (!isNaN(v)) params[k] = v;
     });

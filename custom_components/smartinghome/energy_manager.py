@@ -117,6 +117,8 @@ class EnergyManager:
         # charging or holding.
         self.intent: str = "general"
         self._last_goodwe_reload: float = 0.0
+        self._goodwe_reloads: list[float] = []
+        self._started: float = time.monotonic()
         self._control_unavailable_since: float = 0.0
 
     @property
@@ -865,15 +867,23 @@ class EnergyManager:
         return state is None or state.state in ("unavailable", "unknown")
 
     async def _reload_goodwe_for(self, entity_id: str, reason: str) -> bool:
-        """Reload the GoodWe config entry owning entity_id (max once per 10 min)."""
+        """Reload the GoodWe config entry owning entity_id.
+
+        Not in the first 3 min after start, at most every 3 min and 3× per hour.
+        """
         entry = er.async_get(self.hass).async_get(entity_id)
         now = time.monotonic()
+        self._goodwe_reloads = [t for t in self._goodwe_reloads if now - t < 3600]
         if (
             not entry or entry.platform != "goodwe" or not entry.config_entry_id
-            or now - self._last_goodwe_reload < 600
+            # GoodWe may still be starting — reloading it then made EMS unavailable
+            or now - self._started < 180
+            or now - self._last_goodwe_reload < 180
+            or len(self._goodwe_reloads) >= 3
         ):
             return False
         self._last_goodwe_reload = now
+        self._goodwe_reloads.append(now)
         _LOGGER.warning("GoodWe watchdog: %s — reloading the GoodWe integration", reason)
         try:
             await self.hass.config_entries.async_reload(entry.config_entry_id)
