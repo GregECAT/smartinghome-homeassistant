@@ -71,6 +71,7 @@ _GOODWE_EMS_MODE_FOR_WORK_MODE: dict[str, str] = {
     "general": "auto",
     "eco_charge": "charge_battery",
     "eco_discharge": "discharge_battery",
+    "battery_standby": "battery_standby",
 }
 
 
@@ -296,6 +297,38 @@ class EnergyManager:
             except Exception:
                 _LOGGER.debug("%s turn_off failed", _eid)
         self._current_mode = HEMSMode.AUTO
+
+    async def battery_to_home(self) -> None:
+        """Battery powers the house — no charging, no forced export.
+
+        This is what most autopilot rules mean by "discharge" (peak zone,
+        grid import guard, low PV). force_discharge() instead EXPORTS the
+        battery to the grid at full power — use it only for deliberate selling.
+        """
+        if self._inverter_brand == INVERTER_BRAND_SOFAR:
+            _LOGGER.info("[Sofar] battery_to_home — Passive (grid=0, battery discharge only)")
+            await self._sofar_set_passive(grid_power=0, max_battery=0, min_battery=-6000)
+        else:
+            _LOGGER.info("battery_to_home — general mode, charging blocked (battery → house)")
+            await self.set_general_mode()
+            await self._block_charging()
+        self._current_mode = HEMSMode.PEAK_SAVE
+
+    async def battery_hold(self) -> None:
+        """Keep the battery idle — no charge, no discharge (house runs on PV/grid)."""
+        if self._inverter_brand == INVERTER_BRAND_SOFAR:
+            _LOGGER.info("[Sofar] battery_hold — Passive (battery=0)")
+            await self._sofar_set_passive(grid_power=0, max_battery=0, min_battery=0)
+        elif self._goodwe_ems_select():
+            _LOGGER.info("battery_hold — GoodWe EMS battery_standby")
+            await self._set_work_mode("battery_standby")
+        else:
+            # No EMS: block charging and allow no discharge (DOD 0), restored by general mode
+            _LOGGER.info("battery_hold — general mode, charging blocked, DOD 0")
+            await self._set_work_mode("general")
+            await self._block_charging()
+            await self._set_dod(0)
+        self._current_mode = HEMSMode.MANUAL
 
     async def set_general_mode(self) -> None:
         """Switch to General/Self Use mode — battery self-consumption."""

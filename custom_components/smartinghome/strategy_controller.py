@@ -637,6 +637,12 @@ class StrategyController:
         elif tool == "force_discharge":
             await em.force_discharge()
             return "Force discharge started"
+        elif tool == "battery_to_home":
+            await em.battery_to_home()
+            return "Battery powers home (no charging, no export)"
+        elif tool == "battery_hold":
+            await em.battery_hold()
+            return "Battery hold (idle)"
         elif tool == "set_dod":
             dod = params.get("dod", 95)
             # Safety net: values < 50 are almost certainly confused with SOC target
@@ -1296,7 +1302,7 @@ class StrategyController:
                 # Importing significantly from grid AND low PV
                 if self._charging_enabled is not False:
                     if await self._throttled_action("w0_block_charge"):
-                        await self._em.force_discharge()
+                        await self._em.battery_to_home()
                         self._charging_enabled = False
                         msg = f"W0: Grid Import Guard — blokada ładowania (G13={g13_zone.value}, {g13_price:.2f} PLN)"
                         actions.append(msg)
@@ -1570,7 +1576,7 @@ class StrategyController:
             # Low PV → discharge battery to cover load
             if self._charging_enabled is not False:
                 if await self._throttled_action("msc_discharge"):
-                    await self._em.force_discharge()
+                    await self._em.battery_to_home()
                     self._charging_enabled = False
                     msg = f"🟢 MSC: Niskie PV ({pv:.0f}W) → rozładowanie baterii (SOC={soc:.0f}%)"
                     actions.append(msg)
@@ -1695,7 +1701,9 @@ class StrategyController:
                 # Bateria pełna → eksportuj nadwyżkę PV
                 if surplus > 100:
                     if await self._throttled_action("mp_midday_full_export"):
-                        await self._em.force_discharge()
+                        # Full battery: PV surplus is exported in general mode anyway —
+                        # force_discharge would dump the battery to the grid at noon
+                        await self._em.battery_to_home()
                         self._charging_enabled = False
                         msg = (
                             f"💰 MP FAZA2: Bateria pełna (SOC={soc:.0f}%) "
@@ -1779,7 +1787,7 @@ class StrategyController:
             # SOC too high — stop charging
             if self._charging_enabled is not False:
                 if await self._throttled_action("bp_soc_high"):
-                    await self._em.force_discharge()
+                    await self._em.battery_to_home()
                     self._charging_enabled = False
                     msg = f"🔋 BP: SOC={soc:.0f}% >= {limits['max']:.0f}% — stop ładowania (ochrona)"
                     actions.append(msg)
@@ -1842,7 +1850,7 @@ class StrategyController:
             # No surplus → use battery
             if self._charging_enabled is not False:
                 if await self._throttled_action("ze_discharge"):
-                    await self._em.force_discharge()
+                    await self._em.battery_to_home()
                     self._charging_enabled = False
                     msg = f"⚡ ZE: PV < Load → rozładowanie baterii (SOC={soc:.0f}%)"
                     actions.append(msg)

@@ -982,6 +982,7 @@ async def async_setup_services(
             return
 
         result = await schedule_manager.apply_manual_override(mode)
+        energy_mgr.raise_on_control_error()
         hass.bus.async_fire(
             f"{DOMAIN}_manual_mode_applied",
             result,
