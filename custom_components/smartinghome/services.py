@@ -51,6 +51,7 @@ from .settings_io import (
     read_sync as _read_settings_io,
     write_async as _update_settings_file_io,
     get_path as _get_settings_path_io,
+    SECRET_KEYS as _SETTINGS_SECRET_KEYS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -498,7 +499,7 @@ async def async_setup_services(
         _LOGGER.info("API key test for %s: %s (%s)", provider, status, result["message"])
 
     async def handle_save_panel_settings(call: ServiceCall) -> None:
-        """Save arbitrary panel settings to settings.json."""
+        """Save arbitrary panel settings (kept for automations; the panel uses WS)."""
         raw = call.data["settings"]
         try:
             incoming = json.loads(raw)
@@ -506,7 +507,7 @@ async def async_setup_services(
             _LOGGER.error("Invalid JSON in save_panel_settings: %s", err)
             return
         # SAFETY: never let panel settings overwrite API keys
-        for danger_key in ("gemini_api_key", "anthropic_api_key", "openrouter_api_key"):
+        for danger_key in _SETTINGS_SECRET_KEYS:
             incoming.pop(danger_key, None)
         await _update_settings_file(hass, incoming)
         _LOGGER.info("Panel settings saved: %s", list(incoming.keys()))

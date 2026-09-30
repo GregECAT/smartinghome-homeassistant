@@ -1,4 +1,4 @@
-"""WebSocket API for the Smarting HOME panel (AI providers & models)."""
+"""WebSocket API for the Smarting HOME panel (settings, AI providers & models)."""
 from __future__ import annotations
 
 from typing import Any
@@ -22,6 +22,8 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_ai_models)
     websocket_api.async_register_command(hass, ws_ai_save)
     websocket_api.async_register_command(hass, ws_ai_test)
+    websocket_api.async_register_command(hass, ws_settings_get)
+    websocket_api.async_register_command(hass, ws_settings_update)
 
 
 def _advisor(hass: HomeAssistant):
@@ -140,3 +142,42 @@ async def ws_ai_test(hass: HomeAssistant, connection, msg: dict[str, Any]) -> No
     if result["ok"] and key:
         await advisor.secrets.async_set(msg["provider"], key)
     connection.send_result(msg["id"], result)
+
+
+# ── Panel settings (private store, replaces public /local/…/settings.json) ──
+# Same access level as the panel itself (require_admin=False) and the
+# save_panel_settings service: any authenticated HA user.
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartinghome/settings/get",
+        vol.Optional("keys"): [str],
+    }
+)
+@websocket_api.async_response
+async def ws_settings_get(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    from .settings_io import SECRET_KEYS, read_async
+
+    settings = await read_async(hass)
+    if "keys" in msg:
+        settings = {k: settings[k] for k in msg["keys"] if k in settings}
+    for key in SECRET_KEYS:
+        settings.pop(key, None)
+    connection.send_result(msg["id"], settings)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartinghome/settings/update",
+        vol.Required("settings"): dict,
+    }
+)
+@websocket_api.async_response
+async def ws_settings_update(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    from .settings_io import SECRET_KEYS, write_async
+
+    updates = {k: v for k, v in msg["settings"].items() if k not in SECRET_KEYS}
+    if updates:
+        await write_async(hass, updates)
+    connection.send_result(msg["id"], {"updated": list(updates)})

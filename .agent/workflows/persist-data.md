@@ -7,8 +7,13 @@ description: How to persist data permanently in the Smarting HOME integration (s
 All persistent user/system data in the Smarting HOME integration is stored in a single JSON file:
 
 ```
-/config/www/smartinghome/settings.json
+/config/.storage/smartinghome.settings.json
 ```
+
+It is **private** — never put it under `www/` (HA serves `www/` as `/local/` without
+authentication). Before v1.58.0 it lived in `/config/www/smartinghome/settings.json`;
+`settings_io.get_path()` migrates that file on first access and deletes the public copy.
+Uploaded images (`/config/www/smartinghome/*.png`) stay public on purpose.
 
 ## Architecture
 
@@ -98,10 +103,13 @@ async def _persist(self):
 
 ## Frontend Persistence (panel.js)
 
-The frontend reads settings.json via HTTP fetch and writes via HA services:
+The frontend reads and writes settings over the authenticated HA WebSocket (`ws_api.py`):
 
-- **Load**: `_loadSettings()` fetches `/local/smartinghome/settings.json`
-- **Save**: `_savePanelSettings()` calls `smartinghome.save_panel_settings` service
+- **Load**: `_loadSettings()` → `_getSettings()` → `smartinghome/settings/get`
+  (optional `keys: [...]` returns only those top-level keys — use it for polling)
+- **Save**: `_savePanelSettings()` → `smartinghome/settings/update` (`settings: {...}`, merged)
+- API key fields (`*_api_key`) are stripped both ways — keys live in `AISecrets`
+- The `smartinghome.save_panel_settings` service still exists for automations
 - **Key status**: After successful API key test, call `this._savePanelSettings()` to persist
 
 ## What Gets Persisted

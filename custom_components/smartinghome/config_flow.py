@@ -719,8 +719,8 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
         advisor = self.hass.data.get(DOMAIN, {}).get("_ai_advisor")
 
         if user_input is not None:
-            # Keys go to private storage (.storage) — never to www/settings.json,
-            # which HA serves without authentication.
+            # Keys go to private storage (AISecrets) — never to settings.json,
+            # which the panel can read back.
             if advisor is not None:
                 for key in keys:
                     val = (user_input.get(key) or "").strip()
