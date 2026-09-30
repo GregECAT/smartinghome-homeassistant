@@ -202,6 +202,10 @@ async def async_setup_entry(
         hass, coordinator, license_mgr, strategy_ctrl, schedule_mgr,
     )
 
+    # WebSocket API for the panel (AI providers, dynamic model lists)
+    from .ws_api import async_register as _register_ws_api
+    _register_ws_api(hass)
+
     # Restore saved autopilot state from settings.json
     #   (strategy, enabled, action toggles, disabled actions)
     try:

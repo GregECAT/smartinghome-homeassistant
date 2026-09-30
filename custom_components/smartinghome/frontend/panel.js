@@ -180,6 +180,7 @@ class SmartingHomePanel extends HTMLElement {
     if (tab === 'energy' || tab === 'battery' || tab === 'overview') { this._updateForecastCharts(); }
     if (tab === 'forecast') { this._initForecastTab(); }
     if (tab === 'alerts') { this._updateAlertsTab(); this._loadNotificationConfig(); }
+    if (tab === 'settings' || tab === 'autopilot') { this._loadAiConfig(); }
   }
 
   /* ── Sensor mapping ─────────────────────── */
@@ -2609,22 +2610,6 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
 
-  _saveApiKeys() {
-    const geminiModel = this.shadowRoot.getElementById("sel-gemini-model")?.value || "gemini-2.5-flash";
-    const anthropicModel = this.shadowRoot.getElementById("sel-anthropic-model")?.value || "claude-sonnet-4-6";
-    const defaultProvider = this.shadowRoot.getElementById("sel-default-provider")?.value || "gemini";
-    if (this._hass) {
-      // Save models + provider only (keys are managed via HA integration options)
-      this._hass.callService("smartinghome", "save_settings", {
-        gemini_model: geminiModel,
-        anthropic_model: anthropicModel,
-        default_ai_provider: defaultProvider,
-      });
-      const st = this.shadowRoot.getElementById("v-save-status");
-      if (st) { st.textContent = '✅ Ustawienia AI zapisane!'; setTimeout(() => { st.textContent = ''; }, 4000); }
-    }
-  }
-
   _saveCronSettings() {
     const updates = {
       cron_hems_enabled: this.shadowRoot.getElementById("chk-cron-hems")?.checked ?? true,
@@ -4614,7 +4599,7 @@ class SmartingHomePanel extends HTMLElement {
   _updateHEMSFromAI() {
     const s = this._settings;
     // Stored AI results from older versions may be error strings — never render those
-    const _aiOk = (r) => r && r.text && !/^(Gemini error|Anthropic error|No response)/.test(r.text) && !r.text.includes("Rate limit reached");
+    const _aiOk = (r) => r && r.text && !/^(AI error|Gemini error|Anthropic error|No response|No AI provider)/.test(r.text) && !r.text.includes("Rate limit reached");
     if (_aiOk(s.ai_hems_advice)) {
       const html = this._renderMarkdown(s.ai_hems_advice.text);
       const prov = s.ai_hems_advice.provider || '';
@@ -4978,40 +4963,190 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
 
-  _updateKeyStatus() {
-    ["gemini", "anthropic"].forEach(p => {
-      const ind = this.shadowRoot.getElementById(`key-status-${p}`);
-      if (!ind) return;
-      const s = this._settings[`${p}_key_status`];
-      if (s === "valid") { ind.textContent = "✅ Klucz zweryfikowany"; ind.style.color = "#2ecc71"; }
-      else if (s === "invalid") { ind.textContent = "❌ Klucz nieprawidłowy"; ind.style.color = "#e74c3c"; }
-      else if (s === "saved") { ind.textContent = "💾 Klucz zapisany (niesprawdzony)"; ind.style.color = "#f39c12"; }
-      else { ind.textContent = "— Brak klucza"; ind.style.color = "#64748b"; }
-    });
+  _updateKeyStatus() { /* replaced by _renderAiSettings (dynamic AI providers) */ }
+
+  /* ═══ AI PROVIDERS & MODELS — dynamic (WebSocket smartinghome/ai/*) ═══ */
+
+  _aiWs(msg) { return this._hass.connection.sendMessagePromise(msg); }
+
+  _esc(v) { return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  async _loadAiConfig(force = false) {
+    if (!this._hass?.connection) return;
+    if (this._aiConfig && !force) { this._renderAiSettings(); this._updateAutopilotProviderUI(); return; }
+    try {
+      this._aiConfig = await this._aiWs({ type: 'smartinghome/ai/config' });
+    } catch (e) {
+      const el = this.shadowRoot.getElementById('ai-providers');
+      if (el) el.innerHTML = `<div style="font-size:11px; color:#e74c3c">❌ Nie można wczytać ustawień AI: ${this._esc(e.message || e.code || e)}</div>`;
+      return;
+    }
+    this._aiModels = this._aiModels || {};
+    this._renderAiSettings();
+    this._updateAutopilotProviderUI();
+    await this._refreshAiModels(false);
   }
 
-  async _testApiKey(provider) {
-    const btn = this.shadowRoot.getElementById(`test-btn-${provider}`);
-    if (btn) { btn.textContent = "⏳ Testowanie..."; btn.disabled = true; }
-    if (!this._testSub) {
-      this._testSub = this._hass.connection.subscribeEvents((ev) => {
-        const d = ev.data;
-        this._settings[`${d.provider}_key_status`] = d.status;
-        this._updateKeyStatus();
-        const b = this.shadowRoot.getElementById(`test-btn-${d.provider}`);
-        if (b) { b.textContent = "🧪 Testuj"; b.disabled = false; }
-        // Persist verification status to settings.json so it survives restart
-        if (d.status === "valid") {
-          this._savePanelSettings();
-        }
-      }, "smartinghome_api_key_test");
+  async _refreshAiModels(force) {
+    if (!this._aiConfig) return this._loadAiConfig(true);
+    this._aiModels = this._aiModels || {};
+    const providers = Object.keys(this._aiConfig.providers);
+    await Promise.all(providers.map(async (p) => {
+      const cfg = this._aiConfig.providers[p];
+      // OpenRouter's catalogue is public; others need a key
+      if (!cfg.configured && p !== 'openrouter') { this._aiModels[p] = { models: [], error: 'Brak klucza API' }; return; }
+      try {
+        this._aiModels[p] = await this._aiWs({ type: 'smartinghome/ai/models', provider: p, refresh: !!force });
+      } catch (e) {
+        this._aiModels[p] = { models: [], error: e.message || String(e) };
+      }
+    }));
+    this._renderAiSettings();
+    this._updateAutopilotProviderUI();
+  }
+
+  // <option>s for a provider; OpenRouter grouped by vendor, newest first
+  _aiModelOptions(provider, selected, placeholder) {
+    const list = this._aiModels?.[provider];
+    const models = list?.models || [];
+    let html = placeholder ? `<option value="">${this._esc(placeholder)}</option>` : '';
+    if (selected && !models.some(m => m.id === selected)) {
+      html += `<option value="${this._esc(selected)}" selected>${this._esc(selected)} (zapisany${list && !list.error ? ', niedostępny na liście' : ''})</option>`;
     }
-    setTimeout(() => { if (btn) { btn.textContent = "🧪 Testuj"; btn.disabled = false; } }, 15000);
-    // Test the key stored on backend (managed via HA integration options)
-    if (this._hass) {
-      this._hass.callService("smartinghome", "test_api_key", { provider, api_key: "" });
+    const label = (m) => {
+      let t = m.name && m.name !== m.id ? `${m.name} — ${m.id}` : m.id;
+      if (m.price_in != null && m.price_out != null) t += ` · $${m.price_in}/$${m.price_out} za 1M`;
+      return t;
+    };
+    const opt = (m) => `<option value="${this._esc(m.id)}"${m.id === selected ? ' selected' : ''}>${this._esc(label(m))}</option>`;
+    if (provider === 'openrouter' && models.length > 30) {
+      const groups = {};
+      models.forEach(m => { const v = m.id.split('/')[0]; (groups[v] = groups[v] || []).push(m); });
+      const order = Object.keys(groups).sort((a, b) => (groups[b][0].created || 0) - (groups[a][0].created || 0));
+      html += order.map(v => `<optgroup label="${this._esc(v)} (${groups[v].length})">${groups[v].map(opt).join('')}</optgroup>`).join('');
+    } else {
+      html += models.map(opt).join('');
+    }
+    if (!models.length && !selected && list?.error) html += `<option value="" disabled>— ${this._esc(list.error)} —</option>`;
+    return html;
+  }
+
+  _aiProviderOptions(selected, withDefault) {
+    const provs = this._aiConfig?.providers || {};
+    let html = withDefault ? '<option value="">(domyślny)</option>' : '';
+    html += Object.entries(provs).map(([p, c]) =>
+      `<option value="${p}"${p === selected ? ' selected' : ''}>${this._esc(c.label)}${c.configured ? '' : ' — brak klucza'}</option>`).join('');
+    return html;
+  }
+
+  _renderAiSettings() {
+    const cfg = this._aiConfig;
+    if (!cfg) return;
+    const provEl = this.shadowRoot.getElementById('ai-providers');
+    if (provEl) {
+      provEl.innerHTML = Object.entries(cfg.providers).map(([p, c]) => {
+        const ml = this._aiModels?.[p];
+        const count = ml?.models?.length ? `${ml.models.length} modeli` : (ml?.error ? `⚠️ ${this._esc(ml.error)}` : '');
+        const status = c.configured ? `<span style="color:#2ecc71">✅ ${this._esc(c.masked)}</span>` : '<span style="color:#64748b">— brak klucza</span>';
+        const link = { gemini: 'https://aistudio.google.com/apikey', anthropic: 'https://console.anthropic.com/settings/keys', openrouter: 'https://openrouter.ai/settings/keys' }[p];
+        return `<div class="ai-prov">
+          <div class="ai-prov-head"><span>${this._esc(c.label)}</span><span style="font-weight:400; font-size:10px">${status}</span></div>
+          <input type="password" id="ai-key-${p}" autocomplete="off" placeholder="${c.configured ? 'Wklej nowy klucz, aby zmienić' : 'Wklej klucz API'}" />
+          <div style="display:flex; gap:6px; margin-top:6px; align-items:center">
+            <button class="test-btn" id="ai-test-${p}" onclick="this.getRootNode().host._testAiProvider('${p}')">🧪 Testuj</button>
+            <a href="${link}" target="_blank" rel="noopener" style="font-size:10px; color:#00d4ff">Skąd klucz?</a>
+          </div>
+          <div class="ai-prov-msg" id="ai-msg-${p}">${count}</div>
+        </div>`;
+      }).join('');
+    }
+    const d = cfg.default || {};
+    const defEl = this.shadowRoot.getElementById('ai-default-row');
+    if (defEl) {
+      defEl.innerHTML = `<div class="ai-row">
+        <div class="ai-row-label">Domyślnie (wszystkie zadania)</div>
+        <select id="ai-prov-default" onchange="this.getRootNode().host._onAiRowProviderChange('default')">${this._aiProviderOptions(d.provider, false)}</select>
+        <select id="ai-model-default">${this._aiModelOptions(d.provider, d.model, '— wybierz model —')}</select>
+      </div>`;
+    }
+    const tEl = this.shadowRoot.getElementById('ai-task-rows');
+    if (tEl) {
+      tEl.innerHTML = Object.entries(cfg.tasks).filter(([t]) => t !== 'default').map(([t, label]) => {
+        const a = cfg.assignments?.[t] || {};
+        return `<div class="ai-row">
+          <div class="ai-row-label">${this._esc(label)}</div>
+          <select id="ai-prov-${t}" onchange="this.getRootNode().host._onAiRowProviderChange('${t}')">${this._aiProviderOptions(a.provider || '', true)}</select>
+          <select id="ai-model-${t}"${a.provider ? '' : ' disabled'}>${a.provider ? this._aiModelOptions(a.provider, a.model, '— model domyślny dostawcy —') : '<option value="">(jak domyślny)</option>'}</select>
+        </div>`;
+      }).join('');
     }
   }
+
+  _onAiRowProviderChange(task) {
+    const p = this.shadowRoot.getElementById(`ai-prov-${task}`)?.value || '';
+    const m = this.shadowRoot.getElementById(`ai-model-${task}`);
+    if (!m) return;
+    m.disabled = !p;
+    m.innerHTML = p ? this._aiModelOptions(p, '', task === 'default' ? '— wybierz model —' : '— model domyślny dostawcy —') : '<option value="">(jak domyślny)</option>';
+  }
+
+  _collectAiForm() {
+    const cfg = this._aiConfig;
+    const keys = {};
+    Object.keys(cfg.providers).forEach(p => {
+      const v = this.shadowRoot.getElementById(`ai-key-${p}`)?.value?.trim();
+      if (v) keys[p] = v;
+    });
+    const msg = { type: 'smartinghome/ai/save', keys, tasks: {} };
+    const dp = this.shadowRoot.getElementById('ai-prov-default')?.value;
+    if (dp) msg.default = { provider: dp, model: this.shadowRoot.getElementById('ai-model-default')?.value || '' };
+    Object.keys(cfg.tasks).filter(t => t !== 'default').forEach(t => {
+      const p = this.shadowRoot.getElementById(`ai-prov-${t}`)?.value || '';
+      msg.tasks[t] = { provider: p, model: p ? (this.shadowRoot.getElementById(`ai-model-${t}`)?.value || '') : '' };
+    });
+    return msg;
+  }
+
+  async _saveAiConfig() {
+    const st = this.shadowRoot.getElementById('v-save-status');
+    if (!this._aiConfig) return;
+    const msg = this._collectAiForm();
+    if (st) { st.style.color = '#f59e0b'; st.textContent = '⏳ Zapisywanie…'; }
+    try {
+      this._aiConfig = await this._aiWs(msg);
+      const newKeys = Object.keys(msg.keys).length;
+      if (st) { st.style.color = '#2ecc71'; st.textContent = `✅ Zapisano${newKeys ? ` (nowe klucze: ${newKeys})` : ''}`; }
+      if (newKeys) await this._refreshAiModels(true); else { this._renderAiSettings(); this._updateAutopilotProviderUI(); }
+    } catch (e) {
+      if (st) { st.style.color = '#e74c3c'; st.textContent = `❌ ${e.message || e.code || e}`; }
+    }
+    setTimeout(() => { if (st) st.textContent = ''; }, 6000);
+  }
+
+  async _testAiProvider(provider) {
+    const btn = this.shadowRoot.getElementById(`ai-test-${provider}`);
+    const out = this.shadowRoot.getElementById(`ai-msg-${provider}`);
+    const key = this.shadowRoot.getElementById(`ai-key-${provider}`)?.value?.trim() || '';
+    // Test with the model chosen as default for this provider, if any
+    let model = '';
+    if (this.shadowRoot.getElementById('ai-prov-default')?.value === provider) model = this.shadowRoot.getElementById('ai-model-default')?.value || '';
+    if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+    if (out) { out.style.color = '#94a3b8'; out.textContent = 'Testowanie…'; }
+    try {
+      const r = await this._aiWs({ type: 'smartinghome/ai/test', provider, api_key: key, model });
+      if (out) {
+        out.style.color = r.ok ? '#2ecc71' : '#e74c3c';
+        out.textContent = r.ok ? `✅ Działa (${r.model}) · ${r.models} modeli` : `❌ ${r.message}${r.model ? ` [${r.model}]` : ''}`;
+      }
+      if (r.ok && key) { await this._loadAiConfig(true); }
+    } catch (e) {
+      if (out) { out.style.color = '#e74c3c'; out.textContent = `❌ ${e.message || e.code || e}`; }
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '🧪 Testuj'; }
+  }
+
+  // Legacy entry point (old buttons)
+  async _testApiKey(provider) { return this._testAiProvider(provider); }
 
   // Smart unit formatting
   _pw(w) {
@@ -9520,6 +9655,15 @@ class SmartingHomePanel extends HTMLElement {
         .key-row { display: flex; gap: 8px; align-items: center; }
         .key-row input { flex: 1; }
         .key-status { font-size: 11px; margin-top: 3px; margin-bottom: 8px; }
+        .ai-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:10px; }
+        .ai-prov { padding:10px 12px; border-radius:10px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); }
+        .ai-prov-head { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; font-size:12px; font-weight:700; color:#e2e8f0; }
+        .ai-prov input, .ai-row select { width:100%; box-sizing:border-box; padding:7px 9px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:12px; }
+        .ai-prov-msg { font-size:10px; margin-top:6px; color:#94a3b8; word-break:break-word; }
+        .ai-section-title { font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin:16px 0 6px; }
+        .ai-row { display:grid; grid-template-columns:minmax(140px, 200px) minmax(140px, 1fr) minmax(180px, 2fr); gap:8px; align-items:center; margin-bottom:6px; }
+        .ai-row-label { font-size:11px; color:#cbd5e1; }
+        @media (max-width: 700px) { .ai-row { grid-template-columns:1fr; } }
         .sidebar-toggle {
           background: none; border: none; color: #a0aec0; cursor: pointer;
           padding: 6px; border-radius: 8px; transition: all 0.2s;
@@ -13083,16 +13227,13 @@ class SmartingHomePanel extends HTMLElement {
               <div>
                 <div style="font-size:10px; color:#64748b; margin-bottom:4px">Dostawca</div>
                 <select id="ap-provider-select" style="width:100%; padding:8px 12px; border-radius:10px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); color:#fff; font-size:12px" onchange="this.getRootNode().host._onAutopilotProviderChange()">
-                  <option value="gemini">Google Gemini</option>
-                  <option value="anthropic">Anthropic Claude</option>
+                  <option value="">Ładowanie…</option>
                 </select>
               </div>
               <div>
                 <div style="font-size:10px; color:#64748b; margin-bottom:4px">Model</div>
                 <select id="ap-model-select" style="width:100%; padding:8px 12px; border-radius:10px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); color:#fff; font-size:12px">
-                  <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-                  <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-                  <option value="gemini-3-flash-preview">Gemini 3 Flash (Preview)</option>
+                  <option value="">Ładowanie…</option>
                 </select>
               </div>
               <button class="action-btn" onclick="this.getRootNode().host._runAutopilotEstimation()" style="padding:8px 18px; font-size:12px; height:38px; background:linear-gradient(135deg, #7c3aed, #00d4ff); border:none; font-weight:700">
@@ -13681,58 +13822,24 @@ class SmartingHomePanel extends HTMLElement {
         <div class="tab-content" data-tab="settings">
           <div class="grid-cards gc-2">
 
-            <!-- 🔑 API Keys -->
-            <div class="card" style="grid-column: 1 / -1">
-              <div class="card-title">🤖 Ustawienia AI — AI Advisor</div>
-              <div style="font-size:11px; color:#94a3b8; margin-bottom:10px">Klucze API zarządzaj w: <strong>Ustawienia → Integracje → Smarting HOME → ⚙️ → 🔑 API Keys</strong></div>
-              <div style="display:flex; gap:16px; flex-wrap:wrap; margin-bottom:10px">
-                <div style="flex:1; min-width:200px">
-                  <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">Google Gemini</div>
-                  <div style="display:flex; align-items:center; gap:8px">
-                    <div class="key-status" id="key-status-gemini" style="flex:1">— Brak klucza</div>
-                    <button class="test-btn" id="test-btn-gemini" onclick="this.getRootNode().host._testApiKey('gemini')">🧪 Testuj</button>
-                  </div>
-                </div>
-                <div style="flex:1; min-width:200px">
-                  <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px">Anthropic Claude</div>
-                  <div style="display:flex; align-items:center; gap:8px">
-                    <div class="key-status" id="key-status-anthropic" style="flex:1">— Brak klucza</div>
-                    <button class="test-btn" id="test-btn-anthropic" onclick="this.getRootNode().host._testApiKey('anthropic')">🧪 Testuj</button>
-                  </div>
-                </div>
+            <!-- 🤖 AI providers & models (dynamic) -->
+            <div class="card" style="grid-column: 1 / -1" id="ai-settings-card">
+              <div class="card-title">🤖 Ustawienia AI — dostawcy i modele</div>
+              <div style="font-size:11px; color:#94a3b8; margin-bottom:12px">
+                Klucze API są przechowywane w prywatnym magazynie Home Assistant (nie w plikach publicznych).
+                Listy modeli są pobierane na żywo od dostawców — nowe modele pojawiają się automatycznie.
+                Jeśli wybrany dostawca nie odpowie (limit, awaria, wycofany model), integracja użyje kolejnego skonfigurowanego.
               </div>
-              <div style="display:flex; gap:16px; flex-wrap:wrap; margin-top:14px">
-                <div class="settings-field" style="flex:1; min-width:200px">
-                  <label style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">🤖 Model Gemini</label>
-                  <select id="sel-gemini-model" style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:12px">
-                    <option value="gemini-2.5-flash">Gemini 2.5 Flash (szybki, domyślny)</option>
-                    <option value="gemini-2.5-pro">Gemini 2.5 Pro (zaawansowany)</option>
-                    <option value="gemini-3-flash-preview">Gemini 3 Flash (Preview)</option>
-                  </select>
-                </div>
-                <div class="settings-field" style="flex:1; min-width:200px">
-                  <label style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">🤖 Model Claude</label>
-                  <select id="sel-anthropic-model" style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:12px">
-                    <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (szybki)</option>
-                    <option value="claude-opus-4-6">Claude Opus 4.6 (najpotężniejszy)</option>
-                    <option value="claude-3-5-haiku">Claude Haiku 3.5 (najtańszy)</option>
-                  </select>
-                </div>
+              <div id="ai-providers" class="ai-grid"><div style="font-size:11px; color:#64748b">Ładowanie…</div></div>
+              <div class="ai-section-title">⭐ Domyślny dostawca i model</div>
+              <div id="ai-default-row"></div>
+              <div class="ai-section-title">🎯 Model dla poszczególnych zadań</div>
+              <div id="ai-task-rows"></div>
+              <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; align-items:center">
+                <button class="save-btn" style="margin-top:0" onclick="this.getRootNode().host._saveAiConfig()">💾 Zapisz ustawienia AI</button>
+                <button class="test-btn" onclick="this.getRootNode().host._refreshAiModels(true)">🔄 Odśwież listy modeli</button>
+                <span id="v-save-status" style="font-size:11px; color:#2ecc71"></span>
               </div>
-              <div style="display:flex; gap:16px; flex-wrap:wrap; margin-top:10px; align-items:flex-end">
-                <div class="settings-field" style="flex:1; min-width:200px">
-                  <label style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">⭐ Domyślny dostawca AI</label>
-                  <select id="sel-default-provider" style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:12px">
-                    <option value="gemini">Google Gemini</option>
-                    <option value="anthropic">Anthropic Claude</option>
-                  </select>
-                </div>
-                <div style="flex:1; font-size:10px; color:#64748b; padding:8px 0">
-                  Dostawca używany przez AI Cron i zapytania HEMS
-                </div>
-              </div>
-              <button class="save-btn" onclick="this.getRootNode().host._saveApiKeys()">💾 Zapisz ustawienia AI</button>
-              <div id="v-save-status" style="font-size:11px; color:#2ecc71; margin-top:8px"></div>
             </div>
 
             <!-- 🤖 AI Cron Settings -->
@@ -14015,7 +14122,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.56.11</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.57.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -14667,58 +14774,47 @@ class SmartingHomePanel extends HTMLElement {
     const providerSelect = this.shadowRoot.getElementById('ap-provider-select');
     const modelSelect = this.shadowRoot.getElementById('ap-model-select');
     if (!providerSelect || !modelSelect) return;
-
-    // Load saved provider preference
-    try {
-      const settingsUrl = '/local/smartinghome/settings.json';
-      fetch(settingsUrl + '?t=' + Date.now()).then(r => r.json()).then(s => {
-        const savedProvider = s.default_ai_provider || 'gemini';
-        providerSelect.value = savedProvider;
-        this._updateAutopilotModelOptions(savedProvider);
-
-        const savedModel = savedProvider === 'gemini' ? s.gemini_model : s.anthropic_model;
-        if (savedModel) modelSelect.value = savedModel;
-
-        // Update provider badge
-        const badge = this.shadowRoot.getElementById('ap-provider-badge');
-        if (badge) badge.textContent = savedProvider === 'gemini' ? 'Gemini' : 'Claude';
-      }).catch(() => {});
-    } catch (e) {}
+    const cfg = this._aiConfig;
+    if (!cfg) { this._loadAiConfig(); return; }
+    const a = cfg.assignments?.autopilot || {};
+    const provider = a.provider || cfg.default?.provider || '';
+    const model = a.provider ? a.model : (cfg.default?.model || '');
+    providerSelect.innerHTML = this._aiProviderOptions(provider, false);
+    modelSelect.innerHTML = this._aiModelOptions(provider, model, '— model domyślny dostawcy —');
+    modelSelect.onchange = () => this._saveAutopilotAiChoice();
+    const badge = this.shadowRoot.getElementById('ap-provider-badge');
+    if (badge) badge.textContent = cfg.providers?.[provider]?.label || provider || '—';
   }
 
   _onAutopilotProviderChange() {
-    const providerSelect = this.shadowRoot.getElementById('ap-provider-select');
-    if (!providerSelect) return;
-    this._updateAutopilotModelOptions(providerSelect.value);
-    const badge = this.shadowRoot.getElementById('ap-provider-badge');
-    if (badge) badge.textContent = providerSelect.value === 'gemini' ? 'Gemini' : 'Claude';
+    const p = this.shadowRoot.getElementById('ap-provider-select')?.value || '';
+    const modelSelect = this.shadowRoot.getElementById('ap-model-select');
+    if (modelSelect) modelSelect.innerHTML = this._aiModelOptions(p, '', '— model domyślny dostawcy —');
+    this._saveAutopilotAiChoice();
+  }
+
+  async _saveAutopilotAiChoice() {
+    const p = this.shadowRoot.getElementById('ap-provider-select')?.value || '';
+    const m = this.shadowRoot.getElementById('ap-model-select')?.value || '';
+    try {
+      this._aiConfig = await this._aiWs({ type: 'smartinghome/ai/save', tasks: { autopilot: { provider: p, model: m } } });
+      const badge = this.shadowRoot.getElementById('ap-provider-badge');
+      if (badge) badge.textContent = this._aiConfig.providers?.[p]?.label || p;
+      this._renderAiSettings();
+    } catch (e) {
+      console.error('[SH] save autopilot AI choice failed', e);
+    }
   }
 
   _updateAutopilotModelOptions(provider) {
     const modelSelect = this.shadowRoot.getElementById('ap-model-select');
-    if (!modelSelect) return;
-
-    const models = {
-      gemini: [
-        { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (szybki)' },
-        { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro (zaawansowany)' },
-        { value: 'gemini-3-flash-preview', label: 'Gemini 3 Flash (Preview)' },
-      ],
-      anthropic: [
-        { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (szybki)' },
-        { value: 'claude-opus-4-6', label: 'Claude Opus 4.6 (najpotężniejszy)' },
-        { value: 'claude-3-5-haiku', label: 'Claude Haiku 3.5 (najtańszy)' },
-      ],
-    };
-
-    const options = models[provider] || models.gemini;
-    modelSelect.innerHTML = options.map(m => `<option value="${m.value}">${m.label}</option>`).join('');
+    if (modelSelect) modelSelect.innerHTML = this._aiModelOptions(provider, '', '— model domyślny dostawcy —');
   }
 
   async _runAutopilotEstimation() {
     const strategy = this._autopilotActiveStrategy || 'max_self_consumption';
-    const providerSelect = this.shadowRoot.getElementById('ap-provider-select');
-    const provider = providerSelect ? providerSelect.value : 'auto';
+    // Provider/model come from the "autopilot" AI task (saved on change)
+    const provider = 'auto';
 
     // Visual feedback — disable button and show spinner
     const btn = this.shadowRoot.querySelector('[onclick*="_runAutopilotEstimation"]');

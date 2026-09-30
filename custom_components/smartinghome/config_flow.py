@@ -25,6 +25,7 @@ from .const import (
     CONF_RCE_ENABLED,
     CONF_GEMINI_API_KEY,
     CONF_ANTHROPIC_API_KEY,
+    CONF_OPENROUTER_API_KEY,
     CONF_AI_ENABLED,
     CONF_MODBUS_ENABLED,
     CONF_MODBUS_PORT,
@@ -707,67 +708,47 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
         """Dedicated step for API key management.
 
         Always visible in menu (both FREE and PRO).
-        Saves keys to entry.data + settings.json without triggering reload.
+        Saves keys to HA private storage (no reload). Empty field = keep current key.
         """
+        keys = (CONF_GEMINI_API_KEY, CONF_ANTHROPIC_API_KEY, CONF_OPENROUTER_API_KEY)
+        providers = {
+            CONF_GEMINI_API_KEY: "gemini",
+            CONF_ANTHROPIC_API_KEY: "anthropic",
+            CONF_OPENROUTER_API_KEY: "openrouter",
+        }
+        advisor = self.hass.data.get(DOMAIN, {}).get("_ai_advisor")
+
         if user_input is not None:
-
-            current = self._config_entry.data
-            new_data = {**current}
-
-            # Merge API keys into entry data
-            for key in (CONF_GEMINI_API_KEY, CONF_ANTHROPIC_API_KEY):
-                val = user_input.get(key, "")
-                if val:
-                    new_data[key] = val
-
-            # Mark as soft update — skip integration reload
-            new_data["_keys_only_update"] = True
-
-            # Persist to entry.data
-            self.hass.config_entries.async_update_entry(
-                self._config_entry, data=new_data
-            )
-
-            # Also write to settings.json for panel UI
-            from .settings_io import write_sync
-
-            gk = user_input.get(CONF_GEMINI_API_KEY, "")
-            ak = user_input.get(CONF_ANTHROPIC_API_KEY, "")
-
-            updates = {}
-            if gk:
-                updates["gemini_api_key"] = gk
-                updates["gemini_key_status"] = "saved"
-                updates["gemini_key_masked"] = (
-                    gk[:6] + "***" + gk[-4:] if len(gk) > 10 else "***"
-                )
-            if ak:
-                updates["anthropic_api_key"] = ak
-                updates["anthropic_key_status"] = "saved"
-                updates["anthropic_key_masked"] = (
-                    ak[:7] + "***" + ak[-4:] if len(ak) > 11 else "***"
-                )
-
-            if updates:
-                write_sync(self.hass, updates)
+            # Keys go to private storage (.storage) — never to www/settings.json,
+            # which HA serves without authentication.
+            if advisor is not None:
+                for key in keys:
+                    val = (user_input.get(key) or "").strip()
+                    if val and "…" not in val and "***" not in val:
+                        await advisor.secrets.async_set(providers[key], val)
+            else:
+                # Integration not loaded — keep in entry data, imported on next start
+                new_data = {**self._config_entry.data, "_keys_only_update": True}
+                for key in keys:
+                    val = (user_input.get(key) or "").strip()
+                    if val:
+                        new_data[key] = val
+                self.hass.config_entries.async_update_entry(self._config_entry, data=new_data)
 
             _LOGGER.info("API keys saved via options flow")
             return self.async_create_entry(title="", data={})
 
-        current = self._config_entry.data
+        from .ai_providers import mask_key
+
+        def _masked(key: str) -> str:
+            return mask_key(advisor.key(providers[key])) if advisor else ""
 
         return self.async_show_form(
             step_id="api_keys",
             data_schema=vol.Schema(
                 {
-                    vol.Optional(
-                        CONF_GEMINI_API_KEY,
-                        default=current.get(CONF_GEMINI_API_KEY, ""),
-                    ): str,
-                    vol.Optional(
-                        CONF_ANTHROPIC_API_KEY,
-                        default=current.get(CONF_ANTHROPIC_API_KEY, ""),
-                    ): str,
+                    vol.Optional(key, description={"suggested_value": _masked(key)}): str
+                    for key in keys
                 }
             ),
         )

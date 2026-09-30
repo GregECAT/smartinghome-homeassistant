@@ -142,7 +142,7 @@ ask_ai_advisor:
   name: Ask AI Energy Advisor
   description: >-
     Ask the AI energy advisor a question about your energy system.
-    Requires PRO license and a configured AI provider (Google Gemini or Anthropic Claude).
+    Requires PRO license and a configured AI provider (Google Gemini, Anthropic Claude or OpenRouter).
     Response is fired as a smartinghome_ai_response event.
   fields:
     question:
@@ -163,6 +163,7 @@ ask_ai_advisor:
             - "auto"
             - "gemini"
             - "anthropic"
+            - "openrouter"
 
 generate_report:
   name: Generate Daily Report
@@ -193,7 +194,7 @@ upload_inverter_image:
 save_settings:
   name: Save API Settings
   description: >-
-    Save API keys for AI providers (Google Gemini, Anthropic Claude).
+    Save API keys for AI providers (Google Gemini, Anthropic Claude, OpenRouter). Keys are stored in Home Assistant private storage.
     Keys are stored in the HA config entry.
   fields:
     gemini_api_key:
@@ -226,6 +227,7 @@ test_api_key:
           options:
             - "gemini"
             - "anthropic"
+            - "openrouter"
     api_key:
       name: API Key
       description: "Optional API key to test (if empty, uses stored key)"

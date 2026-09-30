@@ -8,6 +8,20 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
+from .ai_providers import (
+    AI_TASKS,
+    PROVIDERS,
+    PROVIDER_ANTHROPIC,
+    PROVIDER_GEMINI,
+    PROVIDER_LABELS,
+    PROVIDER_OPENROUTER,
+    SECRET_KEYS,
+    AISecrets,
+    Completion,
+    ModelCatalog,
+    async_complete,
+    mask_key,
+)
 from .const import (
     AI_GEMINI_MODEL,
     AI_CLAUDE_MODEL,
@@ -27,17 +41,39 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+AI_CONFIG_KEY = "ai_config"  # settings.json: {"default": {provider, model}, "tasks": {task: {...}}}
+AI_ERROR_PREFIX = "AI error"
+
+_FORMAT_INSTRUCTIONS = """
+IMPORTANT — FORMAT YOUR RESPONSE as structured markdown for rich display:
+- Use ## for main sections (e.g. ## 📊 Analiza bieżącej sytuacji, ## 🔋 Bateria, ## ⚡ Sieć, ## 🎯 Rekomendacje)
+- Use ### for subsections
+- Use numbered lists (1. 2. 3.) for step-by-step recommendations
+- Use bullet points (- ) for details within sections
+- Use **bold** for key values and emphasis
+- Use > for important callout tips (prefix with ✅ for positive, ⚠️ for warning, ❌ for critical)
+- Use **Rekomendacja:** prefix for main action items
+- Use --- between major sections for visual separation
+- Use tables | header | header | for comparative data when useful
+- Keep each section focused and concise
+"""
+
+
+def is_ai_error(text: str) -> bool:
+    """True for error strings returned instead of AI content."""
+    return not text or text.startswith((
+        AI_ERROR_PREFIX, "Gemini error", "Anthropic error", "No response",
+        "No AI provider", "Rate limit reached",
+    ))
+
 
 class AIAdvisor:
     """AI-powered energy optimization advisor.
 
-    Supports Google Gemini and Anthropic Claude for:
-    - Energy usage pattern analysis
-    - Optimal charge/discharge scheduling
-    - Weather-aware PV forecast adjustments
-    - Natural language energy reports
-    - Complex tariff arbitrage recommendations
-    - Anomaly detection
+    Providers: Google Gemini, Anthropic Claude, OpenRouter (any model).
+    Each task (HEMS advice, reports, autopilot, …) can use its own provider and
+    model; on failure (quota, outage, retired model, bad key) the next
+    configured provider is tried automatically.
     """
 
     def __init__(
@@ -50,172 +86,243 @@ class AIAdvisor:
     ) -> None:
         """Initialize the AI Advisor."""
         self.hass = hass
-        self._gemini_key = gemini_api_key
-        self._anthropic_key = anthropic_api_key
-        self._gemini_model = gemini_model or AI_GEMINI_MODEL
-        self._anthropic_model = anthropic_model or AI_CLAUDE_MODEL
+        self.secrets = AISecrets(hass)
+        self.catalog = ModelCatalog(hass)
+        # Legacy keys from the config entry (fallback when .storage has none)
+        self._legacy_keys: dict[str, str] = {
+            PROVIDER_GEMINI: gemini_api_key or "",
+            PROVIDER_ANTHROPIC: anthropic_api_key or "",
+        }
+        # Default model per provider (legacy settings: gemini_model / anthropic_model)
+        self._provider_models: dict[str, str] = {
+            PROVIDER_GEMINI: gemini_model or AI_GEMINI_MODEL,
+            PROVIDER_ANTHROPIC: anthropic_model or AI_CLAUDE_MODEL,
+            PROVIDER_OPENROUTER: "",
+        }
+        self._ai_config: dict[str, Any] = {}
+        self._default_provider: str = ""
         self._call_timestamps: list[float] = []  # advisory calls
         self._controller_timestamps: list[float] = []  # controller/strategist calls
-        self._gemini_client: Any = None
-        self._anthropic_client: Any = None
+        self.last_completion: Completion | None = None
 
-    def refresh_keys(self) -> None:
-        """Reload API keys from settings.json and config entry data."""
+    # ── Setup / config ────────────────────────────────────────────────
+
+    async def async_setup(self) -> None:
+        """Load secrets, migrate keys out of www/settings.json, load config."""
+        await self.secrets.async_load()
+        from .settings_io import read_async, write_async
+
+        settings = await read_async(self.hass)
+        legacy_file: dict[str, Any] = {}
+        try:
+            legacy_file = await self.hass.async_add_executor_job(self._read_legacy_settings)
+        except Exception:  # noqa: BLE001
+            pass
+        imported = await self.secrets.async_merge_missing({
+            SECRET_KEYS[PROVIDER_GEMINI]: settings.get("gemini_api_key")
+            or legacy_file.get("gemini_api_key")
+            or self._legacy_keys[PROVIDER_GEMINI],
+            SECRET_KEYS[PROVIDER_ANTHROPIC]: settings.get("anthropic_api_key")
+            or legacy_file.get("anthropic_api_key")
+            or self._legacy_keys[PROVIDER_ANTHROPIC],
+        })
+        # www/ is served without authentication — never keep secrets there
+        leaked = [k for k in ("gemini_api_key", "anthropic_api_key", "openrouter_api_key") if settings.get(k)]
+        if leaked:
+            await write_async(self.hass, {k: "" for k in leaked})
+            _LOGGER.warning("Moved AI API keys out of www/smartinghome/settings.json: %s", leaked)
+        if imported:
+            _LOGGER.info("AI keys imported into private storage")
+        self.apply_settings(settings)
+
+    def _read_legacy_settings(self) -> dict[str, Any]:
         import json
         from pathlib import Path
-        from .const import CONF_GEMINI_API_KEY, CONF_ANTHROPIC_API_KEY
 
-        # Try settings.json first
-        settings_path = Path(self.hass.config.path("custom_components/smartinghome/settings.json"))
-        stored = {}
-        if settings_path.exists():
-            try:
-                stored = json.loads(settings_path.read_text())
-            except Exception:
-                pass
+        path = Path(self.hass.config.path("custom_components/smartinghome/settings.json"))
+        return json.loads(path.read_text()) if path.exists() else {}
 
-        # Try config entry data
-        entry_data = {}
-        entries = self.hass.config_entries.async_entries("smartinghome")
-        if entries:
-            entry_data = entries[0].data
+    def apply_settings(self, settings: dict[str, Any]) -> None:
+        """Apply non-secret AI settings (models, per-task config) from settings.json."""
+        if settings.get("gemini_model"):
+            self._provider_models[PROVIDER_GEMINI] = settings["gemini_model"]
+        if settings.get("anthropic_model"):
+            self._provider_models[PROVIDER_ANTHROPIC] = settings["anthropic_model"]
+        if settings.get("openrouter_model"):
+            self._provider_models[PROVIDER_OPENROUTER] = settings["openrouter_model"]
+        self._default_provider = settings.get("default_ai_provider", "") or ""
+        cfg = settings.get(AI_CONFIG_KEY)
+        self._ai_config = cfg if isinstance(cfg, dict) else {}
 
-        gk = (
-            stored.get("gemini_api_key", "")
-            or entry_data.get(CONF_GEMINI_API_KEY, "")
-        )
-        ak = (
-            stored.get("anthropic_api_key", "")
-            or entry_data.get(CONF_ANTHROPIC_API_KEY, "")
-        )
-        if gk:
-            self._gemini_key = gk
-        if ak:
-            self._anthropic_key = ak
+    def get_config(self) -> dict[str, Any]:
+        """Effective AI config for the panel (no secrets)."""
+        return {
+            "providers": {
+                p: {
+                    "label": PROVIDER_LABELS[p],
+                    "configured": bool(self.key(p)),
+                    "masked": mask_key(self.key(p)),
+                    "default_model": self._provider_models.get(p, ""),
+                }
+                for p in PROVIDERS
+            },
+            "tasks": AI_TASKS,
+            "default": self._task_entry("default"),
+            "assignments": {t: self._ai_config.get("tasks", {}).get(t, {}) for t in AI_TASKS if t != "default"},
+            "last": {
+                "provider": self.last_completion.provider,
+                "model": self.last_completion.model,
+                "error": self.last_completion.error,
+            } if self.last_completion else None,
+        }
 
-        # Also refresh models
-        gm = stored.get("gemini_model", "")
-        am = stored.get("anthropic_model", "")
-        if gm:
-            self._gemini_model = gm
-        if am:
-            import re
-            am = re.sub(r"claude-sonnet-4[\.\-]6.*", "claude-sonnet-4-6", am)
-            am = re.sub(r"claude-opus-4[\.\-]6.*", "claude-opus-4-6", am)
-            am = re.sub(r"claude-haiku-[34][\.\-]5.*", "claude-3-5-haiku", am)
-            self._anthropic_model = am
-
-        _LOGGER.debug(
-            "Keys refreshed: gemini=%s, anthropic=%s",
-            "yes" if self._gemini_key else "no",
-            "yes" if self._anthropic_key else "no",
-        )
+    def key(self, provider: str) -> str:
+        return self.secrets.get(provider) or self._legacy_keys.get(provider, "")
 
     @property
     def gemini_available(self) -> bool:
-        """Return True if Gemini is configured."""
-        if not self._gemini_key:
-            self.refresh_keys()
-        return bool(self._gemini_key)
+        return bool(self.key(PROVIDER_GEMINI))
 
     @property
     def anthropic_available(self) -> bool:
-        """Return True if Anthropic is configured."""
-        if not self._anthropic_key:
-            self.refresh_keys()
-        return bool(self._anthropic_key)
+        return bool(self.key(PROVIDER_ANTHROPIC))
+
+    @property
+    def openrouter_available(self) -> bool:
+        return bool(self.key(PROVIDER_OPENROUTER))
 
     @property
     def any_available(self) -> bool:
-        """Return True if any AI provider is available."""
-        return self.gemini_available or self.anthropic_available
+        return any(self.key(p) for p in PROVIDERS)
 
-    async def test_gemini_key(self) -> bool:
-        """Test if the Gemini API key is valid via REST API."""
-        try:
-            import aiohttp
-            url = (
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"{self._gemini_model}:generateContent?key={self._gemini_key}"
+    def _task_entry(self, task: str) -> dict[str, str]:
+        if task == "default":
+            entry = self._ai_config.get("default") or {}
+            provider = entry.get("provider") or self._default_provider
+            if provider not in PROVIDERS:
+                provider = next((p for p in PROVIDERS if self.key(p)), PROVIDER_GEMINI)
+            return {"provider": provider, "model": entry.get("model") or self._provider_models.get(provider, "")}
+        entry = (self._ai_config.get("tasks") or {}).get(task) or {}
+        if entry.get("provider") in PROVIDERS:
+            return {
+                "provider": entry["provider"],
+                "model": entry.get("model") or self._provider_models.get(entry["provider"], ""),
+            }
+        return self._task_entry("default")
+
+    def _resolve_chain(self, task: str, provider: str | None = None) -> list[tuple[str, str]]:
+        """Ordered (provider, model) candidates: explicit → task → default → others."""
+        chain: list[tuple[str, str]] = []
+
+        def add(p: str, m: str) -> None:
+            if p in PROVIDERS and m and self.key(p) and (p, m) not in chain:
+                chain.append((p, m))
+
+        if provider in PROVIDERS:
+            entry = self._task_entry(task)
+            add(provider, entry["model"] if entry["provider"] == provider else self._provider_models.get(provider, ""))
+        t = self._task_entry(task)
+        add(t["provider"], t["model"])
+        d = self._task_entry("default")
+        add(d["provider"], d["model"])
+        for p in PROVIDERS:  # automatic fallback to any other working provider
+            add(p, self._provider_models.get(p, ""))
+        return chain
+
+    # ── Core call ─────────────────────────────────────────────────────
+
+    async def complete(
+        self,
+        task: str,
+        prompt: str,
+        *,
+        max_tokens: int = AI_MAX_TOKENS,
+        temperature: float = AI_TEMPERATURE,
+        json_mode: bool = False,
+        timeout: int = 120,
+        provider: str | None = None,
+    ) -> Completion:
+        chain = self._resolve_chain(task, None if provider in (None, "", "auto") else provider)
+        if not chain:
+            result = Completion(error="Brak skonfigurowanego dostawcy AI (klucz API i model)")
+            self.last_completion = result
+            return result
+        result = Completion()
+        failures: list[str] = []
+        for prov, model in chain:
+            result = await async_complete(
+                self.hass, prov, self.key(prov), model, prompt,
+                max_tokens=max_tokens, temperature=temperature,
+                json_mode=json_mode, timeout=timeout,
             )
-            payload = {"contents": [{"parts": [{"text": "Reply with OK"}]}],
-                       "generationConfig": {"maxOutputTokens": 10}}
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        return bool(data.get("candidates"))
-                    _LOGGER.error("Gemini test HTTP %s: %s", resp.status, await resp.text())
-                    return False
-        except Exception as err:
-            _LOGGER.error("Gemini key test failed: %s", err)
-            return False
+            if result.ok:
+                if result.finish_reason in ("MAX_TOKENS", "max_tokens", "length"):
+                    _LOGGER.warning("AI %s/%s response truncated (max tokens)", prov, model)
+                break
+            _LOGGER.warning("AI %s via %s/%s failed: %s", task, prov, model, result.error)
+            failures.append(f"{PROVIDER_LABELS.get(prov, prov)} {model}: {result.error}")
+            if not result.retryable_elsewhere:
+                break
+        if not result.ok and len(failures) > 1:
+            result.error = " | ".join(failures)
+        self.last_completion = result
+        return result
+
+    def _as_text(self, result: Completion) -> str:
+        if result.ok:
+            return result.text
+        if " | " in result.error or not result.provider:
+            return f"{AI_ERROR_PREFIX}: {result.error}"
+        where = f"{PROVIDER_LABELS.get(result.provider, result.provider)} / {result.model}"
+        return f"{AI_ERROR_PREFIX} ({where}): {result.error}"
+
+    async def test_provider(
+        self, provider: str, api_key: str | None = None, model: str | None = None
+    ) -> dict[str, Any]:
+        """Check a key: list models, then a tiny completion with the chosen model."""
+        key = api_key if api_key else self.key(provider)
+        models = await self.catalog.async_get(provider, key, refresh=True) if key else None
+        model = model or self._provider_models.get(provider) or (
+            models.models[0]["id"] if models and models.models else ""
+        )
+        if not key:
+            return {"ok": False, "message": "Brak klucza API", "models": 0}
+        result = await async_complete(
+            self.hass, provider, key, model, "Reply with OK", max_tokens=16, temperature=0, timeout=30,
+        )
+        return {
+            "ok": result.ok,
+            "model": model,
+            "models": len(models.models) if models else 0,
+            "message": "OK" if result.ok else result.error,
+            "models_error": models.error if models else "",
+        }
+
+    # Backwards-compatible key checks (services.test_api_key)
+    async def test_gemini_key(self) -> bool:
+        return (await self.test_provider(PROVIDER_GEMINI))["ok"]
 
     async def test_anthropic_key(self) -> bool:
-        """Test if the Anthropic API key is valid via REST API."""
-        try:
-            import aiohttp
-            url = "https://api.anthropic.com/v1/messages"
-            headers = {
-                "x-api-key": self._anthropic_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            }
-            payload = {
-                "model": self._anthropic_model,
-                "max_tokens": 10,
-                "messages": [{"role": "user", "content": "Reply with OK"}],
-            }
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, headers=headers,
-                                        timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        return bool(data.get("content"))
-                    _LOGGER.error("Anthropic test HTTP %s: %s", resp.status, await resp.text())
-                    return False
-        except Exception as err:
-            _LOGGER.error("Anthropic key test failed: %s", err)
-            return False
+        return (await self.test_provider(PROVIDER_ANTHROPIC))["ok"]
 
     def _check_rate_limit(self) -> bool:
         """Check if we're within rate limits (advisory calls)."""
         now = time.time()
-        self._call_timestamps = [
-            t for t in self._call_timestamps
-            if now - t < AI_RATE_LIMIT_WINDOW
-        ]
+        self._call_timestamps = [t for t in self._call_timestamps if now - t < AI_RATE_LIMIT_WINDOW]
         if len(self._call_timestamps) >= AI_RATE_LIMIT_CALLS:
-            _LOGGER.warning(
-                "AI advisory rate limit reached (%d/%d calls in window)",
-                len(self._call_timestamps),
-                AI_RATE_LIMIT_CALLS,
-            )
+            _LOGGER.warning("AI advisory rate limit reached (%d/%d calls in window)",
+                            len(self._call_timestamps), AI_RATE_LIMIT_CALLS)
             return False
-        _LOGGER.debug(
-            "AI advisory rate budget: %d/%d used",
-            len(self._call_timestamps), AI_RATE_LIMIT_CALLS,
-        )
         return True
 
     def _check_controller_rate_limit(self) -> bool:
         """Check if we're within rate limits (controller/strategist calls)."""
         now = time.time()
-        self._controller_timestamps = [
-            t for t in self._controller_timestamps
-            if now - t < AI_RATE_LIMIT_WINDOW
-        ]
+        self._controller_timestamps = [t for t in self._controller_timestamps if now - t < AI_RATE_LIMIT_WINDOW]
         if len(self._controller_timestamps) >= AI_RATE_LIMIT_CONTROLLER:
-            _LOGGER.warning(
-                "AI controller rate limit reached (%d/%d calls in window)",
-                len(self._controller_timestamps),
-                AI_RATE_LIMIT_CONTROLLER,
-            )
+            _LOGGER.warning("AI controller rate limit reached (%d/%d calls in window)",
+                            len(self._controller_timestamps), AI_RATE_LIMIT_CONTROLLER)
             return False
-        _LOGGER.debug(
-            "AI controller rate budget: %d/%d used",
-            len(self._controller_timestamps), AI_RATE_LIMIT_CONTROLLER,
-        )
         return True
 
     def _build_context(self, data: dict[str, Any]) -> str:
@@ -373,248 +480,52 @@ class AIAdvisor:
         ])
         return "\n".join(lines)
 
-    async def ask_gemini(
-        self,
-        question: str,
-        data: dict[str, Any],
-    ) -> str:
-        """Ask Google Gemini for energy advice via REST API."""
-        if not self.gemini_available:
-            return "Google Gemini is not configured. Add your API key in integration settings."
 
-        if not self._check_rate_limit():
-            return "Rate limit reached. Please try again later."
+    # ── Public API (used by services, cron, autopilot) ────────────────
 
-        try:
-            import aiohttp
-
-            context = self._build_context(data)
-            format_instructions = """
-IMPORTANT — FORMAT YOUR RESPONSE as structured markdown for rich display:
-- Use ## for main sections (e.g. ## 📊 Analiza bieżącej sytuacji, ## 🔋 Bateria, ## ⚡ Sieć, ## 🎯 Rekomendacje)
-- Use ### for subsections
-- Use numbered lists (1. 2. 3.) for step-by-step recommendations
-- Use bullet points (- ) for details within sections
-- Use **bold** for key values and emphasis
-- Use > for important callout tips (prefix with ✅ for positive, ⚠️ for warning, ❌ for critical)
-- Use **Rekomendacja:** prefix for main action items
-- Use --- between major sections for visual separation
-- Use tables | header | header | for comparative data when useful
-- Keep each section focused and concise
-
-Example structure:
-## 📊 Analiza systemu
-- **Moc PV:** 0 W
-- **SOC baterii:** 10%
----
-## 🎯 Rekomendacje na najbliższe 4 godziny
-1. **Rekomendacja:** Zatrzymaj rozładowywanie baterii
-> ✅ Bateria powinna ładować się z sieci w taniej taryfie
-2. **Rekomendacja:** Nie eksportuj do sieci
-> ⚠️ Brak produkcji PV — eksport jest niemożliwy
-"""
-            prompt = f"""You are an expert energy management advisor for a home solar+battery system in Poland.
+    def _advice_prompt(self, question: str, data: dict[str, Any]) -> str:
+        return f"""You are an expert energy management advisor for a home solar+battery system in Poland.
 Analyze the following system data and provide recommendations.
 Use Polish energy market knowledge (G13 tariff, RCE pricing, net-billing rules).
 Provide complete, actionable recommendations. Do NOT truncate your response.
 Respond in Polish.
-{format_instructions}
-{context}
+{_FORMAT_INSTRUCTIONS}
+{self._build_context(data)}
 
 User question: {question}"""
 
-            self._call_timestamps.append(time.time())
-
-            url = (
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"{self._gemini_model}:generateContent?key={self._gemini_key}"
-            )
-            payload = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "maxOutputTokens": AI_MAX_TOKENS,
-                    "temperature": AI_TEMPERATURE,
-                },
-            }
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload,
-                                        timeout=aiohttp.ClientTimeout(total=120)) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        candidates = result.get("candidates", [])
-                        if candidates:
-                            finish_reason = candidates[0].get("finishReason", "UNKNOWN")
-                            _LOGGER.debug("Gemini finish_reason: %s", finish_reason)
-                            if finish_reason == "MAX_TOKENS":
-                                _LOGGER.warning("Gemini response truncated (MAX_TOKENS). Consider increasing AI_MAX_TOKENS.")
-                            parts = candidates[0].get("content", {}).get("parts", [])
-                            if parts:
-                                text = parts[0].get("text", "No response text.")
-                                _LOGGER.debug("Gemini response length: %d chars", len(text))
-                                return text
-                        return "No response from Gemini."
-                    err_text = await resp.text()
-                    _LOGGER.error("Gemini API HTTP %s: %s", resp.status, err_text)
-                    return f"Gemini error (HTTP {resp.status})"
-
-        except Exception as err:
-            _LOGGER.error(
-                "Gemini API error [%s]: %s (key_len=%d, model=%s)",
-                type(err).__name__, err,
-                len(self._gemini_key), self._gemini_model,
-                exc_info=True,
-            )
-            return f"Gemini error: {type(err).__name__}: {err}"
-
-    async def ask_anthropic(
-        self,
-        question: str,
-        data: dict[str, Any],
+    async def ask(
+        self, question: str, data: dict[str, Any], task: str = "ask", provider: str | None = None
     ) -> str:
-        """Ask Anthropic Claude for energy advice via REST API."""
-        if not self.anthropic_available:
-            return "Anthropic Claude is not configured. Add your API key in integration settings."
-
+        """Question + system context → markdown answer (or 'AI error …')."""
         if not self._check_rate_limit():
             return "Rate limit reached. Please try again later."
+        self._call_timestamps.append(time.time())
+        result = await self.complete(task, self._advice_prompt(question, data), provider=provider)
+        return self._as_text(result)
 
-        try:
-            import aiohttp
+    async def direct_ask(self, prompt: str, task: str = "ask", provider: str | None = None) -> str:
+        """Prompt as-is (no system context overlay)."""
+        if not self._check_rate_limit():
+            return "Rate limit reached. Please try again later."
+        self._call_timestamps.append(time.time())
+        return self._as_text(await self.complete(task, prompt, provider=provider))
 
-            context = self._build_context(data)
-            format_instructions = """
-IMPORTANT — FORMAT YOUR RESPONSE as structured markdown for rich display:
-- Use ## for main sections (e.g. ## 📊 Analiza bieżącej sytuacji, ## 🔋 Bateria, ## ⚡ Sieć, ## 🎯 Rekomendacje)
-- Use ### for subsections
-- Use numbered lists (1. 2. 3.) for step-by-step recommendations
-- Use bullet points (- ) for details within sections
-- Use **bold** for key values and emphasis
-- Use > for important callout tips (prefix with ✅ for positive, ⚠️ for warning, ❌ for critical)
-- Use **Rekomendacja:** prefix for main action items
-- Use --- between major sections for visual separation
-- Use tables | header | header | for comparative data when useful
-- Keep each section focused and concise
-"""
-            prompt = f"""You are an expert energy management advisor for a home solar+battery system in Poland.
-Analyze the following system data and provide recommendations.
-Use Polish energy market knowledge (G13 tariff, RCE pricing, net-billing rules).
-Provide complete, actionable recommendations. Do NOT truncate your response.
-Respond in Polish.
-{format_instructions}
-{context}
+    # Legacy names
+    async def ask_gemini(self, question: str, data: dict[str, Any]) -> str:
+        return await self.ask(question, data, provider=PROVIDER_GEMINI)
 
-User question: {question}"""
-
-            self._call_timestamps.append(time.time())
-
-            url = "https://api.anthropic.com/v1/messages"
-            headers = {
-                "x-api-key": self._anthropic_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            }
-            payload = {
-                "model": self._anthropic_model,
-                "max_tokens": AI_MAX_TOKENS,
-                "temperature": AI_TEMPERATURE,
-                "messages": [{"role": "user", "content": prompt}],
-            }
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, headers=headers,
-                                        timeout=aiohttp.ClientTimeout(total=120)) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        content = result.get("content", [])
-                        if content:
-                            return content[0].get("text", "No response text.")
-                        return "No response from Anthropic."
-                    err_text = await resp.text()
-                    _LOGGER.error("Anthropic API HTTP %s: %s", resp.status, err_text)
-                    return f"Anthropic error (HTTP {resp.status})"
-
-        except Exception as err:
-            _LOGGER.error("Anthropic API error: %s", err)
-            return f"Anthropic error: {err}"
+    async def ask_anthropic(self, question: str, data: dict[str, Any]) -> str:
+        return await self.ask(question, data, provider=PROVIDER_ANTHROPIC)
 
     async def _direct_ask_gemini(self, prompt: str) -> str:
-        """Send prompt directly to Gemini without system context overlay."""
-        if not self.gemini_available:
-            return "Google Gemini is not configured."
-        if not self._check_rate_limit():
-            return "Rate limit reached. Please try again later."
-        try:
-            import aiohttp
-            self._call_timestamps.append(time.time())
-            url = (
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"{self._gemini_model}:generateContent?key={self._gemini_key}"
-            )
-            payload = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "maxOutputTokens": AI_MAX_TOKENS,
-                    "temperature": AI_TEMPERATURE,
-                },
-            }
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload,
-                                        timeout=aiohttp.ClientTimeout(total=120)) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        candidates = result.get("candidates", [])
-                        if candidates:
-                            parts = candidates[0].get("content", {}).get("parts", [])
-                            if parts:
-                                return parts[0].get("text", "No response text.")
-                        return "No response from Gemini."
-                    err_text = await resp.text()
-                    _LOGGER.error("Gemini direct API HTTP %s: %s", resp.status, err_text)
-                    return f"Gemini error (HTTP {resp.status})"
-        except Exception as err:
-            _LOGGER.error("Gemini direct API error: %s", err)
-            return f"Gemini error: {err}"
+        return await self.direct_ask(prompt, provider=PROVIDER_GEMINI)
 
     async def _direct_ask_anthropic(self, prompt: str) -> str:
-        """Send prompt directly to Anthropic without system context overlay."""
-        if not self.anthropic_available:
-            return "Anthropic Claude is not configured."
-        if not self._check_rate_limit():
-            return "Rate limit reached. Please try again later."
-        try:
-            import aiohttp
-            self._call_timestamps.append(time.time())
-            url = "https://api.anthropic.com/v1/messages"
-            headers = {
-                "x-api-key": self._anthropic_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            }
-            payload = {
-                "model": self._anthropic_model,
-                "max_tokens": AI_MAX_TOKENS,
-                "temperature": AI_TEMPERATURE,
-                "messages": [{"role": "user", "content": prompt}],
-            }
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, headers=headers,
-                                        timeout=aiohttp.ClientTimeout(total=120)) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        content = result.get("content", [])
-                        if content:
-                            return content[0].get("text", "No response text.")
-                        return "No response from Anthropic."
-                    err_text = await resp.text()
-                    _LOGGER.error("Anthropic direct API HTTP %s: %s", resp.status, err_text)
-                    return f"Anthropic error (HTTP {resp.status})"
-        except Exception as err:
-            _LOGGER.error("Anthropic direct API error: %s", err)
-            return f"Anthropic error: {err}"
+        return await self.direct_ask(prompt, provider=PROVIDER_ANTHROPIC)
 
-    async def get_optimization_advice(
-        self, data: dict[str, Any]
-    ) -> str:
-        """Get automated optimization advice using the best available AI."""
+    async def get_optimization_advice(self, data: dict[str, Any]) -> str:
+        """Get automated optimization advice using the configured AI."""
         question = (
             "Based on the current system state, PV forecast, and energy prices, "
             "what should I optimize in the next 4 hours? Consider: "
@@ -623,17 +534,9 @@ User question: {question}"""
             "3) Should I run high-power loads (boiler, AC)? "
             "4) Any arbitrage opportunities?"
         )
+        return await self.ask(question, data, task="hems_advice")
 
-        if self.gemini_available:
-            return await self.ask_gemini(question, data)
-        elif self.anthropic_available:
-            return await self.ask_anthropic(question, data)
-        else:
-            return "No AI provider configured. Add Google Gemini or Anthropic Claude API key in settings."
-
-    async def generate_daily_report(
-        self, data: dict[str, Any]
-    ) -> str:
+    async def generate_daily_report(self, data: dict[str, Any]) -> str:
         """Generate a daily energy report using AI."""
         question = (
             "Generate a brief daily energy report for today. Include: "
@@ -644,17 +547,9 @@ User question: {question}"""
             "5) Tomorrow's recommendations based on forecast "
             "Format as a clean, readable report."
         )
+        return await self.ask(question, data, task="daily_report")
 
-        if self.gemini_available:
-            return await self.ask_gemini(question, data)
-        elif self.anthropic_available:
-            return await self.ask_anthropic(question, data)
-        else:
-            return "No AI provider configured."
-
-    async def detect_anomalies(
-        self, data: dict[str, Any]
-    ) -> str:
+    async def detect_anomalies(self, data: dict[str, Any]) -> str:
         """Detect anomalies in energy patterns."""
         question = (
             "Analyze the current system state for any anomalies or unusual patterns. "
@@ -665,111 +560,19 @@ User question: {question}"""
             "4) Sensor reading inconsistencies "
             "Report only actual concerns, not normal operation."
         )
-
-        if self.gemini_available:
-            return await self.ask_gemini(question, data)
-        elif self.anthropic_available:
-            return await self.ask_anthropic(question, data)
-        else:
-            return "No AI provider configured."
+        return await self.ask(question, data, task="anomaly")
 
     async def ask_autopilot(
-        self,
-        prompt: str,
-        data: dict[str, Any],
-        provider: str = "auto",
+        self, prompt: str, data: dict[str, Any], provider: str = "auto"
     ) -> str:
-        """Ask AI to analyze and optimize an autopilot strategy.
-
-        Uses a specialized prompt from autopilot_engine.build_autopilot_ai_prompt().
-        Makes direct API calls to avoid adding redundant _build_context().
-        Uses higher token limit for comprehensive autopilot analysis.
-        """
-        AUTOPILOT_MAX_TOKENS = 16384  # Autopilot needs more room than regular queries
-
+        """Autopilot strategy analysis (prompt from autopilot_engine), long answer."""
         if not self._check_rate_limit():
             return "Rate limit reached. Please try again later."
-
         self._call_timestamps.append(time.time())
-
-        # Resolve provider
-        use_gemini = False
-        use_anthropic = False
-        if provider == "gemini" and self.gemini_available:
-            use_gemini = True
-        elif provider == "anthropic" and self.anthropic_available:
-            use_anthropic = True
-        elif provider == "auto":
-            if self.gemini_available:
-                use_gemini = True
-            elif self.anthropic_available:
-                use_anthropic = True
-
-        if not use_gemini and not use_anthropic:
-            return "No AI provider configured. Add Google Gemini or Anthropic Claude API key in settings."
-
-        try:
-            import aiohttp
-
-            if use_gemini:
-                url = (
-                    f"https://generativelanguage.googleapis.com/v1beta/models/"
-                    f"{self._gemini_model}:generateContent?key={self._gemini_key}"
-                )
-                payload = {
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "maxOutputTokens": AUTOPILOT_MAX_TOKENS,
-                        "temperature": AI_TEMPERATURE,
-                    },
-                }
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(url, json=payload,
-                                            timeout=aiohttp.ClientTimeout(total=180)) as resp:
-                        if resp.status == 200:
-                            result = await resp.json()
-                            candidates = result.get("candidates", [])
-                            if candidates:
-                                finish_reason = candidates[0].get("finishReason", "UNKNOWN")
-                                if finish_reason == "MAX_TOKENS":
-                                    _LOGGER.warning("Autopilot Gemini response truncated (MAX_TOKENS)")
-                                parts = candidates[0].get("content", {}).get("parts", [])
-                                if parts:
-                                    return parts[0].get("text", "No response text.")
-                            return "No response from Gemini."
-                        err_text = await resp.text()
-                        _LOGGER.error("Autopilot Gemini HTTP %s: %s", resp.status, err_text)
-                        return f"Gemini error (HTTP {resp.status})"
-
-            else:  # use_anthropic
-                url = "https://api.anthropic.com/v1/messages"
-                headers = {
-                    "x-api-key": self._anthropic_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                }
-                payload = {
-                    "model": self._anthropic_model,
-                    "max_tokens": AUTOPILOT_MAX_TOKENS,
-                    "temperature": AI_TEMPERATURE,
-                    "messages": [{"role": "user", "content": prompt}],
-                }
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(url, json=payload, headers=headers,
-                                            timeout=aiohttp.ClientTimeout(total=180)) as resp:
-                        if resp.status == 200:
-                            result = await resp.json()
-                            content = result.get("content", [])
-                            if content:
-                                return content[0].get("text", "No response text.")
-                            return "No response from Anthropic."
-                        err_text = await resp.text()
-                        _LOGGER.error("Autopilot Anthropic HTTP %s: %s", resp.status, err_text)
-                        return f"Anthropic error (HTTP {resp.status})"
-
-        except Exception as err:
-            _LOGGER.error("Autopilot AI error [%s]: %s", type(err).__name__, err, exc_info=True)
-            return f"Autopilot AI error: {type(err).__name__}: {err}"
+        result = await self.complete(
+            "autopilot", prompt, max_tokens=16384, timeout=180, provider=provider,
+        )
+        return self._as_text(result)
 
     # ------------------------------------------------------------------
     #  AI Controller — JSON toolcalling for real-time inverter control
@@ -780,6 +583,12 @@ User question: {question}"""
         "reasoning": "AI unavailable — fallback to no_action",
         "commands": [{"tool": "no_action", "params": {"reason": "AI response error"}}],
         "next_check_minutes": 5,
+    }
+    _CONTROLLER_TOOLS = {
+        "force_charge", "force_discharge", "stop_force_charge", "stop_force_discharge",
+        "emergency_stop", "set_dod", "set_export_limit", "switch_on", "switch_off",
+        "no_action", "charge_pv_only", "charge_from_grid", "set_general",
+        "battery_to_home", "battery_hold",
     }
 
     async def ask_controller(
@@ -799,97 +608,16 @@ User question: {question}"""
 
         if not self._check_controller_rate_limit():
             return dict(self._CONTROLLER_NO_ACTION, reasoning="Rate limit reached")
-
         self._controller_timestamps.append(time.time())
 
-        # Resolve provider
-        use_gemini = False
-        use_anthropic = False
-        if provider == "gemini" and self.gemini_available:
-            use_gemini = True
-        elif provider == "anthropic" and self.anthropic_available:
-            use_anthropic = True
-        elif provider == "auto":
-            if self.gemini_available:
-                use_gemini = True
-            elif self.anthropic_available:
-                use_anthropic = True
-
-        if not use_gemini and not use_anthropic:
-            return dict(self._CONTROLLER_NO_ACTION, reasoning="No AI provider configured")
-
-        raw_text = ""
-        try:
-            import aiohttp
-
-            if use_gemini:
-                url = (
-                    f"https://generativelanguage.googleapis.com/v1beta/models/"
-                    f"{self._gemini_model}:generateContent?key={self._gemini_key}"
-                )
-                payload = {
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "maxOutputTokens": max_tokens or self._CONTROLLER_MAX_TOKENS,
-                        "temperature": 0.2,  # Lower temp for deterministic control
-                        "responseMimeType": "application/json",
-                    },
-                }
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        url, json=payload,
-                        timeout=aiohttp.ClientTimeout(total=90),  # Generous timeout for Strategist
-                    ) as resp:
-                        if resp.status == 200:
-                            result = await resp.json()
-                            candidates = result.get("candidates", [])
-                            if candidates:
-                                parts = candidates[0].get("content", {}).get("parts", [])
-                                if parts:
-                                    raw_text = parts[0].get("text", "")
-                                # Log finish reason for diagnostics
-                                finish_reason = candidates[0].get("finishReason", "UNKNOWN")
-                                if finish_reason != "STOP":
-                                    _LOGGER.warning(
-                                        "AI Controller: Gemini finishReason=%s (len=%d, max_tok=%s)",
-                                        finish_reason, len(raw_text), max_tokens or self._CONTROLLER_MAX_TOKENS,
-                                    )
-                        else:
-                            err_text = await resp.text()
-                            _LOGGER.error("AI Controller Gemini HTTP %s: %s", resp.status, err_text)
-                            return dict(self._CONTROLLER_NO_ACTION, reasoning=f"Gemini HTTP {resp.status}")
-
-            else:  # use_anthropic
-                url = "https://api.anthropic.com/v1/messages"
-                headers = {
-                    "x-api-key": self._anthropic_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                }
-                payload = {
-                    "model": self._anthropic_model,
-                    "max_tokens": max_tokens or self._CONTROLLER_MAX_TOKENS,
-                    "temperature": 0.2,
-                    "messages": [{"role": "user", "content": prompt}],
-                }
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        url, json=payload, headers=headers,
-                        timeout=aiohttp.ClientTimeout(total=45),
-                    ) as resp:
-                        if resp.status == 200:
-                            result = await resp.json()
-                            content = result.get("content", [])
-                            if content:
-                                raw_text = content[0].get("text", "")
-                        else:
-                            err_text = await resp.text()
-                            _LOGGER.error("AI Controller Anthropic HTTP %s: %s", resp.status, err_text)
-                            return dict(self._CONTROLLER_NO_ACTION, reasoning=f"Anthropic HTTP {resp.status}")
-
-        except Exception as err:
-            _LOGGER.error("AI Controller error [%s]: %s", type(err).__name__, err)
-            return dict(self._CONTROLLER_NO_ACTION, reasoning=f"Error: {err}")
+        result = await self.complete(
+            "autopilot", prompt,
+            max_tokens=max_tokens or self._CONTROLLER_MAX_TOKENS,
+            temperature=0.2, json_mode=True, timeout=90, provider=provider,
+        )
+        if not result.ok:
+            return dict(self._CONTROLLER_NO_ACTION, reasoning=f"{AI_ERROR_PREFIX}: {result.error}")
+        raw_text = result.text
 
         # Parse and validate JSON response
         if not raw_text.strip():
@@ -951,9 +679,7 @@ User question: {question}"""
                 raise ValueError("'commands' is not a list")
 
             # Validate each command — supports both {"action":"id"} and {"tool":"name"}
-            valid_tools = {"force_charge", "force_discharge", "stop_force_charge",
-                           "stop_force_discharge", "emergency_stop", "set_dod",
-                           "set_export_limit", "switch_on", "switch_off", "no_action"}
+            valid_tools = self._CONTROLLER_TOOLS
             validated_commands = []
             for cmd in parsed["commands"][:3]:  # Max 3 commands
                 # Action-based command: pass through for controller to resolve

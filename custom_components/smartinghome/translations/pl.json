@@ -139,7 +139,8 @@
         "description": "Podaj klucze API do doradcy AI.\nKlucz Gemini: https://aistudio.google.com/apikey\nKlucz Claude: https://console.anthropic.com/settings/keys",
         "data": {
           "gemini_api_key": "🤖 Klucz API Google Gemini",
-          "anthropic_api_key": "🤖 Klucz API Anthropic Claude"
+          "anthropic_api_key": "🤖 Klucz API Anthropic Claude",
+          "openrouter_api_key": "🌐 OpenRouter API Key"
         }
       },
       "sensors": {

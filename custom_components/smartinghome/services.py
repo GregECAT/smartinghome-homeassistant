@@ -5,6 +5,7 @@ import base64
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import voluptuous as vol
 
@@ -109,7 +110,7 @@ ASK_AI_SCHEMA = vol.Schema(
     {
         vol.Required("question"): cv.string,
         vol.Optional("provider", default="auto"): vol.In(
-            ["auto", "gemini", "anthropic"]
+            ["auto", "gemini", "anthropic", "openrouter"]
         ),
     }
 )
@@ -130,12 +131,14 @@ SAVE_SETTINGS_SCHEMA = vol.Schema(
         vol.Optional("default_ai_provider"): cv.string,
         vol.Optional("gemini_key_status"): cv.string,
         vol.Optional("anthropic_key_status"): cv.string,
+        vol.Optional("openrouter_api_key"): cv.string,
+        vol.Optional("openrouter_model"): cv.string,
     }
 )
 
 TEST_API_KEY_SCHEMA = vol.Schema(
     {
-        vol.Required("provider"): vol.In(["gemini", "anthropic"]),
+        vol.Required("provider"): vol.In(["gemini", "anthropic", "openrouter"]),
         vol.Optional("api_key", default=""): cv.string,
     }
 )
@@ -152,7 +155,7 @@ RUN_AUTOPILOT_SCHEMA = vol.Schema(
             [s.value for s in AutopilotStrategy]
         ),
         vol.Optional("provider", default="auto"): vol.In(
-            ["auto", "gemini", "anthropic"]
+            ["auto", "gemini", "anthropic", "openrouter"]
         ),
         vol.Optional("with_ai", default=True): cv.boolean,
     }
@@ -272,16 +275,14 @@ async def async_setup_services(
             inverter_brand=entry.data.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE),
         )
 
-    # Try to load keys from settings.json first (more reliable than config_entry)
-    _settings_keys = await _read_settings_async(hass)
-    _gemini_key_init = entry.data.get(CONF_GEMINI_API_KEY, "") or _settings_keys.get("gemini_api_key", "")
-    _anthropic_key_init = entry.data.get(CONF_ANTHROPIC_API_KEY, "") or _settings_keys.get("anthropic_api_key", "")
-
+    # Keys live in private storage (.storage); config-entry keys are imported once
     ai_advisor = AIAdvisor(
         hass,
-        gemini_api_key=_gemini_key_init,
-        anthropic_api_key=_anthropic_key_init,
+        gemini_api_key=entry.data.get(CONF_GEMINI_API_KEY, ""),
+        anthropic_api_key=entry.data.get(CONF_ANTHROPIC_API_KEY, ""),
     )
+    await ai_advisor.async_setup()
+    hass.data.setdefault(DOMAIN, {})["_ai_advisor"] = ai_advisor
 
     # Wire AI advisor to strategy controller for AI Full Autonomy mode
     if strategy_controller is not None:
@@ -387,16 +388,12 @@ async def async_setup_services(
             "ems_mode": data.get("ems_mode"),
         }
 
-        if provider == "gemini" or (
-            provider == "auto" and ai_advisor.gemini_available
-        ):
-            response = await ai_advisor.ask_gemini(question, ai_data)
-        elif provider == "anthropic" or (
-            provider == "auto" and ai_advisor.anthropic_available
-        ):
-            response = await ai_advisor.ask_anthropic(question, ai_data)
-        else:
-            response = "No AI provider available."
+        response = await ai_advisor.ask(
+            question, ai_data, task="ask",
+            provider=None if provider in ("", "auto") else provider,
+        )
+        if ai_advisor.last_completion and ai_advisor.last_completion.provider:
+            provider = ai_advisor.last_completion.provider
 
         hass.bus.async_fire(
             f"{DOMAIN}_ai_response",
@@ -457,34 +454,19 @@ async def async_setup_services(
         It triggers _async_update_listener → async_reload → full integration
         restart, which destroys the ai_advisor before settings.json is written.
         """
-        gemini_key = call.data.get("gemini_api_key")
-        anthropic_key = call.data.get("anthropic_api_key")
-        gemini_model = call.data.get("gemini_model")
-        anthropic_model = call.data.get("anthropic_model")
-        default_provider = call.data.get("default_ai_provider")
+        updates: dict[str, Any] = {}
 
-        updates = {}
+        # API keys → private storage (www/ is served without authentication)
+        for prov in ("gemini", "anthropic", "openrouter"):
+            key = (call.data.get(f"{prov}_api_key") or "").strip()
+            if key and "***" not in key and "…" not in key:
+                await ai_advisor.secrets.async_set(prov, key)
+                updates[f"{prov}_key_status"] = "saved"
 
-        if gemini_key is not None and gemini_key:
-            ai_advisor._gemini_key = gemini_key
-            updates["gemini_api_key"] = gemini_key
-            updates["gemini_key_status"] = "saved"
-            updates["gemini_key_masked"] = gemini_key[:6] + "***" + gemini_key[-4:] if len(gemini_key) > 10 else "***"
-        if anthropic_key is not None and anthropic_key:
-            ai_advisor._anthropic_key = anthropic_key
-            updates["anthropic_api_key"] = anthropic_key
-            updates["anthropic_key_status"] = "saved"
-            updates["anthropic_key_masked"] = anthropic_key[:7] + "***" + anthropic_key[-4:] if len(anthropic_key) > 11 else "***"
-
-        # Update model selections on advisor
-        if gemini_model:
-            ai_advisor._gemini_model = gemini_model
-            updates["gemini_model"] = gemini_model
-        if anthropic_model:
-            ai_advisor._anthropic_model = anthropic_model
-            updates["anthropic_model"] = anthropic_model
-        if default_provider:
-            updates["default_ai_provider"] = default_provider
+        for field in ("gemini_model", "anthropic_model", "openrouter_model", "default_ai_provider"):
+            val = call.data.get(field)
+            if val:
+                updates[field] = val
 
         # Pass through status fields from frontend
         for status_key in ("gemini_key_status", "anthropic_key_status"):
@@ -494,88 +476,26 @@ async def async_setup_services(
 
         if updates:
             await _update_settings_file(hass, updates)
+            ai_advisor.apply_settings(await _read_settings_async(hass))
 
         _LOGGER.info("API keys/models updated via panel (updates=%s)", list(updates.keys()))
 
     async def handle_test_api_key(call: ServiceCall) -> None:
         """Test if an API key is valid by making a minimal request."""
         provider = call.data["provider"]
-        test_key = call.data.get("api_key", "")
-
-        # If no key provided in the call, try reading from stored settings
-        if not test_key:
-            stored = await _read_settings_async(hass)
-            def _clean(k: str) -> str:
-                """Return empty string for masked or empty keys."""
-                return "" if not k or "***" in k else k
-
-            if provider == "gemini":
-                test_key = (
-                    _clean(stored.get("gemini_api_key", ""))
-                    or _clean(entry.data.get(CONF_GEMINI_API_KEY, ""))
-                    or _clean(ai_advisor._gemini_key)
-                )
-            else:
-                test_key = (
-                    _clean(stored.get("anthropic_api_key", ""))
-                    or _clean(entry.data.get(CONF_ANTHROPIC_API_KEY, ""))
-                    or _clean(ai_advisor._anthropic_key)
-                )
-            _LOGGER.info(
-                "Test %s: key from settings (len=%d, prefix=%s)",
-                provider, len(test_key), test_key[:8] + "..." if len(test_key) > 8 else test_key
-            )
-
-        # Also refresh model from settings (user may have changed it in panel)
-        stored_for_model = await _read_settings_async(hass)
-        gm = stored_for_model.get("gemini_model", "")
-        am = stored_for_model.get("anthropic_model", "")
-        if gm:
-            ai_advisor._gemini_model = gm
-        if am:
-            # Normalize old model IDs to clean format
-            import re
-            am = re.sub(r"claude-sonnet-4[\.\-]6.*", "claude-sonnet-4-6", am)
-            am = re.sub(r"claude-opus-4[\.\-]6.*", "claude-opus-4-6", am)
-            am = re.sub(r"claude-haiku-[34][\.\-]5.*", "claude-3-5-haiku", am)
-            ai_advisor._anthropic_model = am
-        _LOGGER.info(
-            "Test %s: model=%s",
-            provider, ai_advisor._gemini_model if provider == "gemini" else ai_advisor._anthropic_model
-        )
-
-        if not test_key:
-            hass.bus.async_fire(
-                f"{DOMAIN}_api_key_test",
-                {"provider": provider, "status": "invalid"},
-            )
-            _LOGGER.warning("Test %s: no key found anywhere!", provider)
-            return
-
-        try:
-            # Save old key to restore on failure
-            old_key = ai_advisor._gemini_key if provider == "gemini" else ai_advisor._anthropic_key
-            if provider == "gemini":
-                ai_advisor._gemini_key = test_key
-                valid = await ai_advisor.test_gemini_key()
-                if not valid:
-                    ai_advisor._gemini_key = old_key  # restore working key
-            else:
-                ai_advisor._anthropic_key = test_key
-                valid = await ai_advisor.test_anthropic_key()
-                if not valid:
-                    ai_advisor._anthropic_key = old_key  # restore working key
-            status = "valid" if valid else "invalid"
-        except Exception:
-            status = "invalid"
-
+        test_key = (call.data.get("api_key") or "").strip()
+        if "***" in test_key or "…" in test_key:
+            test_key = ""
+        result = await ai_advisor.test_provider(provider, api_key=test_key or None)
+        status = "valid" if result["ok"] else "invalid"
+        if result["ok"] and test_key:
+            await ai_advisor.secrets.async_set(provider, test_key)
         hass.bus.async_fire(
             f"{DOMAIN}_api_key_test",
-            {"provider": provider, "status": status},
+            {"provider": provider, "status": status, "message": result["message"], "model": result.get("model", "")},
         )
-        # Also save to settings.json
         await _update_settings_file(hass, {f"{provider}_key_status": status})
-        _LOGGER.info("API key test for %s: %s", provider, status)
+        _LOGGER.info("API key test for %s: %s (%s)", provider, status, result["message"])
 
     async def handle_save_panel_settings(call: ServiceCall) -> None:
         """Save arbitrary panel settings to settings.json."""
@@ -586,7 +506,7 @@ async def async_setup_services(
             _LOGGER.error("Invalid JSON in save_panel_settings: %s", err)
             return
         # SAFETY: never let panel settings overwrite API keys
-        for danger_key in ("gemini_api_key", "anthropic_api_key"):
+        for danger_key in ("gemini_api_key", "anthropic_api_key", "openrouter_api_key"):
             incoming.pop(danger_key, None)
         await _update_settings_file(hass, incoming)
         _LOGGER.info("Panel settings saved: %s", list(incoming.keys()))
@@ -754,11 +674,7 @@ async def async_setup_services(
         ai_analysis = ""
         if with_ai and ai_advisor.any_available:
             try:
-                # Resolve provider from settings if auto
-                if provider == "auto":
-                    stored = await _read_settings_async(hass)
-                    provider = stored.get("default_ai_provider", "gemini")
-
+                # "auto" → provider/model configured for the autopilot task
                 prompt = build_autopilot_ai_prompt(strategy, ai_data, estimation)
                 ai_analysis = await ai_advisor.ask_autopilot(prompt, ai_data, provider)
             except Exception as err:
@@ -1147,22 +1063,10 @@ Odpowiedz w formacie markdown z sekcjami (##), listami, **bold** i tabelą |...|
 Długość: 400-600 słów."""
 
         try:
-            stored = await _read_settings_async(hass)
-            provider = stored.get("default_ai_provider", "gemini")
-
-            # Direct API call without system context (no _build_context)
-            # to avoid polluting ROI analysis with live system status
-            if provider == "anthropic" and ai_advisor.anthropic_available:
-                response = await ai_advisor._direct_ask_anthropic(question)
-            elif ai_advisor.gemini_available:
-                response = await ai_advisor._direct_ask_gemini(question)
-                provider = "gemini"
-            elif ai_advisor.anthropic_available:
-                response = await ai_advisor._direct_ask_anthropic(question)
-                provider = "anthropic"
-            else:
-                response = "Brak dostępnego dostawcy AI."
-                provider = "none"
+            # Direct call without system context — ROI is a yearly simulation
+            response = await ai_advisor.direct_ask(question, task="roi")
+            last = ai_advisor.last_completion
+            provider = last.provider if last and last.provider else "none"
 
             from datetime import datetime
             now_str = datetime.now().strftime("%H:%M")
