@@ -287,14 +287,16 @@ class AIAdvisor:
         )
         if not key:
             return {"ok": False, "message": "Brak klucza API", "models": 0}
+        # Reasoning models spend tokens on thinking first — leave room for the answer
         result = await async_complete(
-            self.hass, provider, key, model, "Reply with OK", max_tokens=16, temperature=0, timeout=30,
+            self.hass, provider, key, model, "Reply with OK", max_tokens=512, temperature=0, timeout=60,
         )
+        key_ok = result.ok or result.status == 200  # 200 = key and model accepted
         return {
-            "ok": result.ok,
+            "ok": key_ok,
             "model": model,
             "models": len(models.models) if models else 0,
-            "message": "OK" if result.ok else result.error,
+            "message": "OK" if result.ok else (f"Klucz OK, ale: {result.error}" if key_ok else result.error),
             "models_error": models.error if models else "",
         }
 
@@ -578,7 +580,8 @@ User question: {question}"""
     #  AI Controller — JSON toolcalling for real-time inverter control
     # ------------------------------------------------------------------
 
-    _CONTROLLER_MAX_TOKENS = 1024
+    # Reasoning models count thinking against the limit; unused tokens cost nothing
+    _CONTROLLER_MAX_TOKENS = 4096
     _CONTROLLER_NO_ACTION = {
         "reasoning": "AI unavailable — fallback to no_action",
         "commands": [{"tool": "no_action", "params": {"reason": "AI response error"}}],
@@ -612,7 +615,7 @@ User question: {question}"""
 
         result = await self.complete(
             "autopilot", prompt,
-            max_tokens=max_tokens or self._CONTROLLER_MAX_TOKENS,
+            max_tokens=max(max_tokens or 0, self._CONTROLLER_MAX_TOKENS),
             temperature=0.2, json_mode=True, timeout=90, provider=provider,
         )
         if not result.ok:

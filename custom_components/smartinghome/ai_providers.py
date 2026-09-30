@@ -364,7 +364,13 @@ async def async_complete(
         return result
 
     if not result.text:
-        result.error = f"Pusta odpowiedź (finish={result.finish_reason or '?'})"
+        if result.finish_reason in ("length", "max_tokens", "MAX_TOKENS"):
+            result.error = (
+                "Model zużył cały limit tokenów (m.in. na rozumowanie) i nie zwrócił treści — "
+                "zwiększ limit lub wybierz model bez rozumowania"
+            )
+        else:
+            result.error = f"Pusta odpowiedź (finish={result.finish_reason or '?'})"
     return result
 
 
