@@ -40,6 +40,7 @@ from .const import (
     SWITCH_SOCKET2,
     SELECT_WORK_MODE,
     NUMBER_DOD_ON_GRID,
+    NUMBER_EXPORT_LIMIT,
     NUMBER_ECO_MODE_POWER,
     NUMBER_ECO_MODE_SOC,
     # Sofar Solar control entities
@@ -700,7 +701,7 @@ class EnergyManager:
                 "goodwe",
                 "set_parameter",
                 {
-                    "device_id": self._device_id,
+                    "device_id": self._goodwe_device_id(),
                     "parameter": "battery_charge_current",
                     "value": DEFAULT_BATTERY_CHARGE_CURRENT_MAX,
                 },
@@ -716,7 +717,7 @@ class EnergyManager:
                 "goodwe",
                 "set_parameter",
                 {
-                    "device_id": self._device_id,
+                    "device_id": self._goodwe_device_id(),
                     "parameter": "battery_charge_current",
                     "value": DEFAULT_BATTERY_CHARGE_CURRENT_BLOCK,
                 },
@@ -742,7 +743,7 @@ class EnergyManager:
                 "goodwe",
                 "set_parameter",
                 {
-                    "device_id": self._device_id,
+                    "device_id": self._goodwe_device_id(),
                     "parameter": "battery_charge_current",
                     "value": value,
                 },
@@ -750,22 +751,38 @@ class EnergyManager:
 
     async def _set_export_limit(self, limit: int) -> None:
         """Set grid export limit."""
+        if self._is_sofar:
+            if self._last_export_limit == limit:
+                return
+            self._last_export_limit = limit
+            await self._sofar_set_export_limit(limit)
+            return
+
+        # Prefer the GoodWe number entity: goodwe.set_parameter("grid_export_limit")
+        # did not change the limit on GW8K-ET, number.set_value did (tested).
+        entity = self._find_goodwe_number(NUMBER_EXPORT_LIMIT, "grid_export_limit")
+        if entity:
+            state = self.hass.states.get(entity)
+            if state and _safe_int(state.state, -1) == limit:
+                return
+            await self.hass.services.async_call(
+                "number", "set_value", {"entity_id": entity, "value": limit},
+            )
+            self._last_export_limit = limit
+            return
+
         if self._last_export_limit == limit:
             return
         self._last_export_limit = limit
-
-        if self._is_sofar:
-            await self._sofar_set_export_limit(limit)
-        else:
-            await self.hass.services.async_call(
-                "goodwe",
-                "set_parameter",
-                {
-                    "device_id": self._device_id,
-                    "parameter": "grid_export_limit",
-                    "value": str(limit),
-                },
-            )
+        await self.hass.services.async_call(
+            "goodwe",
+            "set_parameter",
+            {
+                "device_id": self._goodwe_device_id(),
+                "parameter": "grid_export_limit",
+                "value": str(limit),
+            },
+        )
 
     async def _set_dod(self, dod: int) -> None:
         """Set depth of discharge on grid."""
@@ -825,6 +842,19 @@ class EnergyManager:
                 return entity_id
         return None
 
+    def _goodwe_device_id(self) -> str:
+        """Device ID of the GoodWe inverter (for goodwe.set_parameter).
+
+        The configured ID defaults to a constant from another install; prefer the
+        device that actually owns the GoodWe control entities.
+        """
+        registry = er.async_get(self.hass)
+        for entity_id in self._goodwe_entity_ids("select") + self._goodwe_entity_ids("number"):
+            entry = registry.async_get(entity_id)
+            if entry and entry.device_id:
+                return entry.device_id
+        return self._device_id
+
     def _goodwe_ems_select(self) -> str | None:
         """GoodWe "EMS mode" select, if the integration exposes it."""
         if self._is_sofar:
@@ -872,9 +902,11 @@ class EnergyManager:
             power_entity = self._find_goodwe_number("", "ems_power_limit")
             if power_entity:
                 power_state = self.hass.states.get(power_entity)
-                power = 0 if ems_mode == "auto" else _safe_int(
+                # The limit is the charge/discharge power; any other mode must get 0 —
+                # battery_standby with a non-zero limit CHARGED from grid (tested on ET)
+                power = _safe_int(
                     power_state.attributes.get("max") if power_state else None, 10000
-                )
+                ) if ems_mode in ("charge_battery", "discharge_battery") else 0
                 await self.hass.services.async_call(
                     "number", "set_value", {"entity_id": power_entity, "value": power},
                 )
