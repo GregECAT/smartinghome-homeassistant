@@ -101,6 +101,7 @@ class AIAdvisor:
         }
         self._ai_config: dict[str, Any] = {}
         self._default_provider: str = ""
+        self._energy_provider: str = ""  # panel choice (settings.json); config entry is the fallback
         self._call_timestamps: list[float] = []  # advisory calls
         self._controller_timestamps: list[float] = []  # controller/strategist calls
         self.last_completion: Completion | None = None
@@ -151,6 +152,7 @@ class AIAdvisor:
         if settings.get("openrouter_model"):
             self._provider_models[PROVIDER_OPENROUTER] = settings["openrouter_model"]
         self._default_provider = settings.get("default_ai_provider", "") or ""
+        self._energy_provider = settings.get("energy_provider", "") or ""
         cfg = settings.get(AI_CONFIG_KEY)
         self._ai_config = cfg if isinstance(cfg, dict) else {}
 
@@ -389,22 +391,15 @@ class AIAdvisor:
         ]
 
         # Tariff section — dynamic or tariff plan
-        # Read provider from settings or config entry
-        provider_key = DEFAULT_ENERGY_PROVIDER
-        try:
-            import json
-            from pathlib import Path
-            sp = Path(self.hass.config.path("custom_components/smartinghome/settings.json"))
-            if sp.exists():
-                s = json.loads(sp.read_text())
-                provider_key = s.get("energy_provider", DEFAULT_ENERGY_PROVIDER)
-        except Exception:
-            pass
-        # Also check config entry
-        if provider_key == DEFAULT_ENERGY_PROVIDER:
+        # Provider chosen in the panel (cached by apply_settings — no file I/O
+        # in the event loop), else the one from the config entry.
+        provider_key = self._energy_provider
+        if not provider_key:
             entries = self.hass.config_entries.async_entries("smartinghome")
-            if entries:
-                provider_key = entries[0].data.get(CONF_ENERGY_PROVIDER, DEFAULT_ENERGY_PROVIDER)
+            provider_key = (
+                entries[0].data.get(CONF_ENERGY_PROVIDER, DEFAULT_ENERGY_PROVIDER)
+                if entries else DEFAULT_ENERGY_PROVIDER
+            )
 
         prov_label = ENERGY_PROVIDER_LABELS.get(provider_key, str(provider_key).upper())
 

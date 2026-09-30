@@ -180,4 +180,10 @@ async def ws_settings_update(hass: HomeAssistant, connection, msg: dict[str, Any
     updates = {k: v for k, v in msg["settings"].items() if k not in SECRET_KEYS}
     if updates:
         await write_async(hass, updates)
+        advisor = _advisor(hass)
+        if advisor is not None and "energy_provider" in updates:
+            # Tariff labels/prices in AI prompts follow the panel's provider
+            from .settings_io import read_async
+
+            advisor.apply_settings(await read_async(hass))
     connection.send_result(msg["id"], {"updated": list(updates)})
