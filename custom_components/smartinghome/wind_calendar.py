@@ -533,16 +533,27 @@ class WindCalendar:
     # ── Private helpers ─────────────────────────────────────────
 
     def _get_turbine_params(self) -> dict[str, Any]:
-        """Read turbine parameters from settings (sync, cached)."""
+        """Turbine parameters from settings, cached for 5 min.
+
+        Called every coordinator tick in the event loop — reading and parsing
+        the whole settings file each time was a blocking call HA warned about.
+        """
+        import time as _time
+
+        now = _time.monotonic()
+        cache = getattr(self, "_turbine_cache", None)
+        if cache is not None and now - cache[0] < 300:
+            return cache[1]
+        params = DEFAULT_TURBINE
         try:
             from .settings_io import read_sync
-            settings = read_sync(self.hass)
-            wt = settings.get("wind_turbine")
+            wt = read_sync(self.hass).get("wind_turbine")
             if wt and isinstance(wt, dict):
-                return wt
+                params = wt
         except Exception:
             pass
-        return DEFAULT_TURBINE
+        self._turbine_cache = (now, params)
+        return params
 
     async def _close_day_async(self) -> None:
         """Async wrapper for close_day (called from midnight rollover)."""

@@ -315,6 +315,7 @@ class StrategyController:
         self._arb_cmd_ts: float = 0.0
         self._arb_status: dict[str, Any] = {}
         self._arb_drift_since: float = 0.0
+        self._arb_planning: bool = False  # a plan is being computed
         self._arb_intent: str = ""  # EnergyManager.intent right after our last command
         self._load_profile: list[float | None] = [None] * 24  # kW per hour of day
         self._load_profile_loaded: bool = False
@@ -1614,11 +1615,20 @@ class StrategyController:
         self._load_profile[hour] = kw if prev is None else prev + 0.02 * (kw - prev)
 
     async def _refresh_arbitrage_plan(self, soc: float, data: dict, now: datetime) -> None:
-        from .settings_io import read_async, write_async
-
         key = (now.hour, int(soc // 3))
+        if self._arb_planning:
+            return  # never stack plan computations (slow host / long horizon)
         if self._arb_plan and key == self._arb_plan_key and time.time() - self._arb_plan_ts < 300:
             return
+        self._arb_planning = True
+        try:
+            await self._compute_arbitrage_plan(soc, data, now, key)
+        finally:
+            self._arb_planning = False
+
+    async def _compute_arbitrage_plan(self, soc: float, data: dict, now: datetime, key: tuple) -> None:
+        from .settings_io import read_async, write_async
+
         settings = await read_async(self.hass)
 
         if not self._load_profile_loaded:
@@ -1658,7 +1668,11 @@ class StrategyController:
             sunset_h=sunset,
             horizon_h=params.horizon_h,
         )
+        t0 = time.monotonic()
         plan = await self.hass.async_add_executor_job(optimize, soc, inputs, params)
+        compute_ms = int((time.monotonic() - t0) * 1000)
+        if compute_ms > 2000:
+            _LOGGER.warning("Arbitrage plan took %d ms (%d h, %.1f kWh)", compute_ms, len(inputs), params.capacity_kwh)
         self._arb_plan, self._arb_plan_ts, self._arb_plan_key = plan, time.time(), key
         from dataclasses import asdict
 
@@ -1667,6 +1681,7 @@ class StrategyController:
             "params": asdict(params),
             "updated": now.strftime("%H:%M"),
             "rce_hours": len(rce),
+            "compute_ms": compute_ms,
         }
 
     def _sun_hours(self) -> tuple[float, float]:
