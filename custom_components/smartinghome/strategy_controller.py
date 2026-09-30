@@ -1527,7 +1527,7 @@ class StrategyController:
         hours — only when the margin beats battery wear + the minimum profit.
         """
         actions: list[str] = []
-        now = dt_util.now().replace(tzinfo=None)
+        now = dt_util.now()  # tz-aware: plan hours stay correct across DST changes
         self._update_load_profile(now.hour, load)
         await self._refresh_arbitrage_plan(soc, data, now)
         plan = self._arb_plan

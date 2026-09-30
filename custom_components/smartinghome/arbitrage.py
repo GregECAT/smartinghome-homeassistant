@@ -44,7 +44,9 @@ ACTION_LABELS = {
 class ArbitrageParams:
     """User-tunable parameters (panel → settings "arbitrage_params")."""
 
-    reserve_soc: float = 15.0     # % arbitrage never discharges below
+    reserve_soc: float = 15.0     # % arbitrage never discharges below (outside peaks)
+    peak_floor_soc: float = 5.0   # % in tariff peaks the house runs on the battery down to this
+    peak_import_penalty: float = 5.0  # zł/kWh — grid import in a peak is "forbidden"
     max_soc: float = 100.0        # % upper limit for grid charging
     min_profit: float = 0.10      # zł/kWh required on top of costs for a cycle
     wear_cost: float = 0.25       # zł per kWh discharged (battery degradation)
@@ -67,6 +69,8 @@ class ArbitrageParams:
                     pass
         params.reserve_soc = min(max(params.reserve_soc, 5.0), 90.0)
         params.max_soc = min(max(params.max_soc, params.reserve_soc + 5), 100.0)
+        # DOD 95 % → the inverter never goes below 5 %
+        params.peak_floor_soc = min(max(params.peak_floor_soc, 5.0), params.reserve_soc)
         return params
 
 
@@ -79,6 +83,7 @@ class HourInput:
     load_kwh: float
     pv_kwh: float
     zone: str = ""
+    no_import: bool = False   # tariff peak: house must run on the battery
 
 
 @dataclass
@@ -103,6 +108,9 @@ class ArbitragePlan:
     total_cost: float = 0.0
     baseline_cost: float = 0.0   # same horizon with the battery idle
     note: str = ""
+    charge_start: str = ""       # first planned grid charge (local time)
+    battery_until: str = ""      # next peak: battery runs out at (or "" = lasts)
+    next_peak: str = ""          # next peak block start–end
 
     @property
     def first(self) -> HourPlan | None:
@@ -115,6 +123,9 @@ class ArbitragePlan:
             "baseline_cost": round(self.baseline_cost, 2),
             "savings": round(self.baseline_cost - self.total_cost, 2),
             "note": self.note,
+            "charge_start": self.charge_start,
+            "battery_until": self.battery_until,
+            "next_peak": self.next_peak,
         }
 
 
@@ -181,37 +192,60 @@ def build_inputs(
     sunset_h: float,
     horizon_h: int,
 ) -> list[HourInput]:
-    """Hourly inputs from now until now + horizon."""
-    slot_start = now
-    first_end = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    """Hourly inputs from now until now + horizon.
+
+    `now` may be timezone-aware (recommended): slots are stepped in UTC and
+    converted back to local wall-clock time, so DST changes (last Sunday of
+    March/October) neither drop nor duplicate tariff hours.
+    """
+    tz = now.tzinfo
     today = now.date()
-    today_hours = [h for h in range(now.hour, 24)]
-    pv_today = pv_distribution(pv_today_remaining_kwh, max(sunrise_h, now.hour + now.minute / 60), sunset_h, today_hours)
+    today_hours = list(range(now.hour, 24))
+    pv_today = pv_distribution(
+        pv_today_remaining_kwh, max(sunrise_h, now.hour + now.minute / 60), sunset_h, today_hours
+    )
     pv_later = pv_distribution(pv_tomorrow_kwh, sunrise_h, sunset_h, list(range(24)))
     known_by_hour: dict[int, float] = {}
     for (_, h), v in sorted(rce.items()):
         known_by_hour[h] = v  # latest known day wins as fallback
 
+    def local(t_utc: datetime) -> datetime:
+        return t_utc.astimezone(tz).replace(tzinfo=None) if tz else t_utc
+
+    from datetime import timezone as _tz
+
+    start_utc = now.astimezone(_tz.utc) if tz else now
+    top_of_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    first_end_utc = top_of_hour.astimezone(_tz.utc) if tz else top_of_hour
+    end_utc = start_utc + timedelta(hours=horizon_h)
+
     out: list[HourInput] = []
-    t = slot_start
-    end = now + timedelta(hours=horizon_h)
-    while t < end:
-        slot_end = first_end if not out else t + timedelta(hours=1)
+    t = start_utc
+    while t < end_utc:
+        slot_end = first_end_utc if not out else t + timedelta(hours=1)
         duration = (slot_end - t).total_seconds() / 3600
         if duration <= 0.02:
             t = slot_end
             continue
-        zone, buy = buy_price(t, tariff, provider)
-        rce_mwh = rce.get((t.date(), t.hour), known_by_hour.get(t.hour, 400.0))
+        lt = local(t)
+        zone, buy = buy_price(lt, tariff, provider)
+        rce_mwh = rce.get((lt.date(), lt.hour), known_by_hour.get(lt.hour, 400.0))
         sell = max(rce_mwh, 0.0) / 1000 * RCE_PROSUMER_COEFFICIENT
-        if t.date() == today:
-            # remaining forecast is already spread from "now" to sunset
-            pv = pv_today.get(t.hour, 0.0)
+        if lt.date() == today:
+            pv = pv_today.get(lt.hour, 0.0)  # remaining forecast already spread from "now"
         else:
-            pv = pv_later.get(t.hour, 0.0) * duration
-        load = max(load_profile_kw[t.hour % 24], 0.0) * duration
-        out.append(HourInput(t, duration, buy, sell, load, pv, zone))
+            pv = pv_later.get(lt.hour, 0.0) * duration
+        load = max(load_profile_kw[lt.hour % 24], 0.0) * duration
+        out.append(HourInput(lt, duration, buy, sell, load, pv, zone))
         t = slot_end
+
+    # Tariff peaks: any hour pricier than the cheapest tariff hour of that day
+    cheapest: dict[date, float] = {}
+    for h in out:
+        d = h.start.date()
+        cheapest[d] = min(cheapest.get(d, h.buy), h.buy)
+    for h in out:
+        h.no_import = h.buy > cheapest[h.start.date()] + 0.01
     return out
 
 
@@ -243,8 +277,9 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
     step = p.step_kwh
     e0 = min(max(soc_pct, 0.0), 100.0) / 100 * cap
     e_res = p.reserve_soc / 100 * cap
+    e_peak = min(p.peak_floor_soc, p.reserve_soc) / 100 * cap
     e_max = p.max_soc / 100 * cap
-    lo = min(e0, e_res)
+    lo = min(e0, e_peak)
     levels = [lo + i * step for i in range(int((e_max - lo) / step) + 1)]
     if levels[-1] < e_max - 1e-6:
         levels.append(e_max)
@@ -264,6 +299,8 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
     for t in range(n - 1, -1, -1):
         h = inputs[t]
         d = h.load_kwh - h.pv_kwh
+        floor = e_peak if h.no_import else e_res
+        penalty = p.peak_import_penalty if h.no_import else 0.0
         max_up = p.charge_kw * h.duration * p.eff_charge
         max_dn = p.discharge_kw * h.duration
         for i, e in enumerate(levels):
@@ -273,10 +310,10 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
                 delta = e2 - e
                 if delta > max_up + 1e-9 or -delta > max_dn + 1e-9:
                     continue
-                if delta < 0 and e2 < e_res - 1e-9:
-                    continue  # never discharge below the reserve
+                if delta < 0 and e2 < floor - 1e-9:
+                    continue  # never discharge below the reserve (5 % in peaks)
                 imp, exp, dis = _flows(delta, d, p)
-                cost = imp * h.buy - exp * h.sell + dis * cycle_cost + value[t + 1][j]
+                cost = imp * (h.buy + penalty) - exp * h.sell + dis * cycle_cost + value[t + 1][j]
                 if cost < best - 1e-9:
                     best, best_j = cost, j
             value[t][i] = best
@@ -312,7 +349,30 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
         ))
         i = j
     plan.total_cost = total
+    _summarise(plan, inputs, p)
     return plan
+
+
+def _summarise(plan: ArbitragePlan, inputs: list[HourInput], p: ArbitrageParams) -> None:
+    """Charge start, next peak and whether the battery lasts through it."""
+    for h in plan.hours:
+        if h.action == ACT_CHARGE_GRID:
+            plan.charge_start = h.start[11:16] if h.start[:10] == plan.hours[0].start[:10] else h.start[5:16]
+            break
+    # next peak block
+    idx = [i for i, h in enumerate(inputs) if h.no_import]
+    if not idx:
+        return
+    first = idx[0]
+    last = first
+    while last + 1 < len(inputs) and inputs[last + 1].no_import:
+        last += 1
+    end_t = inputs[last].start + timedelta(hours=inputs[last].duration)
+    plan.next_peak = f"{inputs[first].start.strftime('%H:%M')}–{end_t.strftime('%H:%M')}"
+    for i in range(first, last + 1):
+        if plan.hours[i].grid_import > 0.05:
+            plan.battery_until = plan.hours[i].start[11:16]
+            break
 
 
 def classify(delta: float, d: float, duration: float, p: ArbitrageParams) -> tuple[str, int]:
