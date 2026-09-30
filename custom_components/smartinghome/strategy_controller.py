@@ -1286,7 +1286,7 @@ class StrategyController:
                 self._charging_enabled = False
                 msg = (
                     f"W0: 🛡️ ZERO GRID — SOC={soc:.0f}% > {SOC_GRID_IMPORT_THRESHOLD}%, "
-                    f"grid_import={grid:.0f}W → set_general_mode "
+                    f"grid_import={grid_import_w:.0f}W → set_general_mode "
                     f"(bateria zasila dom, BEZ sprzedaży do sieci)"
                 )
                 actions.append(msg)
@@ -2089,11 +2089,12 @@ class StrategyController:
                         and strategy in ("discharge_self_consume", "discharge")
                         and expected_modes
                         and work_mode in expected_modes
-                        and bat_power >= -50  # Battery NOT discharging (should be negative)
+                        and bat_power <= 50  # battery_power: +discharge / -charge → not discharging
                     ):
                         # Check if grid is importing significantly (home is pulling from grid)
                         grid_state = self.hass.states.get(SENSOR_GRID_POWER_TOTAL)
-                        grid_power = _safe_float(grid_state.state if grid_state else None)
+                        # Meter: +export / -import
+                        grid_power = -_safe_float(grid_state.state if grid_state else None)
                         if grid_power > 500:  # >500W import from grid
                             drifted = True
                             # Read DOD to diagnose root cause
