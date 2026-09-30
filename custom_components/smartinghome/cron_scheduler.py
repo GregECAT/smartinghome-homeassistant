@@ -17,7 +17,6 @@ from homeassistant.core import HomeAssistant
 from .ai_advisor import AIAdvisor, is_ai_error
 from .const import DOMAIN
 
-SETTINGS_FILE = "settings.json"
 
 _LOGGER = logging.getLogger(__name__)
 

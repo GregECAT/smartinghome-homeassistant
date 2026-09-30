@@ -575,85 +575,90 @@ class SmartingHomePanel extends HTMLElement {
     return "FREE";
   }
 
+  /* Settings live in private HA storage (v1.58.0+) — authenticated WebSocket only.
+     `keys` limits the response to the listed top-level keys (polling). */
+  _getSettings(keys) {
+    const msg = { type: 'smartinghome/settings/get' };
+    if (keys) msg.keys = keys;
+    return this._hass.connection.sendMessagePromise(msg);
+  }
+
   async _loadSettings(retryCount = 0) {
     const MAX_RETRIES = 5;
+    if (!this._hass?.connection) {
+      // connectedCallback runs before HA injects hass — wait for it
+      clearTimeout(this._settingsWaitTimer);
+      if (this.isConnected) this._settingsWaitTimer = setTimeout(() => this._loadSettings(retryCount), 250);
+      return;
+    }
     try {
-      const r = await fetch('/local/smartinghome/settings.json?t=' + Date.now());
-      if (r.ok) {
-        this._settings = await r.json();
-        this._settingsLoaded = true;
-        // Day/night energy: computed server-side — no browser restore needed
-        this._updateKeyStatus();
-        // Restore model selections
-        const gSel = this.shadowRoot.getElementById('sel-gemini-model');
-        const aSel = this.shadowRoot.getElementById('sel-anthropic-model');
-        if (gSel && this._settings.gemini_model) gSel.value = this._settings.gemini_model;
-        if (aSel && this._settings.anthropic_model) aSel.value = this._settings.anthropic_model;
-        // Show masked keys as placeholders & set dirty tracking
-        const gInp = this.shadowRoot.getElementById('inp-gemini-key');
-        const aInp = this.shadowRoot.getElementById('inp-anthropic-key');
-        if (gInp) {
-          if (this._settings.gemini_key_masked) gInp.placeholder = this._settings.gemini_key_masked;
-          gInp.value = ''; this._geminiDirty = false;
-          gInp.addEventListener('input', () => { this._geminiDirty = true; });
-        }
-        if (aInp) {
-          if (this._settings.anthropic_key_masked) aInp.placeholder = this._settings.anthropic_key_masked;
-          aInp.value = ''; this._anthropicDirty = false;
-          aInp.addEventListener('input', () => { this._anthropicDirty = true; });
-        }
-        // Restore default provider
-        const dpSel = this.shadowRoot.getElementById('sel-default-provider');
-        if (dpSel && this._settings.default_ai_provider) dpSel.value = this._settings.default_ai_provider;
-        // Restore energy provider
-        const epSel = this.shadowRoot.getElementById('sel-energy-provider');
-        if (epSel && this._settings.energy_provider) epSel.value = this._settings.energy_provider;
-        // Rebuild tariff options for provider then restore tariff plan
-        this._rebuildTariffOptions();
-        const tSel = this.shadowRoot.getElementById('sel-tariff-plan');
-        if (tSel && this._settings.tariff_plan) tSel.value = this._settings.tariff_plan;
-        // Restore cron settings
-        this._loadCronSettings();
-        // Show AI-powered HEMS advice if available
-        this._updateHEMSFromAI();
-        // Render AI logs
-        this._renderAILogs();
-        // Re-apply PV labels and all data after settings loaded
-        if (this._hass) this._updateAll();
-        this._updatePricingTable();
-        this._renderWeatherForecast();
-        // Restore Ecowitt settings
-        const ecoChk = this.shadowRoot.getElementById('chk-ecowitt-enabled');
-        if (ecoChk && this._settings.ecowitt_enabled !== undefined) ecoChk.checked = this._settings.ecowitt_enabled;
-        if (this._settings.ecowitt_enabled) this._detectEcowittSensors();
-        // Restore sensor map overrides from entity picker
-        if (this._settings.sensor_map_overrides) {
-          this._sensorMapOverrides = { ...this._settings.sensor_map_overrides };
-        }
-        // Restore Peak Sell slider
-        const peakSellSlider = this.shadowRoot.getElementById('ap-peak-sell-slider');
-        if (peakSellSlider && this._settings.peak_sell_soc_percent !== undefined) {
-          peakSellSlider.value = this._settings.peak_sell_soc_percent;
-          this._onPeakSellSliderChange(this._settings.peak_sell_soc_percent);
-        }
-        // Restore sub-meters settings
-        const smChk = this.shadowRoot.getElementById('chk-submeters-enabled');
-        if (smChk && this._settings.sub_meters_enabled !== undefined) smChk.checked = this._settings.sub_meters_enabled;
-        const smCardChk = this.shadowRoot.getElementById('chk-submeters-in-card');
-        if (smCardChk && this._settings.sub_meters_in_card !== undefined) smCardChk.checked = this._settings.sub_meters_in_card;
-        this._renderSubMetersSettings();
-      } else if (retryCount < MAX_RETRIES) {
-        // Server returned error (e.g. not ready after restart) — retry
-        const delay = 1000 * Math.pow(2, retryCount); // 1s, 2s, 4s, 8s, 16s
-        console.warn(`[SH] settings.json fetch failed (HTTP ${r.status}), retry ${retryCount + 1}/${MAX_RETRIES} in ${delay}ms`);
-        setTimeout(() => this._loadSettings(retryCount + 1), delay);
-        return; // skip subscriptions setup until settings load
+      this._settings = await this._getSettings();
+      this._settingsLoaded = true;
+      // Day/night energy: computed server-side — no browser restore needed
+      this._updateKeyStatus();
+      // Restore model selections
+      const gSel = this.shadowRoot.getElementById('sel-gemini-model');
+      const aSel = this.shadowRoot.getElementById('sel-anthropic-model');
+      if (gSel && this._settings.gemini_model) gSel.value = this._settings.gemini_model;
+      if (aSel && this._settings.anthropic_model) aSel.value = this._settings.anthropic_model;
+      // Show masked keys as placeholders & set dirty tracking
+      const gInp = this.shadowRoot.getElementById('inp-gemini-key');
+      const aInp = this.shadowRoot.getElementById('inp-anthropic-key');
+      if (gInp) {
+        if (this._settings.gemini_key_masked) gInp.placeholder = this._settings.gemini_key_masked;
+        gInp.value = ''; this._geminiDirty = false;
+        gInp.addEventListener('input', () => { this._geminiDirty = true; });
       }
+      if (aInp) {
+        if (this._settings.anthropic_key_masked) aInp.placeholder = this._settings.anthropic_key_masked;
+        aInp.value = ''; this._anthropicDirty = false;
+        aInp.addEventListener('input', () => { this._anthropicDirty = true; });
+      }
+      // Restore default provider
+      const dpSel = this.shadowRoot.getElementById('sel-default-provider');
+      if (dpSel && this._settings.default_ai_provider) dpSel.value = this._settings.default_ai_provider;
+      // Restore energy provider
+      const epSel = this.shadowRoot.getElementById('sel-energy-provider');
+      if (epSel && this._settings.energy_provider) epSel.value = this._settings.energy_provider;
+      // Rebuild tariff options for provider then restore tariff plan
+      this._rebuildTariffOptions();
+      const tSel = this.shadowRoot.getElementById('sel-tariff-plan');
+      if (tSel && this._settings.tariff_plan) tSel.value = this._settings.tariff_plan;
+      // Restore cron settings
+      this._loadCronSettings();
+      // Show AI-powered HEMS advice if available
+      this._updateHEMSFromAI();
+      // Render AI logs
+      this._renderAILogs();
+      // Re-apply PV labels and all data after settings loaded
+      if (this._hass) this._updateAll();
+      this._updatePricingTable();
+      this._renderWeatherForecast();
+      // Restore Ecowitt settings
+      const ecoChk = this.shadowRoot.getElementById('chk-ecowitt-enabled');
+      if (ecoChk && this._settings.ecowitt_enabled !== undefined) ecoChk.checked = this._settings.ecowitt_enabled;
+      if (this._settings.ecowitt_enabled) this._detectEcowittSensors();
+      // Restore sensor map overrides from entity picker
+      if (this._settings.sensor_map_overrides) {
+        this._sensorMapOverrides = { ...this._settings.sensor_map_overrides };
+      }
+      // Restore Peak Sell slider
+      const peakSellSlider = this.shadowRoot.getElementById('ap-peak-sell-slider');
+      if (peakSellSlider && this._settings.peak_sell_soc_percent !== undefined) {
+        peakSellSlider.value = this._settings.peak_sell_soc_percent;
+        this._onPeakSellSliderChange(this._settings.peak_sell_soc_percent);
+      }
+      // Restore sub-meters settings
+      const smChk = this.shadowRoot.getElementById('chk-submeters-enabled');
+      if (smChk && this._settings.sub_meters_enabled !== undefined) smChk.checked = this._settings.sub_meters_enabled;
+      const smCardChk = this.shadowRoot.getElementById('chk-submeters-in-card');
+      if (smCardChk && this._settings.sub_meters_in_card !== undefined) smCardChk.checked = this._settings.sub_meters_in_card;
+      this._renderSubMetersSettings();
     } catch(e) {
-      // Network error or file not yet created — retry with backoff
+      // Integration not ready after restart (unknown_command) or connection error — retry with backoff
       if (retryCount < MAX_RETRIES) {
-        const delay = 1000 * Math.pow(2, retryCount);
-        console.warn(`[SH] settings.json fetch error, retry ${retryCount + 1}/${MAX_RETRIES} in ${delay}ms`, e.message || e);
+        const delay = 1000 * Math.pow(2, retryCount); // 1s, 2s, 4s, 8s, 16s
+        console.warn(`[SH] settings load error, retry ${retryCount + 1}/${MAX_RETRIES} in ${delay}ms`, e.message || e.code || e);
         setTimeout(() => this._loadSettings(retryCount + 1), delay);
         return;
       }
@@ -664,10 +669,9 @@ class SmartingHomePanel extends HTMLElement {
 
   _savePanelSettings(updates) {
     Object.assign(this._settings, updates);
-    if (this._hass) {
-      this._hass.callService("smartinghome", "save_panel_settings", {
-        settings: JSON.stringify(updates)
-      });
+    if (this._hass?.connection) {
+      return this._hass.connection.sendMessagePromise({ type: 'smartinghome/settings/update', settings: updates })
+        .catch(e => console.error('[SH] settings save failed:', e.message || e.code || e));
     }
   }
 
@@ -7296,8 +7300,8 @@ class SmartingHomePanel extends HTMLElement {
     const now = Date.now();
     if (this._lastBannerUpdate && now - this._lastBannerUpdate < 10000) return;
     this._lastBannerUpdate = now;
-    fetch('/local/smartinghome/settings.json?t=' + now)
-      .then(r => r.json())
+    if (!this._hass?.connection) return;
+    this._getSettings(['autopilot_active_strategy', 'autopilot_live'])
       .then(s => {
         const saved = s.autopilot_active_strategy;
         if (saved) {
@@ -14123,7 +14127,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.57.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.58.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -14874,8 +14878,7 @@ class SmartingHomePanel extends HTMLElement {
 
   async _loadAutopilotPlan() {
     try {
-      const r = await fetch('/local/smartinghome/settings.json?t=' + Date.now());
-      const s = await r.json();
+      const s = await this._getSettings(['ai_autopilot_plan']);
       const plan = s.ai_autopilot_plan;
       if (!plan || !plan.hourly_plan) return;
 
@@ -14977,12 +14980,11 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   _updateLiveDecisionLog() {
-    // Read live autopilot data from settings.json (written by coordinator every tick)
-    if (!this._hass) return;
+    // Read live autopilot data from settings (written by coordinator every tick)
+    if (!this._hass?.connection) return;
 
     try {
-      fetch('/local/smartinghome/settings.json?t=' + Date.now())
-        .then(r => r.json())
+      this._getSettings(['autopilot_active_strategy', 'autopilot_live', 'autopilot_decision_log'])
         .then(s => {
           // ── Sync strategy state ──
           const saved = s.autopilot_active_strategy;

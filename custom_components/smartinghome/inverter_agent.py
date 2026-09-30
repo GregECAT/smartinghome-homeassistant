@@ -22,7 +22,6 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -47,9 +46,6 @@ _LOGGER = logging.getLogger(__name__)
 
 # Minimum seconds between identical commands to the same target
 _COMMAND_COOLDOWN = 120  # 2 minutes
-
-# Settings persistence path
-_SETTINGS_PATH = Path("/config/www/smartinghome/settings.json")
 
 # Brand → entity_id patterns for discovery
 _BRAND_PATTERNS: dict[str, list[str]] = {
