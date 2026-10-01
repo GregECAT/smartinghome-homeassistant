@@ -1412,8 +1412,9 @@ class SmartingHomePanel extends HTMLElement {
     // Net-billing: exported energy is worth RCE × 1.23 at that hour, whatever the
     // tariff. Annual-average RCE profile (midday dip, morning/evening peaks).
     const RCE_ANNUAL_AVG = 0.42;  // PLN/kWh, ~2025 average
-    const rceShape = [0.30, 0.25, 0.20, 0.18, 0.15, 0.20, 0.35, 0.55, 0.65, 0.60, 0.55, 0.50,
-                      0.45, 0.48, 0.55, 0.65, 0.80, 0.95, 1.10, 1.00, 0.85, 0.70, 0.50, 0.35];
+    // Typical PL RCE day: night ~average, deep midday dip (PV), evening peak
+    const rceShape = [0.95, 0.90, 0.88, 0.88, 0.90, 0.95, 1.10, 1.30, 1.20, 0.90, 0.60, 0.45,
+                      0.40, 0.42, 0.55, 0.80, 1.10, 1.40, 1.60, 1.55, 1.35, 1.20, 1.05, 1.00];
     const shapeAvg = avg24(rceShape);
     const netBillingSell = rceShape.map(x => Math.max(0, x / shapeAvg * RCE_ANNUAL_AVG * 1.23));
     const sellAvgTxt = avg24(netBillingSell).toFixed(2);
@@ -1956,6 +1957,17 @@ class SmartingHomePanel extends HTMLElement {
             ? Math.round((wa(sim.pvSelfConsumption) / yearlyPV) * 100)
             : 0,
         };
+        // Net-billing: exports go to a deposit that pays only the energy part of the
+        // bill (~55 %); what is left after 12 months is refunded at most 20 %
+        const gross = yr.exportRev;
+        const credit = Math.min(gross, yr.importCost * 0.55);
+        const settled = credit + (gross - credit) * 0.20;
+        const k = gross > 0 ? settled / gross : 1;
+        yr.exportRevGross = gross;
+        yr.exportRev = settled;
+        yr.pvExportRev = (yr.pvExportRev || 0) * k;
+        yr.netCost = yr.importCost - yr.exportRev;
+        yr.benefit = yr.baselineCost - yr.netCost;
         yr.payback = invest > 0 && yr.benefit > 0 ? invest / yr.benefit : null;
         yr.profit25 = invest > 0 ? yr.benefit * 25 - invest : yr.benefit * 25;
         return { ...sc, yr };
@@ -2041,7 +2053,7 @@ class SmartingHomePanel extends HTMLElement {
           <div style="margin-top:10px; padding:10px; border-radius:10px; background:rgba(0,212,255,0.06); border:1px solid rgba(0,212,255,0.15)">
             <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px">💰 Roczny koszt energii z systemem</div>
             <div style="font-size:26px; font-weight:900; color:#00d4ff">${Math.round(yr.importCost - yr.exportRev).toLocaleString('pl-PL')} zł</div>
-            <div style="font-size:9px; color:#94a3b8; margin-top:1px">import ${yr.importCost.toFixed(0)} zł − eksport ${yr.exportRev.toFixed(0)} zł</div>
+            <div style="font-size:9px; color:#94a3b8; margin-top:1px">import ${yr.importCost.toFixed(0)} zł − depozyt z eksportu ${yr.exportRev.toFixed(0)} zł <span title="Net-billing: eksport ${(yr.exportRevGross || 0).toFixed(0)} zł trafia do depozytu, który pokrywa tylko część „energia” rachunku; nadwyżka po 12 mies. wraca maks. w 20%">ⓘ</span></div>
           </div>
           <div style="border-top:1px solid rgba(255,255,255,0.06); padding-top:8px; margin-top:8px">
             <div style="font-size:9px; color:#64748b">Koszt energii bez PV (baseline G11)</div>
@@ -13734,7 +13746,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.61.5</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.61.6</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
