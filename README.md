@@ -12,7 +12,7 @@
   <a href="https://hacs.xyz"><img src="https://img.shields.io/badge/HACS-Custom-41BDF5?style=for-the-badge&logo=homeassistantcommunitystore&logoColor=white" alt="HACS" /></a>
   <a href="https://www.home-assistant.io"><img src="https://img.shields.io/badge/Home%20Assistant-2025.1+-18BCF2?style=for-the-badge&logo=homeassistant&logoColor=white" alt="Home Assistant" /></a>
   <a href="https://smartinghome.pl"><img src="https://img.shields.io/badge/License-Commercial-E74C3C?style=for-the-badge&logo=keycdn&logoColor=white" alt="License" /></a>
-  <img src="https://img.shields.io/badge/Version-1.63.2-2ECC71?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/Version-1.64.0-2ECC71?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
 </p>
 
@@ -226,7 +226,21 @@ and shows:
 - **Peak vs contracted power** — whether the contracted power (C tariffs) can be lowered
 - **Live power and power factor (cos φ)** from a meter such as **Shelly Pro 3EM** — the early warning for capacitive reactive energy charges
 
-Pick either panel as the default dashboard in your HA profile.
+### Automatic — „Dom / Biuro” panel (v1.64.0+)
+
+A third sidebar panel — a professional overview of the home or office, built automatically
+from what Home Assistant already knows (no YAML, no card configuration):
+- **Status bar** — people present, alarm, open doors/windows, sensor alarms, lights on, cameras online, motion now, power draw, updates, weak batteries
+- **People** — presence from the mobile app / zones
+- **Cameras** — live snapshots (one per device, e.g. UniFi Protect), REC and motion badges, offline cameras folded away; click for the live stream
+- **Security** — alarm panels, locks, smoke/CO/water/problem sensors, open contacts, recent motion
+- **Rooms** — devices grouped by HA areas (or by category when nothing is assigned), one-tap toggles, room temperature and humidity
+- **Device health** — devices that went offline, weak batteries, pending updates
+- **Weather** and shortcuts to the other Smarting HOME panels
+
+The sidebar name is **Biuro** for businesses (Energia i koszty → Typ obiektu), **Dom** otherwise, or your own title. Cameras, rooms and sections can be hidden in the panel's Ustawienia.
+
+Pick any of the panels as the default dashboard in your HA profile.
 
 ### Manual — YAML Dashboards
 

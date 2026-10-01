@@ -48,6 +48,12 @@ METER_PANEL_ICON = "mdi:meter-electric"
 METER_PANEL_FILENAME = "meter.js"
 METER_PANEL_ELEMENT = "smartinghome-meter-panel"
 
+# Third panel: the home / office overview (people, cameras, security, rooms)
+SITE_PANEL_URL = f"{DOMAIN}-obiekt"
+SITE_PANEL_ICON = "mdi:home-city-outline"
+SITE_PANEL_FILENAME = "site.js"
+SITE_PANEL_ELEMENT = "smartinghome-site-panel"
+
 
 class SmartingHomeDashboardProxy:
     """Proxy so Smarting HOME appears in the default-panel dropdown.
@@ -294,8 +300,12 @@ async def _async_register_panel(hass: HomeAssistant, main: bool = True) -> None:
     except Exception as err:  # noqa: BLE001 — images are optional
         _LOGGER.warning("Failed to copy panel images to www/: %s", err)
 
-    panels = [(METER_PANEL_URL, METER_PANEL_TITLE, METER_PANEL_ICON,
-               METER_PANEL_FILENAME, METER_PANEL_ELEMENT)]
+    panels = [
+        (SITE_PANEL_URL, await _async_site_title(hass), SITE_PANEL_ICON,
+         SITE_PANEL_FILENAME, SITE_PANEL_ELEMENT),
+        (METER_PANEL_URL, METER_PANEL_TITLE, METER_PANEL_ICON,
+         METER_PANEL_FILENAME, METER_PANEL_ELEMENT),
+    ]
     if main:
         panels.insert(0, (DOMAIN, PANEL_TITLE, PANEL_ICON, PANEL_FILENAME, "smartinghome-panel"))
 
@@ -304,6 +314,21 @@ async def _async_register_panel(hass: HomeAssistant, main: bool = True) -> None:
         if module_url is None:
             continue
         _register_sidebar_panel(hass, url_path, title, icon, element, module_url)
+
+
+async def _async_site_title(hass: HomeAssistant) -> str:
+    """Sidebar name of the overview panel: custom title, else Biuro / Dom."""
+    try:
+        from .settings_io import read_async
+
+        settings = await read_async(hass)
+    except Exception:  # noqa: BLE001 — a missing settings file means defaults
+        settings = {}
+    site = settings.get("site") if isinstance(settings.get("site"), dict) else {}
+    meter = settings.get("meter") if isinstance(settings.get("meter"), dict) else {}
+    if site.get("title"):
+        return str(site["title"])[:40]
+    return "Biuro" if meter.get("site_kind") == "business" else "Dom"
 
 
 async def _async_publish_js(hass: HomeAssistant, source: Path, www_dir: Path) -> str | None:
@@ -382,7 +407,7 @@ async def async_unload_entry(
             await cron.async_stop()
         await async_unload_services(hass)
         hass.data[DOMAIN].pop(entry.entry_id)
-        for url_path in (DOMAIN, METER_PANEL_URL):
+        for url_path in (DOMAIN, METER_PANEL_URL, SITE_PANEL_URL):
             # Remove sidebar panel
             try:
                 from homeassistant.components.frontend import async_remove_panel
