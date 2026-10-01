@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Final
 
+from .pl_holidays import is_day_off, tariff_weekday
 from .const import (
     TariffType,
     EnergyProvider,
@@ -197,11 +198,11 @@ def build_tariff_prompt_context(
     ctx.tariff_type = tariff_type
     ctx.provider = provider
     ctx.season = _season_label(now.month)
-    ctx.is_weekend = now.weekday() >= 5
+    ctx.is_weekend = is_day_off(now.date())
 
     hour = now.hour
     month = now.month
-    weekday = now.weekday()
+    weekday = tariff_weekday(now.date())
 
     if tariff_type == TariffType.G13:
         ctx = _build_g13_context(ctx, hour, month, weekday)
@@ -670,7 +671,7 @@ def render_next_zones(
 
     hour = now.hour
     month = now.month
-    weekday = now.weekday()
+    weekday = tariff_weekday(now.date())
     lines = []
 
     for offset in range(1, hours_ahead + 1):

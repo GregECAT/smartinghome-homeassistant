@@ -175,7 +175,7 @@ class SmartingHomePanel extends HTMLElement {
     this.shadowRoot.querySelectorAll(".tab-content").forEach(c => c.classList.toggle("active", c.dataset.tab === tab));
     if (tab === 'winter') { this._initWinterTab(); this._loadWinterData(); }
     if (tab === 'wind') { this._initWindTab(); this._loadWindData(); this._fetchWindHistoricalStats(); this._initWindCalendar(); }
-    if (tab === 'hems') { this._updateHEMSArbitrage(); }
+    if (tab === 'hems') { this._updateHEMSArbitrage(); this._loadForecastStatus(); }
     if (tab === 'history') { this._updateHistoryTab(); }
     if (tab === 'autopilot') { this._updateAutopilot(); }
     if (tab === 'energy' || tab === 'battery' || tab === 'overview') { this._updateForecastCharts(); }
@@ -4173,6 +4173,163 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── HEMS Arbitrage: update all automation card statuses ─── */
+  /* ── Prognozy + W5 odbiorniki w szczycie ── */
+  static GUARD_MODES = {
+    block_peak: 'Czeka na tanią strefę (w szczycie tylko z nadwyżki PV)',
+    shed: 'Wyłącz, gdy dom ciągnie z sieci ponad moc baterii',
+    off: 'Bez sterowania',
+  };
+  static GUARD_DEFAULTS = [
+    { entity: 'switch.bojler_3800', name: 'Bojler', power_w: 3800, mode: 'block_peak' },
+    { entity: 'switch.drugie_gniazdko', name: 'Grzejnik', power_w: 2000, mode: 'shed' },
+    { entity: 'switch.klimatyzacja_socket_1', name: 'Klimatyzator', power_w: 1200, mode: 'off' },
+  ];
+
+  async _loadForecastStatus() {
+    if (!this._hass?.connection) return;
+    try {
+      this._fcStatus = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/forecast/status' });
+    } catch (e) { this._fcStatus = null; }
+    this._renderForecastStatus();
+    this._renderPeakGuard();
+  }
+
+  _renderForecastStatus() {
+    const el = this.shadowRoot.getElementById('hems-fc-content');
+    if (!el) return;
+    const st = this._fcStatus || {};
+    const pv = st.pv || {}, fs = st.pv_forecast_solar || {}, ld = st.load || {}, plan = st.plan || {};
+    const src = this._settings.pv_forecast_source || 'auto';
+    const n = (v, d = 1) => (v === null || v === undefined || isNaN(v)) ? '—' : Number(v).toFixed(d).replace('.', ',');
+    const cal = Object.entries(pv.calibration || {}).map(([k, v]) => {
+      const lbl = (this._settings.pv_labels || {})[k] || k.toUpperCase();
+      return `${lbl}: ×${n(v, 2)}`;
+    }).join(' · ') || 'po 2 pełnych dniach pomiarów';
+    const peakHour = (arr) => {
+      if (!arr || !arr.some(v => v != null)) return '—';
+      let best = 0; arr.forEach((v, i) => { if ((v ?? -1) > (arr[best] ?? -1)) best = i; });
+      return `${n(arr[best], 1)} kW o ${best}:00`;
+    };
+    const sumEl = this.shadowRoot.getElementById('hems-fc-sum');
+    if (sumEl) sumEl.textContent = pv.source === 'open_meteo'
+      ? `Open-Meteo · dziś ${n(pv.today_kwh)} / jutro ${n(pv.tomorrow_kwh)} kWh`
+      : 'Forecast.Solar';
+    el.innerHTML = `
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px">
+        <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:10px; padding:12px">
+          <div style="font-weight:700; color:#f7b731; margin-bottom:6px">☀️ Prognoza PV</div>
+          <div>Źródło: <b>${pv.source === 'open_meteo' ? 'Open-Meteo (każda płaszczyzna osobno)' : 'Forecast.Solar'}</b>${pv.updated ? ` · ${pv.updated}` : ''}</div>
+          <div>Dziś: <b>${n(pv.today_kwh)} kWh</b> · jutro: <b>${n(pv.tomorrow_kwh)} kWh</b></div>
+          <div style="color:#94a3b8">Forecast.Solar dla porównania: dziś ${n(fs.today)} · jutro ${n(fs.tomorrow)} kWh</div>
+          <div style="color:#94a3b8">Płaszczyzny: ${(pv.planes || []).join(', ') || '— (skonfiguruj stringi PV w ustawieniach MPPT)'}</div>
+          <div style="color:#94a3b8">Kalibracja z pomiarów: ${cal}</div>
+          ${pv.error ? `<div style="color:#e74c3c">⚠️ ${pv.error}</div>` : ''}
+          <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; align-items:center">
+            <select onchange="this.getRootNode().host._setForecastSource(this.value)" style="background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px">
+              <option value="auto" ${src === 'auto' ? 'selected' : ''}>Automatycznie (Open-Meteo, gdy są stringi)</option>
+              <option value="open_meteo" ${src === 'open_meteo' ? 'selected' : ''}>Open-Meteo</option>
+              <option value="forecast_solar" ${src === 'forecast_solar' ? 'selected' : ''}>Forecast.Solar</option>
+            </select>
+            <input type="password" placeholder="Klucz API Open-Meteo (opcjonalnie, użytek komercyjny)" value="${this._settings.open_meteo_api_key ? '••••••••' : ''}"
+              onchange="this.getRootNode().host._setOpenMeteoKey(this.value)"
+              style="flex:1; min-width:180px; background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px" />
+          </div>
+        </div>
+        <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:10px; padding:12px">
+          <div style="font-weight:700; color:#00d4ff; margin-bottom:6px">🏠 Prognoza zużycia</div>
+          <div>Historia HA: <b>${ld.days ?? 0} dni</b> (dni robocze i wolne osobno, święta jak niedziela)</div>
+          <div>Szczyt profilu — roboczy: <b>${peakHour(ld.work)}</b> · wolny: <b>${peakHour(ld.off)}</b></div>
+          <div>Ogrzewanie: ${ld.kwh_per_degree > 0 ? `<b>+${n(ld.kwh_per_degree, 2)} kWh/dzień</b> na każdy °C poniżej 15,5 °C (baza ${n(ld.base_kwh)} kWh)` : 'brak zależności od temperatury (lub za mało dni)'}</div>
+          <div style="color:#94a3b8">Planer: ${plan.load_source === 'history' ? 'model z historii' : 'profil uczony na bieżąco (za mało historii)'}${plan.load_ratio && plan.load_ratio !== 1 ? ` · ostatnie 2 h: ×${n(plan.load_ratio, 2)} względem prognozy` : ''}</div>
+          <div style="color:#94a3b8">PV w planie: ${plan.pv_source === 'open_meteo' ? 'godzinowo z Open-Meteo' : 'rozkład dzienny'}${plan.pv_factor ? ` · korekta bieżąca ×${n(plan.pv_factor, 2)}` : ''}</div>
+        </div>
+      </div>`;
+  }
+
+  _setForecastSource(v) { this._savePanelSettings({ pv_forecast_source: v }); setTimeout(() => this._loadForecastStatus(), 1500); }
+  _setOpenMeteoKey(v) {
+    if (v && v.startsWith('••')) return;
+    this._savePanelSettings({ open_meteo_api_key: (v || '').trim() });
+  }
+
+  _guardConfig() {
+    const cfg = this._settings.peak_load_control || {};
+    return {
+      enabled: cfg.enabled !== false,
+      devices: (cfg.devices || SmartingHomePanel.GUARD_DEFAULTS).map(d => ({ ...d })),
+    };
+  }
+
+  _renderPeakGuard() {
+    const el = this.shadowRoot.getElementById('hems-w5-content');
+    if (!el) return;
+    const cfg = this._guardDraft || this._guardConfig();
+    this._guardDraft = cfg;
+    const guard = (this._fcStatus || {}).guard || {};
+    const shed = guard.shed || {};
+    const overridden = new Set(guard.overridden || []);
+    const states = this._hass?.states || {};
+    const candidates = Object.keys(states)
+      .filter(k => /^(switch|input_boolean|climate|water_heater|fan|light)\./.test(k) && !/blokada|child|lock|indicator|status_light|overlay|sound|motion|smarting|hems|homekit/i.test(k))
+      .sort();
+    const esc = (t) => String(t ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const inputStyle = 'background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px';
+    const rows = cfg.devices.map((d, i) => {
+      const stt = states[d.entity]?.state || 'brak encji';
+      const tag = shed[d.entity] ? '<span style="color:#e74c3c">⏸️ wyłączony przez strażnika</span>'
+        : overridden.has(d.entity) ? '<span style="color:#f39c12">✋ włączony ręcznie — do końca szczytu bez zmian</span>'
+        : `<span style="color:${stt === 'on' ? '#2ecc71' : stt === 'off' ? '#94a3b8' : '#e67e22'}">${stt === 'on' ? 'włączony' : stt === 'off' ? 'wyłączony' : esc(stt)}</span>`;
+      const opts = [d.entity, ...candidates.filter(c => c !== d.entity)].map(c =>
+        `<option value="${esc(c)}" ${c === d.entity ? 'selected' : ''}>${esc(states[c]?.attributes?.friendly_name || c)} (${esc(c)})</option>`).join('');
+      return `<div style="display:grid; grid-template-columns:1.1fr 2fr 0.7fr 2fr auto; gap:6px; align-items:center; margin-bottom:6px">
+        <input value="${esc(d.name)}" onchange="this.getRootNode().host._guardSet(${i}, 'name', this.value)" style="${inputStyle}" />
+        <select onchange="this.getRootNode().host._guardSet(${i}, 'entity', this.value)" style="${inputStyle}">${opts}</select>
+        <input type="number" min="0" step="100" value="${d.power_w || 0}" title="Moc [W]" onchange="this.getRootNode().host._guardSet(${i}, 'power_w', parseInt(this.value) || 0)" style="${inputStyle}" />
+        <select onchange="this.getRootNode().host._guardSet(${i}, 'mode', this.value)" style="${inputStyle}">
+          ${Object.entries(SmartingHomePanel.GUARD_MODES).map(([k, v]) => `<option value="${k}" ${d.mode === k ? 'selected' : ''}>${v}</option>`).join('')}
+        </select>
+        <button onclick="this.getRootNode().host._guardRemove(${i})" title="Usuń" style="background:none;border:none;color:#e74c3c;cursor:pointer;font-size:14px">✕</button>
+        <div style="grid-column:1/-1; font-size:11px; margin:-2px 0 4px 2px">${tag}</div>
+      </div>`;
+    }).join('');
+    const managed = cfg.devices.filter(d => d.mode !== 'off').length;
+    const sumEl = this.shadowRoot.getElementById('hems-w5-sum');
+    if (sumEl) sumEl.textContent = cfg.enabled ? `${managed} sterowanych · ${Object.keys(shed).length} wyłączonych teraz` : 'wyłączony';
+    el.innerHTML = `
+      <div style="color:#94a3b8; margin-bottom:8px">Bateria pokrywa dom tylko do swojej mocy (~${(((this._settings.arbitrage_params || {}).discharge_kw) || 3.7).toString().replace('.', ',')} kW) i do granicy BMS. Duże odbiorniki ponad to w szczycie idą z sieci po najwyższej cenie — strażnik je wyłącza i po szczycie włącza z powrotem. Gdy ręcznie włączysz odbiornik, strażnik zostawi go do końca szczytu.</div>
+      <label style="display:flex; gap:8px; align-items:center; margin-bottom:10px; cursor:pointer">
+        <input type="checkbox" ${cfg.enabled ? 'checked' : ''} onchange="this.getRootNode().host._guardSetEnabled(this.checked)" />
+        <b>Strażnik odbiorników w szczycie włączony</b>
+      </label>
+      <div style="display:grid; grid-template-columns:1.1fr 2fr 0.7fr 2fr auto; gap:6px; font-size:10px; color:#64748b; text-transform:uppercase; margin-bottom:4px">
+        <span>Nazwa</span><span>Encja</span><span>Moc W</span><span>Tryb w szczycie</span><span></span>
+      </div>
+      ${rows || '<div style="color:#94a3b8">Brak odbiorników.</div>'}
+      <div style="display:flex; gap:8px; margin-top:8px">
+        <button class="btn" onclick="this.getRootNode().host._guardAdd()" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 10px;cursor:pointer">+ Dodaj odbiornik</button>
+        <button class="btn" onclick="this.getRootNode().host._guardSave()" style="background:#2ecc71;color:#0f172a;border:none;border-radius:6px;padding:6px 14px;font-weight:700;cursor:pointer">💾 Zapisz</button>
+        <span id="hems-w5-saved" style="align-self:center; font-size:11px; color:#2ecc71"></span>
+      </div>`;
+  }
+
+  _guardSet(i, key, value) { if (this._guardDraft?.devices[i]) this._guardDraft.devices[i][key] = value; }
+  _guardSetEnabled(on) { if (this._guardDraft) this._guardDraft.enabled = on; }
+  _guardAdd() {
+    this._guardDraft = this._guardDraft || this._guardConfig();
+    this._guardDraft.devices.push({ entity: '', name: 'Nowy odbiornik', power_w: 1000, mode: 'shed' });
+    this._renderPeakGuard();
+  }
+  _guardRemove(i) { this._guardDraft?.devices.splice(i, 1); this._renderPeakGuard(); }
+  async _guardSave() {
+    const cfg = this._guardDraft || this._guardConfig();
+    cfg.devices = cfg.devices.filter(d => d.entity);
+    await this._savePanelSettings({ peak_load_control: cfg });
+    this._guardDraft = null;
+    const el = this.shadowRoot.getElementById('hems-w5-saved');
+    if (el) el.textContent = '✓ Zapisano — autopilot użyje w ciągu 5 min';
+    setTimeout(() => this._loadForecastStatus(), 1500);
+  }
+
   _updateHEMSArbitrage() {
     if (this._activeTab !== 'hems') return;
     const now = new Date();
@@ -7186,11 +7343,17 @@ class SmartingHomePanel extends HTMLElement {
     }
 
     const fmt = (d) => `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    // Arc ends: day = sunrise → sunset, night = sunset → sunrise (the arc runs left → right)
+    const setArcEnds = (left, right) => {
+      for (const [id, [icon, time, color]] of [["ov-arc-left", left], ["ov-arc-right", right]]) {
+        const el = this.shadowRoot.getElementById(id);
+        if (el) { el.textContent = `${icon} ${fmt(time)}`; el.style.color = color; }
+      }
+    };
 
     if (isDay) {
       // ☀️ DAYTIME
-      this._setText("ov-sunrise", fmt(todaySunrise));
-      this._setText("ov-sunset", fmt(todaySunset));
+      setArcEnds(["🌅", todaySunrise, "#f7b731"], ["🌇", todaySunset, "#e67e22"]);
 
       const dayLen = todaySunset.getTime() - todaySunrise.getTime();
       const elapsed = now.getTime() - todaySunrise.getTime();
@@ -7230,8 +7393,6 @@ class SmartingHomePanel extends HTMLElement {
       }
     } else {
       // 🌙 NIGHTTIME
-      this._setText("ov-sunrise", fmt(todaySunrise));
-      this._setText("ov-sunset", fmt(todaySunset));
 
       const msToRise = todaySunrise.getTime() - now.getTime();
       const hToRise = Math.floor(msToRise / 3600000);
@@ -7258,6 +7419,7 @@ class SmartingHomePanel extends HTMLElement {
       } else {
         nightStart = todaySunset;
       }
+      setArcEnds(["🌇", nightStart, "#8b9dc3"], ["🌅", todaySunrise, "#f7b731"]);
       const nightLen = todaySunrise.getTime() - nightStart.getTime();
       const nightElapsed = now.getTime() - nightStart.getTime();
       const tNight = Math.max(0, Math.min(1, nightElapsed / nightLen));
@@ -10472,8 +10634,8 @@ class SmartingHomePanel extends HTMLElement {
                 <line x1="5" y1="98" x2="195" y2="98" stroke="rgba(255,255,255,0.08)" stroke-width="0.5" />
                 <circle id="ov-sun-dot" cx="100" cy="50" r="7" fill="#f7b731" style="filter:drop-shadow(0 0 8px #f7b731); transition: all 1s ease" />
               </svg>
-              <div style="position:absolute; bottom:0; left:2px; font-size:9px; color:#f7b731">🌅 <span id="ov-sunrise">—</span></div>
-              <div style="position:absolute; bottom:0; right:2px; font-size:9px; color:#e67e22; text-align:right">🌇 <span id="ov-sunset">—</span></div>
+              <div id="ov-arc-left" style="position:absolute; bottom:0; left:2px; font-size:9px; color:#f7b731">🌅 —</div>
+              <div id="ov-arc-right" style="position:absolute; bottom:0; right:2px; font-size:9px; color:#e67e22; text-align:right">🌇 —</div>
             </div>
             <div class="sun-side-right" style="text-align:right; min-width:70px; flex-shrink:1">
               <div style="font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px" id="ov-status-label">Dzień</div>
@@ -11852,6 +12014,36 @@ class SmartingHomePanel extends HTMLElement {
                   <span class="hs-label">Próg:</span><span class="hs-val">&gt;500W</span>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <!-- ═══ PROGNOZY: PV (Open-Meteo) + ZUŻYCIE (historia HA) ═══ -->
+          <div class="hems-layer" id="hems-layer-fc">
+            <div class="hems-layer-header" onclick="this.getRootNode().host._toggleHEMSSection('fc')">
+              <div class="hl-left">
+                <span class="hl-tag" style="background:rgba(0,212,255,0.15);color:#00d4ff">📈</span>
+                <span class="hl-name">Prognozy dla planera — PV i zużycie</span>
+                <span style="font-size:10px;color:#64748b" id="hems-fc-sum">—</span>
+              </div>
+              <span class="hl-chevron">▼</span>
+            </div>
+            <div class="hems-layer-body" id="hems-fc-body">
+              <div style="grid-column:1/-1; font-size:12px; color:#cbd5e1" id="hems-fc-content">Ładowanie…</div>
+            </div>
+          </div>
+
+          <!-- ═══ W5: ODBIORNIKI W SZCZYCIE ═══ -->
+          <div class="hems-layer" id="hems-layer-w5">
+            <div class="hems-layer-header" onclick="this.getRootNode().host._toggleHEMSSection('w5')">
+              <div class="hl-left">
+                <span class="hl-tag" style="background:rgba(231,76,60,0.15);color:#e74c3c">W5</span>
+                <span class="hl-name">Odbiorniki w szczycie taryfy</span>
+                <span style="font-size:10px;color:#64748b" id="hems-w5-sum">—</span>
+              </div>
+              <span class="hl-chevron">▼</span>
+            </div>
+            <div class="hems-layer-body" id="hems-w5-body">
+              <div style="grid-column:1/-1; font-size:12px; color:#cbd5e1" id="hems-w5-content">Ładowanie…</div>
             </div>
           </div>
 
@@ -13873,7 +14065,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.64.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.65.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

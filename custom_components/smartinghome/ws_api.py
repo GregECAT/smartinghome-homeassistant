@@ -28,6 +28,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_alerts)
     websocket_api.async_register_command(hass, ws_tariffs)
     websocket_api.async_register_command(hass, ws_energy_monthly)
+    websocket_api.async_register_command(hass, ws_forecast_status)
 
     from .meter_ws import async_register as _register_meter_ws
     _register_meter_ws(hass)
@@ -259,6 +260,30 @@ def ws_alerts(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
         _not_ready(connection, msg)
         return
     connection.send_result(msg["id"], engine.snapshot())
+
+
+@websocket_api.websocket_command({vol.Required("type"): "smartinghome/forecast/status"})
+@callback
+def ws_forecast_status(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """PV forecast (source, per-MPPT calibration), load model and the W5 peak load guard."""
+    coordinator = _coordinator(hass)
+    if coordinator is None:
+        _not_ready(connection, msg)
+        return
+    data = coordinator.data or {}
+    ctrl = getattr(coordinator, "_strategy_controller", None)
+    guard = getattr(ctrl, "_load_guard", None)
+    plan = getattr(ctrl, "_arb_status", None) or {}
+    connection.send_result(msg["id"], {
+        "pv": data.get("pv_forecast_status") or {},
+        "pv_forecast_solar": {
+            "today": data.get("pv_forecast_today_total_fs"),
+            "tomorrow": data.get("pv_forecast_tomorrow_total_fs"),
+        },
+        "load": data.get("load_forecast_status") or {},
+        "plan": {k: plan.get(k) for k in ("pv_source", "load_source", "load_ratio", "pv_factor", "updated")},
+        "guard": guard.status() if guard is not None else None,
+    })
 
 
 # ── Tariff prices (single source for panel, autopilot and AI) ──

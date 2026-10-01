@@ -14,8 +14,9 @@ from __future__ import annotations
 import math
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Callable
 
+from .pl_holidays import tariff_weekday
 from .const import RCE_PROSUMER_COEFFICIENT, TariffType, WINTER_MONTHS
 from .tariff_prompt import (
     _get_current_g12_zone,
@@ -144,13 +145,13 @@ def buy_price(dt: datetime, tariff: str, provider: str) -> tuple[str, float]:
     """(zone, gross price zł/kWh) of the user's tariff at this hour."""
     tariff = str(tariff or TariffType.G13).lower()
     if tariff == TariffType.G13:
-        zone, price = _get_current_g13_zone(dt.hour, dt.month, dt.weekday())
+        zone, price = _get_current_g13_zone(dt.hour, dt.month, tariff_weekday(dt.date()))
         return str(zone), float(price)
     if tariff in (TariffType.G12, TariffType.G12W):
-        zone, price = _get_current_g12_zone(dt.hour, dt.month, dt.weekday(), provider)
+        zone, price = _get_current_g12_zone(dt.hour, dt.month, tariff_weekday(dt.date()), provider)
         return str(zone), float(price)
     if tariff == TariffType.G12N:
-        zone, price = _get_current_g12n_zone(dt.hour, dt.weekday())
+        zone, price = _get_current_g12n_zone(dt.hour, tariff_weekday(dt.date()))
         return str(zone), float(price)
     flat = PGE_G11_PRICE if provider == EnergyProvider.PGE else TAURON_G11_PRICE
     return "flat", float(flat)
@@ -217,12 +218,19 @@ def build_inputs(
     horizon_h: int,
     slot_minutes: int = 60,
     rce_slot: dict[tuple[date, int, int], float] | None = None,
+    pv_hourly_kwh: dict[tuple[date, int], float] | None = None,
+    load_kw_at: Callable[[datetime], float | None] | None = None,
 ) -> list[HourInput]:
     """Plan slots (slot_minutes long, aligned to the clock) from now to now + horizon.
 
     `now` may be timezone-aware (recommended): slots are stepped in UTC and
     converted back to local wall-clock time, so DST changes (last Sunday of
     March/October) neither drop nor duplicate tariff slots.
+
+    pv_hourly_kwh — hourly PV forecast {(date, hour): kWh} (already scaled by
+    the confidence); hours it doesn't cover fall back to the sine spread of the
+    daily totals. load_kw_at — expected house load (kW) for a slot start; None
+    falls back to load_profile_kw.
     """
     from datetime import timezone as _tz
 
@@ -270,9 +278,15 @@ def build_inputs(
             rce.get((lt.date(), lt.hour), known_by_hour.get(lt.hour, 400.0)),
         )
         sell = max(rce_mwh, 0.0) / 1000 * RCE_PROSUMER_COEFFICIENT
-        hourly_pv = pv_today.get(lt.hour, 0.0) if lt.date() == today else pv_later.get(lt.hour, 0.0)
+        if pv_hourly_kwh is not None and (lt.date(), lt.hour) in pv_hourly_kwh:
+            hourly_pv = pv_hourly_kwh[(lt.date(), lt.hour)]
+        else:
+            hourly_pv = pv_today.get(lt.hour, 0.0) if lt.date() == today else pv_later.get(lt.hour, 0.0)
         pv = hourly_pv * duration
-        load = max(load_profile_kw[lt.hour % 24], 0.0) * duration
+        load_kw = load_kw_at(lt) if load_kw_at else None
+        if load_kw is None:
+            load_kw = load_profile_kw[lt.hour % 24]
+        load = max(load_kw, 0.0) * duration
         out.append(HourInput(lt, duration, buy, sell, load, pv, zone))
         t, slot_end = slot_end, slot_end + step
 
