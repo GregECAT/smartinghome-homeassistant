@@ -47,6 +47,7 @@ class ArbitrageParams:
     reserve_soc: float = 15.0     # % arbitrage never discharges below (outside peaks)
     peak_floor_soc: float = 5.0   # % in tariff peaks the house runs on the battery down to this
     peak_import_penalty: float = 5.0  # zł/kWh — grid import in a peak is "forbidden"
+    pv_confidence: float = 0.7    # share of the PV forecast the plan relies on
     max_soc: float = 100.0        # % upper limit for grid charging
     min_profit: float = 0.10      # zł/kWh required on top of costs for a cycle
     wear_cost: float = 0.25       # zł per kWh discharged (battery degradation)
@@ -71,6 +72,7 @@ class ArbitrageParams:
         params.max_soc = min(max(params.max_soc, params.reserve_soc + 5), 100.0)
         # DOD 95 % → the inverter never goes below 5 %
         params.peak_floor_soc = min(max(params.peak_floor_soc, 5.0), params.reserve_soc)
+        params.pv_confidence = min(max(params.pv_confidence, 0.0), 1.0)
         return params
 
 

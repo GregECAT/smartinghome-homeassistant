@@ -316,6 +316,8 @@ class StrategyController:
         self._arb_status: dict[str, Any] = {}
         self._arb_drift_since: float = 0.0
         self._arb_planning: bool = False  # a plan is being computed
+        # Action committed for the current hour: (hour key, action, power W)
+        self._arb_commit: tuple[str, str, int] | None = None
         self._arb_intent: str = ""  # EnergyManager.intent right after our last command
         self._load_profile: list[float | None] = [None] * 24  # kW per hour of day
         self._load_profile_loaded: bool = False
@@ -1536,24 +1538,25 @@ class StrategyController:
         if first is None:
             return actions
 
-        cmd = (first.action, int(round(first.power_w / 500.0)) * 500)
+        action, power_w = self._commit_hour_action(now, first.action, first.power_w, soc)
+        cmd = (action, int(round(power_w / 500.0)) * 500)
         changed = cmd != self._arb_cmd
-        drifted = self._arbitrage_drifted(first.action) if not changed else False
+        drifted = self._arbitrage_drifted(action) if not changed else False
         if drifted:
             self._log_decision(
                 "arbitrage_drift",
-                f"⚠️ Falownik nie wykonał polecenia ({ACTION_LABELS.get(first.action, first.action)}, "
+                f"⚠️ Falownik nie wykonał polecenia ({ACTION_LABELS.get(action, action)}, "
                 f"EMS={self._em.ems_state()}) — ponawiam",
             )
         if changed or drifted or time.time() - self._arb_cmd_ts > 900:  # re-assert every 15 min
-            await self._apply_arbitrage(first.action, first.power_w)
+            await self._apply_arbitrage(action, power_w)
             self._arb_intent = self._em.intent
             self._arb_drift_since = 0.0
             self._arb_cmd, self._arb_cmd_ts = cmd, time.time()
-            self._charging_enabled = first.action in (ACT_CHARGE_GRID, ACT_PV_CHARGE)
-            power = f" {first.power_w} W" if first.power_w else ""
+            self._charging_enabled = action in (ACT_CHARGE_GRID, ACT_PV_CHARGE)
+            power = f" {power_w} W" if power_w else ""
             msg = (
-                f"💰 Arbitraż: {ACTION_LABELS.get(first.action, first.action)}{power} — "
+                f"💰 Arbitraż: {ACTION_LABELS.get(action, action)}{power} — "
                 f"strefa {first.zone}, zakup {first.buy:.2f} / RCE {first.sell:.2f} zł/kWh, "
                 f"SOC {first.soc_start:.0f}→{first.soc_end:.0f}% "
                 f"(plan 30 h: {plan.baseline_cost - plan.total_cost:+.2f} zł vs bateria bez pracy)"
@@ -1562,6 +1565,29 @@ class StrategyController:
             if changed:
                 self._log_decision("arbitrage", msg)
         return actions
+
+    def _commit_hour_action(
+        self, now: datetime, action: str, power_w: int, soc: float
+    ) -> tuple[str, int]:
+        """Keep one action per clock hour (no flapping on every re-plan).
+
+        Re-plans every few minutes can flip between near-equal options (e.g.
+        "charge now, sell at 7:00" vs "sell now"). The first decision of the
+        hour stands unless it became infeasible (battery full / at its floor).
+        """
+        hour_key = now.strftime("%Y%m%d%H")
+        commit = self._arb_commit
+        p = self._arb_params
+        if commit and commit[0] == hour_key and commit[1] != action:
+            held = commit[1]
+            infeasible = (
+                (held == ACT_CHARGE_GRID and soc >= p.max_soc - 1)
+                or (held == ACT_DISCHARGE and soc <= p.peak_floor_soc + 1)
+            )
+            if not infeasible:
+                return held, commit[2]
+        self._arb_commit = (hour_key, action, power_w)
+        return action, power_w
 
     _EXPECTED_EMS = {
         ACT_CHARGE_GRID: "charge_battery",
@@ -1662,8 +1688,9 @@ class StrategyController:
             provider=str(settings.get("energy_provider") or data.get("energy_provider") or "tauron"),
             rce=rce,
             load_profile_kw=profile,
-            pv_today_remaining_kwh=_safe_float(data.get("pv_forecast_remaining_today_total")),
-            pv_tomorrow_kwh=_safe_float(data.get("pv_forecast_tomorrow_total")),
+            # Rely on part of the forecast only — a cloudy peak must not hit the grid
+            pv_today_remaining_kwh=_safe_float(data.get("pv_forecast_remaining_today_total")) * params.pv_confidence,
+            pv_tomorrow_kwh=_safe_float(data.get("pv_forecast_tomorrow_total")) * params.pv_confidence,
             sunrise_h=sunrise,
             sunset_h=sunset,
             horizon_h=params.horizon_h,
@@ -1709,6 +1736,7 @@ class StrategyController:
         """Pause strategy layers after a manual command (0 = resume now)."""
         self._manual_hold_until = time.time() + minutes * 60 if minutes > 0 else 0.0
         self._arb_cmd = None  # re-apply the plan when the hold ends
+        self._arb_commit = None
         if minutes > 0:
             self._log_decision("manual_hold", f"✋ {reason or 'Ręczne polecenie'} — autopilot wstrzymany na {minutes} min")
         else:
