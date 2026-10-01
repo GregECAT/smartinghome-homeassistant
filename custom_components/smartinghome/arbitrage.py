@@ -461,7 +461,8 @@ def classify(
     eps = 0.05 * duration
     if greedy and delta <= eps and d > eps:
         out = max(-delta, 0.0) * p.eff_discharge
-        if out - d > eps and (sell is None or sell >= p.wear_cost + p.min_profit):
+        # sell only a real surplus (≥ 0.2 kW on average) — less stays in general mode
+        if out - d > max(eps, 0.2 * duration) and (sell is None or sell >= p.wear_cost + p.min_profit):
             return ACT_DISCHARGE, max(int(round(out / duration * 1000 / 100) * 100), 300)
         return ACT_HOME, 0
     if delta > eps:

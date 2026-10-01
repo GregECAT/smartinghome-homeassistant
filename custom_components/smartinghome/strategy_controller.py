@@ -1367,7 +1367,8 @@ class StrategyController:
             # Already in general mode — the battery gives what it can; the rest is the
             # house above the battery's max power. Re-setting the mode every 30 s
             # changes nothing, so note it once per 30 min instead.
-            if await self._throttled_action("w0_battery_max", cooldown=1800):
+            # < 500 W is the battery catching up with a load step — nothing to report
+            if grid_import_w >= 500 and await self._throttled_action("w0_battery_max", cooldown=1800):
                 bat_state = self.hass.states.get(SENSOR_BATTERY_POWER)
                 bat_w = _safe_float(bat_state.state if bat_state else None)
                 at_max = bat_w >= 0.8 * self._arb_params.discharge_kw * 1000
@@ -1620,11 +1621,11 @@ class StrategyController:
             self._charging_enabled = action in (ACT_CHARGE_GRID, ACT_PV_CHARGE)
             power = f" {power_w} W" if power_w else ""
             label = ACTION_LABELS.get(action, action)
-            if action == ACT_DISCHARGE and first.export_w < 100:
-                label = "🔋 Bateria stałą mocą"  # rationing outside the last peak, no export
-            elif action == ACT_DISCHARGE and first.no_import:
+            if action == ACT_DISCHARGE and first.no_import:
                 label = "💰 Dom z baterii + sprzedaż"
                 power = f" {first.export_w} W (razem {power_w} W)"
+            elif action == ACT_DISCHARGE and first.export_w < 100:
+                label = "🔋 Bateria stałą mocą"  # rationing before a pricier peak, no export
             msg = (
                 f"💰 Arbitraż: {label}{power} — "
                 f"strefa {_ZONE_LABELS.get(first.zone, first.zone)}, "
