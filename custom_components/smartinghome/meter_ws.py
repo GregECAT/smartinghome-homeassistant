@@ -157,21 +157,24 @@ def summarize(
     prev = [(t, k) for t, k in hours if prev_start <= t < month_start]
     data_until = max((t for t, _ in hours), default=None)
 
-    def month_block(rows: list[tuple[datetime, float]], full_days: int) -> dict[str, Any]:
+    def month_block(rows: list[tuple[datetime, float]], full_days: int, fixed: float) -> dict[str, Any]:
         c = mt.cost_hours(tariff, rows)
         days = len({t.date() for t, _ in rows})
         return {**c, "days_with_data": days, "days": full_days,
-                "fixed": fixed_total, "total": round(c["variable"] + fixed_total, 2)}
+                "fixed": round(fixed, 2), "total": round(c["variable"] + fixed, 2)}
 
-    current = month_block(cur, days_in_month)
+    # Month to date carries the fixed fees of the days elapsed, not the whole month
+    current = month_block(cur, days_in_month, fixed_total * now.day / days_in_month)
+    current["fixed_month"] = fixed_total
     # Forecast: average hour so far (keeps the zone mix) × hours in month.
     # Counted in hours — eLicznik data ends mid-day, a partial day is not a day.
-    if cur:
+    # Needs 3 days of data; one night alone would say nothing about the month.
+    if len(cur) >= 72:
         f = days_in_month * 24 / len(cur)
         current["forecast_kwh"] = round(current["kwh"] * f, 1)
         current["forecast_variable"] = round(current["variable"] * f, 2)
         current["forecast_total"] = round(current["variable"] * f + fixed_total, 2)
-    previous = month_block(prev, monthrange(prev_start.year, prev_start.month)[1])
+    previous = month_block(prev, monthrange(prev_start.year, prev_start.month)[1], fixed_total)
 
     # Daily series (last 31 days with zone split)
     by_day: dict[str, list[tuple[datetime, float]]] = {}

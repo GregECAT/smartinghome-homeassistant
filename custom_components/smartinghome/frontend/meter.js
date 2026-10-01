@@ -318,8 +318,8 @@ class SmartingHomeMeterPanel extends HTMLElement {
         </div>
         <div class="card kpi">
           <div class="lbl">Prognoza rachunku</div>
-          <div class="val">${costHidden ? "—" : this._zl(cm.forecast_total, 0)}</div>
-          <div class="note">${pm.total && !costHidden ? `poprzedni miesiąc ${this._zl(pm.total, 0)}` : "za cały miesiąc"}
+          <div class="val">${costHidden || cm.forecast_total === undefined ? "—" : this._zl(cm.forecast_total, 0)}</div>
+          <div class="note">${cm.forecast_total === undefined && !costHidden ? "po 3 dniach danych · " : ""}${pm.total && !costHidden ? `poprzedni miesiąc ${this._zl(pm.total, 0)}` : "za cały miesiąc"}
             ${delta !== null && isFinite(delta) && !costHidden ? ` · <span class="${delta > 0 ? "up" : "down"}">${delta > 0 ? "▲" : "▼"} ${this._num(Math.abs(delta), 0)}%</span>` : ""}</div>
         </div>
         <div class="card kpi ${blCls}">
@@ -361,10 +361,10 @@ class SmartingHomeMeterPanel extends HTMLElement {
     const money = hidden ? "" : `
       <div class="row" style="margin-top:6px"><span class="k">Energia czynna</span><span class="v">${this._zl(m.energy)}</span></div>
       <div class="row"><span class="k">Dystrybucja zmienna</span><span class="v">${this._zl(m.dist)}</span></div>
-      <div class="row"><span class="k">Opłaty stałe (miesiąc)</span><span class="v">${this._zl(m.fixed)}</span></div>
+      <div class="row"><span class="k">${m.fixed_month && m.fixed_month !== m.fixed ? `Opłaty stałe (${m.days_with_data !== undefined ? "do dziś" : "miesiąc"})` : "Opłaty stałe (miesiąc)"}</span><span class="v">${this._zl(m.fixed)}</span></div>
       ${fixedRows}
       <div class="row total"><span class="k" style="color:#e0e6ed">Razem</span><span class="v">${this._zl(m.total)}</span></div>
-      ${m.kwh ? `<div class="hint">Średnio <b>${this._zl(m.total / m.kwh)}</b> za 1 kWh wraz z opłatami stałymi.</div>` : ""}`;
+      ${m.kwh && m.days_with_data >= 3 ? `<div class="hint">Średnio <b>${this._zl(m.total / m.kwh)}</b> za 1 kWh wraz z opłatami stałymi.</div>` : ""}`;
     return `<div class="card"><h3>${esc(title)} <small>${this._num(m.kwh, 1)} kWh · ${m.days_with_data || 0} dni z danymi</small></h3>
       <div class="stack">${bar}</div><div class="rows">${zoneRows}${money}</div></div>`;
   }
