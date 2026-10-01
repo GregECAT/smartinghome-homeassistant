@@ -1363,6 +1363,24 @@ class StrategyController:
         grid_importing = grid_import_w > GRID_IMPORT_DETECT_THRESHOLD_W
         pv_insufficient = pv < load * 0.8  # PV nie pokrywa popytu
 
+        if battery_available and grid_importing and pv_insufficient and self._em.ems_state() == "auto":
+            # Already in general mode — the battery gives what it can; the rest is the
+            # house above the battery's max power. Re-setting the mode every 30 s
+            # changes nothing, so note it once per 30 min instead.
+            if await self._throttled_action("w0_battery_max", cooldown=1800):
+                bat_state = self.hass.states.get(SENSOR_BATTERY_POWER)
+                bat_w = _safe_float(bat_state.state if bat_state else None)
+                at_max = bat_w >= 0.8 * self._arb_params.discharge_kw * 1000
+                msg = (
+                    f"W0: 🔋 Bateria na maksymalnej mocy ({bat_w:.0f} W) — dom {load:.0f} W, "
+                    f"{grid_import_w:.0f} W z sieci (powyżej mocy baterii)"
+                    if at_max else
+                    f"W0: ⚠️ Tryb ogólny, a bateria oddaje tylko {bat_w:.0f} W przy SOC {soc:.0f}% — "
+                    f"{grid_import_w:.0f} W z sieci (limit BMS / temperatura?)"
+                )
+                actions.append(msg)
+                self._log_decision("w0_battery_max", msg)
+            return actions
         if battery_available and grid_importing and pv_insufficient:
             # System pobiera z sieci mimo dostępnej baterii!
             # Przełącz na general mode — bateria zasili dom naturalnie
