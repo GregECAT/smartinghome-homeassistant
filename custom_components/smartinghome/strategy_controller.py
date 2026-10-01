@@ -322,6 +322,7 @@ class StrategyController:
         self._arb_plan_key: tuple = ()
         self._arb_cmd: tuple[str, int] | None = None
         self._arb_cmd_ts: float = 0.0
+        self._arb_log_key: tuple = ()
         self._arb_status: dict[str, Any] = {}
         self._arb_drift_since: float = 0.0
         self._arb_planning: bool = False  # a plan is being computed
@@ -1577,6 +1578,15 @@ class StrategyController:
             power_w = int(min(max(power_w, live_deficit + first.export_w), max_w))
         cmd = (action, int(round(power_w / 500.0)) * 500)
         changed = cmd != self._arb_cmd
+        if (
+            changed and action == ACT_DISCHARGE and first.no_import
+            and self._arb_cmd and self._arb_cmd[0] == action
+            and abs(power_w - self._arb_cmd[1]) < 500
+            and time.time() - self._arb_cmd_ts < 90
+        ):
+            # Peak power follows the house: small swings don't rewrite the inverter
+            # every 30 s (re-set only on a ≥ 500 W change or after 90 s)
+            changed = False
         drifted = self._arbitrage_drifted(action) if not changed else False
         if drifted:
             self._log_decision(
@@ -1605,7 +1615,10 @@ class StrategyController:
                 f"(plan 30 h: {plan.baseline_cost - plan.total_cost:+.2f} zł vs bateria bez pracy)"
             )
             actions.append(msg)
-            if changed:
+            # Log a decision, not every power adjustment of the same plan step
+            log_key = (action, first.start, first.export_w // 200)
+            if changed and log_key != self._arb_log_key:
+                self._arb_log_key = log_key
                 self._log_decision("arbitrage", msg)
         return actions
 
