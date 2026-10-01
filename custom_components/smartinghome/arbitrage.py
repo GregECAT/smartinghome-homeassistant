@@ -57,6 +57,7 @@ class ArbitrageParams:
     eff_discharge: float = 0.95
     capacity_kwh: float = 10.2
     horizon_h: int = 30
+    slot_minutes: int = 30        # plan resolution (RCE is published per 15 min)
     step_kwh: float = 0.2
 
     @classmethod
@@ -165,6 +166,23 @@ def rce_hourly(prices: list[dict[str, Any]] | None) -> dict[tuple[date, int], fl
     return {k: sum(v) / len(v) for k, v in buckets.items()}
 
 
+def rce_slots(
+    prices: list[dict[str, Any]] | None, slot_minutes: int = 30
+) -> dict[tuple[date, int, int], float]:
+    """RCE PSE v2 'prices' (15-min) → {(date, hour, slot index in hour): PLN/MWh}."""
+    buckets: dict[tuple[date, int, int], list[float]] = {}
+    for entry in prices or []:
+        try:
+            day = date.fromisoformat(str(entry.get("business_date") or str(entry.get("dtime", ""))[:10]))
+            period = str(entry.get("period", ""))
+            hour, minute = int(period[:2]), int(period[3:5])
+            value = float(entry.get("rce_pln"))
+        except (TypeError, ValueError):
+            continue
+        buckets.setdefault((day, hour, minute // slot_minutes), []).append(value)
+    return {k: sum(v) / len(v) for k, v in buckets.items()}
+
+
 def pv_distribution(
     day_total_kwh: float, sunrise_h: float, sunset_h: float, hours: list[int]
 ) -> dict[int, float]:
@@ -193,13 +211,18 @@ def build_inputs(
     sunrise_h: float,
     sunset_h: float,
     horizon_h: int,
+    slot_minutes: int = 60,
+    rce_slot: dict[tuple[date, int, int], float] | None = None,
 ) -> list[HourInput]:
-    """Hourly inputs from now until now + horizon.
+    """Plan slots (slot_minutes long, aligned to the clock) from now to now + horizon.
 
     `now` may be timezone-aware (recommended): slots are stepped in UTC and
     converted back to local wall-clock time, so DST changes (last Sunday of
-    March/October) neither drop nor duplicate tariff hours.
+    March/October) neither drop nor duplicate tariff slots.
     """
+    from datetime import timezone as _tz
+
+    slot_minutes = slot_minutes if slot_minutes in (15, 30, 60) else 60
     tz = now.tzinfo
     today = now.date()
     today_hours = list(range(now.hour, 24))
@@ -210,38 +233,41 @@ def build_inputs(
     known_by_hour: dict[int, float] = {}
     for (_, h), v in sorted(rce.items()):
         known_by_hour[h] = v  # latest known day wins as fallback
+    rce_slot = rce_slot or {}
 
     def local(t_utc: datetime) -> datetime:
         return t_utc.astimezone(tz).replace(tzinfo=None) if tz else t_utc
 
-    from datetime import timezone as _tz
-
+    # first boundary after now on the slot grid (:00/:30 …)
+    minute_floor = (now.minute // slot_minutes) * slot_minutes
+    boundary = now.replace(minute=minute_floor, second=0, microsecond=0) + timedelta(minutes=slot_minutes)
     start_utc = now.astimezone(_tz.utc) if tz else now
-    top_of_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-    first_end_utc = top_of_hour.astimezone(_tz.utc) if tz else top_of_hour
+    first_end_utc = boundary.astimezone(_tz.utc) if tz else boundary
     end_utc = start_utc + timedelta(hours=horizon_h)
+    step = timedelta(minutes=slot_minutes)
 
     out: list[HourInput] = []
     t = start_utc
     while t < end_utc:
-        slot_end = first_end_utc if not out else t + timedelta(hours=1)
+        slot_end = first_end_utc if not out else t + step
         duration = (slot_end - t).total_seconds() / 3600
         if duration <= 0.02:
             t = slot_end
             continue
         lt = local(t)
         zone, buy = buy_price(lt, tariff, provider)
-        rce_mwh = rce.get((lt.date(), lt.hour), known_by_hour.get(lt.hour, 400.0))
+        rce_mwh = rce_slot.get(
+            (lt.date(), lt.hour, lt.minute // slot_minutes) if slot_minutes < 60 else (None, None, None),
+            rce.get((lt.date(), lt.hour), known_by_hour.get(lt.hour, 400.0)),
+        )
         sell = max(rce_mwh, 0.0) / 1000 * RCE_PROSUMER_COEFFICIENT
-        if lt.date() == today:
-            pv = pv_today.get(lt.hour, 0.0)  # remaining forecast already spread from "now"
-        else:
-            pv = pv_later.get(lt.hour, 0.0) * duration
+        hourly_pv = pv_today.get(lt.hour, 0.0) if lt.date() == today else pv_later.get(lt.hour, 0.0)
+        pv = hourly_pv * duration
         load = max(load_profile_kw[lt.hour % 24], 0.0) * duration
         out.append(HourInput(lt, duration, buy, sell, load, pv, zone))
         t = slot_end
 
-    # Tariff peaks: any hour pricier than the cheapest tariff hour of that day
+    # Tariff peaks: any slot pricier than the cheapest tariff slot of that day
     cheapest: dict[date, float] = {}
     for h in out:
         d = h.start.date()
@@ -316,6 +342,10 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
                     continue  # never discharge below the reserve (5 % in peaks)
                 imp, exp, dis = _flows(delta, d, p)
                 cost = imp * (h.buy + penalty) - exp * h.sell + dis * cycle_cost + value[t + 1][j]
+                if delta > 0:
+                    # tie-break: same price → charge as late as possible (battery not
+                    # sitting full for hours)
+                    cost += 1e-4 * (n - t) * delta
                 if cost < best - 1e-9:
                     best, best_j = cost, j
             value[t][i] = best
