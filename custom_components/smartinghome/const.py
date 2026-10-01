@@ -728,20 +728,47 @@ class G13Zone(StrEnum):
     AFTERNOON_PEAK = "afternoon_peak"
 
 
-# ── Tauron 2026 prices (PLN/kWh brutto) ──
-# G13 Tauron 2026 prices
-G13_PRICES: Final = {
-    G13Zone.OFF_PEAK: 0.63,
-    G13Zone.MORNING_PEAK: 0.91,
-    G13Zone.AFTERNOON_PEAK: 1.50,
+# ── Tariff prices 2026 (PLN/kWh brutto, all variable per-kWh components) ──
+# all-in = energia czynna (brutto) + (dystrybucja zmienna + jakościowa 0.0332
+#          + OZE 0.0073 + kogeneracyjna 0.0030) × 1.23 VAT
+# Fixed monthly fees (abonament, opłata stała, mocowa) are not per kWh.
+# Source: taryfy TAURON Sprzedaż / TAURON Dystrybucja 2026 (zatw. Prezes URE
+# 17.12.2025), PGE Obrót 2026; no mid-year changes as of 2026-10-01.
+TARIFF_PRICES_VALID_FROM: Final = "2026-01-01"
+TARIFF_PRICES_CHECKED: Final = "2026-10-01"
+TARIFF_PRICES_SOURCE: Final = "Taryfy 2026 zatwierdzone przez Prezesa URE (17.12.2025)"
+PER_KWH_FEES_NETTO: Final = 0.0332 + 0.0073 + 0.0030  # jakościowa + OZE + kogeneracyjna
+
+# Components: (energy brutto, distribution netto) per zone
+TAURON_2026_COMPONENTS: Final = {
+    "G11": {"flat": (0.6175, 0.2464)},
+    "G12": {"peak": (0.5447 * 1.23, 0.2841), "off_peak": (0.4146 * 1.23, 0.0558)},
+    "G12w": {"peak": (0.6220 * 1.23, 0.3298), "off_peak": (0.4130 * 1.23, 0.0512)},
+    "G13": {"morning": (0.5803, 0.2203), "peak": (0.9631, 0.3898), "off_peak": (0.5240, 0.0392)},
 }
 
-TAURON_G11_PRICE: Final = 0.87   # flat rate per kWh (avg for 4000 kWh/yr)
-TAURON_G12_PRICES: Final = {"off_peak": 0.55, "peak": 1.10}
-TAURON_G12W_PRICES: Final = {"off_peak": 0.55, "peak": 1.10}
+
+def _all_in(energy_brutto: float, dist_netto: float) -> float:
+    return round(energy_brutto + (dist_netto + PER_KWH_FEES_NETTO) * 1.23, 3)
+
+
+# G13 Tauron 2026: 0.905 / 1.496 / 0.626
+G13_PRICES: Final = {
+    G13Zone.OFF_PEAK: _all_in(*TAURON_2026_COMPONENTS["G13"]["off_peak"]),
+    G13Zone.MORNING_PEAK: _all_in(*TAURON_2026_COMPONENTS["G13"]["morning"]),
+    G13Zone.AFTERNOON_PEAK: _all_in(*TAURON_2026_COMPONENTS["G13"]["peak"]),
+}
+
+TAURON_G11_PRICE: Final = _all_in(*TAURON_2026_COMPONENTS["G11"]["flat"])  # 0.974
+TAURON_G12_PRICES: Final = {  # 0.63 / 1.07
+    k: _all_in(*v) for k, v in TAURON_2026_COMPONENTS["G12"].items()
+}
+TAURON_G12W_PRICES: Final = {  # 0.62 / 1.22
+    k: _all_in(*v) for k, v in TAURON_2026_COMPONENTS["G12w"].items()
+}
 
 # ── PGE 2026 prices (PLN/kWh brutto, energia + przesył) ──
-PGE_G11_PRICE: Final = 1.10      # energia czynna 0.62 + przesył 0.48
+PGE_G11_PRICE: Final = 1.10      # 0.6189 + (0.3469 + 0.0435) × 1.23 = 1.10
 PGE_G12_PRICES: Final = {"off_peak": 0.61, "peak": 1.25}
 PGE_G12W_PRICES: Final = {"off_peak": 0.69, "peak": 1.30}
 PGE_G12N_PRICES: Final = {"off_peak": 0.59, "peak": 1.21}

@@ -6,12 +6,13 @@
 
 // ── Provider pricing data (PLN/kWh brutto, energia + przesył) ──
 const SH_PROVIDER_PRICES = {
+  // Fallback only — replaced at runtime by the backend table (smartinghome/tariffs)
   tauron: {
     label: 'Tauron',
-    G11:  { flat: 0.87 },
-    G12:  { off_peak: 0.55, peak: 1.10 },
-    G12w: { off_peak: 0.55, peak: 1.10 },
-    G13:  { off_peak: 0.63, morning: 0.91, peak: 1.50 },
+    G11:  { flat: 0.974 },
+    G12:  { off_peak: 0.632, peak: 1.073 },
+    G12w: { off_peak: 0.624, peak: 1.224 },
+    G13:  { off_peak: 0.626, morning: 0.905, peak: 1.496 },
   },
   pge: {
     label: 'PGE',
@@ -2497,6 +2498,20 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /** Get current provider key */
+  // System tariff prices (backend const.py) — one table for panel, autopilot and AI
+  async _loadTariffs() {
+    if (!this._hass || (this._tariffMetaTs && Date.now() - this._tariffMetaTs < 3600000)) return;
+    this._tariffMetaTs = Date.now();
+    try {
+      const res = await this._hass.callWS({ type: 'smartinghome/tariffs' });
+      for (const [prov, tariffs] of Object.entries(res.prices || {})) {
+        if (!SH_PROVIDER_PRICES[prov]) SH_PROVIDER_PRICES[prov] = { label: prov };
+        Object.assign(SH_PROVIDER_PRICES[prov], tariffs);
+      }
+      this._tariffMeta = res;
+    } catch (e) { /* older backend — keep fallback table */ }
+  }
+
   _getProvider() {
     return this._settings.energy_provider || 'tauron';
   }
@@ -2655,25 +2670,42 @@ class SmartingHomePanel extends HTMLElement {
     const selTd = (t) => t === tariff ? 'font-weight:800; color:#2ecc71' : '';
     const selMark = (t) => t === tariff ? ' ✓' : '';
 
-    if (provider === 'pge') {
-      rows.push({ name: 'G11', prices_2k: '1.33', prices_4k: '1.24', prices_6k: '1.20', hours: 'brak — stała', key: 'G11' });
-      rows.push({ name: 'G12', prices_2k: '1.01', prices_4k: '0.90', prices_6k: '0.85', hours: 'lato: 15–17+22–06 / zima: 13–15+22–06', key: 'G12' });
-      rows.push({ name: 'G12w', prices_2k: '1.08', prices_4k: '0.97', prices_6k: '0.92', hours: 'jak G12 + weekendy cała doba', key: 'G12w' });
-      rows.push({ name: 'G12n', prices_2k: '0.97', prices_4k: '0.86', prices_6k: '0.81', hours: 'noc 1–5 + niedziele cała doba', key: 'G12n' });
-    } else {
-      // Tauron
-      rows.push({ name: 'G11', prices_2k: '1.22', prices_4k: '1.12', prices_6k: '1.07', hours: 'brak — stała', key: 'G11' });
-      rows.push({ name: 'G12', prices_2k: '0.97', prices_4k: '0.87', prices_6k: '0.82', hours: '13–15 + 22–06', key: 'G12' });
-      rows.push({ name: 'G12w', prices_2k: '0.99', prices_4k: '0.90', prices_6k: '0.85', hours: '13–15 + 22–06 + weekendy', key: 'G12w' });
-      rows.push({ name: 'G13', prices_2k: '0.97', prices_4k: '0.87', prices_6k: '0.83', hours: '85% off-peak + weekendy', key: 'G13' });
-    }
+    // Computed from the system price table (backend const, loaded via smartinghome/tariffs)
+    const f2 = (v) => (typeof v === 'number' ? v.toFixed(2) : '—');
+    const winterNow = [9, 10, 11, 0, 1, 2].includes(new Date().getMonth());
+    const defs = provider === 'pge'
+      ? [
+          ['G11', 'brak — stała'],
+          ['G12', winterNow ? '13–15 + 22–06 (zima)' : '15–17 + 22–06 (lato)'],
+          ['G12w', 'jak G12 + weekendy cała doba'],
+          ['G12n', 'noc 1–5 + niedziele cała doba'],
+        ]
+      : [
+          ['G11', 'brak — stała'],
+          ['G12', '13–15 + 22–06'],
+          ['G12w', '13–15 + 22–06 + weekendy'],
+          ['G13', winterNow ? 'poza 7–13 i 16–21 (zima) + weekendy' : 'poza 7–13 i 19–22 (lato) + weekendy'],
+        ];
+    defs.forEach(([key, hours]) => {
+      const p = prices[key];
+      if (!p) return;
+      const dear = p.flat ?? Math.max(p.peak ?? 0, p.morning ?? 0);
+      const cheap = p.flat ?? p.off_peak;
+      const avg = key === 'G11' ? p.flat
+        : key === 'G13' ? p.off_peak * 0.85 + p.morning * 0.05 + p.peak * 0.10
+        : key === 'G12n' ? p.off_peak * 0.3 + p.peak * 0.7
+        : key === 'G12w' ? p.off_peak * 0.75 + p.peak * 0.25
+        : p.off_peak * 0.7 + p.peak * 0.3;
+      const dearTxt = key === 'G13' ? `${f2(p.peak)} / ${f2(p.morning)}` : f2(dear);
+      rows.push({ name: key, prices_2k: dearTxt, prices_4k: f2(cheap), prices_6k: f2(avg), hours, key });
+    });
 
     let html = `<table style="width:100%; border-collapse:collapse; font-size:10px; color:#cbd5e1">
       <thead><tr style="border-bottom:1px solid rgba(255,255,255,0.1)">
         <th style="text-align:left; padding:6px; color:#64748b; font-weight:700">Taryfa</th>
-        <th style="text-align:center; padding:6px; color:#64748b">2000 kWh</th>
-        <th style="text-align:center; padding:6px; color:#64748b">4000 kWh</th>
-        <th style="text-align:center; padding:6px; color:#64748b">6000 kWh</th>
+        <th style="text-align:center; padding:6px; color:#64748b">Strefa droga</th>
+        <th style="text-align:center; padding:6px; color:#64748b">Strefa tania</th>
+        <th style="text-align:center; padding:6px; color:#64748b">Średnio*</th>
         <th style="text-align:center; padding:6px; color:#64748b">Godziny taniej</th>
       </tr></thead><tbody>`;
 
@@ -2702,11 +2734,11 @@ class SmartingHomePanel extends HTMLElement {
     bodyEl.innerHTML = html;
 
     if (footerEl) {
-      if (provider === 'pge') {
-        footerEl.innerHTML = '* Ceny brutto za kWh (sprzedaż + dystrybucja) dla zużycia 80/20 (strefa tańsza/droższa).<br>Stawki 2026 r. zatwierdzone przez URE. Instalacja 3-fazowa.';
-      } else {
-        footerEl.innerHTML = '* Ceny brutto za kWh (sprzedaż + dystrybucja). G13: 5% przedpołudniowa, 10% popołudniowa, 85% off-peak.<br>Weekendy i święta = cały dzień off-peak (najtańsza strefa).';
-      }
+      const meta = this._tariffMeta;
+      footerEl.innerHTML = '* Ceny brutto za kWh — wszystkie składniki zmienne: energia + dystrybucja + opłaty jakościowa, OZE, kogeneracyjna. ' +
+        'Bez opłat stałych miesięcznych (abonament, opłata stała sieciowa, mocowa). Średnio: G13 85% tania / 5% przedpołudniowa / 10% szczyt, G12 70/30.<br>' +
+        `${meta?.source || 'Taryfy 2026 zatwierdzone przez URE'} · obowiązują od ${meta?.valid_from || '2026-01-01'} · sprawdzone ${meta?.checked || '—'} · ` +
+        `sezon: ${winterNow ? 'zima (1.10–31.03)' : 'lato (1.04–30.09)'}. Weekendy i święta = cała doba w strefie tańszej.`;
     }
   }
 
@@ -4766,7 +4798,7 @@ class SmartingHomePanel extends HTMLElement {
       const tr = document.createElement('tr');
       tr.style.cssText = 'border-bottom:1px solid rgba(255,255,255,0.05);' + (isWinter ? 'background:rgba(0,150,255,0.04)' : '');
       tr.innerHTML = '<td style="padding:5px 6px;color:#cbd5e1;font-size:11px">' + emojis[i] + ' ' + m + '</td>' +
-        '<td style="text-align:right;padding:5px 4px"><input type="number" data-month="' + i + '" class="wnt-cons-input" value="' + saved + '" placeholder="—" style="width:70px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:5px;color:#fff;padding:4px 6px;font-size:11px;text-align:right" onchange="this.getRootNode().host._recalcWinter()" /></td>' +
+        '<td style="text-align:right;padding:5px 4px"><input type="number" data-month="' + i + '" class="wnt-cons-input" value="' + saved + '" placeholder="—" style="width:70px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:5px;color:#fff;padding:4px 6px;font-size:11px;text-align:right" onchange="this.getRootNode().host._onWinterManualEdit()" /><span data-src="' + i + '" style="font-size:10px;margin-left:3px" title=""></span></td>' +
         '<td style="text-align:right;padding:5px 6px;color:#f7b731;font-size:11px" data-pv="' + i + '">—</td>' +
         '<td style="text-align:right;padding:5px 6px;font-weight:600;font-size:11px" data-bal="' + i + '">—</td>' +
         '<td style="text-align:right;padding:5px 6px;font-size:10px;color:#e74c3c" data-cost="' + i + '">—</td>' +
@@ -4781,6 +4813,89 @@ class SmartingHomePanel extends HTMLElement {
     this._winterLoading = true;
     this._recalcWinter();
     this._winterLoading = false;
+    if ((s.winter_source || 'ha') === 'ha') this._applyWinterHA();
+    this._renderWinterSourceButtons();
+  }
+
+  /* ── Zima na plusie: monthly consumption from Home Assistant history ── */
+  _renderWinterSourceButtons() {
+    const src = this._settings.winter_source || 'ha';
+    const on = 'background:rgba(0,212,255,0.15); border-color:rgba(0,212,255,0.5); color:#00d4ff';
+    const ha = this.shadowRoot.getElementById('wnt-src-ha');
+    const man = this.shadowRoot.getElementById('wnt-src-manual');
+    if (ha) ha.style.cssText = 'padding:4px 10px; font-size:10px;' + (src === 'ha' ? on : '');
+    if (man) man.style.cssText = 'padding:4px 10px; font-size:10px;' + (src === 'manual' ? on : '');
+  }
+
+  _setWinterSource(src) {
+    this._settings.winter_source = src;
+    this._savePanelSettings({ winter_source: src });
+    this._renderWinterSourceButtons();
+    if (src === 'ha') this._applyWinterHA();
+    else {
+      // Keep the current numbers as the starting point for manual edits
+      this.shadowRoot.querySelectorAll('[data-src]').forEach(el => { el.textContent = '✏️'; el.title = 'wpisane ręcznie'; });
+      this._recalcWinter();
+    }
+  }
+
+  _onWinterManualEdit() {
+    if ((this._settings.winter_source || 'ha') === 'ha') {
+      this._settings.winter_source = 'manual';
+      this._savePanelSettings({ winter_source: 'manual' });
+      this._renderWinterSourceButtons();
+    }
+    this._recalcWinter();
+  }
+
+  async _applyWinterHA() {
+    const info = this.shadowRoot.getElementById('wnt-src-info');
+    let res;
+    try {
+      res = await this._hass.callWS({ type: 'smartinghome/energy/monthly', months: 13 });
+    } catch (e) {
+      if (info) info.textContent = 'Brak danych z HA — wpisz ręcznie';
+      return;
+    }
+    const complete = (res.months || []).filter(m => m.complete).slice(-12);
+    if (!complete.length) { if (info) info.textContent = 'Brak pełnych miesięcy w historii HA'; return; }
+    const full = (n, days) => n && days >= 0.9 * n;
+    // 1) measured or derived per month
+    const rows = complete.map(m => {
+      const idx = parseInt(m.month.slice(5, 7), 10) - 1;
+      let val = null, src = null, tip = '';
+      if (m.load_kwh !== null && full(m.days, m.load_days)) {
+        val = m.load_kwh; src = '📟'; tip = `licznik falownika ${m.month}`;
+      } else if (m.pv_kwh !== null && full(m.days, m.pv_days) && (m.import_raw_kwh ?? m.import_kwh) !== null && full(m.days, m.import_days)) {
+        const imp = m.import_raw_kwh ?? m.import_kwh, exp = m.export_raw_kwh ?? m.export_kwh ?? 0;
+        val = imp + m.pv_kwh - exp; src = '🧮'; tip = `${m.month}: pobór ${imp.toFixed(0)} + PV ${m.pv_kwh.toFixed(0)} − oddanie ${exp.toFixed(0)} kWh`;
+      }
+      return { idx, month: m.month, val, src, tip, imp: m.import_kwh, exp: m.export_kwh };
+    });
+    // 2) months without data: average of measured months in the same season (Apr–Sep / Oct–Mar)
+    const summer = (i) => i >= 3 && i <= 8;
+    rows.forEach(r => {
+      if (r.val !== null) return;
+      const same = rows.filter(x => x.val !== null && summer(x.idx) === summer(r.idx));
+      const pool = same.length ? same : rows.filter(x => x.val !== null);
+      if (pool.length) {
+        r.val = pool.reduce((a, x) => a + x.val, 0) / pool.length;
+        r.src = '≈'; r.tip = `${r.month}: brak danych — średnia z ${pool.length} mies. tego sezonu`;
+      }
+    });
+    const inputs = this.shadowRoot.querySelectorAll('.wnt-cons-input');
+    rows.forEach(r => {
+      const inp = inputs[r.idx];
+      if (inp && r.val !== null) inp.value = Math.round(r.val);
+      const b = this.shadowRoot.querySelector(`[data-src="${r.idx}"]`);
+      if (b) { b.textContent = r.src || ''; b.title = r.tip; }
+    });
+    const imp = complete.reduce((a, m) => a + (m.import_kwh || 0), 0);
+    const exp = complete.reduce((a, m) => a + (m.export_kwh || 0), 0);
+    const meas = rows.filter(r => r.src === '📟').length, der = rows.filter(r => r.src === '🧮').length, est = rows.filter(r => r.src === '≈').length;
+    if (info) info.textContent = `${complete[0].month} – ${complete[complete.length - 1].month}: ${meas}× licznik, ${der}× bilans, ${est}× szacunek · licznik operatora (12 mies.): pobór ${Math.round(imp)} kWh, oddanie ${Math.round(exp)} kWh`;
+    this._winterHaRows = rows;
+    this._recalcWinter();
   }
 
   _recalcWinter() {
@@ -4974,6 +5089,7 @@ class SmartingHomePanel extends HTMLElement {
     const cons = []; inputs.forEach(inp => cons.push(parseFloat(inp.value) || 0));
     this._savePanelSettings({
       winter_consumption: cons,
+      winter_source: this._settings.winter_source || 'ha',
       winter_pv_kwp: parseFloat(this.shadowRoot.getElementById('wnt-pv-kwp')?.value) || 0,
       winter_region: this.shadowRoot.getElementById('wnt-region')?.value || 'center',
       winter_scenario: this.shadowRoot.getElementById('wnt-scenario')?.value || 'optimal'
@@ -6871,7 +6987,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateAlertsVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); this._updateAlertsTab(); this._updateSystemHealth(); this._renderConfigGuide(); this._updateForecastCharts().catch(e => console.error('[SH] charts err:', e)); this._refreshAutopilotLive(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateAlertsVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); this._updateAlertsTab(); this._updateSystemHealth(); this._renderConfigGuide(); this._updateForecastCharts().catch(e => console.error('[SH] charts err:', e)); this._refreshAutopilotLive(); this._loadTariffs(); }
 
 
   /* ── Overview Autopilot banner (runs every 5s via _updateAll) ── */
@@ -12184,7 +12300,13 @@ class SmartingHomePanel extends HTMLElement {
           <!-- Monthly table -->
           <div class="card" style="margin-bottom:12px">
             <div class="card-title">📋 Miesięczne dane zużycia i produkcji</div>
-            <div style="font-size:10px; color:#94a3b8; margin-bottom:8px">Wpisz zużycie domu (kWh/miesiąc) — z licznika falownika lub szacunek. Uwaga: przy PV rachunek pokazuje tylko <b>pobór z sieci</b>, nie całe zużycie. Produkcja PV z mocy i regionu. Rozliczenie wg net-billingu: zakup po cenie taryfy, sprzedaż do depozytu po RCE, depozyt pokrywa tylko część „energia”, nadwyżka po 12 mies. wraca maks. w 20%.</div>
+            <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:6px">
+              <span style="font-size:10px; color:#94a3b8">Źródło zużycia:</span>
+              <button class="action-btn" id="wnt-src-ha" style="padding:4px 10px; font-size:10px" onclick="this.getRootNode().host._setWinterSource('ha')">📥 Home Assistant (12 mies.)</button>
+              <button class="action-btn" id="wnt-src-manual" style="padding:4px 10px; font-size:10px" onclick="this.getRootNode().host._setWinterSource('manual')">✏️ Ręcznie</button>
+              <span style="font-size:9px; color:#64748b" id="wnt-src-info"></span>
+            </div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:8px">Zużycie domu z Home Assistant: 📟 licznik falownika (pełny miesiąc), 🧮 bilans: pobór z licznika operatora + PV − oddanie, ≈ szacunek z sąsiednich miesięcy (brak danych). Przy PV rachunek pokazuje tylko <b>pobór z sieci</b>, nie całe zużycie. Produkcja PV z mocy i regionu (obecna instalacja). Rozliczenie wg net-billingu: zakup po cenie taryfy, sprzedaż do depozytu po RCE, depozyt pokrywa tylko część „energia”, nadwyżka po 12 mies. wraca maks. w 20%.</div>
             <div style="overflow-x:auto">
               <table style="width:100%; border-collapse:collapse; font-size:11px">
                 <thead>
@@ -13751,7 +13873,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.61.7</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.62.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
