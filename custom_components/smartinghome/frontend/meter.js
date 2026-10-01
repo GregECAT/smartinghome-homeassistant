@@ -383,7 +383,9 @@ class SmartingHomeMeterPanel extends HTMLElement {
       </div>
       <div class="hint">${over
         ? `Tło przekracza próg <b>${this._num(alertW, 0)} W</b>. Każde 100 W pracujące non stop to około <b>876 kWh</b> rocznie. Sprawdź serwery, UPS-y, bojler, klimatyzację w czuwaniu i zasilacze — wyłączając obwody po kolei i obserwując moc na żywo.`
-        : `Tło poniżej progu ${this._num(alertW, 0)} W — dobrze.`}</div></div>`;
+        : `Tło poniżej progu ${this._num(alertW, 0)} W — dobrze.`}${this._hass && this._hass.panels && this._hass.panels.smartinghome
+        ? "<br>Z fotowoltaiką i magazynem to pobór <b>z sieci</b> po bilansowaniu — obejmuje też nocne ładowanie baterii z sieci, nie tylko urządzenia."
+        : ""}</div></div>`;
   }
 
   _peakCard(d) {
@@ -417,6 +419,7 @@ class SmartingHomeMeterPanel extends HTMLElement {
   _qualityCard() {
     const s = this._settings;
     const pf = this._stateNum(s.pf_entity);
+    if (!s.pf_entity && !this._isBusiness) return ""; // reactive energy is billed in C tariffs only
     if (!s.pf_entity) {
       return `<div class="card"><h3>Jakość energii · energia bierna</h3>
         <div class="hint">Licznik w eLiczniku nie pokazuje współczynnika mocy na bieżąco, a w taryfach C operator
