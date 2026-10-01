@@ -1386,12 +1386,15 @@ class StrategyController:
                         actions.append(msg)
                         self._log_decision("w0_block", msg)
         elif is_expensive and rce_cheap_exception:
-            # Expensive G13 but RCE is very cheap → allow grid charging
-            if self._charging_enabled is False:
+            # Very cheap RCE only lowers what exported PV is worth — a G13 buyer still
+            # pays the tariff (0.91 / 1.50 zł). So store PV surplus instead of selling
+            # it, but never buy from the grid here (12:46 today it forced EMS
+            # charge_battery at full power in the morning peak and fought the plan).
+            if self._charging_enabled is False and pv > load:
                 if await self._throttled_action("w0_rce_exception"):
-                    await self._em.charge_from_grid()
+                    await self._em.charge_pv_only()
                     self._charging_enabled = True
-                    msg = f"W0: RCE wyjątek ({rce_mwh:.0f} PLN/MWh) — ładowanie z sieci dozwolone (tania energia mimo drogiej taryfy)"
+                    msg = f"W0: RCE {rce_mwh:.0f} PLN/MWh — nadwyżka PV do baterii zamiast sprzedaży (bez poboru z sieci)"
                     actions.append(msg)
                     self._log_decision("w0_rce_exception", msg)
 
