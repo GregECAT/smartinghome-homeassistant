@@ -435,8 +435,10 @@ def _summarise(plan: ArbitragePlan, inputs: list[HourInput], p: ArbitrageParams)
         last += 1
     end_t = inputs[last].start + timedelta(hours=inputs[last].duration)
     plan.next_peak = f"{inputs[first].start.strftime('%H:%M')}–{end_t.strftime('%H:%M')}"
+    floor_pct = min(p.peak_floor_soc, p.reserve_soc) + 1
     for i in range(first, last + 1):
-        if plan.hours[i].grid_import > 0.05:
+        # battery empty (at its peak floor) — not a short spike above its max power
+        if plan.hours[i].grid_import > 0.05 and plan.hours[i].soc_end <= floor_pct:
             plan.battery_until = plan.hours[i].start[11:16]
             break
 
