@@ -55,8 +55,26 @@ def ws_meter_tariffs(hass: HomeAssistant, connection, msg: dict[str, Any]) -> No
     })
 
 
+_NOT_CONSUMPTION = ("export", "generation", "production", "feed_in", "feedin", "return",
+                    "_pv", "pv_", "solar", "battery", "discharge", "charge")
+_CONSUMPTION_HINTS = ("consumption", "import", "pobor", "pobór", "zuzycie", "zużycie")
+
+
+def _is_consumption_candidate(sid: str, name: str) -> bool:
+    if sid.startswith("sensor.smarting_home"):
+        return False  # our own counters come from the inverter sensor map
+    text = f"{sid} {name}".lower()
+    return not any(word in text for word in _NOT_CONSUMPTION)
+
+
+def _auto_pick(item: dict[str, str]) -> bool:
+    """Safe enough to pick without asking: a utility meter or an import counter."""
+    text = f"{item['id']} {item['name']}".lower()
+    return any(hint in text for hint in _CONSUMPTION_HINTS)
+
+
 async def _energy_statistics(hass: HomeAssistant) -> list[dict[str, str]]:
-    """Cumulative kWh statistics usable as a meter, utility meters first."""
+    """Cumulative kWh consumption statistics usable as a meter, utility meters first."""
     from homeassistant.components.recorder import get_instance
     from homeassistant.components.recorder.statistics import list_statistic_ids
 
@@ -67,9 +85,10 @@ async def _energy_statistics(hass: HomeAssistant) -> list[dict[str, str]]:
         if not row.get("has_sum") or unit not in ("kWh", "Wh", "MWh"):
             continue
         sid = row["statistic_id"]
-        if ":" in sid and "generation" in sid:
+        name = row.get("name") or sid
+        if not _is_consumption_candidate(sid, name):
             continue
-        out.append({"id": sid, "name": row.get("name") or sid, "unit": unit})
+        out.append({"id": sid, "name": name, "unit": unit})
 
     def rank(item: dict[str, str]) -> tuple[int, str]:
         sid = item["id"]
@@ -77,7 +96,9 @@ async def _energy_statistics(hass: HomeAssistant) -> list[dict[str, str]]:
             return (0, sid)
         if ":" in sid and sid.endswith("_consumption"):
             return (1, sid)
-        return (2, sid)
+        if _auto_pick(item):
+            return (2, sid)
+        return (3, sid)
 
     return sorted(out, key=rank)
 
@@ -219,8 +240,9 @@ async def ws_meter_summary(hass: HomeAssistant, connection, msg: dict[str, Any])
     cfg = meter_settings(await read_async(hass))
     sources = await _energy_statistics(hass)
     stat = next((s for s in sources if s["id"] == cfg.get("energy_stat")), None)
-    if stat is None and sources:
-        stat = sources[0]
+    if stat is None and not cfg.get("energy_stat"):
+        # Automatic: only an unambiguous consumption meter, never a guess
+        stat = next((s for s in sources if _auto_pick(s)), None)
     if stat is None:
         connection.send_result(msg["id"], {"settings": cfg, "source": None, "sources": sources})
         return
