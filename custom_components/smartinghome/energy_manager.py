@@ -908,6 +908,12 @@ class EnergyManager:
             await asyncio.sleep(1)
         return False
 
+    @property
+    def in_startup_grace(self) -> bool:
+        """First 3 min after start: writing to GoodWe while it is still starting
+        made its EMS select unavailable (seen on every HA restart on bobrek)."""
+        return time.monotonic() - self._started < 180
+
     def ems_state(self) -> str | None:
         """Current GoodWe EMS mode (None if the integration has no EMS select)."""
         select = self._goodwe_ems_select()
@@ -1013,8 +1019,8 @@ class EnergyManager:
         if ems_mode and ems_select:
             if not await self._ensure_available(ems_select):
                 self._control_error = (
-                    f"{ems_select} jest niedostępny mimo przeładowania integracji GoodWe — "
-                    "sprawdź połączenie z falownikiem."
+                    f"{ems_select} jest niedostępny — watchdog przeładuje integrację GoodWe "
+                    "(jeśli to się powtarza, sprawdź połączenie z falownikiem)."
                 )
                 _LOGGER.warning(self._control_error)
                 return
