@@ -67,9 +67,21 @@ def _is_consumption_candidate(sid: str, name: str) -> bool:
     return not any(word in text for word in _NOT_CONSUMPTION)
 
 
+_AGGREGATES = ("daily", "monthly", "yearly", "annual", "12_months", "configurable",
+               "today", "this_month", "this_year")
+
+
 def _auto_pick(item: dict[str, str]) -> bool:
-    """Safe enough to pick without asking: a utility meter or an import counter."""
-    text = f"{item['id']} {item['name']}".lower()
+    """Safe enough to pick without asking: a utility meter or an import counter.
+
+    Period aggregates (e.g. Tauron AMIplus "daily energy consumption") are
+    excluded: eLicznik fills them once a day, so a whole day would land in a
+    single hour and the zone split would be wrong. Its hourly external
+    statistics (tauron_amiplus:…_consumption) are the right source.
+    """
+    text = f"{item['id']} {item['name']}".lower().replace(" ", "_")
+    if any(word in text for word in _AGGREGATES):
+        return False
     return any(hint in text for hint in _CONSUMPTION_HINTS)
 
 
@@ -224,7 +236,9 @@ def summarize(
         },
         "peak": {"current_month": peak_of(cur), "previous_month": peak_of(prev)},
         "data_until": data_until.isoformat(timespec="minutes") if data_until else None,
-        "hours_count": len(hours),
+        # Hours with any consumption — a meter that has only reported zeros so
+        # far (new eLicznik account) counts as "no data yet"
+        "hours_count": sum(1 for _, k in hours if k > 0),
     }
 
 
