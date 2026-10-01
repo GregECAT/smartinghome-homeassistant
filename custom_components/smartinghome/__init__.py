@@ -197,6 +197,7 @@ async def async_setup_entry(
     energy_mgr = EnergyManager(hass, device_id_for_ems, inverter_brand=inverter_brand)
     strategy_ctrl = StrategyController(hass, energy_mgr)
     strategy_ctrl.set_inverter_brand(inverter_brand)
+    strategy_ctrl.set_forecasters(coordinator.pv_forecaster, coordinator.load_forecaster)
     grid_only = is_grid_only(entry.data)
     if not grid_only:
         # Without an inverter the controller exists (services reference it)

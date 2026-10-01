@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import (
 )
 from homeassistant.util import dt as dt_util
 
+from .pl_holidays import is_day_off
 from .const import (
     is_grid_only,
     DOMAIN,
@@ -115,6 +116,8 @@ from .const import (
 from .arbitrage import buy_price as arb_buy_price
 from .alert_engine import Alert, AlertEngine
 from .energy_ledger import EnergyLedger, Sample
+from .load_forecast import LoadForecaster
+from .pv_forecast import PVForecaster
 from .settings_io import read_async as settings_read_async
 from .license import LicenseManager
 
@@ -291,6 +294,12 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._grid_store: Store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.grid_baseline")
         self._grid_store_loaded: bool = False
 
+        # ── Forecasts: PV per panel plane (Open-Meteo) and house load (HA history) ──
+        self.pv_forecaster = PVForecaster(hass, hass.config.latitude, hass.config.longitude)
+        self.load_forecaster = LoadForecaster(hass, SENSOR_LOAD_TOTAL)
+        self._forecast_settings: dict[str, Any] = {}
+        self._forecast_settings_ts = 0.0
+
         # ── Energy ledger: flows, money and HEMS score (persisted) ──
         self.ledger = EnergyLedger(hass, entry.entry_id)
         self._ledger_backfilled = False
@@ -432,6 +441,11 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             computed = self._compute_derived(raw)
 
             try:
+                await self._async_update_forecasts(computed)
+            except Exception as fc_err:  # noqa: BLE001 — never break the cycle
+                _LOGGER.warning("Forecast update failed: %s", fc_err, exc_info=True)
+
+            try:
                 await self._async_update_ledger(raw, computed)
             except Exception as ledger_err:  # noqa: BLE001 — never break the cycle
                 _LOGGER.warning("Energy ledger update failed: %s", ledger_err, exc_info=True)
@@ -571,6 +585,46 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "rce": SENSOR_RCE_PRICE,
             **{f"pv{i}": m.get(f"pv{i}_power", "") for i in range(1, 5) if m.get(f"pv{i}_power")},
         }
+
+    async def _async_update_forecasts(self, data: dict[str, Any]) -> None:
+        """Open-Meteo PV forecast per plane replaces Forecast.Solar totals; load model refresh.
+
+        settings "pv_forecast_source": "auto" (default — Open-Meteo when the PV
+        strings are configured) / "open_meteo" / "forecast_solar".
+        """
+        import time as _time
+
+        from .settings_io import read_async
+
+        if _time.time() - self._forecast_settings_ts > 300:
+            self._forecast_settings = await read_async(self.hass)
+            self._forecast_settings_ts = _time.time()
+        settings = self._forecast_settings
+        source = str(settings.get("pv_forecast_source") or "auto")
+        now = dt_util.now()
+
+        pv = self.pv_forecaster
+        if source != "forecast_solar":
+            await pv.async_refresh(
+                settings.get("pv_string_config"), self.ledger,
+                api_key=str(settings.get("open_meteo_api_key") or ""),
+            )
+        for key in ("pv_forecast_today_total", "pv_forecast_remaining_today_total",
+                    "pv_forecast_tomorrow_total", "pv_forecast_power_now_total"):
+            data[f"{key}_fs"] = data.get(key)  # Forecast.Solar kept for comparison
+        if source != "forecast_solar" and pv.available:
+            data["pv_forecast_today_total"] = round(pv.day_total(now.date()), 2)
+            data["pv_forecast_remaining_today_total"] = round(pv.remaining_today(now), 2)
+            data["pv_forecast_tomorrow_total"] = round(pv.day_total(now.date() + timedelta(days=1)), 2)
+            data["pv_forecast_power_now_total"] = round(pv.power_now_w(now))
+            data["pv_forecast_source"] = "open_meteo"
+            data["pv_forecast_status"] = pv.status(now)
+        else:
+            data["pv_forecast_source"] = "forecast_solar"
+            data["pv_forecast_status"] = {"source": "forecast_solar", "error": pv.error}
+
+        await self.load_forecaster.async_refresh(pv.daily_temps())
+        data["load_forecast_status"] = self.load_forecaster.status()
 
     async def _async_update_ledger(self, raw: dict[str, Any], data: dict[str, Any]) -> None:
         """Feed this cycle into the ledger and publish today's KPIs + HEMS score."""
@@ -1237,7 +1291,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _compute_g13(self, now: datetime) -> dict[str, Any]:
         """Compute G13 tariff data."""
         data: dict[str, Any] = {}
-        is_weekend = now.weekday() >= 5
+        is_weekend = is_day_off(now.date())
         hour = now.hour
         is_winter = now.month in WINTER_MONTHS
 
@@ -1554,7 +1608,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> str:
         """Compute the next recommended arbitrage action."""
         hour = now.hour
-        is_weekend = now.weekday() >= 5
+        is_weekend = is_day_off(now.date())
 
         if is_weekend:
             if soc < 50:

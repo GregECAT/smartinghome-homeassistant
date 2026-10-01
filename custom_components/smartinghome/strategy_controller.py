@@ -10,6 +10,7 @@ run **always**, regardless of selected strategy.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from datetime import datetime, timedelta
 from typing import Any, TYPE_CHECKING
@@ -17,6 +18,9 @@ from typing import Any, TYPE_CHECKING
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .pl_holidays import tariff_weekday
+from .load_guard import GuardInput, LoadGuard
+from .arbitrage import buy_price as arb_buy_price
 from .arbitrage import (
     ACT_CHARGE_GRID,
     ACT_DISCHARGE,
@@ -334,6 +338,14 @@ class StrategyController:
         self._load_profile_loaded: bool = False
         self._load_profile_hour: int = -1
         self._load_stats: list[float | None] = [None] * 24  # kW, recorder hourly means
+        # Forecasts owned by the coordinator (Open-Meteo PV per plane, HA-history load model)
+        self._pv_forecaster: Any = None
+        self._load_forecaster: Any = None
+        # W5 peak load guard
+        self._load_guard = LoadGuard()
+        self._guard_cfg_ts = 0.0
+        self._guard_restored = False
+        self._load_samples: list[tuple[float, float]] = []  # (ts, W) — last 3 h for the load nowcast
         self._load_stats_day: Any = None
 
         # ── Manual hold: panel force buttons pause the autopilot ──
@@ -815,7 +827,7 @@ class StrategyController:
         now = datetime.now()
         hour = now.hour
         month = now.month
-        weekday = now.weekday()
+        weekday = tariff_weekday(now.date())
 
         # Extract key sensor values
         soc = _safe_float(data.get(SENSOR_BATTERY_SOC))
@@ -909,6 +921,9 @@ class StrategyController:
             soc, pv, load, grid, g13_zone, g13_price, rce_mwh, hour,
         )
         actions_taken.extend(w0_actions)
+
+        # W5: Peak load guard — big loads off the grid in expensive tariff hours
+        actions_taken.extend(await self._execute_w5_peak_load_guard(data, soc, grid))
 
         # W4: Voltage cascade (if daytime)
         if pv > 50:  # only during solar hours
@@ -1049,7 +1064,7 @@ class StrategyController:
         now = datetime.now()
         hour = now.hour
         month = now.month
-        weekday = now.weekday()
+        weekday = tariff_weekday(now.date())
 
         soc = _safe_float(data.get(SENSOR_BATTERY_SOC))
         pv = _safe_float(data.get(SENSOR_PV_POWER))
@@ -1333,6 +1348,58 @@ class StrategyController:
     # ------------------------------------------------------------------
     #  W0 — Grid Import Guard
     # ------------------------------------------------------------------
+
+    async def _execute_w5_peak_load_guard(self, data: dict[str, Any], soc: float, grid: float) -> list[str]:
+        """W5: switch configured loads off in a tariff peak (load_guard.py), back on after it."""
+        from .settings_io import read_async, write_async
+
+        guard = self._load_guard
+        if time.time() - self._guard_cfg_ts > 300:
+            settings = await read_async(self.hass)
+            guard.configure(settings.get("peak_load_control"))
+            if not self._guard_restored:
+                # switched off before a restart → still ours to switch back on
+                for entity in settings.get("peak_load_shed") or []:
+                    guard.shed.setdefault(entity, ("restart", 0.0))
+                self._guard_restored = True
+            self._guard_cfg_ts = time.time()
+        if not guard.devices:
+            return []
+
+        now = dt_util.now()
+        tariff = str(data.get("tariff_type") or "g13")
+        provider = str(data.get("energy_provider") or "tauron")
+        price_now = arb_buy_price(now, tariff, provider)[1]
+        cheapest = min(arb_buy_price(now.replace(hour=h, minute=0), tariff, provider)[1] for h in range(24))
+        limit_a = _safe_float(data.get("battery_discharge_limit_a"), -1.0)
+        states = {}
+        for dev in guard.devices:
+            st = self.hass.states.get(dev["entity"])
+            states[dev["entity"]] = st.state if st else "unavailable"
+        before = set(guard.shed)
+        decisions = guard.decide(GuardInput(
+            in_peak=price_now > cheapest + 0.01,
+            grid_import_w=max(-grid, 0.0),
+            battery_w=_safe_float(data.get(SENSOR_BATTERY_POWER)),
+            battery_max_w=self._arb_params.discharge_kw * 1000,
+            battery_blocked=limit_a == 0 or soc <= self._arb_params.peak_floor_soc + 1,
+            states=states,
+        ))
+        msgs: list[str] = []
+        names = {d["entity"]: d.get("name") or d["entity"] for d in guard.devices}
+        for entity, service, reason in decisions:
+            try:
+                await self.hass.services.async_call("homeassistant", service, {"entity_id": entity})
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("W5 %s %s failed: %s", service, entity, err)
+                continue
+            icon, verb = ("⏸️", "wyłączony") if service == "turn_off" else ("▶️", "włączony")
+            msg = f"W5: {icon} {names.get(entity, entity)} {verb} — {reason}"
+            msgs.append(msg)
+            self._log_decision("w5_peak_load", msg)
+        if set(guard.shed) != before:
+            await write_async(self.hass, {"peak_load_shed": sorted(guard.shed)})
+        return msgs
 
     async def _execute_w0_grid_import_guard(
         self,
@@ -1750,10 +1817,40 @@ class StrategyController:
                 out[h] = max(sum(values) / len(values) / 1000, 0.1)
         return out
 
+    def set_forecasters(self, pv_forecaster: Any, load_forecaster: Any) -> None:
+        self._pv_forecaster = pv_forecaster
+        self._load_forecaster = load_forecaster
+
+    def _load_nowcast_ratio(self, now: datetime) -> float:
+        """Actual / forecast house load over the last 2 h (1.0 when unknown).
+
+        A house running hotter than its profile (heaters on, guests) keeps doing
+        so for a while — the next hours of the plan are scaled by this ratio,
+        fading out over ~3 h.
+        """
+        lf = self._load_forecaster
+        cutoff = time.time() - 7200
+        samples = [w for ts, w in self._load_samples if ts >= cutoff]
+        if lf is None or len(samples) < 60:  # ≥ ~30 min of 30-s ticks
+            return 1.0
+        expected = [
+            lf.kw((now - timedelta(minutes=m)).replace(minute=0, second=0, microsecond=0, tzinfo=None))
+            for m in range(0, 120, 30)
+        ]
+        expected = [e for e in expected if e]
+        if not expected:
+            return 1.0
+        ratio = (sum(samples) / len(samples) / 1000) / (sum(expected) / len(expected))
+        return min(max(ratio, 0.6), 2.0)
+
     def _update_load_profile(self, hour: int, load_w: float) -> None:
         """Learn average house load per hour of day (EMA, kW)."""
         if load_w <= 0:
             return
+        now_ts = time.time()
+        self._load_samples.append((now_ts, load_w))
+        if self._load_samples[0][0] < now_ts - 10800:
+            self._load_samples = [x for x in self._load_samples if x[0] >= now_ts - 10800]
         kw = load_w / 1000
         prev = self._load_profile[hour]
         self._load_profile[hour] = kw if prev is None else prev + 0.02 * (kw - prev)
@@ -1833,6 +1930,31 @@ class StrategyController:
         sunrise, sunset = self._sun_hours()
         pv_factor = self._pv_nowcast_factor(data)
         pv_today_conf = min(1.0, params.pv_confidence * pv_factor)
+        # Hourly PV forecast (Open-Meteo per plane) when available — same confidence as the totals
+        pv_hourly = None
+        pvf = self._pv_forecaster
+        if pvf is not None and pvf.available and data.get("pv_forecast_source") == "open_meteo":
+            local_now = now.replace(tzinfo=None)
+            pv_hourly = {
+                key: kwh * (pv_today_conf if key[0] == local_now.date() else params.pv_confidence)
+                for key, kwh in pvf.hourly().items()
+            }
+        # House load: HA-history model (day type + temperature) × the live deviation, fading
+        load_kw_at = None
+        lf = self._load_forecaster
+        if lf is not None and lf.model.days >= 3:
+            ratio = self._load_nowcast_ratio(now)
+            temps = pvf.daily_temps() if pvf is not None else None
+            local_now = now.replace(tzinfo=None)
+
+            def load_kw_at(slot_start: datetime) -> float | None:
+                base = lf.kw(slot_start, temps)
+                if base is None:
+                    return None
+                ahead_h = max((slot_start - local_now).total_seconds() / 3600, 0.0)
+                return base * (1 + (ratio - 1) * math.exp(-ahead_h / 3))
+
+            self._arb_load_ratio = ratio
         inputs = build_inputs(
             now,
             tariff=str(data.get("tariff_type") or "g13"),
@@ -1847,6 +1969,8 @@ class StrategyController:
             horizon_h=params.horizon_h,
             slot_minutes=params.slot_minutes,
             rce_slot=rce_slot,
+            pv_hourly_kwh=pv_hourly,
+            load_kw_at=load_kw_at,
         )
         if inputs:
             # Current slot: what PV and the house do right now beats the forecast
@@ -1870,6 +1994,9 @@ class StrategyController:
             "rce_hours": len(rce),
             "compute_ms": compute_ms,
             "pv_factor": round(pv_factor, 2),
+            "pv_source": "open_meteo" if pv_hourly is not None else "forecast_solar",
+            "load_source": "history" if load_kw_at is not None else "profile",
+            "load_ratio": round(getattr(self, "_arb_load_ratio", 1.0), 2),
         }
 
     @staticmethod
@@ -2772,7 +2899,7 @@ class StrategyController:
         if delta_import > 0 or delta_export > 0:
             # Get current prices for cost calculation
             now = datetime.now()
-            g13_zone = _get_g13_zone(now.hour, now.month, now.weekday())
+            g13_zone = _get_g13_zone(now.hour, now.month, tariff_weekday(now.date()))
             g13_price = G13_PRICES.get(g13_zone, 0.63)
             rce_sell = _safe_float(data.get("rce_sell_price"))
 
