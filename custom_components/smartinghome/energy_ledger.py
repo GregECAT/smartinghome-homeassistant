@@ -31,7 +31,7 @@ from .const import DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 STORE_VERSION = 1
-SCHEMA = 2  # bump → stored days are dropped and rebuilt from the recorder
+SCHEMA = 3  # bump → stored days are dropped and rebuilt from the recorder
 KEEP_DAYS = 400
 MAX_STEP_S = 180          # longer gaps are not integrated (HA was down)
 MAX_METER_STEP_KWH = 5.0  # meter jump sanity limit per cycle
@@ -419,15 +419,18 @@ class EnergyLedger:
 
         series: dict[str, list[tuple[datetime, float]]] = {}
         for key, eid in entity_ids.items():
-            points: list[tuple[datetime, float]] = []
+            points: list[tuple[datetime, float | None]] = []
             for st in states.get(eid, []) if eid else []:
                 try:
                     points.append((st.last_updated, float(st.state)))
                 except (TypeError, ValueError):
-                    continue
+                    points.append((st.last_updated, None))  # unavailable → gap until next value
             series[key] = points
         # Need real power data for most of the period, not just a start value
-        if len(series.get("pv") or []) < 10 or len(series.get("grid") or []) < 10:
+        def numeric(key: str) -> int:
+            return sum(1 for _, v in series.get(key) or [] if v is not None)
+
+        if numeric("pv") < 10 or numeric("grid") < 10:
             return False
 
         def value_at(key: str, t: datetime) -> float | None:
@@ -448,12 +451,18 @@ class EnergyLedger:
         self._last = None
         t = start
         while t < end:
+            pv_w, bat_w, grid_w = value_at("pv", t), value_at("bat", t), value_at("grid", t)
+            if pv_w is None or bat_w is None or grid_w is None:
+                # No data yet (e.g. inverter added to HA later that day) — a gap, not zeros
+                self.update_gap()
+                t += timedelta(minutes=1)
+                continue
             buy, sell, peak = price_at(t, value_at("rce", t))
             self.update(Sample(
                 ts=dt_util.as_local(t),
-                pv_w=value_at("pv", t) or 0.0,
-                bat_w=value_at("bat", t) or 0.0,
-                grid_w=value_at("grid", t) or 0.0,
+                pv_w=pv_w,
+                bat_w=bat_w,
+                grid_w=grid_w,
                 soc=value_at("soc", t),
                 buy_price=buy, sell_price=sell, is_peak=peak, sun_up=sun_up(t),
                 import_total=value_at("import_total", t),
