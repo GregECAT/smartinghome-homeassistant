@@ -371,7 +371,7 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
         imp, exp, _dis = _flows(delta, d, p)
         cost = imp * h.buy - exp * h.sell
         total += cost
-        action, power = classify(delta, d, h.duration, p)
+        action, power = classify(delta, d, h.duration, p, sell=h.sell)
         plan.hours.append(HourPlan(
             start=h.start.strftime("%Y-%m-%d %H:%M"),
             zone=h.zone,
@@ -414,8 +414,16 @@ def _summarise(plan: ArbitragePlan, inputs: list[HourInput], p: ArbitrageParams)
             break
 
 
-def classify(delta: float, d: float, duration: float, p: ArbitrageParams) -> tuple[str, int]:
-    """Map a planned stored-energy change to an inverter action (+ power W)."""
+def classify(
+    delta: float, d: float, duration: float, p: ArbitrageParams, sell: float | None = None
+) -> tuple[str, int]:
+    """Map a planned stored-energy change to an inverter action (+ power W).
+
+    Forced discharge (EMS discharge at a fixed power) only when exporting pays:
+    with real PV above the forecast a fixed discharge power goes straight to
+    the grid, so at a sell price below wear + minimum profit the battery just
+    follows the house (general mode) instead.
+    """
     eps = 0.05 * duration
     if delta > eps:
         bat_in = delta / p.eff_charge
@@ -427,8 +435,11 @@ def classify(delta: float, d: float, duration: float, p: ArbitrageParams) -> tup
         out = -delta * p.eff_discharge
         power = int(round(out / duration * 1000 / 100) * 100)
         deficit = max(d, 0.0)
-        if out - deficit > eps:
+        export_pays = sell is None or sell >= p.wear_cost + p.min_profit
+        if out - deficit > eps and export_pays:
             return ACT_DISCHARGE, max(power, 300)        # exporting
+        if not export_pays:
+            return ACT_HOME, 0                           # export worthless → only cover the house
         if out >= 0.8 * deficit:
             return ACT_HOME, 0                           # battery follows the house
         return ACT_DISCHARGE, max(power, 300)            # partial: fixed battery power

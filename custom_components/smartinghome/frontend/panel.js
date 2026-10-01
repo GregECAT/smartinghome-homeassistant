@@ -323,6 +323,31 @@ class SmartingHomePanel extends HTMLElement {
   /* ── Energy ledger (backend energy_ledger.py) ─────────
      Billing-grade kWh from the grid meter × the price at that moment, PV/battery
      flows and the HEMS score. One source for Przegląd, Energia, Taryfy, ROI, Historia. */
+  // Measured PV energy per MPPT today (ledger integrates each string's power)
+  _mpptKwh(i) {
+    const v = this._ledgerToday()?.pv_mppt_kwh?.[i - 1];
+    return typeof v === "number" ? v : null;
+  }
+  // Inverter AC output. GoodWe "active_power" is the grid-meter exchange, not the
+  // inverter — the on-grid phase powers are; fall back to the mapped sensor.
+  _inverterAcW() {
+    const ph = [1, 2, 3].map(i => this._n(`sensor.on_grid_l${i}_power`) ?? this._n(`sensor.goodwe_on_grid_l${i}_power`));
+    if (ph.some(v => v !== null)) return ph.reduce((a, v) => a + (v || 0), 0);
+    return this._nm("inverter_power");
+  }
+  // Forecast tab strategy follows the running autopilot (Max Zysk → MAX_ZYSK)
+  _forecastMode() {
+    const ap = this._autopilotActiveStrategy || this._apSavedStrategy;
+    if (ap === 'max_profit') return 'MAX_ZYSK';
+    if (ap === 'max_self_consumption' || ap === 'zero_export') return 'AUTARKIA';
+    return this._settings.forecast_strategy || 'AUTARKIA';
+  }
+  _installedKwp() {
+    const cfg = this._settings.pv_string_config || {};
+    let wp = 0;
+    for (let i = 1; i <= 4; i++) (cfg[`pv${i}`]?.substrings || []).forEach(sub => { wp += (sub.panel_count || 0) * (sub.panel_power || 0); });
+    return wp / 1000;
+  }
   _ymd(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
   _ledgerRange(period, ref = new Date()) {
     const end = new Date(ref);
@@ -978,7 +1003,7 @@ class SmartingHomePanel extends HTMLElement {
     const parentCurrent = this._n(this._m(`pv${idx}_current`)) || 0;
     const pvTodayVal = this._nm('pv_today') || 0;
     const totalPv = this._nm('pv_power') || 1;
-    const stringKwh = pvTodayVal * (parentPower / (totalPv || 1));
+    const stringKwh = this._mpptKwh(idx) ?? pvTodayVal * (parentPower / (totalPv || 1));
 
     if (!sc.has_substrings || sc.substrings.length < 2) {
       const sub = sc.substrings[0];
@@ -1136,7 +1161,7 @@ class SmartingHomePanel extends HTMLElement {
         const parentCurrent = this._n(this._m(`pv${i}_current`)) || 0;
         const pvTodayVal = this._nm('pv_today') || 0;
         const totalPv = this._nm('pv_power') || 1;
-        const stringKwh = pvTodayVal * (parentPower / (totalPv || 1));
+        const stringKwh = this._mpptKwh(i) ?? pvTodayVal * (parentPower / (totalPv || 1));
         const dirLabels = { 'N': 'Pn', 'NE': 'PnE', 'E': 'Wsch', 'SE': 'PdE', 'S': 'Pd', 'SW': 'PdZ', 'W': 'Zach', 'NW': 'PnZ' };
         const pvParentLabel = pvLabels[`pv${i}`] || `PV${i}`;
 
@@ -1818,12 +1843,17 @@ class SmartingHomePanel extends HTMLElement {
     // Get profile parameters (may override PV + battery)
     const profileParams = this._getRoiProfileParams();
 
-    // Estimate yearly energy values from current period
-    const multiplier = { day: 365, week: 52, month: 12, year: 1 };
-    const sensorYearlyPV = pvVal * multiplier[p];
-    const yearlyImport = impVal * multiplier[p];
-    const yearlyExport = expVal * multiplier[p];
-    const yearlySelfUse = selfUse * multiplier[p];
+    // Estimate yearly values. Scale by the hours the ledger actually covered (a day
+    // seen until 11:40 is not a full day); PV from installed kWp until there is
+    // close to a year of data — one October day × 365 says nothing about July.
+    const coverageH = L.kpi?.coverage_h || 0;
+    const scale = coverageH >= 1 ? 8760 / coverageH : 0;
+    const kwpInstalled = this._installedKwp();
+    const sensorYearlyPV = (kwpInstalled > 0 && coverageH < 300 * 24) ? kwpInstalled * 1000 : pvVal * scale;
+    const yearlyImport = impVal * scale;
+    const yearlyExport = expVal * scale;
+    const yearlySelfUse = selfUse * scale;
+    const yearlyLoadMeasured = (L.loadVal || 0) * scale;
 
     // Use profile PV if preset, otherwise sensor data
     const yearlyPV = profileParams.yearlyPvKwh || sensorYearlyPV;
@@ -1835,14 +1865,16 @@ class SmartingHomePanel extends HTMLElement {
 
     // Label — show source
     const periodLabels = { day: "dzień", week: "tydzień", month: "miesiąc", year: "rok" };
+    const daysTxt = (coverageH / 24).toFixed(1).replace('.', ',');
     const srcLabel = profileKey === 'real'
-      ? `Baza: ${periodLabels[p]} × ${multiplier[p]}`
+      ? `Baza: zużycie z ${daysTxt} dni danych${kwpInstalled > 0 && coverageH < 300 * 24 ? ` · PV ${kwpInstalled.toFixed(1)} kWp × 1000 kWh/kWp` : ''}`
       : `Baza: profil ${presetObj?.label || profileKey}`;
     this._setText("roi-period-label", srcLabel);
 
     // Build per-tariff simulation
     const tariffScenarios = this._buildTariffScenarios();
-    const yearlyLoad = yearlySelfUse + yearlyImport;
+    // House consumption (import also contains grid energy stored for arbitrage)
+    const yearlyLoad = yearlyLoadMeasured > 0 ? yearlyLoadMeasured : yearlySelfUse + yearlyImport;
     const ct = this.shadowRoot.getElementById("roi-scenario-cards");
 
     if (ct && yearlyPV > 0 && yearlyLoad > 0) {
@@ -4082,7 +4114,7 @@ class SmartingHomePanel extends HTMLElement {
     // Helper: get sensor values
     const soc = this._nm("battery_soc") || 0;
     const pvPower = this._nm("pv_power") || 0;
-    const gridPower = this._nm("grid_power") || 0;
+    const gridPower = -(this._nm("grid_power") || 0);  // grid_power: + export → here + import / − export
     const surplus = pvPower - (this._nm("load_power") || 0);
     const v1 = this._nm("voltage_l1") || 0;
     const v2 = this._nm("voltage_l2") || 0;
@@ -4091,7 +4123,8 @@ class SmartingHomePanel extends HTMLElement {
 
     // RCE data — v2.0 entity names (NC-RCE PSE migration)
     const rceMwh = parseFloat(this._s("sensor.rce_pse_cena") || "0");
-    const rceKwh = rceMwh > 0 ? rceMwh / 1000 : 0;  // v2: cena_za_kwh removed, compute from MWh
+    // Prosumer sell price (RCE × 1.23) — same value as on the Taryfy tab
+    const rceKwh = rceMwh / 1000 * 1.23;
     const rceNext = parseFloat(this._s("sensor.rce_pse_cena_nastepny_okres") || "0");  // v2: was cena_nastepnej_godziny
     const rceCheapWin = this._s("binary_sensor.rce_pse_tanie_okno_aktywne");  // v2: was aktywne_najtansze_okno_dzisiaj
     const rceExpWin = this._s("binary_sensor.rce_pse_drogie_okno_aktywne");  // v2: was aktywne_najdrozsze_okno_dzisiaj
@@ -4211,10 +4244,13 @@ class SmartingHomePanel extends HTMLElement {
     if (arbTitle) arbTitle.textContent = `📋 Strategia ${tInfo.tariff} + RCE`;
     if (arbBody) {
       if (tInfo.tariff === "G13") {
-        arbBody.innerHTML = '<strong style="color:#2ecc71">⏰ 22:00–06:00</strong> — Ładuj baterię (off-peak, najtańsza strefa)<br>' +
-          '<strong style="color:#e74c3c">⏰ 07:00–13:00</strong> — Rozładowuj na dom (peak poranny)<br>' +
-          '<strong style="color:#f7b731">⏰ 13:00–17:00</strong> — PV ładuje baterię + eksport nadwyżki<br>' +
-          '<strong style="color:#e74c3c">⏰ 17:00–22:00</strong> — Rozładowuj na dom (peak wieczorny, najdrożej!)';
+        // Tauron G13: winter (Oct–Mar) 7–13 / 16–21, summer 7–13 / 19–22 (weekdays)
+        const winter = [9, 10, 11, 0, 1, 2].includes(new Date().getMonth());
+        const [pk2s, pk2e] = winter ? ["16", "21"] : ["19", "22"];
+        arbBody.innerHTML = `<strong style="color:#2ecc71">⏰ ${pk2e}:00–07:00</strong> — Off-peak: ładowanie z sieci tylko gdy opłaca się na szczyt (plan Max Zysk)<br>` +
+          '<strong style="color:#e74c3c">⏰ 07:00–13:00</strong> — Szczyt poranny: dom z baterii, nadwyżka sprzedawana przy wysokim RCE<br>' +
+          `<strong style="color:#f7b731">⏰ 13:00–${pk2s}:00</strong> — Off-peak: PV ładuje baterię, dobicie z sieci przed szczytem<br>` +
+          `<strong style="color:#e74c3c">⏰ ${pk2s}:00–${pk2e}:00</strong> — Szczyt popołudniowy (najdrożej): dom tylko z baterii do 5%`;
       } else if (tInfo.tariff === "G12" || tInfo.tariff === "G12w") {
         arbBody.innerHTML = '<strong style="color:#2ecc71">⏰ 22:00–06:00 + 13:00–15:00</strong> — Ładuj baterię (off-peak)<br>' +
           '<strong style="color:#e74c3c">⏰ 06:00–13:00 + 15:00–22:00</strong> — Rozładowuj na dom (szczyt)' +
@@ -4250,11 +4286,11 @@ class SmartingHomePanel extends HTMLElement {
     const isWorkday = !isWeekend;
     const isExpensiveHour = isWorkday && (tInfo.zone === 'morning' || tInfo.zone === 'peak');
     const gridImporting = gridPower > 100;
-    const batCharging = batPower > 100;
+    const batCharging = batPower < -100;  // battery_power: + discharge / − charge
     // Guard active: importing from grid + charging battery + expensive hour + RCE > 100
     setStatus("hac-grid-guard-st", isExpensiveHour && gridImporting && batCharging && rceMwh > 100 ? "on" : (isExpensiveHour ? "wait" : "off"));
     this._setText("hac-gg-grid", `${gridPower > 0 ? '+' : ''}${(gridPower/1000).toFixed(1)} kW`);
-    this._setText("hac-gg-bat", `${batPower > 0 ? 'Ładuje' : 'Rozładowuje'} ${Math.abs(batPower).toFixed(0)} W`);
+    this._setText("hac-gg-bat", `${batPower < 0 ? 'Ładuje' : batPower > 0 ? 'Rozładowuje' : 'Czuwa'} ${Math.abs(batPower).toFixed(0)} W`);
 
     // PV Surplus Smart Charge: export > 300W + expensive hour + SOC < 95
     const gridExporting = gridPower < -300;
@@ -6438,7 +6474,7 @@ class SmartingHomePanel extends HTMLElement {
       grid: 'Sieć', meter: 'Pomiar / CT', comm: 'Komunikacja'
     };
     const sourceAlerts = (this._alertState?.alerts || []).filter(a => {
-      const sourceMap = { inv: 'Falownik', pv: 'PV', bat: 'Bateria', grid: 'Sieć', meter: 'Meter/CT', comm: 'Komunikacja' };
+      const sourceMap = { inv: 'Falownik', pv: 'PV', bat: 'Bateria', grid: 'Sieć', meter: 'Pomiar', comm: 'Komunikacja' };
       return a.source === sourceMap[source] || a.source.includes(sourceMap[source] || '');
     });
 
@@ -6766,6 +6802,7 @@ class SmartingHomePanel extends HTMLElement {
     this._getSettings(['autopilot_active_strategy', 'autopilot_live'])
       .then(s => {
         const saved = s.autopilot_active_strategy;
+        this._apSavedStrategy = saved || null;
         if (saved) {
           banner.style.display = 'block';
           const labels = {
@@ -6842,36 +6879,43 @@ class SmartingHomePanel extends HTMLElement {
       }
     }
 
-    // Grid Power Factor
-    const pf = _findHealth(['_grid_power_factor', 'smartinghome_grid_power_factor', 'meter_power_factor1']);
-    const pfEl = this.shadowRoot.getElementById('sh-pf-val');
-    const pfLabel = this.shadowRoot.getElementById('sh-pf-label');
-    if (pfEl && pf !== null && pf !== 'unavailable' && pf !== 'unknown') {
-      const v = parseFloat(pf);
-      pfEl.textContent = isNaN(v) ? '—' : v.toFixed(2);
-      if (!isNaN(v)) {
-        const absV = Math.abs(v);
-        pfEl.style.color = absV >= 0.95 ? '#2ecc71' : absV >= 0.85 ? '#f59e0b' : '#e74c3c';
+    // Grid quality — voltage (PN-EN 50160: 230 V ±10 %) and frequency. The meter's
+    // power factor says nothing for a prosumer whose exchange is often ~0 W.
+    {
+      const pfEl = this.shadowRoot.getElementById('sh-pf-val');
+      const pfLabel = this.shadowRoot.getElementById('sh-pf-label');
+      const volts = [1, 2, 3].map(i => this._nm(`voltage_l${i}`)).filter(v => v !== null && v > 100);
+      const freq = this._nm('grid_frequency');
+      if (pfEl && volts.length) {
+        const vmax = Math.max(...volts), vmin = Math.min(...volts);
+        const freqOk = freq === null || (freq >= 49.8 && freq <= 50.2);
+        const lvl = (vmax > 253 || vmin < 207 || !freqOk) ? 2 : (vmax > 248 || vmin < 212) ? 1 : 0;
+        const color = ['#2ecc71', '#f59e0b', '#e74c3c'][lvl];
+        pfEl.textContent = vmax.toFixed(0);
+        pfEl.style.color = color;
         if (pfLabel) {
-          pfLabel.textContent = absV >= 0.95 ? '✅ Doskonała' : absV >= 0.85 ? '⚠️ Słaba' : '🔴 Krytyczna';
-          pfLabel.style.color = absV >= 0.95 ? '#2ecc71' : absV >= 0.85 ? '#f59e0b' : '#e74c3c';
+          pfLabel.textContent = ['✅ W normie', '⚠️ Blisko granicy', '🔴 Poza normą'][lvl] + (freq !== null ? ` · ${freq.toFixed(2)} Hz` : '');
+          pfLabel.style.color = color;
         }
       }
     }
 
-    // Diagnostics
-    const hasErrors = _findHealth(['_has_active_errors', 'smartinghome_has_active_errors']);
-    const diagEl = this.shadowRoot.getElementById('sh-diag-icon');
-    const diagLabel = this.shadowRoot.getElementById('sh-diag-label');
-    if (diagEl) {
-      if (hasErrors === 'True' || hasErrors === 'true' || hasErrors === '1') {
-        diagEl.textContent = '⚠️';
-        diagEl.style.color = '#e74c3c';
-        if (diagLabel) { diagLabel.textContent = 'Wykryto błędy'; diagLabel.style.color = '#e74c3c'; }
-      } else if (hasErrors !== null && hasErrors !== 'unavailable' && hasErrors !== 'unknown') {
-        diagEl.textContent = '✅';
-        diagEl.style.color = '#2ecc71';
-        if (diagLabel) { diagLabel.textContent = 'OK — brak błędów'; diagLabel.style.color = '#2ecc71'; }
+    // Diagnostics — inverter error/warning codes (diag_status_code is a bitmap of
+    // operating states such as "export limit set", not errors)
+    {
+      const diagEl = this.shadowRoot.getElementById('sh-diag-icon');
+      const diagLabel = this.shadowRoot.getElementById('sh-diag-label');
+      const err = this._n('sensor.error_codes') ?? this._n('sensor.goodwe_error_codes');
+      const warn = this._n('sensor.warning_code') ?? this._n('sensor.goodwe_warning_code');
+      if (diagEl && (err !== null || warn !== null)) {
+        const bad = (err || 0) !== 0 || (warn || 0) !== 0;
+        diagEl.textContent = bad ? '⚠️' : '✅';
+        diagEl.style.color = bad ? '#e74c3c' : '#2ecc71';
+        if (diagLabel) {
+          diagLabel.textContent = bad ? `Błąd ${err || 0} / ostrzeżenie ${warn || 0}` : 'OK — brak błędów';
+          diagLabel.style.color = bad ? '#e74c3c' : '#2ecc71';
+          diagLabel.title = this._s('sensor.diag_status') || '';
+        }
       }
     }
   }
@@ -7205,8 +7249,12 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-batt-v", `${this._fm("battery_voltage")} V`);
     this._setText("v-batt-a", `${this._fm("battery_current")} A`);
     this._setText("v-batt-temp", `${this._fm("battery_temp")}°C`);
-    this._setText("v-batt-charge", `↑ ${this._fm("battery_charge_today")} kWh`);
-    this._setText("v-batt-discharge", `↓ ${this._fm("battery_discharge_today")} kWh`);
+    // Same source as Bateria / Historia tabs (measured battery power, energy ledger)
+    {
+      const bk = this._ledgerToday();
+      this._setText("v-batt-charge", `↑ ${bk ? bk.battery_charge_kwh.toFixed(1) : this._fm("battery_charge_today")} kWh`);
+      this._setText("v-batt-discharge", `↓ ${bk ? bk.battery_discharge_kwh.toFixed(1) : this._fm("battery_discharge_today")} kWh`);
+    }
 
     // Battery ETA — czas do pełna / rozładowania
     const battEtaEl = this.shadowRoot.getElementById("v-batt-eta");
@@ -7305,7 +7353,7 @@ class SmartingHomePanel extends HTMLElement {
     if (socEl) socEl.style.color = soc > 50 ? "#2ecc71" : soc > 20 ? "#f39c12" : "#e74c3c";
 
     // Inverter
-    this._setText("v-inv-p", this._pw(Math.abs(this._nm("inverter_power") || 0)));
+    this._setText("v-inv-p", this._pw(Math.abs(this._inverterAcW() || 0)));
     this._setText("v-inv-t", `${this._fm("inverter_temp")}°C`);
 
     // Autarky / Self-consumption — from the backend energy ledger
@@ -7691,6 +7739,40 @@ class SmartingHomePanel extends HTMLElement {
       const todayWindows = _findWindows(attrs.prices || attrs.forecast || attrs.price_list || null);
       this._setText("v-cheapest-window", todayWindows.cheap);
       this._setText("v-expensive-window", todayWindows.expensive);
+
+      // Net-billing strategy from today's real prices (not a fixed summer pattern)
+      const stratEl = this.shadowRoot.getElementById("v-rce-strategy");
+      const prices = attrs.prices || attrs.forecast || attrs.price_list || null;
+      if (stratEl && Array.isArray(prices) && prices.length) {
+        const hourly = {};
+        for (const p of prices) {
+          const hh = _entryStartHour(p);
+          const v = parseFloat(p.rce_pln ?? p.price ?? p.value);
+          if (!isNaN(hh) && !isNaN(v)) (hourly[hh] = hourly[hh] || []).push(toSell(v));
+        }
+        const avg = Object.fromEntries(Object.entries(hourly).map(([h, a]) => [parseInt(h, 10), a.reduce((x, y) => x + y, 0) / a.length]));
+        const ranges = (hours) => {
+          const hs = [...hours].sort((a, b) => a - b); const out = [];
+          for (let i = 0; i < hs.length; i++) {
+            let j = i; while (j + 1 < hs.length && hs[j + 1] === hs[j] + 1) j++;
+            out.push(`${String(hs[i]).padStart(2, "0")}–${String(hs[j] + 1).padStart(2, "0")}`); i = j;
+          }
+          return out.join(", ");
+        };
+        const byPrice = Object.keys(avg).map(Number).sort((a, b) => avg[b] - avg[a]);
+        const top = byPrice.slice(0, 3);
+        const low = byPrice.filter(h => avg[h] <= 0.30);
+        const range = (hs) => { const v = hs.map(h => avg[h]); return `${Math.min(...v).toFixed(2)}–${Math.max(...v).toFixed(2)} zł`; };
+        const lines = [`<div>💰 <strong style="color:#2ecc71">${ranges(top)}</strong> = najlepsza sprzedaż (${range(top)})</div>`];
+        if (low.length) lines.push(`<div>❌ <strong style="color:#e74c3c">${ranges(low)}</strong> = nie sprzedawaj — ładuj baterię z PV (${range(low)})</div>`);
+        if ((this._settings.tariff_plan || "G13") === "G13") {
+          const d = new Date(); const wk = d.getDay() === 0 || d.getDay() === 6;
+          const winter = [9, 10, 11, 0, 1, 2].includes(d.getMonth());
+          const off = wk ? "cały dzień" : (winter ? "00–07, 13–16, 21–24" : "00–07, 13–19, 22–24");
+          lines.push(`<div>🌙 <strong style="color:#00d4ff">${off}</strong> = G13 off-peak (0.63 zł) — dom i ładowanie z sieci najtaniej</div>`);
+        }
+        stratEl.innerHTML = lines.join("");
+      }
     }
     this._setText("v-kompas", this._s("sensor.rce_pse_kompas_energetyczny_dzisiaj") || "—");
 
@@ -7849,19 +7931,33 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-batt-dod-tab", dod !== null ? `${dod}%` : "—%");
     this._setText("v-batt-charge-rate-tab", "18.5 A");
 
-    // Daily charge/discharge
-    const chargeToday = this._nm("battery_charge_today") || 0;
-    const dischargeToday = this._nm("battery_discharge_today") || 0;
+    // Daily charge/discharge — measured battery power (ledger); inverter's own counter as a hint
+    const bk = this._ledgerToday();
+    const invChg = this._nm("battery_charge_today");
+    const invDis = this._nm("battery_discharge_today");
+    const chargeToday = bk ? bk.battery_charge_kwh : (invChg || 0);
+    const dischargeToday = bk ? bk.battery_discharge_kwh : (invDis || 0);
     this._setText("v-batt-charge-tab", `${chargeToday.toFixed(1)} kWh`);
     this._setText("v-batt-discharge-tab", `${dischargeToday.toFixed(1)} kWh`);
+    const cntEl = this.shadowRoot.getElementById("v-batt-inv-counters");
+    if (cntEl) cntEl.textContent = (invChg !== null || invDis !== null) ? `licznik falownika: ↑ ${(invChg ?? 0).toFixed(1)} · ↓ ${(invDis ?? 0).toFixed(1)} kWh` : "";
 
-    // Cycles estimate (1 cycle = 10.2 kWh)
-    const cycles = (dischargeToday / 10.2).toFixed(1);
-    this._setText("v-batt-cycles-tab", cycles);
+    // Cycles (full equivalent cycles of the configured capacity)
+    const capKwh = this._settings.battery_capacity_kwh || 10.2;
+    this._setText("v-batt-cycles-tab", (dischargeToday / capKwh).toFixed(1));
 
-    // Efficiency (discharge/charge * 100)
-    const efficiency = chargeToday > 0 ? Math.min(100, (dischargeToday / chargeToday) * 100) : 0;
-    this._setText("v-batt-efficiency-tab", `${efficiency.toFixed(0)}%`);
+    // Efficiency: (out + change of stored energy) / in — plain out/in is meaningless mid-cycle
+    const eff = bk?.battery_efficiency_pct;
+    this._setText("v-batt-efficiency-tab", typeof eff === "number" ? `${eff.toFixed(0)}%` : "—");
+
+    // Spec card — from settings and live BMS data (no hard-coded model)
+    this._setText("v-batt-model", this._settings.battery_model || "LiFePO4");
+    this._setText("v-batt-capacity-spec", `${capKwh.toFixed(1).replace('.', ',')} kWh`);
+    this._setText("v-batt-voltage-spec", `${this._fm("battery_voltage")} V`);
+    const chgLim = this._shN("battery_charge_limit_a");
+    this._setText("v-batt-chglim-spec", chgLim ? `${chgLim.toFixed(1)} A` : "—");
+    const wear = this._settings.arbitrage_params?.wear_cost ?? 0.16;
+    this._setText("v-batt-wear-spec", `${(dischargeToday / capKwh).toFixed(2)} · ${(dischargeToday * wear).toFixed(2)} zł (${wear.toFixed(2)} zł/kWh)`);
 
     // Warnings
     const warning = this._s("sensor.warning_code") || "0";
@@ -8096,7 +8192,9 @@ class SmartingHomePanel extends HTMLElement {
     // ROW 3: Grid Extended — currents & powers per phase
     [1, 2, 3].forEach(i => {
       this._setText(`v-en-a${i}`, `${this._fm(`current_l${i}`, 1)} A`);
-      this._setText(`v-en-p${i}`, `${this._fm(`power_l${i}`, 0)} W`);
+      // power_lX: + export / − import (grid meter per phase)
+      const ph = this._nm(`power_l${i}`);
+      this._setText(`v-en-p${i}`, ph === null ? "— W" : `${ph > 5 ? "↑ " : ph < -5 ? "↓ " : ""}${Math.abs(Math.round(ph))} W`);
     });
 
     // ROW 3: PV Strings
@@ -8194,7 +8292,7 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-en-forecast-accuracy", fAccuracy !== null ? `${Math.round(fAccuracy)}%` : "—%");
 
     // ROW 4: Inverter & Battery details
-    this._setText("v-en-inv-p", this._pw(Math.abs(this._nm("inverter_power") || 0)));
+    this._setText("v-en-inv-p", this._pw(Math.abs(this._inverterAcW() || 0)));
     this._setText("v-en-inv-t", `${this._fm("inverter_temp", 1)} °C`);
     this._setText("v-en-batt-v", `${this._fm("battery_voltage", 1)} V`);
     this._setText("v-en-batt-a", `${this._fm("battery_current", 1)} A`);
@@ -8214,15 +8312,17 @@ class SmartingHomePanel extends HTMLElement {
     } else {
       this._setText("v-en-batt-runtime", enLoadKw === 0 ? "∞ (brak zużycia)" : "—");
     }
-    const enChargeToday = this._nm("battery_charge_today") || 0;
-    const enDischargeToday = this._nm("battery_discharge_today") || 0;
+    const enBk = this._ledgerToday();
+    const enChargeToday = enBk ? enBk.battery_charge_kwh : (this._nm("battery_charge_today") || 0);
+    const enDischargeToday = enBk ? enBk.battery_discharge_kwh : (this._nm("battery_discharge_today") || 0);
     this._setText("v-en-batt-charge", `${enChargeToday.toFixed(1)} kWh`);
     this._setText("v-en-batt-discharge", `${enDischargeToday.toFixed(1)} kWh`);
 
     // ROW 5: PV Forecast extended
     this._setText("v-en-forecast-now", this._pw(enPv));
     const fTodayKwh = fTodayVal ?? 0;
-    const fRemainingKwh = Math.max(0, fTodayKwh - enPvToday);
+    // Forecast's own "remaining today" (forecast − actual hits 0 when PV beats the forecast)
+    const fRemainingKwh = this._shN("pv_forecast_remaining_today_total") ?? Math.max(0, fTodayKwh - enPvToday);
     this._setText("v-en-forecast-remaining", fTodayKwh > 0 ? `${fRemainingKwh.toFixed(1)} kWh` : "— kWh");
 
     // ROW 6: Ecowitt local weather
@@ -8309,13 +8409,15 @@ class SmartingHomePanel extends HTMLElement {
       if (pw !== null || i <= 2) {
         const power = pw || 0;
         const ratio = totalPv > 0 ? power / totalPv : 0;
-        const kwh = pvVal * ratio;
+        const measured = p === "day" ? this._mpptKwh(i) : null;
+        const kwh = measured ?? pvVal * ratio;
         const label = (this._settings.pv_labels || {})[`pv${i}`] || `PV${i}`;
-        strings.push({ idx: i, label, power, ratio, kwh, pct: ratio * 100 });
+        const pct = measured !== null && pvVal > 0 ? (kwh / pvVal) * 100 : ratio * 100;
+        strings.push({ idx: i, label, power, ratio, kwh, pct });
       }
     }
 
-    return { pvVal, impVal, expVal, selfUse, batChg, batDischg, costVal, revVal, savVal, balVal, autarky, selfCons, strings };
+    return { pvVal, impVal, expVal, selfUse, batChg, batDischg, costVal, revVal, savVal, balVal, autarky, selfCons, strings, kpi: L.kpi };
   }
 
   async _updateHistoryTab() {
@@ -8345,6 +8447,10 @@ class SmartingHomePanel extends HTMLElement {
       dateStr = `${months[new Date().getMonth()]} ${new Date().getFullYear()}`;
     } else {
       dateStr = `${new Date().getFullYear()}`;
+    }
+    // Days the ledger only partly saw (e.g. inverter added mid-day) are marked
+    if (p === 'day' && !isToday && d.kpi && typeof d.kpi.coverage_h === 'number' && d.kpi.coverage_h < 22) {
+      dateStr += ` · ⚠️ dane z ${d.kpi.coverage_h.toFixed(1).replace('.', ',')} h`;
     }
     this._setText('hist-date-label', dateStr);
 
@@ -8650,10 +8756,9 @@ class SmartingHomePanel extends HTMLElement {
     const ct = this.shadowRoot.getElementById('hist-compare-body');
     if (!ct) return;
 
-    // Previous period data — use multiplier estimation
-    const multiplier = { day: 365, week: 52, month: 12, year: 1 };
-    const p = this._histPeriod;
-    const m = multiplier[p];
+    // Scale by the hours of data actually covered (partial day/week ≠ a full one)
+    const coverageH = d.kpi?.coverage_h || 0;
+    const m = coverageH >= 1 ? 8760 / coverageH : 0;
 
     // Compute estimated annual values
     const yearlyPV = d.pvVal * m;
@@ -8674,7 +8779,7 @@ class SmartingHomePanel extends HTMLElement {
         <span class="hist-cmp-curr" style="color:${r.color}">${r.curr.toFixed(1)} ${r.unit}</span>
         <span class="hist-cmp-arrow">→</span>
         <span class="hist-cmp-yearly" style="color:#94a3b8">
-          ~${r.yearly.toFixed(0)} ${r.unit}/rok
+          ${m ? `~${r.yearly.toFixed(0)} ${r.unit}/rok` : '—'}
         </span>
       </div>`;
     }).join('');
@@ -10501,7 +10606,7 @@ class SmartingHomePanel extends HTMLElement {
                 <div style="font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px">⚡ Jakość sieci</div>
                 <div style="display:flex; align-items:baseline; gap:4px">
                   <div style="font-size:22px; font-weight:800" id="sh-pf-val">—</div>
-                  <div style="font-size:11px; color:#94a3b8">PF</div>
+                  <div style="font-size:11px; color:#94a3b8">V maks.</div>
                 </div>
                 <div style="font-size:10px; margin-top:4px; font-weight:600" id="sh-pf-label">—</div>
               </div>
@@ -11017,11 +11122,8 @@ class SmartingHomePanel extends HTMLElement {
               <div style="margin-top:10px; padding:8px; border-radius:6px; background:rgba(255,255,255,0.03)">
                 <div style="font-size:9px; color:#f7b731; text-transform:uppercase; font-weight:700; margin-bottom:4px">💰 Strategia RCE Net-Billing</div>
                 <div style="font-size:10px; color:#cbd5e1; line-height:1.5">
-                  <div>🌞 <strong style="color:#e74c3c">10–16h</strong> = ❌ NIE sprzedawaj (0.10–0.30 zł)</div>
-                  <div>🌇 <strong style="color:#2ecc71">17–22h</strong> = 💰 SPRZEDAWAJ (0.60–1.20 zł)</div>
-                  <div>🌙 <strong style="color:#00d4ff">22–06h</strong> = ⚡ ładuj baterię (G13 off-peak)</div>
-                  <div>🌅 <strong style="color:#f7b731">06–09h</strong> = 📈 rosnące ceny (0.50–0.90 zł)</div>
-                  <div style="margin-top:4px; color:#94a3b8; font-size:9px">Sprzedaż: RCE × 1.23 (współcz. prosumencki 2026)</div>
+                  <div id="v-rce-strategy">—</div>
+                  <div style="margin-top:4px; color:#94a3b8; font-size:9px">Dzisiejsze ceny RCE × 1.23 (współcz. prosumencki 2026)</div>
                 </div>
               </div>
             </div>
@@ -11135,6 +11237,7 @@ class SmartingHomePanel extends HTMLElement {
             <div class="card" style="text-align:center; padding:14px 8px">
               <div style="font-size:9px; color:#2ecc71; text-transform:uppercase; letter-spacing:0.5px">↑ Ładowanie dziś</div>
               <div style="font-size:22px; font-weight:800; color:#2ecc71; margin-top:4px" id="v-batt-charge-tab">— kWh</div>
+              <div style="font-size:8px; color:#64748b; margin-top:3px" id="v-batt-inv-counters"></div>
             </div>
             <div class="card" style="text-align:center; padding:14px 8px">
               <div style="font-size:9px; color:#f39c12; text-transform:uppercase; letter-spacing:0.5px">↓ Rozładowanie dziś</div>
@@ -11155,14 +11258,14 @@ class SmartingHomePanel extends HTMLElement {
             <div class="card-title">🏥 Zdrowie baterii</div>
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:10px; margin-top:8px">
               <div>
-                <div class="dr"><span class="lb">Technologia</span><span class="vl" style="color:#2ecc71">LiFePO4 (Lynx Home U)</span></div>
-                <div class="dr"><span class="lb">Pojemność</span><span class="vl">10.2 kWh</span></div>
+                <div class="dr"><span class="lb">Model</span><span class="vl" style="color:#2ecc71" id="v-batt-model">—</span></div>
+                <div class="dr"><span class="lb">Pojemność</span><span class="vl" id="v-batt-capacity-spec">—</span></div>
                 <div class="dr"><span class="lb">DOD maks.</span><span class="vl">95% (min SOC 5%)</span></div>
-                <div class="dr"><span class="lb">Żywotność gwar.</span><span class="vl">6000+ cykli</span></div>
+                <div class="dr"><span class="lb">Cykle dziś / koszt zużycia</span><span class="vl" id="v-batt-wear-spec">—</span></div>
               </div>
               <div>
-                <div class="dr"><span class="lb">Napięcie nominalne</span><span class="vl">51.2 V</span></div>
-                <div class="dr"><span class="lb">Prąd ładowania maks.</span><span class="vl">18.5 A</span></div>
+                <div class="dr"><span class="lb">Napięcie pracy</span><span class="vl" id="v-batt-voltage-spec">—</span></div>
+                <div class="dr"><span class="lb">Prąd ładowania maks. (BMS)</span><span class="vl" id="v-batt-chglim-spec">—</span></div>
                 <div class="dr"><span class="lb">Zakres temp. pracy</span><span class="vl">0°C – 50°C</span></div>
                 <div class="dr"><span class="lb">Ostrzeżenia</span><span class="vl" id="v-batt-warning-tab" style="color:#2ecc71">Brak</span></div>
               </div>
@@ -13564,7 +13667,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.61.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.61.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -14646,7 +14749,7 @@ class SmartingHomePanel extends HTMLElement {
 
   async _initForecastTab() {
     // Restore strategy from settings
-    const mode = this._settings.forecast_strategy || 'AUTARKIA';
+    const mode = this._forecastMode();
     this._setForecastStrategy(mode, true);
 
     // Render PV config cards (from pv_string_config or manual fallback)
@@ -14865,7 +14968,7 @@ class SmartingHomePanel extends HTMLElement {
     const peakSub = this.shadowRoot.getElementById('fc-kpi-peak-sub');
     if (peakSub) peakSub.textContent = `max ${peakKw.toFixed(1)} kW`;
 
-    const mode = this._settings.forecast_strategy || 'AUTARKIA';
+    const mode = this._forecastMode();
     this._setText('fc-kpi-strategy', mode.replace('_', ' '));
   }
 
@@ -14996,7 +15099,7 @@ class SmartingHomePanel extends HTMLElement {
   _generateDecisions() {
     const el = this.shadowRoot.getElementById('fc-decisions');
     if (!el) return;
-    const mode = this._settings.forecast_strategy || 'AUTARKIA';
+    const mode = this._forecastMode();
     const soc = this._nm('battery_soc') || 0;
     const peak = this._fcPeakWindow || { start: 11, end: 14, kw: 3 };
     const todayKwh = this._fcTodayKwh || 0;

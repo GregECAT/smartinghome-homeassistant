@@ -568,6 +568,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "import_total": m.get("total_energy_import", ""),
             "export_total": m.get("total_energy_export", ""),
             "rce": SENSOR_RCE_PRICE,
+            **{f"pv{i}": m.get(f"pv{i}_power", "") for i in range(1, 5) if m.get(f"pv{i}_power")},
         }
 
     async def _async_update_ledger(self, raw: dict[str, Any], data: dict[str, Any]) -> None:
@@ -615,6 +616,10 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 sun_up=sun is not None and sun.state == "above_horizon",
                 import_total=self._read_total(self._sensor_map.get("total_energy_import", "")),
                 export_total=self._read_total(self._sensor_map.get("total_energy_export", "")),
+                mppt_w=tuple(
+                    num(eid) for i in range(1, 5)
+                    if (eid := self._sensor_map.get(f"pv{i}_power"))
+                ),
             ), cap)
         await ledger.async_save()
 
@@ -1112,7 +1117,14 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # —— Diagnostics ——
         diag_code = int(_safe_float(raw.get(SENSOR_DIAG_STATUS_CODE)))
         data["diag_status_code"] = diag_code
-        data["has_active_errors"] = diag_code != 0
+        # diag_status_code is a bitmap of operating states (e.g. "export limit set"),
+        # not faults — errors are the inverter's error/warning codes
+        codes = []
+        for eid in ("sensor.error_codes", "sensor.goodwe_error_codes", "sensor.warning_code", "sensor.goodwe_warning_code"):
+            st = self.hass.states.get(eid)
+            if st is not None and st.state not in ("unknown", "unavailable"):
+                codes.append(_safe_float(st.state))
+        data["has_active_errors"] = any(c != 0 for c in codes)
 
         # —— EMS Mode (pass-through) ——
         ems_raw = raw.get(SENSOR_EMS_MODE)
