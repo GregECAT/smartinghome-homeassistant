@@ -6787,7 +6787,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateAlertsVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); this._updateAlertsTab(); this._updateSystemHealth(); this._renderConfigGuide(); this._updateForecastCharts().catch(e => console.error('[SH] charts err:', e)); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateAlertsVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); this._updateAlertsTab(); this._updateSystemHealth(); this._renderConfigGuide(); this._updateForecastCharts().catch(e => console.error('[SH] charts err:', e)); this._refreshAutopilotLive(); }
 
 
   /* ── Overview Autopilot banner (runs every 5s via _updateAll) ── */
@@ -13667,7 +13667,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.61.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.61.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -14590,6 +14590,16 @@ class SmartingHomePanel extends HTMLElement {
     if (entries.length > 10) {
       for (let i = 10; i < entries.length; i++) entries[i].remove();
     }
+  }
+
+  // Autopilot tab was only refreshed on tab switch — the 30-h plan, decisions and
+  // live tick went stale while the tab stayed open. Poll every 30 s while visible.
+  _refreshAutopilotLive() {
+    if (this._activeTab !== 'autopilot') return;
+    const now = Date.now();
+    if (this._apLiveTs && now - this._apLiveTs < 30000) return;
+    this._apLiveTs = now;
+    this._updateLiveDecisionLog();
   }
 
   _updateLiveDecisionLog() {
