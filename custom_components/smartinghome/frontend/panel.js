@@ -1570,6 +1570,8 @@ class SmartingHomePanel extends HTMLElement {
     // only the energy that block needs and only when the spread pays
     const minBuy = Math.min(...scenario.buyPrice);
     const g13Target = {};  // hour → target battery kWh for the coming block
+    const g13Reserve = new Array(24).fill(0);  // off-peak hour → kWh kept for the next expensive block
+    let firstNeed = null;  // the evening keeps a reserve for tomorrow's first expensive block
     if (scenario.strategy === 'g13_active' && scenario.gridChargeAllowed) {
       for (let h = 0; h < 24; h++) {
         if (scenario.buyPrice[h] > minBuy + 0.01 && (h === 0 || scenario.buyPrice[h - 1] <= minBuy + 0.01)) {
@@ -1578,6 +1580,8 @@ class SmartingHomePanel extends HTMLElement {
             need += Math.max(0, profile.load[end] - profile.pv[end]);
             end++;
           }
+          for (let k = h - 1; k >= 0 && scenario.buyPrice[k] <= minBuy + 0.01; k--) g13Reserve[k] = need / ETA;
+          if (firstNeed === null) firstNeed = need / ETA;
           const blockPrice = scenario.buyPrice[h];
           const pays = blockPrice * ETA * ETA > minBuy + 0.08 + 0.16;  // spread vs losses + wear
           if (pays && need > 0.2) {
@@ -1587,6 +1591,7 @@ class SmartingHomePanel extends HTMLElement {
           }
         }
       }
+      for (let k = 23; k >= 0 && scenario.buyPrice[k] <= minBuy + 0.01 && firstNeed !== null; k--) g13Reserve[k] = firstNeed;
     }
 
     // Run 2 passes: pass 1 = warmup (establishes steady-state SOC), pass 2 = measurement
@@ -1645,10 +1650,10 @@ class SmartingHomePanel extends HTMLElement {
         const availableKwh = (soc - SOC_MIN) * CAP;
 
         if (scenario.strategy === 'g13_active') {
-          // Expensive zones (morning and afternoon): house only from the battery
-          if (scenario.buyPrice[h] > minBuy + 0.01) {
-            dischargeToLoad = Math.min(remainingLoad, MAX_RATE, availableKwh * ETA);
-          }
+          // Expensive zones: house only from the battery. Off-peak: battery may cover
+          // the house too, keeping what the next expensive block needs (PV refills it)
+          const reserve = scenario.buyPrice[h] > minBuy + 0.01 ? 0 : g13Reserve[h];
+          dischargeToLoad = Math.min(remainingLoad, MAX_RATE, Math.max(0, availableKwh - reserve) * ETA);
         } else if (scenario.strategy === 'dynamic_active') {
           if (expensiveHours.includes(h)) {
             dischargeToLoad = Math.min(remainingLoad, MAX_RATE, availableKwh * ETA);
@@ -13746,7 +13751,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.61.6</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.61.7</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
