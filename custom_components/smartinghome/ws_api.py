@@ -29,6 +29,9 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_tariffs)
     websocket_api.async_register_command(hass, ws_energy_monthly)
 
+    from .meter_ws import async_register as _register_meter_ws
+    _register_meter_ws(hass)
+
 
 def _advisor(hass: HomeAssistant):
     return hass.data.get(DOMAIN, {}).get("_ai_advisor")

@@ -49,6 +49,7 @@ from .const import (
     INVERTER_BRAND_GROWATT,
     INVERTER_BRAND_SOFAR,
     INVERTER_BRAND_OTHER,
+    INVERTER_BRAND_NONE,
     DEFAULT_ECOWITT_SENSOR_MAP,
     LICENSE_MODE_FREE,
     LICENSE_MODE_PRO,
@@ -63,6 +64,16 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+BRAND_OPTIONS: dict[str, str] = {
+    INVERTER_BRAND_GOODWE: "GoodWe",
+    INVERTER_BRAND_DEYE: "Deye",
+    INVERTER_BRAND_GROWATT: "Growatt",
+    INVERTER_BRAND_SOFAR: "Sofar Solar",
+    INVERTER_BRAND_OTHER: "Inny / Other",
+    INVERTER_BRAND_NONE: "Brak falownika — tylko licznik (dom / firma bez PV)",
+}
+
 
 def _get_tariff_options(provider: str) -> dict[str, str]:
     """Return tariff selection options based on energy provider."""
@@ -182,6 +193,11 @@ class SmartingHomeConfigFlow(
             self._data[CONF_INVERTER_BRAND] = user_input.get(
                 CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE
             )
+            if self._data[CONF_INVERTER_BRAND] == INVERTER_BRAND_NONE:
+                # Meter-only installation: nothing to connect to
+                self._data[CONF_DEVICE_ID] = ""
+                self._data[CONF_MODBUS_ENABLED] = False
+                return await self.async_step_tariff()
             return await self.async_step_inverter()
 
         return self.async_show_form(
@@ -190,15 +206,7 @@ class SmartingHomeConfigFlow(
                 {
                     vol.Required(
                         CONF_INVERTER_BRAND, default=INVERTER_BRAND_GOODWE
-                    ): vol.In(
-                        {
-                            INVERTER_BRAND_GOODWE: "GoodWe",
-                            INVERTER_BRAND_DEYE: "Deye",
-                            INVERTER_BRAND_GROWATT: "Growatt",
-                            INVERTER_BRAND_SOFAR: "Sofar Solar",
-                            INVERTER_BRAND_OTHER: "Inny / Other",
-                        }
-                    ),
+                    ): vol.In(BRAND_OPTIONS),
                 }
             ),
         )
@@ -285,7 +293,7 @@ class SmartingHomeConfigFlow(
             self._data[CONF_UPDATE_INTERVAL] = DEFAULT_UPDATE_INTERVAL
 
             await self.async_set_unique_id(
-                f"smartinghome_{self._data[CONF_DEVICE_ID][:8]}"
+                f"smartinghome_{self._data[CONF_DEVICE_ID][:8] or 'meter'}"
             )
             self._abort_if_unique_id_configured()
 
@@ -346,7 +354,7 @@ class SmartingHomeConfigFlow(
             self._data[CONF_UPDATE_INTERVAL] = DEFAULT_UPDATE_INTERVAL
 
             await self.async_set_unique_id(
-                f"smartinghome_{self._data[CONF_DEVICE_ID][:8]}"
+                f"smartinghome_{self._data[CONF_DEVICE_ID][:8] or 'meter'}"
             )
             self._abort_if_unique_id_configured()
 
@@ -399,7 +407,7 @@ class SmartingHomeConfigFlow(
 
             # Create the config entry
             await self.async_set_unique_id(
-                f"smartinghome_{self._data[CONF_DEVICE_ID][:8]}"
+                f"smartinghome_{self._data[CONF_DEVICE_ID][:8] or 'meter'}"
             )
             self._abort_if_unique_id_configured()
 
@@ -689,15 +697,7 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
                         default=current.get(
                             CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE
                         ),
-                    ): vol.In(
-                        {
-                            INVERTER_BRAND_GOODWE: "GoodWe",
-                            INVERTER_BRAND_DEYE: "Deye",
-                            INVERTER_BRAND_GROWATT: "Growatt",
-                            INVERTER_BRAND_SOFAR: "Sofar Solar",
-                            INVERTER_BRAND_OTHER: "Inny / Other",
-                        }
-                    ),
+                    ): vol.In(BRAND_OPTIONS),
                 }
             ),
         )

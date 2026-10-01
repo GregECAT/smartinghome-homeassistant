@@ -17,7 +17,7 @@
       },
       "brand": {
         "title": "Inverter Brand",
-        "description": "Choose your solar inverter brand. This will set default sensor mappings.\nYou can always adjust sensors manually in the next step.",
+        "description": "Choose your solar inverter brand. This will set default sensor mappings.\nYou can always adjust sensors manually in the next step.\n\nNo PV (a home or business with just a meter)? Choose “Brak falownika” — nothing will be controlled and the “Energia i koszty” panel appears in the sidebar.",
         "data": {
           "inverter_brand": "Inverter Brand"
         }

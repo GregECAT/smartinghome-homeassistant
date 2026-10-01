@@ -17,7 +17,7 @@
       },
       "brand": {
         "title": "Marka falownika",
-        "description": "Wybierz markę falownika. Na tej podstawie zostaną ustawione domyślne sensory.\nZawsze możesz je ręcznie zmienić w następnym kroku.",
+        "description": "Wybierz markę falownika. Na tej podstawie zostaną ustawione domyślne sensory.\nZawsze możesz je ręcznie zmienić w następnym kroku.\n\nBez fotowoltaiki (dom lub firma tylko z licznikiem)? Wybierz „Brak falownika” — integracja nie będzie niczym sterować, a w menu pojawi się panel „Energia i koszty”.",
         "data": {
           "inverter_brand": "Marka falownika"
         }

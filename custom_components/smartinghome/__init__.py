@@ -30,7 +30,7 @@ from .strategy_controller import StrategyController
 from .energy_manager import EnergyManager
 from .schedule_manager import ScheduleManager
 from .wind_calendar import WindCalendar
-from .const import AutopilotStrategy as AutopilotStrategy, CONF_DEVICE_ID, DEFAULT_GOODWE_DEVICE_ID, CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE
+from .const import AutopilotStrategy as AutopilotStrategy, CONF_DEVICE_ID, DEFAULT_GOODWE_DEVICE_ID, CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE, is_grid_only
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,6 +40,13 @@ PANEL_TITLE = "Smarting HOME"
 PANEL_ICON = "mdi:solar-power-variant"
 PANEL_FILENAME = "panel.js"
 PANEL_WWW_DIR = "community/smartinghome"
+
+# Second panel: meter, tariff zones and costs — works with or without PV
+METER_PANEL_URL = f"{DOMAIN}-energia"
+METER_PANEL_TITLE = "Energia i koszty"
+METER_PANEL_ICON = "mdi:meter-electric"
+METER_PANEL_FILENAME = "meter.js"
+METER_PANEL_ELEMENT = "smartinghome-meter-panel"
 
 
 class SmartingHomeDashboardProxy:
@@ -184,7 +191,11 @@ async def async_setup_entry(
     energy_mgr = EnergyManager(hass, device_id_for_ems, inverter_brand=inverter_brand)
     strategy_ctrl = StrategyController(hass, energy_mgr)
     strategy_ctrl.set_inverter_brand(inverter_brand)
-    coordinator.set_strategy_controller(strategy_ctrl)
+    grid_only = is_grid_only(entry.data)
+    if not grid_only:
+        # Without an inverter the controller exists (services reference it)
+        # but is never ticked — nothing ever writes to an inverter.
+        coordinator.set_strategy_controller(strategy_ctrl)
 
     # Persist inverter_brand to settings.json for panel.js image detection
     try:
@@ -195,7 +206,8 @@ async def async_setup_entry(
 
     # Create Schedule Manager
     schedule_mgr = ScheduleManager(hass, strategy_ctrl, energy_mgr)
-    coordinator.set_schedule_manager(schedule_mgr)
+    if not grid_only:
+        coordinator.set_schedule_manager(schedule_mgr)
 
     # Register services (returns AI cron scheduler)
     cron_scheduler = await async_setup_services(
@@ -241,9 +253,9 @@ async def async_setup_entry(
 
     hass.async_create_task(_bootstrap_wind())
 
-    # Register custom panel in sidebar
+    # Register custom panels in sidebar (no PV/battery panel without an inverter)
     try:
-        await _async_register_panel(hass)
+        await _async_register_panel(hass, main=not grid_only)
     except Exception as err:
         _LOGGER.warning("Could not register sidebar panel: %s", err)
 
@@ -256,77 +268,97 @@ async def async_setup_entry(
     return True
 
 
-async def _async_register_panel(hass: HomeAssistant) -> None:
-    """Register the Smarting HOME panel in the sidebar.
+async def _async_register_panel(hass: HomeAssistant, main: bool = True) -> None:
+    """Register the Smarting HOME panels in the sidebar.
 
-    Approach: copy panel.js to <config>/www/community/smartinghome/
-    and register with module_url /local/community/smartinghome/panel.js.
+    Approach: copy the panel JS files to <config>/www/community/smartinghome/
+    and register them with module_url /local/community/smartinghome/<file>.
     The /local/ path is HA's built-in static file server for www/.
+
+    main: the PV/battery panel (skipped for installations without an inverter).
+    The "Energia i koszty" meter panel is always registered.
     """
-    import hashlib
     import shutil
 
-    source_file = Path(__file__).parent / "frontend" / PANEL_FILENAME
-    if not source_file.exists():
-        _LOGGER.error("Panel JS not found: %s", source_file)
-        return
-
-    # Copy panel.js to <config>/www/community/smartinghome/
+    frontend = Path(__file__).parent / "frontend"
     www_dir = Path(hass.config.path("www")) / PANEL_WWW_DIR
     www_dir.mkdir(parents=True, exist_ok=True)
-    dest_file = www_dir / PANEL_FILENAME
 
-    img_source = Path(__file__).parent / "frontend" / "img"
+    img_source = frontend / "img"
     try:
-        await hass.async_add_executor_job(
-            shutil.copy2, str(source_file), str(dest_file)
-        )
-        _LOGGER.info("Copied panel.js → %s", dest_file)
         # Bundled graphics (inverters per brand, house, grid) — no external hosting
         if img_source.is_dir():
             await hass.async_add_executor_job(
                 lambda: shutil.copytree(img_source, www_dir / "img", dirs_exist_ok=True)
             )
+    except Exception as err:  # noqa: BLE001 — images are optional
+        _LOGGER.warning("Failed to copy panel images to www/: %s", err)
+
+    panels = [(METER_PANEL_URL, METER_PANEL_TITLE, METER_PANEL_ICON,
+               METER_PANEL_FILENAME, METER_PANEL_ELEMENT)]
+    if main:
+        panels.insert(0, (DOMAIN, PANEL_TITLE, PANEL_ICON, PANEL_FILENAME, "smartinghome-panel"))
+
+    for url_path, title, icon, filename, element in panels:
+        module_url = await _async_publish_js(hass, frontend / filename, www_dir)
+        if module_url is None:
+            continue
+        _register_sidebar_panel(hass, url_path, title, icon, element, module_url)
+
+
+async def _async_publish_js(hass: HomeAssistant, source: Path, www_dir: Path) -> str | None:
+    """Copy a panel JS file to www/ and return its cache-busted /local/ URL."""
+    import hashlib
+    import shutil
+
+    if not source.exists():
+        _LOGGER.error("Panel JS not found: %s", source)
+        return None
+    dest = www_dir / source.name
+    try:
+        await hass.async_add_executor_job(shutil.copy2, str(source), str(dest))
+        _LOGGER.info("Copied %s → %s", source.name, dest)
     except Exception as err:
-        _LOGGER.error("Failed to copy panel.js to www/: %s", err)
-        return
-
+        _LOGGER.error("Failed to copy %s to www/: %s", source.name, err)
+        return None
     # Cache-busting: hash of file content as query param
-    file_bytes = await hass.async_add_executor_job(dest_file.read_bytes)
+    file_bytes = await hass.async_add_executor_job(dest.read_bytes)
     file_hash = hashlib.md5(file_bytes).hexdigest()[:8]
-    module_url = f"/local/{PANEL_WWW_DIR}/{PANEL_FILENAME}?v={file_hash}"
+    return f"/local/{PANEL_WWW_DIR}/{source.name}?v={file_hash}"
 
-    # Register the panel in the sidebar
+
+def _register_sidebar_panel(
+    hass: HomeAssistant, url_path: str, title: str, icon: str, element: str, module_url: str
+) -> None:
     from homeassistant.components.frontend import async_register_built_in_panel
 
     try:
         async_register_built_in_panel(
             hass,
             component_name="custom",
-            sidebar_title=PANEL_TITLE,
-            sidebar_icon=PANEL_ICON,
-            frontend_url_path=DOMAIN,
+            sidebar_title=title,
+            sidebar_icon=icon,
+            frontend_url_path=url_path,
             require_admin=False,
             config={
                 "_panel_custom": {
-                    "name": "smartinghome-panel",
+                    "name": element,
                     "module_url": module_url,
                 }
             },
         )
-        _LOGGER.info("Registered sidebar panel → %s ✅", module_url)
+        _LOGGER.info("Registered sidebar panel %s → %s ✅", url_path, module_url)
     except Exception as err:
-        _LOGGER.warning("Panel already registered or error: %s", err)
+        _LOGGER.warning("Panel %s already registered or error: %s", url_path, err)
 
-    # Inject dashboard proxy so panel appears in default-panel dropdown
+    # Inject dashboard proxy so the panel appears in the default-panel dropdown
     try:
         from homeassistant.components.lovelace.const import LOVELACE_DATA
 
         lovelace_data = hass.data.get(LOVELACE_DATA)
         if lovelace_data is not None:
-            proxy = SmartingHomeDashboardProxy(DOMAIN, PANEL_TITLE, PANEL_ICON)
-            lovelace_data.dashboards[DOMAIN] = proxy
-            _LOGGER.info("Injected dashboard proxy for default-panel dropdown ✅")
+            lovelace_data.dashboards[url_path] = SmartingHomeDashboardProxy(url_path, title, icon)
+            _LOGGER.info("Injected dashboard proxy for %s ✅", url_path)
         else:
             _LOGGER.debug("Lovelace data not available yet, skipping proxy")
     except Exception as err:
@@ -350,23 +382,24 @@ async def async_unload_entry(
             await cron.async_stop()
         await async_unload_services(hass)
         hass.data[DOMAIN].pop(entry.entry_id)
-        # Remove sidebar panel
-        try:
-            from homeassistant.components.frontend import async_remove_panel
-            async_remove_panel(hass, DOMAIN)
-        except Exception:
-            _LOGGER.debug("Panel already removed or not registered")
+        for url_path in (DOMAIN, METER_PANEL_URL):
+            # Remove sidebar panel
+            try:
+                from homeassistant.components.frontend import async_remove_panel
+                async_remove_panel(hass, url_path)
+            except Exception:
+                _LOGGER.debug("Panel %s already removed or not registered", url_path)
 
-        # Remove dashboard proxy
-        try:
-            from homeassistant.components.lovelace.const import LOVELACE_DATA
+            # Remove dashboard proxy
+            try:
+                from homeassistant.components.lovelace.const import LOVELACE_DATA
 
-            lovelace_data = hass.data.get(LOVELACE_DATA)
-            if lovelace_data and DOMAIN in lovelace_data.dashboards:
-                del lovelace_data.dashboards[DOMAIN]
-                _LOGGER.debug("Removed dashboard proxy")
-        except Exception:
-            _LOGGER.debug("Dashboard proxy already removed")
+                lovelace_data = hass.data.get(LOVELACE_DATA)
+                if lovelace_data and url_path in lovelace_data.dashboards:
+                    del lovelace_data.dashboards[url_path]
+                    _LOGGER.debug("Removed dashboard proxy %s", url_path)
+            except Exception:
+                _LOGGER.debug("Dashboard proxy %s already removed", url_path)
 
     return unload_ok
 

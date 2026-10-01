@@ -44,6 +44,13 @@ INVERTER_BRAND_DEYE: Final = "deye"
 INVERTER_BRAND_GROWATT: Final = "growatt"
 INVERTER_BRAND_SOFAR: Final = "sofar"
 INVERTER_BRAND_OTHER: Final = "other"
+# No inverter — meter only (home or business without PV): no inverter control
+INVERTER_BRAND_NONE: Final = "none"
+
+
+def is_grid_only(data) -> bool:
+    """Config entry without an inverter (meter-only installation)."""
+    return (data or {}).get(CONF_INVERTER_BRAND) == INVERTER_BRAND_NONE
 
 # =============================================================================
 # Sensor Mapping — universal entity configuration (35 sensors)
@@ -1311,6 +1318,8 @@ def get_sensor_map_defaults(brand: str) -> dict[str, str]:
         return DEFAULT_SENSOR_MAP_GROWATT
     if brand == INVERTER_BRAND_SOFAR:
         return DEFAULT_SENSOR_MAP_SOFAR
+    if brand == INVERTER_BRAND_NONE:
+        return {key: "" for key in SENSOR_MAP_KEYS}
     return DEFAULT_SENSOR_MAP
 
 # Email/SMS relay for alert notifications

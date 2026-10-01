@@ -16,6 +16,7 @@ from homeassistant.helpers.update_coordinator import (
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    is_grid_only,
     DOMAIN,
     SENSOR_PV_POWER,
     SENSOR_PV1_POWER,
@@ -660,6 +661,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         hours = (arb or {}).get("hours") or []
         params = getattr(ctrl, "_arb_params", None) if ctrl else None
         context = {
+            "grid_only": is_grid_only(self.entry.data),
             "is_peak": self._is_peak,
             "autopilot_active": bool(ctrl and getattr(self, "_autopilot_ran", False)),
             "manual_hold": bool(ctrl and ctrl.manual_hold_active),

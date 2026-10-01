@@ -12,7 +12,7 @@
   <a href="https://hacs.xyz"><img src="https://img.shields.io/badge/HACS-Custom-41BDF5?style=for-the-badge&logo=homeassistantcommunitystore&logoColor=white" alt="HACS" /></a>
   <a href="https://www.home-assistant.io"><img src="https://img.shields.io/badge/Home%20Assistant-2025.1+-18BCF2?style=for-the-badge&logo=homeassistant&logoColor=white" alt="Home Assistant" /></a>
   <a href="https://smartinghome.pl"><img src="https://img.shields.io/badge/License-Commercial-E74C3C?style=for-the-badge&logo=keycdn&logoColor=white" alt="License" /></a>
-  <img src="https://img.shields.io/badge/Version-1.56.0-2ECC71?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/Version-1.63.0-2ECC71?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
 </p>
 
@@ -167,6 +167,8 @@ Choose between **FREE** (no license needed) or **PRO** (license key required):
 
 Enter your GoodWe device ID (found in GoodWe integration). Optionally enable Modbus RS485 for extended diagnostics.
 
+> 🏢 **No PV?** Choose **„Brak falownika — tylko licznik”** as the inverter brand (homes and businesses with just a meter). The inverter step is skipped, nothing is ever controlled, and only the **Energia i koszty** panel is added. Existing installations can switch in **Configure → Inverter brand**.
+
 ### Step 3 — Tariff Selection 💶
 
 Choose your electricity tariff:
@@ -212,6 +214,19 @@ After setup, **Smarting HOME** panel appears automatically in the HA sidebar wit
 - **🤖 HEMS** — Mode control, AI advisor, reports
 
 > Click **⊞ Pełny ekran** for fullscreen (kiosk) mode — perfect for wall-mounted tablets.
+
+### Automatic — „Energia i koszty” panel (v1.63.0+)
+
+A second sidebar panel for every installation — with or without PV. It reads hourly meter
+statistics (e.g. **TAURON eLicznik** via the [Tauron AMIplus](https://github.com/PiotrMachowski/Home-Assistant-custom-components-Tauron-AMIplus) integration)
+and shows:
+- **Costs per tariff zone** — this month, forecast of the bill, previous month (C11, C13, G11, G12, G12w, G13; prices editable from your invoice, netto for businesses / brutto for homes)
+- **Base load** — what runs 24/7 and what it costs per year
+- **Daily consumption** and **average day profile** (working vs free days, Polish public holidays included)
+- **Peak vs contracted power** — whether the contracted power (C tariffs) can be lowered
+- **Live power and power factor (cos φ)** from a meter such as **Shelly Pro 3EM** — the early warning for capacitive reactive energy charges
+
+Pick either panel as the default dashboard in your HA profile.
 
 ### Manual — YAML Dashboards
 
