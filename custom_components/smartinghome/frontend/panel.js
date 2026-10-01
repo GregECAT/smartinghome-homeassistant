@@ -1392,38 +1392,43 @@ class SmartingHomePanel extends HTMLElement {
     } catch(e) {}
     const avgEntso = parseFloat(this._hass?.states?.['sensor.entso_e_srednia_dzisiaj']?.state) || 0.50;
 
-    // G13: ALWAYS compute weekday pricing for main simulation
-    // Base price: 0.63 zł brutto (off-peak), morning: 0.85, peak: 1.20
-    // Weighted avg weekday: ~0.80 zł (zimowe miesiące podnoszą średnią)
-    // Weekend: flat 0.63 zł (like off-peak)
-    const g13WeekdayPrice = (h) => {
-      if (h >= 7 && h < 13) return 0.85; // morning semi-peak (6h)
-      if (isSummer) {
-        if (h >= 19 && h < 22) return 1.20; // summer afternoon peak (3h)
-        return 0.63; // off-peak (15h)
-      } else {
-        if (h >= 16 && h < 21) return 1.20; // winter afternoon peak (5h)
-        return 0.63; // off-peak (13h)
-      }
-    };
-    const g13WeekendPrice = () => 0.63; // flat off-peak
+    // Prices from the configured provider (same table as Taryfy / autopilot)
+    const provider = this._getProvider();
+    const pp = SH_PROVIDER_PRICES[provider] || SH_PROVIDER_PRICES.tauron;
+    const g11Flat = (pp.G11 || SH_PROVIDER_PRICES.tauron.G11).flat;
+    const g13 = SH_PROVIDER_PRICES.tauron.G13;  // G13 is a Tauron tariff
+    // Tauron G13 weekdays: 7–13 morning; afternoon peak 16–21 (Oct–Mar) / 19–22 (Apr–Sep)
+    const g13Day = (winter) => Array.from({ length: 24 }, (_, h) => {
+      if (h >= 7 && h < 13) return g13.morning;
+      if (winter ? (h >= 16 && h < 21) : (h >= 19 && h < 22)) return g13.peak;
+      return g13.off_peak;
+    });
+    const g13Winter = g13Day(true), g13Summer = g13Day(false);
+    const g13wdPrices = g13Day(isWinter);
+    const avg24 = (a) => a.reduce((x, y) => x + y, 0) / 24;
+    const g13wdAvg = ((avg24(g13Winter) + avg24(g13Summer)) / 2).toFixed(2);
+    const g13totalAvg = ((avg24(g13Winter) * 130.5 + avg24(g13Summer) * 130.5 + g13.off_peak * 104) / 365).toFixed(2);
 
-    // Calculate G13 weighted average for description
-    const g13wdPrices = Array.from({length: 24}, (_, h) => g13WeekdayPrice(h));
-    const g13wdAvg = (g13wdPrices.reduce((a,b) => a+b, 0) / 24).toFixed(2);
-    const g13totalAvg = ((g13wdPrices.reduce((a,b) => a+b, 0) / 24 * 261 + 0.63 * 104) / 365).toFixed(2);
+    // Net-billing: exported energy is worth RCE × 1.23 at that hour, whatever the
+    // tariff. Annual-average RCE profile (midday dip, morning/evening peaks).
+    const RCE_ANNUAL_AVG = 0.42;  // PLN/kWh, ~2025 average
+    const rceShape = [0.30, 0.25, 0.20, 0.18, 0.15, 0.20, 0.35, 0.55, 0.65, 0.60, 0.55, 0.50,
+                      0.45, 0.48, 0.55, 0.65, 0.80, 0.95, 1.10, 1.00, 0.85, 0.70, 0.50, 0.35];
+    const shapeAvg = avg24(rceShape);
+    const netBillingSell = rceShape.map(x => Math.max(0, x / shapeAvg * RCE_ANNUAL_AVG * 1.23));
+    const sellAvgTxt = avg24(netBillingSell).toFixed(2);
 
     return [
       {
         key: 'g11',
         label: '🔴 G11 — Stała cena',
-        desc: 'Taryfa G11: stała cena 1.10 zł/kWh, eksport po średniej RCE (0.20 zł)',
+        desc: `Taryfa G11 (${pp.label || provider}): stała cena ${g11Flat.toFixed(2)} zł/kWh · eksport net-billing RCE×1.23 (śr. ${sellAvgTxt} zł)`,
         color: '#e74c3c',
         border: 'rgba(231,76,60,0.2)',
         bg: 'rgba(231,76,60,0.06)',
         badge: '',
-        buyPrice: Array(24).fill(1.10),
-        sellPrice: Array(24).fill(0.20),
+        buyPrice: Array(24).fill(g11Flat),
+        sellPrice: netBillingSell,
         strategy: 'passive',
         gridChargeAllowed: false,
         annualDays: 365, // same every day
@@ -1431,20 +1436,22 @@ class SmartingHomePanel extends HTMLElement {
       {
         key: 'g13',
         label: '🟡 G13 — Strefowa',
-        desc: `Taryfa G13: off-peak 0.63, poranna 0.85, szczyt 1.20 zł · śr. weekday ${g13wdAvg} zł · śr. rok ${g13totalAvg} zł (261 dn. rob. + 104 dn. week.)`,
+        desc: `Taryfa G13 (Tauron): off-peak ${g13.off_peak.toFixed(2)}, przedpołudniowa ${g13.morning.toFixed(2)}, szczyt ${g13.peak.toFixed(2)} zł · śr. dzień roboczy ${g13wdAvg} zł · śr. rok ${g13totalAvg} zł · rok = zima + lato + weekendy · ładowanie z sieci przed szczytem jak w autopilocie`,
         color: '#f7b731',
         border: 'rgba(247,183,49,0.2)',
         bg: 'rgba(247,183,49,0.06)',
         badge: '',
         buyPrice: g13wdPrices,
-        sellPrice: g13wdPrices.map(p => p * 0.35),
+        sellPrice: netBillingSell,
         strategy: 'g13_active',
-        gridChargeAllowed: false,
-        annualDays: 261, // weekdays only
-        // Weekend variant for weighted calculation
-        weekendBuyPrice: Array(24).fill(0.63),
-        weekendSellPrice: Array(24).fill(0.63 * 0.35),
-        weekendDays: 104,
+        gridChargeAllowed: true,
+        annualDays: 261,
+        // Year = winter weekdays + summer weekdays + weekends (all off-peak)
+        variants: [
+          { buyPrice: g13Winter, sellPrice: netBillingSell, days: 130.5 },
+          { buyPrice: g13Summer, sellPrice: netBillingSell, days: 130.5 },
+          { buyPrice: Array(24).fill(g13.off_peak), sellPrice: netBillingSell, days: 104 },
+        ],
       },
       {
         key: 'dynamic',
@@ -1558,6 +1565,29 @@ class SmartingHomePanel extends HTMLElement {
 
     const avgBuy = scenario.buyPrice.reduce((a,b) => a+b, 0) / 24;
 
+    // G13: charge from the grid as late as possible before each expensive block,
+    // only the energy that block needs and only when the spread pays
+    const minBuy = Math.min(...scenario.buyPrice);
+    const g13Target = {};  // hour → target battery kWh for the coming block
+    if (scenario.strategy === 'g13_active' && scenario.gridChargeAllowed) {
+      for (let h = 0; h < 24; h++) {
+        if (scenario.buyPrice[h] > minBuy + 0.01 && (h === 0 || scenario.buyPrice[h - 1] <= minBuy + 0.01)) {
+          let need = 0, end = h;
+          while (end < 24 && scenario.buyPrice[end] > minBuy + 0.01) {
+            need += Math.max(0, profile.load[end] - profile.pv[end]);
+            end++;
+          }
+          const blockPrice = scenario.buyPrice[h];
+          const pays = blockPrice * ETA * ETA > minBuy + 0.08 + 0.16;  // spread vs losses + wear
+          if (pays && need > 0.2) {
+            for (let k = Math.max(0, h - 3); k < h; k++) {
+              if (scenario.buyPrice[k] <= minBuy + 0.01) { cheapHours.push(k); g13Target[k] = Math.min(CAP * SOC_MAX, need / ETA + CAP * SOC_MIN); }
+            }
+          }
+        }
+      }
+    }
+
     // Run 2 passes: pass 1 = warmup (establishes steady-state SOC), pass 2 = measurement
     let result = null;
     for (let pass = 0; pass < 2; pass++) {
@@ -1614,11 +1644,9 @@ class SmartingHomePanel extends HTMLElement {
         const availableKwh = (soc - SOC_MIN) * CAP;
 
         if (scenario.strategy === 'g13_active') {
-          const price = scenario.buyPrice[h];
-          if (price >= 1.20) {
+          // Expensive zones (morning and afternoon): house only from the battery
+          if (scenario.buyPrice[h] > minBuy + 0.01) {
             dischargeToLoad = Math.min(remainingLoad, MAX_RATE, availableKwh * ETA);
-          } else if (price >= 0.80) {
-            dischargeToLoad = Math.min(remainingLoad * 0.5, MAX_RATE, availableKwh * ETA);
           }
         } else if (scenario.strategy === 'dynamic_active') {
           if (expensiveHours.includes(h)) {
@@ -1669,7 +1697,9 @@ class SmartingHomePanel extends HTMLElement {
 
         // Step 7: Grid-to-battery charging (dynamic only, cheap hours)
         if (scenario.gridChargeAllowed && cheapHours.includes(h)) {
-          const gFree = (SOC_MAX - soc) * CAP;
+          const gFree = g13Target[h] !== undefined
+            ? Math.max(0, g13Target[h] - soc * CAP)          // G13: only what the next peak needs
+            : (SOC_MAX - soc) * CAP;
           const gridCharge = Math.min(MAX_RATE - chargeFromPV, gFree / ETA, MAX_RATE * 0.9);
           if (gridCharge > 0.1) {
             const actualGridCharge = gridCharge * ETA;
@@ -1881,55 +1911,49 @@ class SmartingHomePanel extends HTMLElement {
       const profile = this._buildDayProfile(yearlyPV, yearlyLoad);
 
       const results = tariffScenarios.map(sc => {
-        const sim = this._simulateBatteryDay(profile, sc, batParams);
-        const days = sc.annualDays || 365;
+        // Year = weighted day types (G13: winter / summer weekdays + weekends)
+        const variants = sc.variants || [
+          { buyPrice: sc.buyPrice, sellPrice: sc.sellPrice, days: sc.annualDays || 365 },
+          ...(sc.weekendBuyPrice ? [{ buyPrice: sc.weekendBuyPrice, sellPrice: sc.weekendSellPrice, days: sc.weekendDays || 0 }] : []),
+        ];
+        const sims = variants.map(v => ({ sim: this._simulateBatteryDay(profile, { ...sc, buyPrice: v.buyPrice, sellPrice: v.sellPrice }, batParams), days: v.days }));
+        const totalDays = sims.reduce((a, x) => a + x.days, 0);
+        const sumKey = (key) => sims.reduce((a, x) => a + (x.sim[key] || 0) * x.days, 0);
+        const avgKey = (key) => totalDays > 0 ? sumKey(key) / totalDays : 0;
+        const sim = Object.fromEntries(Object.keys(sims[0].sim).map(k => [k, typeof sims[0].sim[k] === 'number' ? avgKey(k) : sims[0].sim[k]]));
+        const wa = (main) => main * totalDays;  // sim holds day-weighted averages
 
-        // For G13: also simulate weekend and weight results
-        let wkSim = null;
-        if (sc.weekendBuyPrice) {
-          const weekendSc = { ...sc, buyPrice: sc.weekendBuyPrice, sellPrice: sc.weekendSellPrice };
-          wkSim = this._simulateBatteryDay(profile, weekendSc, batParams);
-        }
-        const wkDays = sc.weekendDays || 0;
-        const totalDays = days + wkDays;
-
-        // Helper: weighted daily value → annual
-        const wa = (main, weekend) => wkSim
-          ? (main * days + weekend * wkDays)
-          : (main * totalDays);
-
-        // Scale daily results to yearly (weighted for G13)
         const yr = {
-          import: wa(sim.totalImport, wkSim?.totalImport || 0),
-          export: wa(sim.totalExport, wkSim?.totalExport || 0),
-          pvSelfCons: wa(sim.pvSelfConsumption, wkSim?.pvSelfConsumption || 0),
-          pvDirect: wa(sim.totalPvDirectToLoad, wkSim?.totalPvDirectToLoad || 0),
-          batPvToLoad: wa(sim.totalBatPvToLoad, wkSim?.totalBatPvToLoad || 0),
-          batGridToLoad: wa(sim.totalBatGridToLoad, wkSim?.totalBatGridToLoad || 0),
-          gridDirect: wa(sim.totalGridDirectToLoad, wkSim?.totalGridDirectToLoad || 0),
-          batToGrid: wa(sim.totalBatToGrid, wkSim?.totalBatToGrid || 0),
-          pvToGrid: wa(sim.totalPvToGrid, wkSim?.totalPvToGrid || 0),
-          localServed: wa(sim.totalLocalServed, wkSim?.totalLocalServed || 0),
-          gridToCharge: wa(sim.gridToCharge, wkSim?.gridToCharge || 0),
-          gridToLoad: wa(sim.gridToLoad, wkSim?.gridToLoad || 0),
-          batteryLosses: wa(sim.batteryLosses, wkSim?.batteryLosses || 0),
-          load: wa(sim.dailyLoad, wkSim?.dailyLoad || 0),
-          pvTotal: wa(sim.dailyPV, wkSim?.dailyPV || 0),
-          importCost: wa(sim.importCost, wkSim?.importCost || 0),
-          exportRev: wa(sim.exportRevenue, wkSim?.exportRevenue || 0),
-          baselineCost: wa(sim.baselineCost, wkSim?.baselineCost || 0),
-          netCost: wa(sim.systemNetCost, wkSim?.systemNetCost || 0),
-          benefit: wa(sim.dailyBenefit, wkSim?.dailyBenefit || 0),
+          import: wa(sim.totalImport),
+          export: wa(sim.totalExport),
+          pvSelfCons: wa(sim.pvSelfConsumption),
+          pvDirect: wa(sim.totalPvDirectToLoad),
+          batPvToLoad: wa(sim.totalBatPvToLoad),
+          batGridToLoad: wa(sim.totalBatGridToLoad),
+          gridDirect: wa(sim.totalGridDirectToLoad),
+          batToGrid: wa(sim.totalBatToGrid),
+          pvToGrid: wa(sim.totalPvToGrid),
+          localServed: wa(sim.totalLocalServed),
+          gridToCharge: wa(sim.gridToCharge),
+          gridToLoad: wa(sim.gridToLoad),
+          batteryLosses: wa(sim.batteryLosses),
+          load: wa(sim.dailyLoad),
+          pvTotal: wa(sim.dailyPV),
+          importCost: wa(sim.importCost),
+          exportRev: wa(sim.exportRevenue),
+          baselineCost: wa(sim.baselineCost),
+          netCost: wa(sim.systemNetCost),
+          benefit: wa(sim.dailyBenefit),
           avgBuy: sim.avgBuyPrice,
           avgSell: sim.avgSellPrice,
           avgPricePvHours: sim.avgPricePvHours,
-          pvSavings: wa(sim.pvSavings, wkSim?.pvSavings || 0),
-          pvExportRev: wa(sim.pvExportRevenue, wkSim?.pvExportRevenue || 0),
+          pvSavings: wa(sim.pvSavings),
+          pvExportRev: wa(sim.pvExportRevenue),
           effectivePvValue: sim.effectivePvValue,
-          cycles: wa(sim.cycles, wkSim?.cycles || 0),
-          arbitrageProfit: wa(sim.arbitrageProfit, wkSim?.arbitrageProfit || 0),
+          cycles: wa(sim.cycles),
+          arbitrageProfit: wa(sim.arbitrageProfit),
           pvSelfConsPct: yearlyPV > 0
-            ? Math.round((wa(sim.pvSelfConsumption, wkSim?.pvSelfConsumption || 0) / yearlyPV) * 100)
+            ? Math.round((wa(sim.pvSelfConsumption) / yearlyPV) * 100)
             : 0,
         };
         yr.payback = invest > 0 && yr.benefit > 0 ? invest / yr.benefit : null;
@@ -4658,18 +4682,59 @@ class SmartingHomePanel extends HTMLElement {
     const avgPrice = parseFloat(this._hass?.states?.['sensor.entso_e_srednia_dzisiaj']?.state) || 0.50;
     const minPrice = Math.max(0.05, avgPrice * 0.3);
     const maxPrice = avgPrice * 2.0;
-
+    const provider = this._getProvider();
+    const pp = SH_PROVIDER_PRICES[provider] || SH_PROVIDER_PRICES.tauron;
+    const g11 = (pp.G11 || SH_PROVIDER_PRICES.tauron.G11).flat;
+    const g13 = SH_PROVIDER_PRICES.tauron.G13;
+    // G13 with HEMS: what the autopilot actually paid (ledger), else ~90 % bought off-peak
+    const yk = this._ledgerSummary('year');
+    const measuredBuy = yk && yk.import_kwh >= 5 && yk.avg_buy_price ? yk.avg_buy_price : null;
+    const g13Eff = measuredBuy ?? (0.9 * g13.off_peak + 0.1 * g13.morning);
+    // PV exported mostly around midday: annual RCE in PV hours ≈ 0.28 zł × 1.23
+    const pvExport = 0.35;
     return {
       none:    { label: '🔴 G11 — Stała cena',
-                 importPrice: 1.10, exportPrice: 0.20,
-                 desc: 'Taryfa G11: stała cena 1.10 zł/kWh (z opłatami dystrybucji), eksport po RCE min (0.20 zł)' },
-      basic:   { label: '🟡 G13 — Strefowa',
-                 importPrice: 0.87, exportPrice: 0.35,
-                 desc: 'Taryfa G13: off-peak 0.63, poranna 0.91, szczyt 1.50 zł (średnia 0.87), eksport po średniej RCE' },
+                 importPrice: g11, exportPrice: pvExport, energyShare: 0.55,
+                 desc: `Taryfa G11 (${pp.label || provider}): ${g11.toFixed(2)} zł/kWh, eksport net-billing ≈ RCE×1.23 w godzinach PV (${pvExport.toFixed(2)} zł)` },
+      basic:   { label: '🟡 G13 + HEMS',
+                 importPrice: g13Eff, exportPrice: pvExport, energyShare: 0.55,
+                 desc: `G13 (${g13.off_peak.toFixed(2)} / ${g13.morning.toFixed(2)} / ${g13.peak.toFixed(2)} zł): autopilot kupuje głównie off-peak — śr. ${g13Eff.toFixed(2)} zł/kWh${measuredBuy ? ' (zmierzone)' : ' (szacunek)'}` },
       optimal: { label: '🟢 Dynamiczna — RCE/ENTSO-E',
-                 importPrice: minPrice, exportPrice: maxPrice,
-                 desc: `Cena dynamiczna RCE: import w najtańszych godzinach (${minPrice.toFixed(2)} zł), sprzedaż w najdroższych (${maxPrice.toFixed(2)} zł) — pełny arbitraż cenowy HEMS` }
+                 importPrice: minPrice, exportPrice: maxPrice, energyShare: 0.55,
+                 desc: `Cena dynamiczna RCE (szacunek): import w najtańszych godzinach (${minPrice.toFixed(2)} zł), sprzedaż w najdroższych (${maxPrice.toFixed(2)} zł) — pełny arbitraż cenowy HEMS` }
     };
+  }
+
+  /**
+   * Net-billing settlement (prosument od 2022): every imported kWh is paid in
+   * full, exported energy goes to a deposit at RCE value, the deposit pays only
+   * the energy part of the bill (not distribution), and what is left after 12
+   * months is refunded at most 20 %. Energy is not netted kWh-for-kWh.
+   */
+  _winterSettle(data, sc) {
+    // Share of PV used on site (house + battery) of what could be used: min(PV, load).
+    // Measured from the energy ledger after 3 days of data, else ~0.8 with a battery.
+    const yk = this._ledgerSummary('year');
+    let f = 0.8;
+    if (yk && yk.coverage_h >= 72) {
+      const used = (yk.pv_to_home_kwh || 0) + (yk.pv_to_battery_kwh || 0);
+      const cap = Math.min(yk.pv_kwh || 0, yk.load_kwh || 0);
+      if (cap > 1) f = Math.max(0.3, Math.min(1, used / cap));
+    }
+    let cost = 0, rev = 0, imp = 0, exp = 0;
+    const months = data.map(d => {
+      const self = Math.min(d.pv, d.cons) * f;
+      const mi = Math.max(0, d.cons - self), me = Math.max(0, d.pv - self);
+      const mc = mi * sc.importPrice, mr = me * sc.exportPrice;
+      cost += mc; rev += mr; imp += mi; exp += me;
+      return { imp: mi, exp: me, cost: mc, rev: mr, fbal: mr - mc };
+    });
+    const energyPart = cost * (sc.energyShare ?? 0.55);
+    const credit = Math.min(rev, energyPart);
+    const leftover = rev - credit;
+    const refund = leftover * 0.20;
+    const bill = cost - credit;
+    return { months, cost, rev, imp, exp, credit, leftover, refund, bill, net: refund - bill, selfFactor: f };
   }
 
   _initWinterTab() {
@@ -4720,12 +4785,13 @@ class SmartingHomePanel extends HTMLElement {
     const inputs = this.shadowRoot.querySelectorAll('.wnt-cons-input');
     let totalCons = 0, totalPV = 0, totalCost = 0, totalRev = 0;
     const monthData = [];
+    const consPv = [...inputs].map((inp, i) => ({ cons: parseFloat(inp.value) || 0, pv: kwp > 0 ? Math.round(annualYield * dist[i]) : 0 }));
+    const settle = this._winterSettle(consPv, sc);
     inputs.forEach((inp, i) => {
-      const cons = parseFloat(inp.value) || 0;
-      const pv = kwp > 0 ? Math.round(annualYield * dist[i]) : 0;
+      const { cons, pv } = consPv[i];
       const bal = pv - cons;
-      const cost = bal < 0 ? Math.abs(bal) * sc.importPrice : 0;
-      const rev = bal > 0 ? bal * sc.exportPrice : 0;
+      const cost = settle.months[i].cost;
+      const rev = settle.months[i].rev;
       const fbal = rev - cost;
       totalCons += cons; totalPV += pv; totalCost += cost; totalRev += rev;
       monthData.push({ cons, pv, bal, cost, rev, fbal, month: i });
@@ -4743,7 +4809,7 @@ class SmartingHomePanel extends HTMLElement {
       if (barE && cons > 0) { const p = Math.min((pv / Math.max(cons, 1)) * 100, 100); barE.style.width = p + '%'; barE.style.background = p >= 100 ? '#2ecc71' : p >= 60 ? '#f7b731' : '#e74c3c'; }
     });
     const totalBal = totalPV - totalCons;
-    const totalFBal = totalRev - totalCost;
+    const totalFBal = settle.net;  // after net-billing settlement (deposit, 20 % refund)
     this._setText('wnt-sum-cons', totalCons > 0 ? totalCons + ' kWh' : '—');
     this._setText('wnt-sum-pv', totalPV > 0 ? totalPV + ' kWh' : '—');
     const sBal = this.shadowRoot.getElementById('wnt-sum-bal');
@@ -4761,7 +4827,7 @@ class SmartingHomePanel extends HTMLElement {
     if (totalCons > 0 && kwp > 0) {
       if (vl) { vl.textContent = (totalBal > 0 ? '+' : '') + totalBal + ' kWh'; vl.style.color = totalBal >= 0 ? '#2ecc71' : '#e74c3c'; }
       if (bx) bx.style.background = totalBal >= 0 ? 'rgba(46,204,113,0.1)' : 'rgba(231,76,60,0.1)';
-      if (mg) { mg.textContent = totalBal >= 0 ? 'Nadwyżka: ' + totalBal + ' kWh/rok — JESTEŚ NA PLUSIE!' : 'Niedobór: ' + Math.abs(totalBal) + ' kWh/rok'; mg.style.color = totalBal >= 0 ? '#2ecc71' : '#f7b731'; }
+      if (mg) { mg.textContent = totalBal >= 0 ? 'Produkcja PV większa od zużycia o ' + totalBal + ' kWh/rok (energetycznie)' : 'Niedobór: ' + Math.abs(totalBal) + ' kWh/rok'; mg.style.color = totalBal >= 0 ? '#2ecc71' : '#f7b731'; }
     }
     // Financial balance in hero
     const fvl = this.shadowRoot.getElementById('wnt-fbal-value');
@@ -4769,7 +4835,11 @@ class SmartingHomePanel extends HTMLElement {
     if (totalCons > 0 && kwp > 0 && fvl) {
       fvl.textContent = (totalFBal >= 0 ? '+' : '') + totalFBal.toFixed(0) + ' zł';
       fvl.style.color = totalFBal >= 0 ? '#2ecc71' : '#e74c3c';
-      if (fmg) { fmg.textContent = 'Scenariusz: ' + sc.label; fmg.style.color = '#94a3b8'; }
+      if (fmg) {
+        fmg.textContent = `${sc.label} · rachunek ${settle.bill.toFixed(0)} zł/rok po depozycie ${settle.credit.toFixed(0)} zł` +
+          (settle.refund > 0 ? ` · zwrot nadwyżki ${settle.refund.toFixed(0)} zł (20%)` : '');
+        fmg.style.color = '#94a3b8';
+      }
     }
     const cov = totalCons > 0 && totalPV > 0 ? Math.round(totalPV / totalCons * 100) : 0;
     const cb = this.shadowRoot.getElementById('wnt-coverage-bar'); if (cb) cb.style.width = Math.min(cov, 120) + '%';
@@ -4803,12 +4873,8 @@ class SmartingHomePanel extends HTMLElement {
     let html = '';
     const results = keys.map(k => {
       const s = scenarios[k];
-      let cost = 0, rev = 0;
-      data.forEach(d => {
-        if (d.bal < 0) cost += Math.abs(d.bal) * s.importPrice;
-        if (d.bal > 0) rev += d.bal * s.exportPrice;
-      });
-      return { key: k, label: s.label, desc: s.desc, cost, rev, net: rev - cost, importPrice: s.importPrice, exportPrice: s.exportPrice };
+      const st = this._winterSettle(data, s);
+      return { key: k, label: s.label, desc: s.desc, cost: st.cost, rev: st.rev, net: st.net, bill: st.bill, refund: st.refund, importPrice: s.importPrice, exportPrice: s.exportPrice };
     });
     const bestNet = results[2].net;
     const worstNet = results[0].net;
@@ -4824,17 +4890,18 @@ class SmartingHomePanel extends HTMLElement {
         '</div>' +
         '<div style="border-top:1px solid rgba(255,255,255,0.06);padding-top:8px">' +
         '<div style="font-size:9px;color:#64748b">Koszt importu</div><div style="font-size:14px;font-weight:700;color:#e74c3c">-' + r.cost.toFixed(0) + ' zł</div>' +
-        '<div style="font-size:9px;color:#64748b;margin-top:4px">Przychód z eksportu</div><div style="font-size:14px;font-weight:700;color:#2ecc71">+' + r.rev.toFixed(0) + ' zł</div>' +
+        '<div style="font-size:9px;color:#64748b;margin-top:4px">Depozyt z eksportu</div><div style="font-size:14px;font-weight:700;color:#2ecc71">+' + r.rev.toFixed(0) + ' zł</div>' +
+        '<div style="font-size:9px;color:#64748b;margin-top:4px">Rachunek po depozycie / zwrot 20%</div><div style="font-size:12px;font-weight:700;color:#cbd5e1">' + r.bill.toFixed(0) + ' zł / +' + r.refund.toFixed(0) + ' zł</div>' +
         '</div>' +
         '<div style="margin-top:8px;padding:8px;border-radius:8px;background:rgba(255,255,255,0.04)">' +
-        '<div style="font-size:9px;color:#64748b">BILANS ROCZNY</div>' +
+        '<div style="font-size:9px;color:#64748b">BILANS ROCZNY (net-billing)</div>' +
         '<div style="font-size:22px;font-weight:900;color:' + (r.net >= 0 ? '#2ecc71' : '#e74c3c') + '">' + (r.net >= 0 ? '+' : '') + r.net.toFixed(0) + ' zł</div>' +
         (i > 0 ? '<div style="font-size:10px;color:#2ecc71;margin-top:2px">+' + diff.toFixed(0) + ' zł vs G11</div>' : '<div style="font-size:10px;color:#e74c3c;margin-top:2px">taryfa stała</div>') +
         '</div></div>';
     }).join('');
     ct.innerHTML = '<div style="display:flex;gap:10px;flex-wrap:wrap">' + html + '</div>' +
       (savings > 0 ? '<div style="margin-top:12px;padding:12px;background:rgba(46,204,113,0.08);border:1px solid rgba(46,204,113,0.2);border-radius:10px;text-align:center">' +
-      '<div style="font-size:11px;color:#94a3b8">💰 Różnica cenowa: Dynamiczna RCE vs G11</div>' +
+      '<div style="font-size:11px;color:#94a3b8">💰 Różnica: Dynamiczna RCE vs G11 (szacunek)</div>' +
       '<div style="font-size:28px;font-weight:900;color:#2ecc71;margin-top:4px">+' + savings.toFixed(0) + ' zł/rok</div>' +
       '<div style="font-size:10px;color:#64748b;margin-top:2px">Oszczędność dzięki taryfie dynamicznej vs stała cena G11</div></div>' : '');
   }
@@ -12074,8 +12141,8 @@ class SmartingHomePanel extends HTMLElement {
                 <select id="wnt-scenario"
                   style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:12px"
                   onchange="this.getRootNode().host._recalcWinter()">
-                  <option value="none">🔴 G11 — Stała cena (1.10 zł/kWh)</option>
-                  <option value="basic">🟡 G13 — Strefowa (średnio 0.87 zł/kWh)</option>
+                  <option value="none">🔴 G11 — Stała cena</option>
+                  <option value="basic">🟡 G13 + HEMS (zakup głównie off-peak)</option>
                   <option value="optimal" selected>🟢 Dynamiczna RCE — arbitraż cenowy HEMS</option>
                 </select>
               </div>
@@ -12100,7 +12167,7 @@ class SmartingHomePanel extends HTMLElement {
           <!-- Monthly table -->
           <div class="card" style="margin-bottom:12px">
             <div class="card-title">📋 Miesięczne dane zużycia i produkcji</div>
-            <div style="font-size:10px; color:#94a3b8; margin-bottom:8px">Wpisz zużycie z rachunków za prąd (kWh/miesiąc). Produkcja PV obliczona automatycznie na podstawie mocy i regionu.</div>
+            <div style="font-size:10px; color:#94a3b8; margin-bottom:8px">Wpisz zużycie domu (kWh/miesiąc) — z licznika falownika lub szacunek. Uwaga: przy PV rachunek pokazuje tylko <b>pobór z sieci</b>, nie całe zużycie. Produkcja PV z mocy i regionu. Rozliczenie wg net-billingu: zakup po cenie taryfy, sprzedaż do depozytu po RCE, depozyt pokrywa tylko część „energia”, nadwyżka po 12 mies. wraca maks. w 20%.</div>
             <div style="overflow-x:auto">
               <table style="width:100%; border-collapse:collapse; font-size:11px">
                 <thead>
@@ -13667,7 +13734,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.61.4</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.61.5</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
