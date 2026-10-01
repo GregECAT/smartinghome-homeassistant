@@ -858,6 +858,22 @@ class StrategyController:
                     source = "PV-only" if pv > 100 else "sieć"
                     self._log_decision("soc_emergency", f"SOC={soc:.0f}% < {soc_emergency_threshold}% — ładowanie awaryjne [{source}]")
 
+        # Right after start: don't write to the inverter (GoodWe still starting)
+        if self._em.in_startup_grace:
+            return {
+                "enabled": True,
+                "strategy": strategy.value,
+                "strategy_label": AUTOPILOT_STRATEGY_LABELS.get(strategy, ""),
+                "actions": ["⏳ Start — autopilot czeka, aż integracja falownika się uruchomi (do 3 min)"],
+                "soc": soc, "pv": pv, "load": load, "surplus": surplus,
+                "g13_zone": g13_zone.value, "g13_price": g13_price,
+                "rce_price_mwh": rce_mwh, "ai_reasoning": "",
+                "timestamp": now.strftime("%H:%M:%S"),
+                "action_states": self._get_action_states_for_ai(),
+                "manual_hold_until": self._manual_hold_until,
+                "arbitrage": self._arb_status if strategy == AutopilotStrategy.MAX_PROFIT else None,
+            }
+
         # Manual command from the panel → only emergency layers until the hold ends
         if self.manual_hold_active:
             mins = int((self._manual_hold_until - time.time()) / 60) + 1
@@ -1711,7 +1727,7 @@ class StrategyController:
         from dataclasses import asdict
 
         self._arb_status = {
-            **plan.as_dict(limit=30),
+            **plan.as_dict(limit=60),
             "params": asdict(params),
             "updated": now.strftime("%H:%M"),
             "rce_hours": len(rce),
