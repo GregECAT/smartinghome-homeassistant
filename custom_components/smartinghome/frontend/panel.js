@@ -13213,6 +13213,7 @@ class SmartingHomePanel extends HTMLElement {
               <label>Rezerwa SOC poza szczytem (%)<input type="number" id="arb-reserve_soc" oninput="this.getRootNode().host._arbParamsTouched = true" min="5" max="90" step="1"></label>
               <label>Maks. SOC ładowania (%)<input type="number" id="arb-max_soc" oninput="this.getRootNode().host._arbParamsTouched = true" min="20" max="100" step="1"></label>
               <label>Min. zysk (zł/kWh)<input type="number" id="arb-min_profit" oninput="this.getRootNode().host._arbParamsTouched = true" min="0" max="2" step="0.01"></label>
+              <label>Pewność prognozy PV (0–1)<input type="number" id="arb-pv_confidence" oninput="this.getRootNode().host._arbParamsTouched = true" min="0" max="1" step="0.05"></label>
               <label>Zużycie baterii (zł/kWh)<input type="number" id="arb-wear_cost" oninput="this.getRootNode().host._arbParamsTouched = true" min="0" max="2" step="0.01"></label>
               <button class="test-btn" onclick="this.getRootNode().host._saveArbitrageParams(this)">💾 Zapisz</button>
             </div>
@@ -14124,7 +14125,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.60.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.60.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -14696,7 +14697,7 @@ class SmartingHomePanel extends HTMLElement {
     }
     const params = plan?.params;
     if (params && !this._arbParamsTouched) {
-      ['peak_floor_soc', 'reserve_soc', 'max_soc', 'min_profit', 'wear_cost'].forEach(k => {
+      ['peak_floor_soc', 'reserve_soc', 'max_soc', 'min_profit', 'wear_cost', 'pv_confidence'].forEach(k => {
         const el = this.shadowRoot.getElementById(`arb-${k}`);
         if (el && document.activeElement !== el && this.shadowRoot.activeElement !== el) el.value = params[k];
       });
@@ -14741,7 +14742,7 @@ class SmartingHomePanel extends HTMLElement {
 
   async _saveArbitrageParams(btn) {
     const params = {};
-    ['peak_floor_soc', 'reserve_soc', 'max_soc', 'min_profit', 'wear_cost'].forEach(k => {
+    ['peak_floor_soc', 'reserve_soc', 'max_soc', 'min_profit', 'wear_cost', 'pv_confidence'].forEach(k => {
       const v = parseFloat(this.shadowRoot.getElementById(`arb-${k}`)?.value);
       if (!isNaN(v)) params[k] = v;
     });
