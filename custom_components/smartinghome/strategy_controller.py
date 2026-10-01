@@ -122,6 +122,14 @@ HEMS_CONFLICT_SERVICES = {
 HEMS_MANAGED_SWITCHES = {SWITCH_BOILER, SWITCH_AC, SWITCH_SOCKET2}
 
 
+_ZONE_LABELS = {
+    "off_peak": "tania",
+    "morning_peak": "przedpołudniowa",
+    "afternoon_peak": "szczyt",
+    "flat": "całodobowa",
+}
+
+
 def _safe_float(value: Any, default: float = 0.0) -> float:
     """Convert to float safely."""
     if value is None:
@@ -323,6 +331,8 @@ class StrategyController:
         self._load_profile: list[float | None] = [None] * 24  # kW per hour of day
         self._load_profile_loaded: bool = False
         self._load_profile_hour: int = -1
+        self._load_stats: list[float | None] = [None] * 24  # kW, recorder hourly means
+        self._load_stats_day: Any = None
 
         # ── Manual hold: panel force buttons pause the autopilot ──
         self._manual_hold_until: float = 0.0
@@ -1559,6 +1569,12 @@ class StrategyController:
             return actions
 
         action, power_w = self._commit_hour_action(now, first.action, first.power_w, soc)
+        if action == ACT_DISCHARGE and first.no_import:
+            # Tariff peak: a fixed discharge power must cover the house as it is
+            # now plus the planned export — never leave part of the house on the grid
+            live_deficit = max(load - pv, 0.0)
+            max_w = self._arb_params.discharge_kw * 1000
+            power_w = int(min(max(power_w, live_deficit + first.export_w), max_w))
         cmd = (action, int(round(power_w / 500.0)) * 500)
         changed = cmd != self._arb_cmd
         drifted = self._arbitrage_drifted(action) if not changed else False
@@ -1575,9 +1591,16 @@ class StrategyController:
             self._arb_cmd, self._arb_cmd_ts = cmd, time.time()
             self._charging_enabled = action in (ACT_CHARGE_GRID, ACT_PV_CHARGE)
             power = f" {power_w} W" if power_w else ""
+            label = ACTION_LABELS.get(action, action)
+            if action == ACT_DISCHARGE and first.export_w < 100:
+                label = "🔋 Bateria stałą mocą"  # rationing outside the last peak, no export
+            elif action == ACT_DISCHARGE and first.no_import:
+                label = "💰 Dom z baterii + sprzedaż"
+                power = f" {first.export_w} W (razem {power_w} W)"
             msg = (
-                f"💰 Arbitraż: {ACTION_LABELS.get(action, action)}{power} — "
-                f"strefa {first.zone}, zakup {first.buy:.2f} / RCE {first.sell:.2f} zł/kWh, "
+                f"💰 Arbitraż: {label}{power} — "
+                f"strefa {_ZONE_LABELS.get(first.zone, first.zone)}, "
+                f"zakup {first.buy:.2f} / sprzedaż {first.sell:.2f} zł/kWh, "
                 f"SOC {first.soc_start:.0f}→{first.soc_end:.0f}% "
                 f"(plan 30 h: {plan.baseline_cost - plan.total_cost:+.2f} zł vs bateria bez pracy)"
             )
@@ -1662,6 +1685,35 @@ class StrategyController:
         else:  # home / pv_charge — battery follows the house, PV charges it
             await self._em.set_general_mode()
 
+    async def _recorder_load_profile(self, now: datetime) -> list[float | None]:
+        """Average house load per hour of day over the last 14 days (kW) from HA statistics."""
+        out: list[float | None] = [None] * 24
+        try:
+            from homeassistant.components.recorder import get_instance
+            from homeassistant.components.recorder.statistics import statistics_during_period
+
+            start = dt_util.as_utc(now - timedelta(days=14))
+            stats = await get_instance(self.hass).async_add_executor_job(
+                statistics_during_period, self.hass, start, None,
+                {SENSOR_LOAD_TOTAL}, "hour", None, {"mean"},
+            )
+        except Exception as err:  # noqa: BLE001 — recorder missing / no statistics
+            _LOGGER.debug("Load profile from recorder unavailable: %s", err)
+            return out
+        buckets: list[list[float]] = [[] for _ in range(24)]
+        for row in stats.get(SENSOR_LOAD_TOTAL, []):
+            mean = row.get("mean")
+            begin = row.get("start")
+            if mean is None or begin is None:
+                continue
+            if isinstance(begin, (int, float)):
+                begin = datetime.fromtimestamp(begin, tz=dt_util.UTC)
+            buckets[dt_util.as_local(begin).hour].append(float(mean))
+        for h, values in enumerate(buckets):
+            if values:
+                out[h] = max(sum(values) / len(values) / 1000, 0.1)
+        return out
+
     def _update_load_profile(self, hour: int, load_w: float) -> None:
         """Learn average house load per hour of day (EMA, kW)."""
         if load_w <= 0:
@@ -1698,9 +1750,16 @@ class StrategyController:
             await write_async(self.hass, {
                 "arbitrage_load_profile": [round(v, 3) if v else None for v in self._load_profile],
             })
+        if self._load_stats_day != now.date():
+            self._load_stats_day = now.date()
+            self._load_stats = await self._recorder_load_profile(now)
         known = [v for v in self._load_profile if v]
         default_kw = sum(known) / len(known) if known else 1.0
-        profile = [v if v else default_kw for v in self._load_profile]
+        # Hours not learned yet: average of that hour in the last 14 days (HA history)
+        profile = [
+            v if v else (self._load_stats[h] or default_kw)
+            for h, v in enumerate(self._load_profile)
+        ]
 
         params = ArbitrageParams.from_dict(settings.get("arbitrage_params"))
         cap = _safe_float(settings.get("battery_capacity_kwh"))

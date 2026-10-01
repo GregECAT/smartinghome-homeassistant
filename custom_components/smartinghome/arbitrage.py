@@ -47,6 +47,7 @@ class ArbitrageParams:
     reserve_soc: float = 15.0     # % arbitrage never discharges below (outside peaks)
     peak_floor_soc: float = 5.0   # % in tariff peaks the house runs on the battery down to this
     peak_import_penalty: float = 5.0  # zł/kWh — grid import in a peak is "forbidden"
+    peak_load_margin: float = 1.25  # plan peaks for 25 % more load than the profile (sell only a sure surplus)
     pv_confidence: float = 0.7    # share of the PV forecast the plan relies on
     charge_margin: float = 0.9    # plan with 90 % of max charge power (executed at 100 %)
     max_soc: float = 100.0        # % upper limit for grid charging
@@ -104,6 +105,8 @@ class HourPlan:
     grid_export: float
     cost: float
     power_w: int = 0
+    no_import: bool = False   # tariff peak: the house must not draw from the grid
+    export_w: int = 0         # planned battery export on top of the house (W)
 
 
 @dataclass
@@ -324,6 +327,28 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
     # Energy left at the end is worth at least avoiding a cheap import later
     terminal_value = max(0.0, min(h.buy for h in inputs[-12:]) * p.eff_discharge - cycle_cost)
 
+    # Peak slots after the current one: plan for a higher load than the profile,
+    # so the battery is sold in a peak only when the surplus is sure
+    deficits = [
+        h.load_kwh * (p.peak_load_margin if h.no_import and t > 0 else 1.0) - h.pv_kwh
+        for t, h in enumerate(inputs)
+    ]
+    # Greedy peak slots: no pricier slot follows before cheap energy is back,
+    # so the battery covers the whole house now (no rationing at a fixed power —
+    # at one price the order of imports doesn't matter, but unused energy does)
+    greedy = [False] * n
+    for t, h in enumerate(inputs):
+        if not h.no_import:
+            continue
+        pricier_later = False
+        for later in inputs[t + 1:]:
+            if not later.no_import:
+                break
+            if later.buy > h.buy + 0.01:
+                pricier_later = True
+                break
+        greedy[t] = not pricier_later
+
     INF = float("inf")
     value = [[INF] * len(levels) for _ in range(n + 1)]
     choice = [[-1] * len(levels) for _ in range(n)]
@@ -332,7 +357,7 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
 
     for t in range(n - 1, -1, -1):
         h = inputs[t]
-        d = h.load_kwh - h.pv_kwh
+        d = deficits[t]
         floor = e_peak if h.no_import else e_res
         penalty = p.peak_import_penalty if h.no_import else 0.0
         # time buffer: plan slower than the inverter really charges
@@ -367,11 +392,11 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
         j = choice[t][i]
         e, e2 = levels[i], levels[j]
         delta = e2 - e
-        d = h.load_kwh - h.pv_kwh
+        d = deficits[t]
         imp, exp, _dis = _flows(delta, d, p)
         cost = imp * h.buy - exp * h.sell
         total += cost
-        action, power = classify(delta, d, h.duration, p, sell=h.sell)
+        action, power = classify(delta, d, h.duration, p, sell=h.sell, greedy=greedy[t])
         plan.hours.append(HourPlan(
             start=h.start.strftime("%Y-%m-%d %H:%M"),
             zone=h.zone,
@@ -385,6 +410,8 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
             grid_export=round(exp, 2),
             cost=round(cost, 2),
             power_w=power,
+            no_import=h.no_import,
+            export_w=int(round(exp / h.duration * 1000)) if action == ACT_DISCHARGE else 0,
         ))
         i = j
     plan.total_cost = total
@@ -415,7 +442,8 @@ def _summarise(plan: ArbitragePlan, inputs: list[HourInput], p: ArbitrageParams)
 
 
 def classify(
-    delta: float, d: float, duration: float, p: ArbitrageParams, sell: float | None = None
+    delta: float, d: float, duration: float, p: ArbitrageParams, sell: float | None = None,
+    greedy: bool = False,
 ) -> tuple[str, int]:
     """Map a planned stored-energy change to an inverter action (+ power W).
 
@@ -423,8 +451,17 @@ def classify(
     with real PV above the forecast a fixed discharge power goes straight to
     the grid, so at a sell price below wear + minimum profit the battery just
     follows the house (general mode) instead.
+
+    greedy — a tariff peak with no pricier slot ahead: the battery covers the
+    whole house (general mode) unless the plan also exports from it; a fixed
+    discharge power below the house load would buy the rest at the peak price.
     """
     eps = 0.05 * duration
+    if greedy and delta <= eps and d > eps:
+        out = max(-delta, 0.0) * p.eff_discharge
+        if out - d > eps and (sell is None or sell >= p.wear_cost + p.min_profit):
+            return ACT_DISCHARGE, max(int(round(out / duration * 1000 / 100) * 100), 300)
+        return ACT_HOME, 0
     if delta > eps:
         bat_in = delta / p.eff_charge
         from_grid = bat_in - min(max(-d, 0.0), bat_in)
