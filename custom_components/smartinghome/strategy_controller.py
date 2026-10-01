@@ -75,6 +75,7 @@ from .const import (
     SENSOR_BATTERY_SOC,
     SENSOR_BATTERY_POWER,
     SENSOR_PV_POWER,
+    SENSOR_BATTERY_DISCHARGE_LIMIT,
     SENSOR_LOAD_TOTAL,
     SENSOR_GRID_POWER_TOTAL,
     SENSOR_RCE_PRICE,
@@ -1358,6 +1359,9 @@ class StrategyController:
         # GUARD NADRZĘDNY: Zero Grid Import gdy SOC > 5%
         # ══════════════════════════════════════════════════════════
         battery_available = soc > SOC_GRID_IMPORT_THRESHOLD
+        limit_state = self.hass.states.get(SENSOR_BATTERY_DISCHARGE_LIMIT)
+        if limit_state and _safe_float(limit_state.state, -1.0) == 0:
+            battery_available = False  # the BMS blocked discharging (its own SOC floor)
         # Meter convention: +export / -import → import is the negative part
         grid_import_w = -grid
         grid_importing = grid_import_w > GRID_IMPORT_DETECT_THRESHOLD_W
@@ -1796,6 +1800,27 @@ class StrategyController:
         params = ArbitrageParams.from_dict(settings.get("arbitrage_params"))
         cap = _safe_float(settings.get("battery_capacity_kwh"))
         params.capacity_kwh = cap if cap > 0 else DEFAULT_BATTERY_CAPACITY / 1000
+
+        # The battery's BMS may stop discharging above the inverter's DOD floor
+        # (seen: discharge limit 50 A → 0 A at SOC 10 % with DOD 95 %). Learn that
+        # SOC and plan with it, so the peak isn't planned on energy the BMS won't give.
+        bms_floor = _safe_float(settings.get("battery_bms_floor_soc"))
+        limit_a = _safe_float(data.get("battery_discharge_limit_a"), -1.0)
+        pv_w = _safe_float(data.get(SENSOR_PV_POWER))
+        load_w = _safe_float(data.get(SENSOR_LOAD_TOTAL))
+        if limit_a == 0 and params.peak_floor_soc < soc <= 20 and load_w > pv_w + 200:
+            cutoff = round(soc)
+            if cutoff != round(bms_floor):
+                bms_floor = float(cutoff)
+                await write_async(self.hass, {"battery_bms_floor_soc": bms_floor})
+                self._log_decision(
+                    "bms_floor",
+                    f"🔋 BMS baterii zablokował rozładowanie przy SOC {cutoff}% "
+                    f"(falownik pozwala do {params.peak_floor_soc:.0f}%) — planuję szczyty do {cutoff}%",
+                )
+        if bms_floor > params.peak_floor_soc:
+            params.peak_floor_soc = min(bms_floor, 30.0)
+            params.reserve_soc = max(params.reserve_soc, params.peak_floor_soc)
         self._arb_params = params
 
         rce: dict = {}
