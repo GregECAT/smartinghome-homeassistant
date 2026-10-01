@@ -204,12 +204,16 @@ class AlertEngine:
         now = dt_util.now()
 
         found: dict[str, Alert] = {}
-        for check in (
+        checks = (
             self._check_inverter_offline, self._check_control_lost, self._check_voltage,
             self._check_grid_outage, self._check_frequency, self._check_inverter_temp,
             self._check_battery_temp, self._check_export_balance, self._check_pv_dead,
             self._check_peak_import, self._check_planned_charge, self._check_autopilot_error,
-        ):
+        )
+        if context.get("grid_only"):
+            # No inverter, PV or battery — only grid-quality checks apply
+            checks = (self._check_voltage, self._check_grid_outage, self._check_frequency)
+        for check in checks:
             try:
                 alert = check(data, context, now_m)
             except Exception as err:  # noqa: BLE001 — one bad check must not stop the rest
