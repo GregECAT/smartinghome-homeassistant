@@ -72,7 +72,14 @@ SERVICE_GET_WIND_CALENDAR = "get_wind_calendar"
 SERVICE_GET_WIND_SUMMARY = "get_wind_summary"
 SERVICE_RECALCULATE_WIND_CALENDAR = "recalculate_wind_calendar"
 
-ALERT_WEBHOOK_URL = "https://a.gregciupek.com/webhook/1161573e-6e16-4884-97f9-e98d7f6d04e2"
+from .const import ALERT_WEBHOOK_URL  # noqa: E402
+
+# Client-side alert ids from panels older than v1.61 (see handle_send_alert_notification)
+_LEGACY_PANEL_ALERT_PREFIXES = (
+    "INV_OFFLINE", "INV_OVERTEMP", "BAT_BMS_OFFLINE", "GRID_OVERVOLT_", "GRID_HIGHVOLT_",
+    "GRID_FREQ_DRIFT", "PV_UNDERPERFORM", "PV_STRING_DROP_", "BAT_NO_CHARGE",
+    "GRID_IMPORT_WITH_PV", "EXPORT_NO_PV", "PHASE_IMBALANCE", "PV_MIDDAY_ZERO", "RISK_",
+)
 
 FORCE_CUSTOM_SCHEMA = vol.Schema(
     {
@@ -1125,6 +1132,13 @@ Długość: 400-600 słów."""
         # Test notifications bypass all filters
         is_test = alert_id == "TEST_NOTIFICATION"
 
+        # Alerts are detected and sent by the backend engine (alert_engine.py) since
+        # v1.61. Panels still cached in a browser keep calling this service with
+        # their old client-side alerts — drop those so nothing is sent twice.
+        if not is_test and alert_id.startswith(_LEGACY_PANEL_ALERT_PREFIXES):
+            _LOGGER.debug("Legacy panel alert '%s' ignored (backend engine handles alerts)", alert_id)
+            return
+
         # Cooldown check
         cooldown_min = int(notif_cfg.get("cooldown", 15))
         notif_log = settings.get("notification_log", [])
@@ -1173,110 +1187,13 @@ Długość: 400-600 słów."""
             _LOGGER.debug("Alert '%s' skipped — level '%s' not in filter", alert_id, level)
             return
 
-        channels = notif_cfg.get("channels", {})
-        sent_channels = []
-        level_emoji = {"critical": "🔴", "warning": "🟡", "info": "🔵"}.get(level, "ℹ️")
-        notif_title = f"{level_emoji} Smarting HOME — {title}"
-        notif_body = f"{message}"
-        if diag_action:
-            notif_body += f"\n🛠️ {diag_action}"
+        from .notifier import async_deliver
 
-        # Channel 1: HA Companion Push (multi-device)
-        if channels.get("ha_push"):
-            entities = notif_cfg.get("ha_push_entities", [])
-            # Backward compat: single entity fallback
-            if not entities:
-                single = notif_cfg.get("ha_push_entity", "")
-                if single:
-                    entities = [single]
-            push_ok = False
-            for entity in entities:
-                if not entity:
-                    continue
-                try:
-                    await hass.services.async_call(
-                        "notify", entity.replace("notify.", ""),
-                        {
-                            "title": notif_title,
-                            "message": notif_body,
-                            "data": {
-                                "tag": f"smartinghome_{alert_id}",
-                                "importance": "high" if level == "critical" else "default",
-                                "channel": "smartinghome_alerts",
-                            },
-                        },
-                    )
-                    push_ok = True
-                    _LOGGER.info("HA push sent to %s", entity)
-                except Exception as err:
-                    _LOGGER.error("HA push notification failed for %s: %s", entity, err)
-            if push_ok:
-                sent_channels.append("ha_push")
-
-        # Channel 2: Persistent Notification
-        if channels.get("persistent"):
-            try:
-                await hass.services.async_call(
-                    "persistent_notification", "create",
-                    {
-                        "title": notif_title,
-                        "message": notif_body,
-                        "notification_id": f"smartinghome_{alert_id}",
-                    },
-                )
-                sent_channels.append("persistent")
-            except Exception as err:
-                _LOGGER.error("Persistent notification failed: %s", err)
-
-        # Channel 3: Webhook SMS
-        if channels.get("sms"):
-            phone = notif_cfg.get("phone", "")
-            if phone:
-                try:
-                    import aiohttp
-                    async with aiohttp.ClientSession() as session:
-                        await session.post(
-                            ALERT_WEBHOOK_URL,
-                            json={
-                                "channel": "sms",
-                                "phone": phone,
-                                "subject": notif_title,
-                                "message": notif_body,
-                                "level": level,
-                                "alert_id": alert_id,
-                                "source": source,
-                                "timestamp": now_str,
-                            },
-                            timeout=aiohttp.ClientTimeout(total=10),
-                        )
-                    sent_channels.append("sms")
-                except Exception as err:
-                    _LOGGER.error("Webhook SMS failed: %s", err)
-
-        # Channel 4: Webhook Email
-        if channels.get("email"):
-            email = notif_cfg.get("email", "")
-            if email:
-                try:
-                    import aiohttp
-                    async with aiohttp.ClientSession() as session:
-                        await session.post(
-                            ALERT_WEBHOOK_URL,
-                            json={
-                                "channel": "email",
-                                "email": email,
-                                "subject": notif_title,
-                                "message": notif_body,
-                                "level": level,
-                                "alert_id": alert_id,
-                                "source": source,
-                                "timestamp": now_str,
-                            },
-                            timeout=aiohttp.ClientTimeout(total=10),
-                        )
-                    sent_channels.append("email")
-                except Exception as err:
-                    _LOGGER.error("Webhook email failed: %s", err)
+        sent_channels = await async_deliver(
+            hass, notif_cfg, key=alert_id, level=level, title=title,
+            message=message + (f"\n→ {diag_action}" if diag_action else ""),
+            source=source, email=(is_test or level == "critical"),
+        )
 
         if sent_channels:
             # Log to notification_log

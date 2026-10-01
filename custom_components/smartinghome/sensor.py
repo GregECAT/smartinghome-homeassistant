@@ -284,6 +284,51 @@ HEMS_SENSOR_DESCRIPTIONS: list[SensorEntityDescription] = [
         state_class=SensorStateClass.TOTAL,
         icon=ICON_GRID,
     ),
+    # —— Energy ledger: money & HEMS score (energy_ledger.py) ——
+    SensorEntityDescription(
+        key="hems_score",
+        name="HEMS Efficiency Score",
+        native_unit_of_measurement="pkt",
+        icon="mdi:gauge",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key="energy_import_cost_today",
+        name="Import Cost Today",
+        native_unit_of_measurement="PLN",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.TOTAL,
+        icon="mdi:cash-minus",
+    ),
+    SensorEntityDescription(
+        key="energy_export_revenue_today",
+        name="Export Revenue Today",
+        native_unit_of_measurement="PLN",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.TOTAL,
+        icon="mdi:cash-plus",
+    ),
+    SensorEntityDescription(
+        key="energy_savings_today",
+        name="Savings Today",
+        native_unit_of_measurement="PLN",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.TOTAL,
+        icon="mdi:piggy-bank",
+    ),
+    SensorEntityDescription(
+        key="energy_net_balance_today",
+        name="Net Balance Today",
+        native_unit_of_measurement="PLN",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.TOTAL,
+        icon="mdi:scale-balance",
+    ),
+    SensorEntityDescription(
+        key="active_alerts",
+        name="Active Alerts",
+        icon="mdi:alert-circle-outline",
+    ),
     # —— System Status ——
     SensorEntityDescription(
         key="goodwe_system_status",
@@ -447,6 +492,14 @@ HEMS_SENSOR_DESCRIPTIONS: list[SensorEntityDescription] = [
 ]
 
 
+# Sensor key → coordinator data key exposed as the "details" attribute
+_DETAIL_ATTRS: dict[str, str] = {
+    "hems_score": "hems_score_details",
+    "energy_net_balance_today": "energy_today",
+    "active_alerts": "alerts_active",
+}
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -480,6 +533,7 @@ class SmartingHomeSensor(
     """Smarting HOME sensor entity."""
 
     _attr_has_entity_name = True
+    _unrecorded_attributes = frozenset({"details"})
 
     def __init__(
         self,
@@ -510,6 +564,15 @@ class SmartingHomeSensor(
         if self.coordinator.data is None:
             return None
         return self.coordinator.data.get(self.entity_description.key)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Structured details (score factors, today's ledger, alert list)."""
+        source = _DETAIL_ATTRS.get(self.entity_description.key)
+        if not source or self.coordinator.data is None:
+            return None
+        details = self.coordinator.data.get(source)
+        return {"details": details} if details is not None else None
 
     @property
     def available(self) -> bool:

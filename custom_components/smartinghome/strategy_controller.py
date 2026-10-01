@@ -1706,6 +1706,8 @@ class StrategyController:
             rce.update(rce_hourly(prices))
             rce_slot.update(rce_slots(prices, params.slot_minutes))
         sunrise, sunset = self._sun_hours()
+        pv_factor = self._pv_nowcast_factor(data)
+        pv_today_conf = min(1.0, params.pv_confidence * pv_factor)
         inputs = build_inputs(
             now,
             tariff=str(data.get("tariff_type") or "g13"),
@@ -1713,7 +1715,7 @@ class StrategyController:
             rce=rce,
             load_profile_kw=profile,
             # Rely on part of the forecast only — a cloudy peak must not hit the grid
-            pv_today_remaining_kwh=_safe_float(data.get("pv_forecast_remaining_today_total")) * params.pv_confidence,
+            pv_today_remaining_kwh=_safe_float(data.get("pv_forecast_remaining_today_total")) * pv_today_conf,
             pv_tomorrow_kwh=_safe_float(data.get("pv_forecast_tomorrow_total")) * params.pv_confidence,
             sunrise_h=sunrise,
             sunset_h=sunset,
@@ -1742,7 +1744,24 @@ class StrategyController:
             "updated": now.strftime("%H:%M"),
             "rce_hours": len(rce),
             "compute_ms": compute_ms,
+            "pv_factor": round(pv_factor, 2),
         }
+
+    @staticmethod
+    def _pv_nowcast_factor(data: dict[str, Any]) -> float:
+        """Correct today's remaining PV forecast by how today has gone so far.
+
+        Forecasts can be off by 2–3× on a given day (fog, wrong cloud model).
+        Once the forecast expected ≥ 1 kWh so far, scale the rest of the day by
+        actual/expected (clamped 0.5–1.5), blending in as evidence grows.
+        """
+        so_far = _safe_float(data.get("pv_forecast_so_far_kwh"))
+        actual = _safe_float((data.get("energy_today") or {}).get("pv_kwh"))
+        if so_far < 1.0 or actual <= 0:
+            return 1.0
+        ratio = max(0.5, min(1.5, actual / so_far))
+        weight = min(1.0, so_far / 4.0)
+        return 1.0 + weight * (ratio - 1.0)
 
     def _sun_hours(self) -> tuple[float, float]:
         """Local sunrise/sunset hours (float) from sun.sun, default 7:00/17:30."""

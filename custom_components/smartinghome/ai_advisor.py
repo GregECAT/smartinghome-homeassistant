@@ -473,7 +473,7 @@ class AIAdvisor:
             "",
             "## HEMS Efficiency Score",
             f"- Current Score: {data.get('hems_score', 'N/A')} / 100",
-            "- Score breakdown: autarky(30%), self-consumption(25%), battery(15%), tariff(15%), PV yield(15%)",
+            "- Score breakdown: savings vs no installation(25%), peak covered by battery(25%), off-peak import share(15%), autarky(15%), self-consumption(10%), PV vs forecast so far(10%)",
         ])
         return "\n".join(lines)
 

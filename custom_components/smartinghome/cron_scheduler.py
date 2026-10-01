@@ -83,28 +83,12 @@ class AICronScheduler:
         except Exception:
             pass
 
-        # ── G13 finance sensors (HA entities, not in coordinator raw) ──
-        finance_data = {}
-        try:
-            # GoodWe swap: g13_import_cost has export revenue, and vice versa
-            ic_state = self.hass.states.get("sensor.g13_export_revenue_today")
-            er_state = self.hass.states.get("sensor.g13_import_cost_today")
-            sv_state = self.hass.states.get("sensor.g13_self_consumption_savings_today")
-            finance_data["import_cost"] = float(ic_state.state) if ic_state and ic_state.state not in ("unknown", "unavailable") else None
-            finance_data["export_revenue"] = float(er_state.state) if er_state and er_state.state not in ("unknown", "unavailable") else None
-            sav_val = float(sv_state.state) if sv_state and sv_state.state not in ("unknown", "unavailable") else 0
-            # Fallback: compute savings from self-consumed PV energy × G13 price
-            if sav_val == 0:
-                pv_gen = float(raw.get("sensor.today_s_pv_generation") or 0)
-                exp_kWh = float(raw.get("sensor.grid_import_daily") or 0)  # GoodWe: grid_import = our export
-                self_consumed = max(pv_gen - exp_kWh, 0)
-                g13_price = float(raw.get("g13_buy_price") or 0.87)
-                sav_val = round(self_consumed * g13_price, 2) if self_consumed > 0 else 0
-            finance_data["savings"] = sav_val
-        except Exception:
-            finance_data["import_cost"] = None
-            finance_data["export_revenue"] = None
-            finance_data["savings"] = 0
+        # ── Finance from the energy ledger (meter kWh × price at that moment) ──
+        finance_data = {
+            "import_cost": raw.get("energy_import_cost_today"),
+            "export_revenue": raw.get("energy_export_revenue_today"),
+            "savings": raw.get("energy_savings_today") or 0,
+        }
 
         # GoodWe: positive = EXPORT, negative = IMPORT (raw sensor convention)
         # AI expects: positive = import, negative = export
@@ -156,54 +140,9 @@ class AICronScheduler:
             "ems_mode": raw.get("ems_mode"),
             **finance_data,
             **weather_data,
-            **self._calc_hems_score(raw),
+            "hems_score": raw.get("hems_score"),
+            "self_consumption": raw.get("goodwe_self_consumption_today"),
         }
-
-    def _calc_hems_score(self, raw: dict) -> dict:
-        """Calculate HEMS efficiency score (0-100)."""
-        from datetime import datetime
-        try:
-            pv_today = float(raw.get("sensor.today_s_pv_generation") or 0)
-            imp_today = float(raw.get("sensor.grid_export_daily") or 0)  # mapped: grid_export = our import
-            exp_today = float(raw.get("sensor.grid_import_daily") or 0)  # mapped: grid_import = our export
-            soc = float(raw.get("sensor.battery_state_of_charge") or 0)
-            pv_power = float(raw.get("sensor.pv_power") or 0)
-            load_power = float(raw.get("sensor.load") or 0)
-
-            # Autarky
-            total = pv_today + imp_today
-            autarky = min(100, ((total - imp_today) / total) * 100) if total > 0 else (min(100, pv_power / load_power * 100) if load_power > 0 else 0)
-
-            # Self-consumption
-            self_cons = min(100, ((pv_today - exp_today) / pv_today) * 100) if pv_today > 0 else 0
-
-            # Battery score
-            batt = 100 if 20 <= soc <= 90 else (100 - (soc - 90) * 5 if soc > 90 else soc * 5)
-
-            # Tariff score — penalize only IMPORT during peak hours (export = revenue, not cost)
-            hour = datetime.now().hour
-            weekday = datetime.now().weekday()
-            is_off_peak = (hour >= 22 or hour < 6) or weekday >= 5
-            # GoodWe raw: +export/-import → invert to +import/-export
-            grid_power_ai = -1 * float(raw.get("sensor.meter_active_power_total") or 0)
-            grid_import_w = max(0, grid_power_ai)  # only positive values = import
-            tariff = 100
-            if grid_import_w > 100 and not is_off_peak:
-                if 7 <= hour < 13:
-                    tariff = 40
-                elif 15 <= hour < 22:
-                    tariff = 20
-                elif 13 <= hour <= 15:
-                    tariff = 90
-
-            # PV yield
-            forecast = float(raw.get("pv_forecast_today_total") or 0)
-            pv_yield = min(100, (pv_today / forecast) * 100) if forecast > 0 and pv_today > 0 else 50
-
-            score = round(autarky * 0.30 + self_cons * 0.25 + batt * 0.15 + tariff * 0.15 + pv_yield * 0.15)
-            return {"hems_score": min(100, max(0, score)), "self_consumption": round(self_cons)}
-        except Exception:
-            return {"hems_score": 0, "self_consumption": 0}
 
     def _get_settings_path(self) -> Path:
         """Return path to settings.json."""

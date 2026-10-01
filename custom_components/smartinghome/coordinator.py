@@ -111,6 +111,10 @@ from .const import (
     SENSOR_ENTSOE_RANK,
     SENSOR_ENTSOE_PERCENTILE,
 )
+from .arbitrage import buy_price as arb_buy_price
+from .alert_engine import Alert, AlertEngine
+from .energy_ledger import EnergyLedger, Sample
+from .settings_io import read_async as settings_read_async
 from .license import LicenseManager
 
 _LOGGER = logging.getLogger(__name__)
@@ -286,6 +290,14 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._grid_store: Store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.grid_baseline")
         self._grid_store_loaded: bool = False
 
+        # ── Energy ledger: flows, money and HEMS score (persisted) ──
+        self.ledger = EnergyLedger(hass, entry.entry_id)
+        self._ledger_backfilled = False
+        self._is_peak = False
+
+        # ── Alerts & notifications (backend — one push per incident) ──
+        self.alerts = AlertEngine(hass, entry.entry_id, settings_read_async)
+
     def set_strategy_controller(self, controller) -> None:
         """Set the strategy controller for autonomous HEMS control."""
         self._strategy_controller = controller
@@ -418,6 +430,11 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Compute derived values
             computed = self._compute_derived(raw)
 
+            try:
+                await self._async_update_ledger(raw, computed)
+            except Exception as ledger_err:  # noqa: BLE001 — never break the cycle
+                _LOGGER.warning("Energy ledger update failed: %s", ledger_err, exc_info=True)
+
             # Read Ecowitt sensors if enabled
             if self._ecowitt_enabled:
                 ecowitt = self._read_ecowitt_sensors()
@@ -457,6 +474,11 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                     if heal:
                         self._strategy_controller.on_inverter_healed(heal)
+                        self.alerts.record_event(Alert(
+                            id="INV_WATCHDOG", level="info", source="Falownik",
+                            title="Automatyczna naprawa połączenia z falownikiem",
+                            message=heal.replace("🔧 Watchdog: ", ""),
+                        ))
                 except Exception as wd_err:  # noqa: BLE001
                     _LOGGER.debug("Inverter watchdog error: %s", wd_err)
 
@@ -466,6 +488,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "autopilot_should_run", self._strategy_controller.enabled if self._strategy_controller else False
             )
             safety_only = schedule_result.get("safety_only", False)
+            self._autopilot_ran = bool(autopilot_should_run and not safety_only)
 
             if self._strategy_controller:
                 try:
@@ -506,10 +529,195 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                     computed["autopilot_status"] = {"error": str(ctrl_err)}
 
+            try:
+                await self._async_evaluate_alerts(raw, computed)
+            except Exception as alert_err:  # noqa: BLE001 — never break the cycle
+                _LOGGER.warning("Alert engine failed: %s", alert_err, exc_info=True)
+
             return {**raw, **computed}
 
         except Exception as err:
             raise UpdateFailed(f"Error updating Smarting HOME data: {err}") from err
+
+    # ── Energy ledger ────────────────────────────────────────────
+
+    def _battery_capacity_kwh(self) -> float:
+        ctrl = self._strategy_controller
+        params = getattr(ctrl, "_arb_params", None) if ctrl else None
+        cap = getattr(params, "capacity_kwh", 0) if params else 0
+        return float(cap) if cap and cap > 0 else DEFAULT_BATTERY_CAPACITY / 1000
+
+    def _tariff_price(self, when: datetime) -> tuple[float, bool]:
+        """(buy zł/kWh, is expensive zone) of the configured tariff at a moment."""
+        provider = str(self.entry.data.get(CONF_ENERGY_PROVIDER, DEFAULT_ENERGY_PROVIDER))
+        zone, price = arb_buy_price(dt_util.as_local(when), str(self._tariff), provider)
+        return price, zone not in ("off_peak", "flat")
+
+    def _ledger_price_at(self, when: datetime, rce_mwh: float | None) -> tuple[float, float, bool]:
+        buy, peak = self._tariff_price(when)
+        sell = (rce_mwh or 0.0) / 1000 * RCE_PROSUMER_COEFFICIENT
+        return buy, sell, peak
+
+    def _ledger_entities(self) -> dict[str, str]:
+        m = self._sensor_map
+        return {
+            "pv": m.get("pv_power", ""),
+            "bat": m.get("battery_power", ""),
+            "grid": m.get("grid_power", ""),
+            "soc": m.get("battery_soc", ""),
+            "import_total": m.get("total_energy_import", ""),
+            "export_total": m.get("total_energy_export", ""),
+            "rce": SENSOR_RCE_PRICE,
+        }
+
+    async def _async_update_ledger(self, raw: dict[str, Any], data: dict[str, Any]) -> None:
+        """Feed this cycle into the ledger and publish today's KPIs + HEMS score."""
+        ledger = self.ledger
+        await ledger.async_load()
+        now = dt_util.now()
+        cap = self._battery_capacity_kwh()
+
+        if not self._ledger_backfilled:
+            # First run: rebuild days the ledger doesn't know yet (recorder keeps ~10)
+            self._ledger_backfilled = True
+            entities = self._ledger_entities()
+            for back in range(10, -1, -1):
+                day = now.date() - timedelta(days=back)
+                if not ledger.has_day(day):
+                    await ledger.async_backfill_day(day, entities, self._ledger_price_at, cap)
+            await ledger.async_save(force=True)
+
+        def num(key: str) -> float | None:
+            value = raw.get(key)
+            try:
+                return float(value) if value is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        pv, bat, grid = num(SENSOR_PV_POWER), num(SENSOR_BATTERY_POWER), num(SENSOR_GRID_POWER_TOTAL)
+        if pv is None or bat is None or grid is None:
+            ledger.update_gap()
+        else:
+            if self._tariff == TariffType.DYNAMIC:
+                buy = _safe_float(data.get("g13_buy_price"))
+                peak = not data.get("g13_is_off_peak", True)
+            else:
+                buy, peak = self._tariff_price(now)
+            self._is_peak = peak
+            sun = self.hass.states.get("sun.sun")
+            ledger.update(Sample(
+                ts=now,
+                pv_w=pv, bat_w=bat, grid_w=grid,
+                soc=num(SENSOR_BATTERY_SOC),
+                buy_price=buy,
+                sell_price=_safe_float(data.get("rce_sell_price")),
+                is_peak=peak,
+                sun_up=sun is not None and sun.state == "above_horizon",
+                import_total=self._read_total(self._sensor_map.get("total_energy_import", "")),
+                export_total=self._read_total(self._sensor_map.get("total_energy_export", "")),
+            ), cap)
+        await ledger.async_save()
+
+        kpi = EnergyLedger.summarise(ledger.day(now.date()))
+        # PV vs forecast so far (not vs the whole day — that's always low in the morning)
+        f_total = _safe_float(data.get("pv_forecast_today_total"))
+        f_left = _safe_float(data.get("pv_forecast_remaining_today_total"))
+        f_so_far = max(0.0, f_total - f_left)
+        pv_vs_fc = round(min(100.0, kpi["pv_kwh"] / f_so_far * 100), 1) if f_so_far >= 0.5 else None
+        data["pv_forecast_accuracy_today"] = pv_vs_fc if pv_vs_fc is not None else 0.0
+        data["pv_forecast_so_far_kwh"] = round(f_so_far, 2)
+        score = EnergyLedger.score(kpi, pv_vs_fc)
+
+        data["energy_today"] = kpi
+        data["hems_score"] = score["score"]
+        data["hems_score_details"] = {**score, "kpi": kpi}
+        data["energy_import_cost_today"] = kpi["import_cost_pln"]
+        data["energy_export_revenue_today"] = kpi["export_revenue_pln"]
+        data["energy_savings_today"] = kpi["savings_pln"]
+        data["energy_net_balance_today"] = round(kpi["export_revenue_pln"] - kpi["import_cost_pln"], 2)
+        # Ledger-based values replace the older approximations
+        data["goodwe_autarky_today"] = kpi["autarky_pct"] if kpi["autarky_pct"] is not None else 0.0
+        data["goodwe_self_consumption_today"] = (
+            kpi["self_consumption_pct"] if kpi["self_consumption_pct"] is not None else 0.0
+        )
+        data["goodwe_home_consumption_from_pv_today"] = kpi["pv_to_home_kwh"]
+        data["load_day_kwh"] = kpi["load_day_kwh"]
+        data["load_night_kwh"] = kpi["load_night_kwh"]
+        data["load_pv_to_home_kwh"] = kpi["pv_to_home_kwh"]
+
+    # ── Alerts & daily report ────────────────────────────────────
+
+    async def _async_evaluate_alerts(self, raw: dict[str, Any], computed: dict[str, Any]) -> None:
+        ctrl = self._strategy_controller
+        em = ctrl.energy_manager if ctrl else None
+        status = computed.get("autopilot_status") or {}
+        arb = status.get("arbitrage") if isinstance(status, dict) else None
+        hours = (arb or {}).get("hours") or []
+        params = getattr(ctrl, "_arb_params", None) if ctrl else None
+        context = {
+            "is_peak": self._is_peak,
+            "autopilot_active": bool(ctrl and getattr(self, "_autopilot_ran", False)),
+            "manual_hold": bool(ctrl and ctrl.manual_hold_active),
+            "intent": getattr(em, "intent", None),
+            "plan_action": hours[0].get("action") if hours else None,
+            "peak_floor_soc": getattr(params, "peak_floor_soc", 5),
+            "control_unavailable_since": getattr(em, "_control_unavailable_since", 0.0) if em else 0.0,
+            "autopilot_error": status.get("error") if isinstance(status, dict) else None,
+            "report_time": self._daily_report_time(),
+            "report_builder": lambda: self._build_daily_report(computed, arb),
+        }
+        active = await self.alerts.async_evaluate({**raw, **computed}, context)
+        computed["active_alerts"] = len(active)
+        computed["alerts_active"] = [a.as_panel() for a in active]
+
+    def _daily_report_time(self) -> datetime:
+        """5 min after today's last expensive tariff hour (21:05 on days without peaks)."""
+        today = dt_util.start_of_local_day()
+        last_peak_end = None
+        for hour in range(6, 24):
+            moment = today + timedelta(hours=hour)
+            if self._tariff_price(moment)[1]:
+                last_peak_end = moment + timedelta(hours=1)
+        base = last_peak_end if last_peak_end and last_peak_end.hour >= 15 else today + timedelta(hours=21)
+        return base + timedelta(minutes=5)
+
+    def _build_daily_report(self, data: dict[str, Any], arb: dict[str, Any] | None) -> tuple[str, str]:
+        def n(value: float, digits: int = 1) -> str:
+            return f"{value:.{digits}f}".replace(".", ",")
+
+        kpi = data.get("energy_today") or {}
+        details = data.get("hems_score_details") or {}
+        score, label = details.get("score"), details.get("label")
+        now = dt_util.now()
+        title = f"Raport dnia {now.day}.{now.month:02d}"
+        if score is not None:
+            title += f" — HEMS {score}/100 ({label})"
+        balance = kpi.get("export_revenue_pln", 0) - kpi.get("import_cost_pln", 0)
+        lines = [
+            f"☀️ PV {n(kpi.get('pv_kwh', 0))} kWh · 🏠 zużycie {n(kpi.get('load_kwh', 0))} kWh",
+            (f"🔌 Kupiono {n(kpi.get('import_kwh', 0))} kWh za {n(kpi.get('import_cost_pln', 0), 2)} zł · "
+             f"sprzedano {n(kpi.get('export_kwh', 0))} kWh za {n(kpi.get('export_revenue_pln', 0), 2)} zł"),
+            (f"💰 Bilans {'+' if balance >= 0 else ''}{n(balance, 2)} zł · "
+             f"oszczędność {n(kpi.get('savings_pln', 0), 2)} zł vs. bez instalacji"),
+        ]
+        extras = []
+        if kpi.get("peak_battery_pct") is not None:
+            extras.append(f"szczyt z baterii {kpi['peak_battery_pct']:.0f}%")
+        if kpi.get("autarky_pct") is not None:
+            extras.append(f"autarkia {kpi['autarky_pct']:.0f}%")
+        if extras:
+            lines.append("🔋 " + " · ".join(extras))
+        if arb:
+            plan = []
+            if arb.get("charge_start"):
+                plan.append(f"ładowanie z sieci od {arb['charge_start']}")
+            if arb.get("next_peak"):
+                plan.append(f"szczyt {arb['next_peak']}")
+            if plan:
+                lines.append("📅 Plan: " + " · ".join(plan))
+        active = self.alerts.active
+        lines.append(f"⚠️ Aktywne alerty: {len(active)}" if active else "✅ Bez aktywnych alertów")
+        return title, "\n".join(lines)
 
     def _read_source_sensors(self) -> dict[str, Any]:
         """Read current values from HA state machine.
@@ -673,8 +881,9 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # —— Grid directional power ——
         meter = _safe_float(raw.get(SENSOR_GRID_POWER_TOTAL))
-        data["grid_import_power"] = max(meter, 0)
-        data["grid_export_power"] = max(-meter, 0)
+        # Canonical grid power: + export / − import
+        data["grid_import_power"] = max(-meter, 0)
+        data["grid_export_power"] = max(meter, 0)
 
         # —— Synthetic sensors for brands without native load/grid ——
         # These become HA entities: sensor.smarting_home_*_load_power_computed etc.
