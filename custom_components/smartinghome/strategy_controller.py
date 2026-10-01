@@ -1596,7 +1596,8 @@ class StrategyController:
         hour_key = now.strftime("%Y%m%d%H") + ("a" if now.minute < 30 else "b")
         commit = self._arb_commit
         p = self._arb_params
-        if commit and commit[0] == hour_key and commit[1] != action:
+        opposite = {ACT_CHARGE_GRID: ACT_DISCHARGE, ACT_DISCHARGE: ACT_CHARGE_GRID}
+        if commit and commit[0] == hour_key and opposite.get(commit[1]) == action:
             held = commit[1]
             infeasible = (
                 (held == ACT_CHARGE_GRID and soc >= p.max_soc - 1)
@@ -1642,7 +1643,9 @@ class StrategyController:
 
     async def _apply_arbitrage(self, action: str, power_w: int) -> None:
         if action == ACT_CHARGE_GRID:
-            await self._em.charge_from_grid(power_w=power_w or None)
+            # Full power: the plan assumed 90 %, so the battery is ready early;
+            # the next re-plan stops grid charging once the target is reached.
+            await self._em.charge_from_grid(power_w=None)
         elif action == ACT_DISCHARGE:
             await self._em.force_discharge(power_w=power_w or None)
         elif action == ACT_HOLD:
@@ -1718,6 +1721,13 @@ class StrategyController:
             slot_minutes=params.slot_minutes,
             rce_slot=rce_slot,
         )
+        if inputs:
+            # Current slot: what PV and the house do right now beats the forecast
+            pv_kw = _safe_float(data.get(SENSOR_PV_POWER)) / 1000
+            load_kw = _safe_float(data.get(SENSOR_LOAD_TOTAL)) / 1000
+            inputs[0].pv_kwh = max(pv_kw, 0.0) * inputs[0].duration
+            if load_kw > 0:
+                inputs[0].load_kwh = load_kw * inputs[0].duration
         t0 = time.monotonic()
         plan = await self.hass.async_add_executor_job(optimize, soc, inputs, params)
         compute_ms = int((time.monotonic() - t0) * 1000)

@@ -48,6 +48,7 @@ class ArbitrageParams:
     peak_floor_soc: float = 5.0   # % in tariff peaks the house runs on the battery down to this
     peak_import_penalty: float = 5.0  # zł/kWh — grid import in a peak is "forbidden"
     pv_confidence: float = 0.7    # share of the PV forecast the plan relies on
+    charge_margin: float = 0.9    # plan with 90 % of max charge power (executed at 100 %)
     max_soc: float = 100.0        # % upper limit for grid charging
     min_profit: float = 0.10      # zł/kWh required on top of costs for a cycle
     wear_cost: float = 0.25       # zł per kWh discharged (battery degradation)
@@ -329,7 +330,8 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
         d = h.load_kwh - h.pv_kwh
         floor = e_peak if h.no_import else e_res
         penalty = p.peak_import_penalty if h.no_import else 0.0
-        max_up = p.charge_kw * h.duration * p.eff_charge
+        # time buffer: plan slower than the inverter really charges
+        max_up = p.charge_kw * p.charge_margin * h.duration * p.eff_charge
         max_dn = p.discharge_kw * h.duration
         for i, e in enumerate(levels):
             best = INF
