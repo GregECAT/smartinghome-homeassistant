@@ -26,6 +26,8 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_settings_update)
     websocket_api.async_register_command(hass, ws_energy_ledger)
     websocket_api.async_register_command(hass, ws_alerts)
+    websocket_api.async_register_command(hass, ws_tariffs)
+    websocket_api.async_register_command(hass, ws_energy_monthly)
 
 
 def _advisor(hass: HomeAssistant):
@@ -254,3 +256,149 @@ def ws_alerts(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
         _not_ready(connection, msg)
         return
     connection.send_result(msg["id"], engine.snapshot())
+
+
+# ── Tariff prices (single source for panel, autopilot and AI) ──
+
+_PANEL_TARIFF_KEY = {"g11": "G11", "g12": "G12", "g12w": "G12w", "g12n": "G12n", "g13": "G13"}
+
+
+@websocket_api.websocket_command({vol.Required("type"): "smartinghome/tariffs"})
+@callback
+def ws_tariffs(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Per-kWh prices per provider/tariff (brutto, all variable components) + season."""
+    from homeassistant.util import dt as dt_util
+
+    from .const import (
+        PROVIDER_TARIFF_PRICES,
+        TARIFF_PRICES_CHECKED,
+        TARIFF_PRICES_SOURCE,
+        TARIFF_PRICES_VALID_FROM,
+        WINTER_MONTHS,
+    )
+
+    prices: dict[str, Any] = {}
+    for provider, tariffs in PROVIDER_TARIFF_PRICES.items():
+        prices[str(provider)] = {
+            _PANEL_TARIFF_KEY.get(str(t), str(t).upper()): dict(v) for t, v in tariffs.items()
+        }
+    now = dt_util.now()
+    winter = now.month in WINTER_MONTHS
+    connection.send_result(msg["id"], {
+        "prices": prices,
+        "valid_from": TARIFF_PRICES_VALID_FROM,
+        "checked": TARIFF_PRICES_CHECKED,
+        "source": TARIFF_PRICES_SOURCE,
+        "season": "winter" if winter else "summer",
+        "g13_afternoon_peak": "16:00–21:00" if winter else "19:00–22:00",
+    })
+
+
+# ── Monthly history from the recorder (Zima na plusie) ──
+
+_LOAD_CANDIDATES = ("sensor.total_load", "sensor.goodwe_total_load")
+_PV_CANDIDATES = ("sensor.total_pv_generation", "sensor.goodwe_total_pv_generation")
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): "smartinghome/energy/monthly", vol.Optional("months", default=13): int}
+)
+@websocket_api.async_response
+async def ws_energy_monthly(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Per month: house load and PV (inverter lifetime counters) and grid import/export
+    (utility meter import e.g. Tauron eLicznik, else grid-meter counters), with the
+    number of days that actually had data."""
+    from datetime import timedelta
+
+    from homeassistant.components.recorder import get_instance
+    from homeassistant.components.recorder.statistics import (
+        list_statistic_ids,
+        statistics_during_period,
+    )
+    from homeassistant.util import dt as dt_util
+
+    coordinator = _coordinator(hass)
+    smap = getattr(coordinator, "_sensor_map", {}) if coordinator else {}
+    months = max(1, min(25, msg["months"]))
+    now = dt_util.now()
+    first = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    for _ in range(months - 1):
+        first = (first - timedelta(days=1)).replace(day=1)
+
+    instance = get_instance(hass)
+    stat_ids = await instance.async_add_executor_job(list_statistic_ids, hass)
+    known = {s["statistic_id"] for s in stat_ids if s.get("has_sum")}
+
+    def pick(mapped: str, candidates: tuple[str, ...]) -> str:
+        for eid in (mapped, *candidates):
+            if eid and eid in known:
+                return eid
+        return ""
+
+    load_id = pick(smap.get("total_load_consumption", ""), _LOAD_CANDIDATES)
+    pv_id = pick(smap.get("total_production", ""), _PV_CANDIDATES)
+    # Utility meter import (billing truth, full history): prefer hourly-balanced values
+    ext = sorted(k for k in known if ":" in k)
+    imp_id = next((k for k in ext if k.endswith("_balanced_consumption")), "") or \
+        next((k for k in ext if k.endswith("_consumption")), "")
+    exp_id = next((k for k in ext if k.endswith("_balanced_generation")), "") or \
+        next((k for k in ext if k.endswith("_generation")), "")
+    raw_imp_id = next((k for k in ext if k.endswith("_consumption") and "balanced" not in k), "")
+    raw_exp_id = next((k for k in ext if k.endswith("_generation") and "balanced" not in k), "")
+    if not imp_id:
+        imp_id = pick(smap.get("total_energy_import", ""), ())
+        exp_id = pick(smap.get("total_energy_export", ""), ())
+    ids = [i for i in {load_id, pv_id, imp_id, exp_id, raw_imp_id, raw_exp_id} if i]
+
+    stats = await instance.async_add_executor_job(
+        statistics_during_period, hass, dt_util.as_utc(first), None, set(ids), "day", None, {"change"}
+    ) if ids else {}
+
+    def monthly(stat_id: str, cap: float) -> dict[str, dict[str, float]]:
+        out: dict[str, dict[str, float]] = {}
+        for row in stats.get(stat_id, []) if stat_id else []:
+            change = row.get("change")
+            start = row.get("start")
+            if change is None or start is None:
+                continue
+            ts = dt_util.as_local(dt_util.utc_from_timestamp(start) if isinstance(start, (int, float)) else start)
+            key = ts.strftime("%Y-%m")
+            m = out.setdefault(key, {"kwh": 0.0, "days": 0})
+            if 0 < change < cap:  # counter resets / gaps produce negative or huge jumps
+                m["kwh"] += change
+                m["days"] += 1
+        return out
+
+    load_m, pv_m = monthly(load_id, 300), monthly(pv_id, 200)
+    imp_m, exp_m = monthly(imp_id, 300), monthly(exp_id, 300)
+    rimp_m, rexp_m = monthly(raw_imp_id, 300), monthly(raw_exp_id, 300)
+
+    result = []
+    cursor = first
+    while cursor <= now:
+        key = cursor.strftime("%Y-%m")
+        nxt = (cursor + timedelta(days=32)).replace(day=1)
+        days_in = (nxt - cursor).days if nxt <= now else now.day
+        def g(src, k=key):
+            v = src.get(k)
+            return (round(v["kwh"], 1), v["days"]) if v else (None, 0)
+        load, load_d = g(load_m)
+        pv, pv_d = g(pv_m)
+        imp, imp_d = g(imp_m)
+        exp, exp_d = g(exp_m)
+        rimp, _ = g(rimp_m)
+        rexp, _ = g(rexp_m)
+        result.append({
+            "month": key, "days": days_in, "complete": nxt <= now,
+            "load_kwh": load, "load_days": load_d,
+            "pv_kwh": pv, "pv_days": pv_d,
+            "import_kwh": imp, "import_days": imp_d,
+            "export_kwh": exp, "export_days": exp_d,
+            "import_raw_kwh": rimp, "export_raw_kwh": rexp,
+        })
+        cursor = nxt
+    connection.send_result(msg["id"], {
+        "months": result,
+        "sources": {"load": load_id, "pv": pv_id, "import": imp_id, "export": exp_id,
+                    "import_raw": raw_imp_id, "export_raw": raw_exp_id},
+    })
