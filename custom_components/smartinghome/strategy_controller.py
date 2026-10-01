@@ -28,6 +28,7 @@ from .arbitrage import (
     build_inputs,
     optimize,
     rce_hourly,
+    rce_slots,
 )
 
 if TYPE_CHECKING:
@@ -1569,13 +1570,14 @@ class StrategyController:
     def _commit_hour_action(
         self, now: datetime, action: str, power_w: int, soc: float
     ) -> tuple[str, int]:
-        """Keep one action per clock hour (no flapping on every re-plan).
+        """Keep one action per 30-min block (no flapping on every re-plan).
 
         Re-plans every few minutes can flip between near-equal options (e.g.
         "charge now, sell at 7:00" vs "sell now"). The first decision of the
-        hour stands unless it became infeasible (battery full / at its floor).
+        block stands unless it became infeasible (battery full / at its floor).
         """
-        hour_key = now.strftime("%Y%m%d%H")
+        # 30-min blocks (:00–:29 / :30–:59) — a good price may last only half an hour
+        hour_key = now.strftime("%Y%m%d%H") + ("a" if now.minute < 30 else "b")
         commit = self._arb_commit
         p = self._arb_params
         if commit and commit[0] == hour_key and commit[1] != action:
@@ -1641,7 +1643,7 @@ class StrategyController:
         self._load_profile[hour] = kw if prev is None else prev + 0.02 * (kw - prev)
 
     async def _refresh_arbitrage_plan(self, soc: float, data: dict, now: datetime) -> None:
-        key = (now.hour, int(soc // 3))
+        key = (now.hour, now.minute // 30, int(soc // 3))
         if self._arb_planning:
             return  # never stack plan computations (slow host / long horizon)
         if self._arb_plan and key == self._arb_plan_key and time.time() - self._arb_plan_ts < 300:
@@ -1678,9 +1680,12 @@ class StrategyController:
         self._arb_params = params
 
         rce: dict = {}
+        rce_slot: dict = {}
         for eid in ("sensor.rce_pse_cena", "sensor.rce_pse_cena_jutro"):
             state = self.hass.states.get(eid)
-            rce.update(rce_hourly(state.attributes.get("prices") if state else None))
+            prices = state.attributes.get("prices") if state else None
+            rce.update(rce_hourly(prices))
+            rce_slot.update(rce_slots(prices, params.slot_minutes))
         sunrise, sunset = self._sun_hours()
         inputs = build_inputs(
             now,
@@ -1694,6 +1699,8 @@ class StrategyController:
             sunrise_h=sunrise,
             sunset_h=sunset,
             horizon_h=params.horizon_h,
+            slot_minutes=params.slot_minutes,
+            rce_slot=rce_slot,
         )
         t0 = time.monotonic()
         plan = await self.hass.async_add_executor_job(optimize, soc, inputs, params)
