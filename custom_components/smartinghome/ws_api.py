@@ -24,6 +24,8 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_ai_test)
     websocket_api.async_register_command(hass, ws_settings_get)
     websocket_api.async_register_command(hass, ws_settings_update)
+    websocket_api.async_register_command(hass, ws_energy_ledger)
+    websocket_api.async_register_command(hass, ws_alerts)
 
 
 def _advisor(hass: HomeAssistant):
@@ -193,3 +195,62 @@ async def ws_settings_update(hass: HomeAssistant, connection, msg: dict[str, Any
 
             advisor.apply_settings(await read_async(hass))
     connection.send_result(msg["id"], {"updated": list(updates)})
+
+
+# ── Energy ledger & alerts (backend is the single source of truth) ──
+
+
+def _coordinator(hass: HomeAssistant):
+    for entry_data in hass.data.get(DOMAIN, {}).values():
+        if isinstance(entry_data, dict) and entry_data.get("coordinator") is not None:
+            return entry_data["coordinator"]
+    return None
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartinghome/energy/ledger",
+        vol.Required("start"): str,
+        vol.Required("end"): str,
+        vol.Optional("days", default=False): bool,
+    }
+)
+@callback
+def ws_energy_ledger(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Energy & money summary for [start, end] (YYYY-MM-DD, local days)."""
+    from datetime import date, timedelta
+
+    from .energy_ledger import EnergyLedger
+
+    coordinator = _coordinator(hass)
+    if coordinator is None:
+        _not_ready(connection, msg)
+        return
+    try:
+        start, end = date.fromisoformat(msg["start"]), date.fromisoformat(msg["end"])
+    except ValueError:
+        connection.send_error(msg["id"], "invalid_format", "Daty w formacie YYYY-MM-DD")
+        return
+    ledger = coordinator.ledger
+    result: dict[str, Any] = {"summary": EnergyLedger.summarise(ledger.period(start, end))}
+    if msg["days"]:
+        days: dict[str, Any] = {}
+        day = start
+        while day <= end and len(days) < 400:
+            if ledger.has_day(day):
+                days[day.isoformat()] = EnergyLedger.summarise(ledger.day(day))
+            day += timedelta(days=1)
+        result["days"] = days
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command({vol.Required("type"): "smartinghome/alerts"})
+@callback
+def ws_alerts(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Active alerts + recent history from the backend alert engine."""
+    coordinator = _coordinator(hass)
+    engine = getattr(coordinator, "alerts", None) if coordinator else None
+    if engine is None:
+        _not_ready(connection, msg)
+        return
+    connection.send_result(msg["id"], engine.snapshot())

@@ -1285,3 +1285,6 @@ def get_sensor_map_defaults(brand: str) -> dict[str, str]:
     if brand == INVERTER_BRAND_SOFAR:
         return DEFAULT_SENSOR_MAP_SOFAR
     return DEFAULT_SENSOR_MAP
+
+# Email/SMS relay for alert notifications
+ALERT_WEBHOOK_URL: Final = "https://a.gregciupek.com/webhook/1161573e-6e16-4884-97f9-e98d7f6d04e2"

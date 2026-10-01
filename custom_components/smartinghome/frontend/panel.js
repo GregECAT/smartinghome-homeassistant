@@ -320,6 +320,56 @@ class SmartingHomePanel extends HTMLElement {
     const v = id ? this._s(id) : null;
     return (v === null || v === "unavailable" || v === "unknown") ? null : v;
   }
+  /* ── Energy ledger (backend energy_ledger.py) ─────────
+     Billing-grade kWh from the grid meter × the price at that moment, PV/battery
+     flows and the HEMS score. One source for Przegląd, Energia, Taryfy, ROI, Historia. */
+  _ymd(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+  _ledgerRange(period, ref = new Date()) {
+    const end = new Date(ref);
+    const start = new Date(ref);
+    if (period === "week") start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+    else if (period === "month") start.setDate(1);
+    else if (period === "year") { start.setMonth(0); start.setDate(1); }
+    return { start: this._ymd(start), end: this._ymd(end) };
+  }
+  _ledgerToday() {
+    const id = this._shId("energy_net_balance_today");
+    return (id && this._hass?.states?.[id]?.attributes?.details) || null;
+  }
+  _ledgerSummary(period) {
+    if (period === "day") return this._ledgerToday() || this._ledgerCache?.day?.summary || null;
+    if (!this._ledgerCache) this._ledgerCache = {};
+    const cached = this._ledgerCache[period];
+    if (!cached || Date.now() - cached.ts > 60000) this._ledgerRefresh(period);
+    return cached?.summary || null;
+  }
+  async _ledgerRefresh(period) {
+    if (!this._hass || this._ledgerPending?.[period]) return;
+    this._ledgerPending = { ...(this._ledgerPending || {}), [period]: true };
+    try {
+      const { start, end } = this._ledgerRange(period);
+      const res = await this._hass.callWS({ type: "smartinghome/energy/ledger", start, end });
+      this._ledgerCache = { ...(this._ledgerCache || {}), [period]: { ts: Date.now(), summary: res.summary } };
+    } catch (e) {
+      this._ledgerCache = { ...(this._ledgerCache || {}), [period]: { ts: Date.now(), summary: null } };
+    } finally {
+      this._ledgerPending[period] = false;
+    }
+  }
+  // Ledger summary → the field set the tabs render
+  _ledgerFields(k) {
+    const z = (v) => (typeof v === "number" ? v : 0);
+    if (!k) return { pvVal: 0, impVal: 0, expVal: 0, selfUse: 0, batChg: 0, batDischg: 0, costVal: 0, revVal: 0, savVal: 0, balVal: 0, autarky: 0, selfCons: 0, hasData: false };
+    const costVal = z(k.import_cost_pln), revVal = z(k.export_revenue_pln);
+    return {
+      pvVal: z(k.pv_kwh), impVal: z(k.import_kwh), expVal: z(k.export_kwh),
+      selfUse: z(k.pv_to_home_kwh) + z(k.pv_to_battery_kwh),
+      batChg: z(k.battery_charge_kwh), batDischg: z(k.battery_discharge_kwh),
+      costVal, revVal, savVal: z(k.savings_pln), balVal: revVal - costVal,
+      autarky: z(k.autarky_pct), selfCons: z(k.self_consumption_pct),
+      loadVal: z(k.load_kwh), days: k.days, hasData: true, kpi: k,
+    };
+  }
   _setText(id, val) { const el = this.shadowRoot.getElementById(id); if (el) el.textContent = val; }
   _callService(domain, service, data = {}) { if (this._hass) this._hass.callService(domain, service, data); }
   // Show call result on the button itself (⏳ → ✅ / ❌ message), restore after a few seconds
@@ -1718,29 +1768,16 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("roi-period-label", `(${labels[p]})`);
     this._setText("roi-fin-label", `(${labels[p]})`);
 
-    // Sensor mapping per period
-    const suffixes = { day: "daily", week: "weekly", month: "monthly", year: "yearly" };
-    const s = suffixes[p];
-
-    // Energy
-    const pvVal = p === "day" ? (this._n("sensor.today_s_pv_generation") ?? 0) : (this._n(`sensor.pv_${s}`) ?? 0);
-    // GoodWe naming: grid_import = grid imports FROM you = YOUR EXPORT; grid_export = grid exports TO you = YOUR IMPORT
-    const impVal = this._n(`sensor.grid_export_${s}`) ?? 0;  // YOUR import (grid exports TO you)
-    const expVal = this._n(`sensor.grid_import_${s}`) ?? 0;  // YOUR export (grid imports FROM you)
-    const selfUse = Math.max(0, pvVal - expVal);
+    // Energy & money from the backend ledger (meter kWh × price at that moment)
+    const L = this._ledgerFields(this._ledgerSummary(p));
+    const { pvVal, impVal, expVal, selfUse } = L;
 
     this._setText("roi-pv", `${pvVal.toFixed(1)} kWh`);
     this._setText("roi-import", `${impVal.toFixed(1)} kWh`);
     this._setText("roi-export", `${expVal.toFixed(1)} kWh`);
     this._setText("roi-selfuse", `${selfUse.toFixed(1)} kWh`);
 
-    // Financial (G13 sensors)
-    // GoodWe swap: g13_import_cost actually has export revenue, and vice versa
-    const costVal = p === "day" ? (this._n("sensor.g13_export_revenue_today") ?? 0) : (this._n(`sensor.g13_export_revenue_${s}`) ?? 0);
-    const revVal = p === "day" ? (this._n("sensor.g13_import_cost_today") ?? 0) : (this._n(`sensor.g13_import_cost_${s}`) ?? 0);
-    const savVal = p === "day" ? (this._n("sensor.g13_self_consumption_savings_today") ?? 0) : (this._n(`sensor.g13_self_consumption_savings_${s}`) ?? 0);
-    // Compute balance from corrected components (backend sensor has swapped sign)
-    const balVal = revVal + savVal - costVal;
+    const { costVal, revVal, savVal, balVal } = L;
 
     this._setText("roi-cost", `${costVal.toFixed(2)} zł`);
     this._setText("roi-revenue", `${revVal.toFixed(2)} zł`);
@@ -1754,8 +1791,7 @@ class SmartingHomePanel extends HTMLElement {
     if (balText) balText.style.color = balVal >= 0 ? "#2ecc71" : "#e74c3c";
 
     // Efficiency
-    const autarky = (pvVal + impVal) > 0 ? Math.min(100, (pvVal / (pvVal + impVal)) * 100) : 0;
-    const selfCons = pvVal > 0 ? Math.min(100, (selfUse / pvVal) * 100) : 0;
+    const { autarky, selfCons } = L;
     this._setText("roi-autarky", `${autarky.toFixed(0)}%`);
     this._setText("roi-selfcons", `${selfCons.toFixed(0)}%`);
     const aBar = this.shadowRoot.getElementById("roi-autarky-bar");
@@ -2127,27 +2163,14 @@ class SmartingHomePanel extends HTMLElement {
     }
 
 
-    // Summary table — all periods
-    const periods = [
-      { key: "d", suffix: "daily", label: "today", pvSensor: "sensor.today_s_pv_generation" },
-      { key: "w", suffix: "weekly", pvSensor: "sensor.pv_weekly" },
-      { key: "m", suffix: "monthly", pvSensor: "sensor.pv_monthly" },
-      { key: "y", suffix: "yearly", pvSensor: "sensor.pv_yearly" },
-    ];
-    periods.forEach(({ key, suffix, pvSensor }) => {
-      const pv = this._n(pvSensor) ?? 0;
-      const imp = this._n(`sensor.grid_import_${suffix}`) ?? 0;
-      const exp = this._n(`sensor.grid_export_${suffix}`) ?? 0;
-      // Compute balance from corrected components (backend sensor has swapped sign)
-      const cost_p = key === "d" ? (this._n("sensor.g13_export_revenue_today") ?? 0) : (this._n(`sensor.g13_export_revenue_${suffix}`) ?? 0);
-      const rev_p = key === "d" ? (this._n("sensor.g13_import_cost_today") ?? 0) : (this._n(`sensor.g13_import_cost_${suffix}`) ?? 0);
-      const sav_p = key === "d" ? (this._n("sensor.g13_self_consumption_savings_today") ?? 0) : (this._n(`sensor.g13_self_consumption_savings_${suffix}`) ?? 0);
-      const bal = rev_p + sav_p - cost_p;
-      this._setText(`roi-tbl-pv-${key}`, pv.toFixed(1));
-      this._setText(`roi-tbl-imp-${key}`, imp.toFixed(1));
-      this._setText(`roi-tbl-exp-${key}`, exp.toFixed(1));
+    // Summary table — all periods (ledger)
+    [["d", "day"], ["w", "week"], ["m", "month"], ["y", "year"]].forEach(([key, period]) => {
+      const t = this._ledgerFields(this._ledgerSummary(period));
+      this._setText(`roi-tbl-pv-${key}`, t.pvVal.toFixed(1));
+      this._setText(`roi-tbl-imp-${key}`, t.impVal.toFixed(1));
+      this._setText(`roi-tbl-exp-${key}`, t.expVal.toFixed(1));
       const balEl = this.shadowRoot.getElementById(`roi-tbl-bal-${key}`);
-      if (balEl) { balEl.textContent = `${bal >= 0 ? "+" : ""}${bal.toFixed(2)}`; balEl.style.color = bal >= 0 ? "#2ecc71" : "#e74c3c"; }
+      if (balEl) { balEl.textContent = `${t.balVal >= 0 ? "+" : ""}${t.balVal.toFixed(2)}`; balEl.style.color = t.balVal >= 0 ? "#2ecc71" : "#e74c3c"; }
     });
   }
 
@@ -3989,73 +4012,26 @@ class SmartingHomePanel extends HTMLElement {
   _calcHEMSScore() {
     const el = this.shadowRoot.getElementById("hems-score-display");
     if (!el) return;
-
-    // ── Factor 1: Autarky (30%) — how much energy comes from PV vs grid
-    const impToday = this._nm("grid_import_today") || 0;
-    const pvToday = parseFloat(this._fm("pv_today")) || 0;
-    let autarky = 0;
-    if (pvToday > 0 || impToday > 0) {
-      const total = pvToday + impToday;
-      autarky = total > 0 ? Math.min(100, ((total - impToday) / total) * 100) : 0;
-    } else {
-      const pvNow = this._nm("pv_power") || 0;
-      const loadNow = this._nm("load_power") || 0;
-      autarky = loadNow > 0 ? Math.min(100, (pvNow / loadNow) * 100) : 0;
+    // Computed by the backend from today's energy ledger (energy_ledger.py)
+    const id = this._shId("hems_score");
+    const st = id ? this._hass?.states?.[id] : null;
+    const det = st?.attributes?.details;
+    if (!det || det.score === null || det.score === undefined) {
+      el.innerHTML = '<div style="color:#64748b; font-size:11px; padding:8px">Wynik HEMS pojawi się po pierwszych minutach pracy bilansu energii.</div>';
+      return;
     }
-
-    // ── Factor 2: Self-consumption (25%) — how much PV is used vs exported
-    const expToday = this._nm("grid_export_today") || 0;
-    let selfCons = 0;
-    if (pvToday > 0) {
-      selfCons = Math.min(100, ((pvToday - expToday) / pvToday) * 100);
-    } else {
-      selfCons = (this._nm("pv_power") || 0) > 0 ? 100 : 0;
-    }
-
-    // ── Factor 3: Battery utilization (15%) — SOC management
-    const soc = this._nm("battery_soc") || 0;
-    // Optimal SOC range: 20-90%. Penalize extremes
-    let battScore = 0;
-    if (soc >= 20 && soc <= 90) battScore = 100;
-    else if (soc > 90) battScore = 100 - (soc - 90) * 5; // slight penalty for overcharging
-    else battScore = soc * 5; // 0% SOC = 0, 20% SOC = 100
-
-    // ── Factor 4: Tariff optimization (15%) — are we using cheap energy?
-    const hour = new Date().getHours();
-    const isOffPeak = (hour >= 22 || hour < 6) || (new Date().getDay() === 0 || new Date().getDay() === 6);
-    const gridPower = Math.abs(this._nm("grid_power") || 0);
-    let tariffScore = 100; // default: good
-    if (gridPower > 100) { // significant grid usage
-      if (!isOffPeak && hour >= 13 && hour <= 15) tariffScore = 90; // midday cheaper
-      else if (!isOffPeak && (hour >= 7 && hour < 13)) tariffScore = 40; // morning peak
-      else if (!isOffPeak && (hour >= 15 && hour < 22)) tariffScore = 20; // afternoon peak!
-      // Off-peak importing is OK = 100
-    }
-    // Bonus: if we're exporting during high RCE, great
-    const rceSell = parseFloat(this._s("sensor.rce_pse_cena_sprzedazy_prosument") || "0");
-    if (rceSell > 0.5 && expToday > 0) tariffScore = Math.min(100, tariffScore + 20);
-
-    // ── Factor 5: PV yield vs forecast (15%)
-    const forecastToday = this._shN("pv_forecast_today_total") || 0;
-    let pvYieldScore = 50; // neutral default
-    if (forecastToday > 0 && pvToday > 0) {
-      pvYieldScore = Math.min(100, (pvToday / forecastToday) * 100);
-    } else if (hour < 7) {
-      pvYieldScore = 50; // too early to judge
-    }
-
-    // ── Weighted score
-    const score = Math.round(
-      autarky * 0.30 +
-      selfCons * 0.25 +
-      battScore * 0.15 +
-      tariffScore * 0.15 +
-      pvYieldScore * 0.15
-    );
-    const clampedScore = Math.min(100, Math.max(0, score));
-
-    // Store for AI
+    const clampedScore = Math.max(0, Math.min(100, det.score));
     this._hemsScore = clampedScore;
+    const f = det.factors || {};
+    const w = det.weights || {};
+    const factorRows = [
+      ["savings", "💰 Oszczędność", "ile taniej niż bez PV i baterii"],
+      ["peak", "🔋 Szczyt z baterii", "zużycie w drogich strefach pokryte baterią"],
+      ["tariff", "🌙 Zakup w taniej strefie", "udział importu kupionego off-peak"],
+      ["autarky", "⚡ Autarkia", "zużycie domu pokryte własnym PV"],
+      ["self_consumption", "♻️ Autokonsumpcja", "PV zużyte na miejscu (dom + bateria)"],
+      ["pv", "☀️ PV vs prognoza", "produkcja względem prognozy do tej pory"],
+    ];
 
     // Color grading
     let scoreColor, scoreLabel, scoreBg;
@@ -4078,12 +4054,8 @@ class SmartingHomePanel extends HTMLElement {
         </div>
         <div style="flex:1">
           <div style="font-size:14px; font-weight:700; color:${scoreColor}; margin-bottom:6px">${scoreLabel}</div>
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px 12px; font-size:10px">
-            <div style="color:#94a3b8">⚡ Autarkia</div><div style="color:#fff; font-weight:600">${autarky.toFixed(0)}%</div>
-            <div style="color:#94a3b8">♻️ Autokonsumpcja</div><div style="color:#fff; font-weight:600">${selfCons.toFixed(0)}%</div>
-            <div style="color:#94a3b8">🔋 Bateria</div><div style="color:#fff; font-weight:600">${battScore.toFixed(0)}%</div>
-            <div style="color:#94a3b8">💰 Taryfa</div><div style="color:#fff; font-weight:600">${tariffScore.toFixed(0)}%</div>
-            <div style="color:#94a3b8">☀️ PV Yield</div><div style="color:#fff; font-weight:600">${pvYieldScore.toFixed(0)}%</div>
+          <div style="display:grid; grid-template-columns:max-content max-content; gap:4px 18px; font-size:11px">
+            ${factorRows.map(([k, label, hint]) => `<div style="color:#94a3b8" title="${hint}">${label} <span style="color:#475569">${Math.round((w[k] || 0) * 100)}%</span></div><div style="color:${f[k] === null || f[k] === undefined ? '#475569' : '#fff'}; font-weight:600">${f[k] === null || f[k] === undefined ? '—' : f[k] + '%'}</div>`).join('')}
           </div>
         </div>
       </div>`;
@@ -4142,7 +4114,10 @@ class SmartingHomePanel extends HTMLElement {
     const boilerState = this._s("switch.bojler_3800") || "unknown";
     const acState = this._s("switch.klimatyzacja_socket_1") || "unknown";
     const pumpState = this._s("switch.pompa_zalania_socket_1") || "unknown";
-    const invMode = this._s("select.goodwe_tryb_pracy_falownika") || "—";
+    // EMS mode is what HEMS actually drives (charge_battery / discharge_battery / battery_standby / auto)
+    const emsSel = this._s("select.goodwe_ems_mode");
+    const invMode = (emsSel && emsSel !== "unavailable" && emsSel !== "unknown")
+      ? `EMS: ${emsSel}` : (this._s("select.goodwe_tryb_pracy_falownika") || "—");
     const hemsMode = this._s("sensor.smartinghome_hems_mode") || "auto";
 
     // ── Tariff zone calculation (dynamic) ──
@@ -5811,403 +5786,34 @@ class SmartingHomePanel extends HTMLElement {
     // Tier gate — alerts only for PRO/ENTERPRISE
     const tier = this._tier();
     if (tier !== 'PRO' && tier !== 'ENTERPRISE') return;
-    // Initialize alert state
-    if (!this._alertState) {
-      this._alertState = { alerts: [], history: [], lastSensorTs: {}, acknowledgedIds: new Set() };
-      // Restore history from settings
-      if (this._settings.alert_history) {
-        this._alertState.history = this._settings.alert_history.slice(-50);
-      }
-    }
+    if (!this._alertState) this._alertState = { alerts: [], history: [], sent: [] };
 
-    // Run anomaly engine
-    const alerts = this._runAnomalyEngine();
-    this._alertState.alerts = alerts;
-
-    // Persist new alerts to history (dedup by id + 5min window)
+    // Alerts come from the backend engine (alert_engine.py) — the same list that
+    // drives push notifications, so the panel and the phone always agree.
+    this._alertState.alerts = this._runAnomalyEngine();
     const now = Date.now();
-    alerts.forEach(a => {
-      const isDup = this._alertState.history.some(h =>
-        h.id === a.id && (now - h.ts) < 300000
-      );
-      if (!isDup) {
-        this._alertState.history.push({ ...a, ts: now });
-        // Send notification for new alerts
-        this._sendAlertNotification(a);
-      }
-    });
-    // Trim history to last 50
-    if (this._alertState.history.length > 50) {
-      this._alertState.history = this._alertState.history.slice(-50);
+    if (!this._alertSnapTs || now - this._alertSnapTs > 60000) {
+      this._alertSnapTs = now;
+      this._hass.callWS({ type: 'smartinghome/alerts' }).then(snap => {
+        this._alertState.history = (snap.history || []).map(h => ({ ...h, ts: Date.parse(h.ts) }));
+        this._alertState.sent = snap.sent || [];
+        if (this._activeTab === 'alerts') { this._renderAlertHistory(); this._renderNotificationLog(); this._renderAlertStatusBar(this._alertState.alerts, this._calcHealthScore(this._alertState.alerts)); }
+      }).catch(() => {});
     }
 
-    // Calculate health score
-    const health = this._calcHealthScore(alerts);
-
-    // Render all sections
-    this._renderAlertStatusBar(alerts, health);
+    const health = this._calcHealthScore(this._alertState.alerts);
+    this._renderAlertStatusBar(this._alertState.alerts, health);
     this._renderAlertTiles();
-    this._renderActiveAlerts(alerts);
+    this._renderActiveAlerts(this._alertState.alerts);
     this._renderHealthBreakdown(health);
     this._renderAlertHistory();
     this._renderNotificationLog();
-
-    // Save history periodically (every 60s)
-    if (!this._lastAlertHistorySave || (now - this._lastAlertHistorySave) > 60000) {
-      this._lastAlertHistorySave = now;
-      const last24h = this._alertState.history.filter(h => (now - h.ts) < 86400000);
-      this._savePanelSettings({ alert_history: last24h.slice(-50) });
-    }
   }
 
   _runAnomalyEngine() {
-    const alerts = [];
-    const hour = new Date().getHours();
-    const isDaytime = hour >= 6 && hour <= 21;
-    const isSolarHours = hour >= 8 && hour <= 17;
-
-    // ─── Layer 1: Hard Alerts (device data) ───
-    this._checkHardAlerts(alerts, isDaytime, isSolarHours);
-
-    // ─── Layer 2: Soft Anomalies (behavioral) ───
-    this._checkSoftAnomalies(alerts, isDaytime, isSolarHours);
-
-    // ─── Layer 3: Risk Predictions ───
-    this._checkRiskPredictions(alerts, isDaytime);
-
-    return alerts;
-  }
-
-  _checkHardAlerts(alerts, isDaytime, isSolarHours) {
-    // Inverter offline (daytime only)
-    const pvPower = this._nm('pv_power');
-    const invTemp = this._nm('inverter_temp');
-    const loadPower = this._nm('load_power');
-    const batSoc = this._nm('battery_soc');
-
-    if (isDaytime && pvPower === null && loadPower === null) {
-      alerts.push({
-        id: 'INV_OFFLINE', level: 'critical', source: 'Falownik',
-        title: 'Falownik offline',
-        desc: 'Brak odczytu danych z falownika — sprawdź zasilanie i komunikację',
-        diag: {
-          detected: 'Brak danych z sensorów PV i Load',
-          reason: 'Falownik nie odpowiada na zapytania Modbus/LAN',
-          causes: ['Brak zasilania falownika', 'Awaria komunikacji RS485/LAN', 'Restart falownika', 'Uszkodzenie loggera WiFi'],
-          action: 'Sprawdź zasilanie falownika, kabel RS485, status loggera WiFi',
-          severity: 'Wymaga natychmiastowej interwencji'
-        }
-      });
-    }
-
-    // Inverter overtemperature
-    if (invTemp !== null) {
-      if (invTemp > 75) {
-        alerts.push({
-          id: 'INV_OVERTEMP_CRIT', level: 'critical', source: 'Falownik',
-          title: `Przegrzanie falownika: ${invTemp.toFixed(1)}°C`,
-          desc: 'Temperatura krytyczna — falownik może się wyłączyć automatycznie',
-          diag: {
-            detected: `Temperatura falownika: ${invTemp.toFixed(1)}°C (próg: 75°C)`,
-            reason: 'Przegrzanie wewnętrzne falownika',
-            causes: ['Zablokowana wentylacja', 'Wysoka temp. otoczenia', 'Przeciążenie', 'Uszkodzony wentylator'],
-            action: 'Sprawdź wentylację falownika, wyczyść filtry, zmniejsz obciążenie',
-            severity: 'Krytyczne — ryzyko wyłączenia'
-          }
-        });
-      } else if (invTemp > 65) {
-        alerts.push({
-          id: 'INV_OVERTEMP', level: 'warning', source: 'Falownik',
-          title: `Wysoka temperatura falownika: ${invTemp.toFixed(1)}°C`,
-          desc: 'Temperatura powyżej normy — monitoruj sytuację',
-          diag: {
-            detected: `Temperatura: ${invTemp.toFixed(1)}°C (próg ostrzegawczy: 65°C)`,
-            reason: 'Podwyższona temperatura pracy',
-            causes: ['Słaba wentylacja', 'Duże obciążenie', 'Wysoka temp. otoczenia (lato)'],
-            action: 'Zapewnij lepszą wentylację, sprawdź filtry powietrza',
-            severity: 'Ostrzeżenie — obserwuj trend'
-          }
-        });
-      }
-    }
-
-    // Battery BMS offline
-    if (batSoc === null) {
-      alerts.push({
-        id: 'BAT_BMS_OFFLINE', level: 'critical', source: 'Bateria',
-        title: 'Brak danych baterii / BMS offline',
-        desc: 'Brak odczytu SOC — możliwa utrata komunikacji z BMS',
-        diag: {
-          detected: 'Sensor battery_soc zwraca null',
-          reason: 'Brak komunikacji z systemem zarządzania baterią (BMS)',
-          causes: ['Awaria CAN/RS485 baterii', 'Restart BMS', 'Luźny kabel komunikacyjny', 'Bateria wyłączona'],
-          action: 'Sprawdź kabel komunikacyjny baterii, napięcie baterii, status falownika',
-          severity: 'Krytyczne — brak kontroli nad baterią'
-        }
-      });
-    }
-
-    // Grid overvoltage
-    const vl1 = this._nm('voltage_l1');
-    const vl2 = this._nm('voltage_l2');
-    const vl3 = this._nm('voltage_l3');
-    const voltages = [vl1, vl2, vl3].filter(v => v !== null);
-
-    voltages.forEach((v, i) => {
-      const phase = `L${i + 1}`;
-      if (v > 253) {
-        alerts.push({
-          id: `GRID_OVERVOLT_${phase}`, level: 'critical', source: 'Sieć',
-          title: `Napięcie ${phase} krytycznie wysokie: ${v.toFixed(1)}V`,
-          desc: 'Przekroczone dopuszczalne napięcie sieci — falownik może się wyłączyć',
-          diag: {
-            detected: `${phase}: ${v.toFixed(1)}V (próg: 253V)`,
-            reason: 'Napięcie sieci przekracza normę',
-            causes: ['Problemy z siecią energetyczną', 'Zbyt dużo eksportu PV w okolicy', 'Słaby transformator'],
-            action: 'Ogranicz eksport do sieci, włącz zero-export, zgłoś do operatora',
-            severity: 'Krytyczne — ryzyko odstawienia falownika'
-          }
-        });
-      } else if (v > 245) {
-        alerts.push({
-          id: `GRID_HIGHVOLT_${phase}`, level: 'warning', source: 'Sieć',
-          title: `Wysokie napięcie ${phase}: ${v.toFixed(1)}V`,
-          desc: 'Napięcie bliskie limitu — monitoruj',
-          diag: {
-            detected: `${phase}: ${v.toFixed(1)}V (próg ostrzegawczy: 245V)`,
-            reason: 'Napięcie sieci powyżej komfortowej normy',
-            causes: ['Duży eksport PV w regionie', 'Niska konsumpcja w sieci', 'Problemy po stronie operatora'],
-            action: 'Rozważ ograniczenie eksportu, obserwuj trend',
-            severity: 'Ostrzeżenie'
-          }
-        });
-      }
-    });
-
-    // Grid frequency drift
-    const gridFreq = this._nm('grid_frequency');
-    if (gridFreq !== null && (gridFreq < 49.5 || gridFreq > 50.5)) {
-      alerts.push({
-        id: 'GRID_FREQ_DRIFT', level: 'warning', source: 'Sieć',
-        title: `Częstotliwość sieci: ${gridFreq.toFixed(2)} Hz`,
-        desc: `Poza normą 49.5-50.5 Hz — niestabilność sieci`,
-        diag: {
-          detected: `Częstotliwość: ${gridFreq.toFixed(2)} Hz`,
-          reason: 'Częstotliwość sieci odbiega od normy 50 Hz',
-          causes: ['Niestabilność sieci energetycznej', 'Przeciążenie sieci', 'Awaria regionalna'],
-          action: 'Obserwuj, jeśli utrzymuje się — zgłoś operatorowi',
-          severity: 'Ostrzeżenie'
-        }
-      });
-    }
-  }
-
-  _checkSoftAnomalies(alerts, isDaytime, isSolarHours) {
-    const pvPower = this._nm('pv_power') || 0;
-    const pv1 = this._nm('pv1_power');
-    const pv2 = this._nm('pv2_power');
-    const batPower = this._nm('battery_power') || 0;
-    const batSoc = this._nm('battery_soc');
-    const gridPower = this._nm('grid_power') || 0;
-    const loadPower = this._nm('load_power') || 0;
-
-    // PV underperformance (solar hours only, needs irradiance or forecast)
-    if (isSolarHours && pvPower !== null) {
-      // Use forecast as expected if available
-      const forecastState = this._hass?.states?.[this._shId('pv_forecast_power_now_total')];
-      const expectedPv = forecastState ? parseFloat(forecastState.state) : null;
-
-      if (expectedPv && expectedPv > 500 && pvPower < expectedPv * 0.65) {
-        const deficit = Math.round((1 - pvPower / expectedPv) * 100);
-        alerts.push({
-          id: 'PV_UNDERPERFORM', level: 'warning', source: 'PV',
-          title: `PV poniżej oczekiwań: -${deficit}%`,
-          desc: `Aktualna: ${this._pw(pvPower)}, oczekiwana: ${this._pw(expectedPv)}`,
-          diag: {
-            detected: `Produkcja PV ${deficit}% poniżej prognozy`,
-            reason: 'Rzeczywista produkcja znacząco niższa od oczekiwanej',
-            causes: ['Zabrudzenie paneli', 'Częściowe zacienienie', 'Uszkodzony string', 'Degradacja paneli', 'Zachmurzenie (jeśli prognoza niedokładna)'],
-            action: 'Sprawdź panele wizualnie, porównaj stringi, wyczyść panele',
-            severity: 'Ważne — potencjalna utrata produkcji'
-          }
-        });
-      }
-    }
-
-    // PV string anomaly — per-string baseline tracking
-    // Instead of comparing PV1 vs PV2 (which can differ by design),
-    // we track each string's own historical performance and detect
-    // when it drops significantly below its own baseline at the same hour.
-    if (isSolarHours && (pv1 !== null || pv2 !== null)) {
-      this._trackAndCheckStringBaseline('PV1', pv1, alerts);
-      this._trackAndCheckStringBaseline('PV2', pv2, alerts);
-    }
-
-    // Battery no charge despite surplus
-    if (isSolarHours && pvPower > 1500 && loadPower > 0) {
-      const surplus = pvPower - loadPower;
-      if (surplus > 500 && batSoc !== null && batSoc < 95 && Math.abs(batPower) < 100) {
-        alerts.push({
-          id: 'BAT_NO_CHARGE', level: 'warning', source: 'Bateria',
-          title: 'Brak ładowania mimo nadwyżki PV',
-          desc: `Nadwyżka: ${this._pw(surplus)}, bateria: ${batSoc.toFixed(0)}%, brak ładowania`,
-          diag: {
-            detected: `Nadwyżka PV ${this._pw(surplus)} przy SOC ${batSoc.toFixed(0)}%, battery_power ≈ 0`,
-            reason: 'Bateria nie ładuje się mimo dostępnej energii',
-            causes: ['Tryb falownika blokuje ładowanie', 'Bateria w hold mode', 'Limit DOD', 'Awaria BMS', 'Ręczny override HEMS'],
-            action: 'Sprawdź tryb pracy falownika, ustawienia DOD, status BMS',
-            severity: 'Ważne — marnowanie nadwyżki PV'
-          }
-        });
-      }
-    }
-
-    // Grid import with significant PV (CT wiring issue?)
-    if (isSolarHours && pvPower > 1000 && gridPower > 500 && batSoc !== null && batSoc < 95) {
-      alerts.push({
-        id: 'GRID_IMPORT_WITH_PV', level: 'info', source: 'Meter/CT',
-        title: 'Import z sieci przy dużej produkcji PV',
-        desc: `PV: ${this._pw(pvPower)}, import: ${this._pw(gridPower)}`,
-        diag: {
-          detected: `Import ${this._pw(gridPower)} mimo produkcji PV ${this._pw(pvPower)}`,
-          reason: 'Import z sieci w sytuacji gdy PV powinno pokrywać zapotrzebowanie',
-          causes: ['Duże obciążenie domu > PV', 'Niewłaściwy kierunek CT', 'Problem z konfiguracją metera', 'Chwilowy peak zużycia'],
-          action: 'Sprawdź obciążenie domu, kierunek przekładników CT',
-          severity: 'Informacyjne — sprawdź CT jeśli się powtarza'
-        }
-      });
-    }
-
-    // Export without PV (possible CT error)
-    if (pvPower < 100 && gridPower < -200) {
-      alerts.push({
-        id: 'EXPORT_NO_PV', level: 'warning', source: 'Meter/CT',
-        title: 'Eksport do sieci bez produkcji PV',
-        desc: `PV: ${this._pw(pvPower)}, eksport: ${this._pw(Math.abs(gridPower))}`,
-        diag: {
-          detected: `Eksport ${this._pw(Math.abs(gridPower))} przy PV ${this._pw(pvPower)}`,
-          reason: 'System raportuje eksport mimo braku produkcji PV — prawdopodobny błąd pomiaru',
-          causes: ['Odwrócony kierunek CT', 'Uszkodzony przekładnik prądowy', 'Błąd kalibracji metera'],
-          action: 'Sprawdź kierunek montażu przekładników CT, zamień fazy',
-          severity: 'Ważne — błędny pomiar = złe decyzje HEMS'
-        }
-      });
-    }
-
-    // Phase imbalance
-    const pl1 = this._nm('power_l1') || 0;
-    const pl2 = this._nm('power_l2') || 0;
-    const pl3 = this._nm('power_l3') || 0;
-    const phases = [Math.abs(pl1), Math.abs(pl2), Math.abs(pl3)].filter(v => v > 0);
-    if (phases.length >= 2) {
-      const phaseDelta = Math.max(...phases) - Math.min(...phases);
-      if (phaseDelta > 3000) {
-        alerts.push({
-          id: 'PHASE_IMBALANCE', level: 'warning', source: 'Sieć',
-          title: `Nierównomierność faz: Δ ${this._pw(phaseDelta)}`,
-          desc: `L1: ${this._pw(pl1)}, L2: ${this._pw(pl2)}, L3: ${this._pw(pl3)}`,
-          diag: {
-            detected: `Różnica obciążenia faz: ${this._pw(phaseDelta)} (próg: 3000W)`,
-            reason: 'Duża asymetria obciążeń między fazami',
-            causes: ['Duże odbiorniki na jednej fazie', 'Niewłaściwy podział obwodów', 'Uruchomienie dużego odbiornika 1-fazowego'],
-            action: 'Rozważ przeniesienie odbiorników na mniej obciążone fazy',
-            severity: 'Informacyjne'
-          }
-        });
-      }
-    }
-
-    // PV zero during solar hours (with positive irradiance)
-    if (isSolarHours && pvPower === 0) {
-      // Check if we have irradiance data
-      const irradiance = this._hass?.states?.[this._m('local_solar_radiation')];
-      const irrVal = irradiance ? parseFloat(irradiance.state) : null;
-      if (irrVal !== null && irrVal > 100) {
-        alerts.push({
-          id: 'PV_MIDDAY_ZERO', level: 'critical', source: 'PV',
-          title: 'Brak produkcji PV w dzień',
-          desc: `PV = 0W przy nasłonecznieniu ${irrVal.toFixed(0)} W/m²`,
-          diag: {
-            detected: `Produkcja PV = 0W, nasłonecznienie = ${irrVal.toFixed(0)} W/m²`,
-            reason: 'Panele nie produkują energii mimo dobrego nasłonecznienia',
-            causes: ['Falownik w trybie standby', 'Wyłącznik DC wyłączony', 'Awaria falownika', 'Izolacja / ground fault', 'Uszkodzenie okablowania DC'],
-            action: 'Sprawdź wyłącznik DC, status falownika, logi błędów',
-            severity: 'Krytyczne — pełna utrata produkcji'
-          }
-        });
-      }
-    }
-  }
-
-  _checkRiskPredictions(alerts, isDaytime) {
-    const invTemp = this._nm('inverter_temp');
-    const batSoc = this._nm('battery_soc');
-    const hour = new Date().getHours();
-
-    // Risk: overheating trend
-    if (invTemp !== null && invTemp > 55 && isDaytime) {
-      // Store temp history for trend
-      if (!this._invTempHistory) this._invTempHistory = [];
-      this._invTempHistory.push({ t: Date.now(), v: invTemp });
-      // Keep last 10 readings
-      if (this._invTempHistory.length > 10) this._invTempHistory.shift();
-      // Check trend (last 5 readings rising)
-      if (this._invTempHistory.length >= 5) {
-        const last5 = this._invTempHistory.slice(-5);
-        const rising = last5.every((p, i) => i === 0 || p.v >= last5[i - 1].v - 0.5);
-        if (rising && invTemp > 58) {
-          alerts.push({
-            id: 'RISK_OVERHEAT', level: 'info', source: 'Falownik',
-            title: `Ryzyko przegrzania: ${invTemp.toFixed(1)}°C ↑`,
-            desc: 'Temperatura falownika stale rośnie — monitoruj',
-            diag: {
-              detected: `Temp. ${invTemp.toFixed(1)}°C, trend rosnący w ostatnich 5 odczytach`,
-              reason: 'Temperatura falownika rośnie ciągle — może przekroczyć próg',
-              causes: ['Duże obciążenie w ciepły dzień', 'Słaba wentylacja', 'Ekspozycja na słońce'],
-              action: 'Zapewnij lepszą wentylację, ogranicz eksport jeśli to możliwe',
-              severity: 'Predykcja ryzyka'
-            }
-          });
-        }
-      }
-    }
-
-    // Risk: grid curtailment
-    const voltages = [this._nm('voltage_l1'), this._nm('voltage_l2'), this._nm('voltage_l3')].filter(v => v !== null);
-    const gridPower = this._nm('grid_power') || 0;
-    if (voltages.some(v => v > 248) && gridPower < -500) {
-      alerts.push({
-        id: 'RISK_CURTAILMENT', level: 'info', source: 'Sieć',
-        title: 'Ryzyko odstawienia — wysokie napięcie + eksport',
-        desc: 'Napięcie bliskie limitu przy aktywnym eksporcie',
-        diag: {
-          detected: `Napięcie > 248V, eksport: ${this._pw(Math.abs(gridPower))}`,
-          reason: 'Falownik może zostać odstawiony przez ochronę napięciową',
-          causes: ['Duży eksport PV podnosi napięcie', 'Słaba sieć lokalna', 'Wielu prosumentów w okolicy'],
-          action: 'Włącz ograniczenie eksportu, ładuj baterię zamiast eksportować',
-          severity: 'Predykcja ryzyka'
-        }
-      });
-    }
-
-    // Risk: low SOC before evening
-    if (hour >= 14 && hour <= 17 && batSoc !== null && batSoc < 30) {
-      const batPower = this._nm('battery_power') || 0;
-      if (batPower <= 0) { // not charging
-        alerts.push({
-          id: 'RISK_LOW_SOC_EVENING', level: 'info', source: 'Bateria',
-          title: `Niski SOC przed wieczorem: ${batSoc.toFixed(0)}%`,
-          desc: 'Bateria może nie wystarczyć na wieczorny szczyt',
-          diag: {
-            detected: `SOC: ${batSoc.toFixed(0)}% o ${hour}:00, brak ładowania`,
-            reason: 'SOC niski, a wieczorny szczyt taryfowy się zbliża',
-            causes: ['Mała produkcja PV', 'Duże zużycie w ciągu dnia', 'Brak automatycznego ładowania'],
-            action: 'Rozważ doładowanie z sieci lub PV przed szczytem',
-            severity: 'Predykcja ryzyka'
-          }
-        });
-      }
-    }
+    const id = this._shId('active_alerts');
+    const list = id ? this._hass?.states?.[id]?.attributes?.details : null;
+    return Array.isArray(list) ? list : [];
   }
 
   _calcHealthScore(alerts) {
@@ -6324,6 +5930,10 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   _renderAlertTiles() {
+    // Tile status follows the backend alert engine (same as push notifications)
+    const active = this._alertState?.alerts || [];
+    const alertFor = (...ids) => active.find(a => ids.includes(a.id));
+    const tileLevel = (a) => (a ? (a.level === 'critical' ? 'critical' : 'warning') : 'ok');
     // Falownik tile
     const invTemp = this._nm('inverter_temp');
     const pvPower = this._nm('pv_power');
@@ -6331,12 +5941,10 @@ class SmartingHomePanel extends HTMLElement {
     this._setText('at-inv-temp', invTemp !== null ? `${invTemp.toFixed(1)}°C` : '—');
     this._setText('at-inv-contact', pvPower !== null ? `${new Date().toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}` : 'Brak');
 
-    let invStatus = 'ok';
-    let invIssue = '';
-    if (pvPower === null) { invStatus = 'offline'; invIssue = '⚫ Brak komunikacji'; }
-    else if (invTemp !== null && invTemp > 75) { invStatus = 'critical'; invIssue = '🔴 Przegrzanie!'; }
-    else if (invTemp !== null && invTemp > 65) { invStatus = 'warning'; invIssue = '🟡 Wysoka temperatura'; }
-    else { invIssue = '✅ Brak błędów'; }
+    const invAlert = alertFor('INV_OFFLINE', 'INV_CONTROL_LOST', 'INV_TEMP');
+    let invStatus = tileLevel(invAlert);
+    let invIssue = invAlert ? `${invAlert.level === 'critical' ? '🔴' : '🟠'} ${invAlert.title}` : '✅ Brak błędów';
+    if (pvPower === null && !invAlert) { invStatus = 'offline'; invIssue = '⚫ Brak komunikacji'; }
     this._setTileStatus('alert-tile-inv', invStatus, 'at-inv-issue', invIssue);
 
     // PV tile
@@ -6353,23 +5961,10 @@ class SmartingHomePanel extends HTMLElement {
       this._setText('at-pv-delta', `${delta.toFixed(0)}W`);
     } else { this._setText('at-pv-delta', '—'); }
 
-    let pvStatus = 'ok';
-    let pvIssue = '✅ Produkcja w normie';
-    const hour = new Date().getHours();
-    if (hour < 6 || hour > 21) { pvIssue = '🌙 Noc — brak produkcji'; }
-    else if (pvPower !== null && expected && expected > 500 && pvPower < expected * 0.65) {
-      pvStatus = 'warning';
-      pvIssue = `⚠️ -${Math.round((1 - pvPower / expected) * 100)}% poniżej normy`;
-    }
-    // Check for per-string baseline drops (from anomaly engine)
-    const stringDropAlerts = (this._alertState?.alerts || []).filter(a => 
-      a.id && a.id.startsWith('PV_STRING_DROP_')
-    );
-    if (stringDropAlerts.length > 0) {
-      pvStatus = pvStatus === 'ok' ? 'warning' : pvStatus;
-      const names = stringDropAlerts.map(a => a.id.replace('PV_STRING_DROP_', '')).join(', ');
-      pvIssue += ` | ${names} poniżej normy`;
-    }
+    const pvAlert = alertFor('PV_ZERO');
+    const pvStatus = tileLevel(pvAlert);
+    const sunUp = this._hass?.states?.['sun.sun']?.state === 'above_horizon';
+    const pvIssue = pvAlert ? `🔴 ${pvAlert.title}` : (sunUp ? '✅ Produkcja w normie' : '🌙 Noc — brak produkcji');
     this._setTileStatus('alert-tile-pv', pvStatus, 'at-pv-issue', pvIssue);
 
     // Battery tile
@@ -6377,14 +5972,14 @@ class SmartingHomePanel extends HTMLElement {
     const batPower = this._nm('battery_power');
     const batTemp = this._nm('battery_temp');
     this._setText('at-bat-soc', batSoc !== null ? `${batSoc.toFixed(0)}%` : '—');
-    this._setText('at-bat-power', batPower !== null ? this._pw(Math.abs(batPower)) + (batPower > 50 ? ' ⬆️' : batPower < -50 ? ' ⬇️' : '') : '—');
+    // battery_power: + discharge / − charge
+    this._setText('at-bat-power', batPower !== null ? this._pw(Math.abs(batPower)) + (batPower < -50 ? ' ⬆️ ład.' : batPower > 50 ? ' ⬇️ rozład.' : '') : '—');
     this._setText('at-bat-temp', batTemp !== null ? `${batTemp.toFixed(1)}°C` : '—');
 
-    let batStatus = 'ok';
-    let batIssue = '✅ Bateria OK';
-    if (batSoc === null) { batStatus = 'critical'; batIssue = '🔴 BMS offline'; }
-    else if (batSoc < 10) { batStatus = 'critical'; batIssue = '🔴 SOC krytycznie niski'; }
-    else if (batSoc < 20) { batStatus = 'warning'; batIssue = '🟡 SOC niski'; }
+    const batAlert = alertFor('BAT_TEMP', 'PLAN_CHARGE_IDLE', 'PEAK_GRID_IMPORT');
+    let batStatus = tileLevel(batAlert);
+    let batIssue = batAlert ? `🟠 ${batAlert.title}` : '✅ Bateria OK';
+    if (batSoc === null) { batStatus = 'critical'; batIssue = '🔴 Brak danych BMS'; }
     this._setTileStatus('alert-tile-bat', batStatus, 'at-bat-issue', batIssue);
 
     // Grid tile
@@ -6395,26 +5990,22 @@ class SmartingHomePanel extends HTMLElement {
     this._setText('at-grid-l2', vl2 !== null ? `${vl2.toFixed(1)}V` : '—');
     this._setText('at-grid-l3', vl3 !== null ? `${vl3.toFixed(1)}V` : '—');
 
-    let gridStatus = 'ok';
-    let gridIssue = '✅ Napięcia w normie';
-    const allV = [vl1, vl2, vl3].filter(v => v !== null);
-    if (allV.some(v => v > 253)) { gridStatus = 'critical'; gridIssue = '🔴 Napięcie krytyczne!'; }
-    else if (allV.some(v => v > 245)) { gridStatus = 'warning'; gridIssue = '🟡 Napięcie wysokie'; }
+    // Norm: 230 V +10 % = 253 V as a 10-minute average (backend tracks the average)
+    const gridAlert = alertFor('GRID_VOLTAGE', 'GRID_OUTAGE', 'GRID_FREQUENCY');
+    const gridStatus = tileLevel(gridAlert);
+    const gridIssue = gridAlert ? `${gridAlert.level === 'critical' ? '🔴' : '🟠'} ${gridAlert.title}` : '✅ Napięcia w normie (≤ 253 V)';
     this._setTileStatus('alert-tile-grid', gridStatus, 'at-grid-issue', gridIssue);
 
     // Meter/CT tile
-    const gridP = this._nm('grid_power') || 0;
-    const importW = Math.max(gridP, 0);
-    const exportW = Math.max(-gridP, 0);
+    const gridP = this._nm('grid_power') || 0;  // + export / − import
+    const importW = Math.max(-gridP, 0);
+    const exportW = Math.max(gridP, 0);
     this._setText('at-meter-import', this._pw(importW));
     this._setText('at-meter-export', this._pw(exportW));
 
-    let meterStatus = 'ok';
-    let meterIssue = '✅ Pomiar OK';
-    const pvP = this._nm('pv_power') || 0;
-    if (pvP < 100 && exportW > 200) {
-      meterStatus = 'warning'; meterIssue = '⚠️ Możliwy błąd CT';
-    }
+    const meterAlert = alertFor('METER_BALANCE');
+    const meterStatus = tileLevel(meterAlert);
+    const meterIssue = meterAlert ? '⚠️ Niespójny pomiar — sprawdź CT' : '✅ Pomiar OK';
     this._setText('at-meter-status', meterStatus === 'ok' ? 'OK' : '⚠️');
     this._setTileStatus('alert-tile-meter', meterStatus, 'at-meter-issue', meterIssue);
 
@@ -6501,8 +6092,8 @@ class SmartingHomePanel extends HTMLElement {
     if (!container) return;
 
     const now = Date.now();
-    const recent = this._alertState.history
-      .filter(h => (now - h.ts) < 86400000)
+    const recent = (this._alertState.history || [])
+      .filter(h => h.phase !== 'end' && (now - h.ts) < 86400000)
       .sort((a, b) => b.ts - a.ts)
       .slice(0, 20);
 
@@ -6533,137 +6124,7 @@ class SmartingHomePanel extends HTMLElement {
     }).join('');
   }
 
-  // ── PV String Baseline Tracking ──
-
-  /**
-   * Track each string's performance over time and detect anomalies
-   * by comparing to its own historical baseline at the same hour.
-   *
-   * Data structure (persisted to settings.json as pv_string_baselines):
-   *   { PV1: { "8": [vals...], "9": [vals...], ... }, PV2: { ... } }
-   *   Each hour key has an array of up to 7 samples (last 7 days).
-   *
-   * Algorithm:
-   *   1. Record current power for this string at current hour
-   *   2. Compare to average of previous samples at the same hour
-   *   3. Alert if current output is >35% below baseline AND baseline > 200W
-   */
-  _trackAndCheckStringBaseline(stringName, currentPower, alerts) {
-    if (currentPower === null || currentPower === undefined) return;
-
-    const hour = new Date().getHours().toString();
-
-    // Initialize baseline storage
-    if (!this._pvStringBaselines) {
-      this._pvStringBaselines = this._settings?.pv_string_baselines || {};
-    }
-    if (!this._pvStringBaselines[stringName]) {
-      this._pvStringBaselines[stringName] = {};
-    }
-    const stringData = this._pvStringBaselines[stringName];
-    if (!stringData[hour]) {
-      stringData[hour] = [];
-    }
-
-    // Rate-limit recording — max once per 10 minutes per string
-    const recordKey = `_pvBaselineLastRecord_${stringName}`;
-    const now = Date.now();
-    if (!this[recordKey] || (now - this[recordKey]) > 600000) {
-      this[recordKey] = now;
-
-      // Only record meaningful values (> 50W) to avoid cloudy/night noise
-      if (currentPower > 50) {
-        stringData[hour].push({
-          w: Math.round(currentPower),
-          ts: now,
-        });
-
-        // Keep only last 7 samples per hour slot (≈ 7 days of data)
-        if (stringData[hour].length > 7) {
-          stringData[hour] = stringData[hour].slice(-7);
-        }
-
-        // Persist baselines every 5 minutes  
-        if (!this._lastBaselineSave || (now - this._lastBaselineSave) > 300000) {
-          this._lastBaselineSave = now;
-          this._savePanelSettings({ pv_string_baselines: this._pvStringBaselines });
-        }
-      }
-    }
-
-    // Need at least 3 historical samples for this hour to detect anomalies
-    const samples = stringData[hour];
-    if (!samples || samples.length < 3) return;
-
-    // Calculate baseline: average of previous samples (exclude the one we just added)
-    // Use samples older than 30 min to avoid self-comparison
-    const cutoff = now - 1800000; // 30 min ago
-    const historicalSamples = samples.filter(s => s.ts < cutoff);
-    if (historicalSamples.length < 2) return;
-
-    const baseline = historicalSamples.reduce((sum, s) => sum + s.w, 0) / historicalSamples.length;
-
-    // Don't alert if baseline is very low (cloudy/early/late hours)
-    if (baseline < 200) return;
-
-    // Don't alert if current is very low but still reporting (could be sudden cloud)
-    // Only alert if sustained drop: current < 65% of baseline
-    if (currentPower < baseline * 0.65 && currentPower > 10) {
-      const dropPct = Math.round((1 - currentPower / baseline) * 100);
-      alerts.push({
-        id: `PV_STRING_DROP_${stringName}`, level: 'warning', source: 'PV',
-        title: `${stringName} spadek: -${dropPct}% vs norma`,
-        desc: `Teraz: ${this._pw(currentPower)}, norma (${hour}:00): ${this._pw(baseline)}`,
-        diag: {
-          detected: `${stringName} produkuje ${dropPct}% mniej niż zwykle o tej porze (baseline: ${Math.round(baseline)}W z ${historicalSamples.length} dni)`,
-          reason: `Porównanie z historyczną średnią tego samego stringa o godzinie ${hour}:00`,
-          causes: [
-            'Nowe zacienienie (drzewo, budynek, komin)',
-            'Zabrudzenie paneli na tym stringu',
-            'Uszkodzony panel lub optymizer',
-            'Problem z MPPT falownika',
-            'Degradacja paneli',
-            'Krótkotrwałe zachmurzenie (poczekaj 15 min)',
-          ],
-          action: `Sprawdź ${stringName} wizualnie. Jeśli alert powtarza się codziennie o tej porze — prawdopodobnie nowe zacienienie.`,
-          severity: dropPct > 50 ? 'Krytyczne — duża utrata produkcji' : 'Ważne — spadek wydajności'
-        }
-      });
-    }
-  }
-
   // ── Notification System Methods ──
-
-  _sendAlertNotification(alert) {
-    // Check config
-    const cfg = this._settings?.notification_config;
-    if (!cfg?.enabled) return;
-
-    // Cooldown check (client-side)
-    const cooldownMin = cfg.cooldown || 15;
-    if (!this._notifLastSent) this._notifLastSent = {};
-    const lastSent = this._notifLastSent[alert.id] || 0;
-    if (Date.now() - lastSent < cooldownMin * 60000) return;
-
-    // Level filter
-    const levels = cfg.levels || ['critical', 'warning'];
-    if (!levels.includes(alert.level)) return;
-
-    // Dispatch to backend
-    try {
-      this._hass.callService('smartinghome', 'send_alert_notification', {
-        alert_id: alert.id,
-        level: alert.level,
-        source: alert.source || 'System',
-        title: alert.title || alert.id,
-        message: alert.desc || alert.title || '',
-        diag_action: alert.diag?.action || '',
-      });
-      this._notifLastSent[alert.id] = Date.now();
-    } catch (e) {
-      console.warn('Notification dispatch error:', e);
-    }
-  }
 
   // ── Multi-device Push Helpers ──
 
@@ -6818,7 +6279,7 @@ class SmartingHomePanel extends HTMLElement {
     if (el('notif-lvl-info')) el('notif-lvl-info').checked = levels.includes('info');
 
     // Settings
-    if (el('notif-cooldown')) el('notif-cooldown').value = cfg.cooldown || 15;
+    if (el('notif-daily-report')) el('notif-daily-report').checked = cfg.daily_report !== false;
     if (el('notif-quiet-start')) el('notif-quiet-start').value = cfg.quiet_start || '22:00';
     if (el('notif-quiet-end')) el('notif-quiet-end').value = cfg.quiet_end || '07:00';
 
@@ -6849,7 +6310,8 @@ class SmartingHomePanel extends HTMLElement {
       phone: (el('notif-phone')?.value || '').trim(),
       email: (el('notif-email')?.value || '').trim(),
       levels,
-      cooldown: parseInt(el('notif-cooldown')?.value || '15', 10) || 15,
+      cooldown: this._settings?.notification_config?.cooldown || 15,  // legacy service only
+      daily_report: !!el('notif-daily-report')?.checked,
       quiet_start: el('notif-quiet-start')?.value || '22:00',
       quiet_end: el('notif-quiet-end')?.value || '07:00',
     };
@@ -6906,14 +6368,14 @@ class SmartingHomePanel extends HTMLElement {
     const container = this.shadowRoot.getElementById('notif-log-items');
     if (!container) return;
 
-    const log = this._settings?.notification_log || [];
+    const log = this._alertState?.sent || [];
     if (log.length === 0) {
       container.innerHTML = '<div style="text-align:center; padding:8px">Brak wysłanych powiadomień</div>';
       return;
     }
 
-    const levelIcons = { critical: '🔴', warning: '🟡', info: '🔵' };
-    const channelIcons = { ha_push: '📱', persistent: '📌', sms: '📱', email: '📧' };
+    const levelIcons = { critical: '🔴', warning: '🟠', info: '🔵', resolved: '✅', report: '📊' };
+    const channelIcons = { ha_push: '📱', persistent: '📌', sms: '💬', email: '📧' };
 
     container.innerHTML = log.slice().reverse().slice(0, 15).map(e => {
       const icon = levelIcons[e.level] || 'ℹ️';
@@ -7638,9 +7100,16 @@ class SmartingHomePanel extends HTMLElement {
       const val = typeof loadTodayVal === 'number' ? loadTodayVal : parseFloat(loadTodayVal);
       if (!isNaN(val)) loadTodayEl.textContent = `📊 Dziś: ${val.toFixed(1)} kWh`;
     }
-    this._setText("v-load-l1", `L1: ${this._fm("power_l1", 0)} W`);
-    this._setText("v-load-l2", `L2: ${this._fm("power_l2", 0)} W`);
-    this._setText("v-load-l3", `L3: ${this._fm("power_l3", 0)} W`);
+    // House load per phase (power_l1..3 are inverter/grid phases — not consumption)
+    {
+      const loadPh = [1, 2, 3].map(i => this._n(`sensor.load_l${i}`) ?? this._n(`sensor.goodwe_load_l${i}`));
+      const phEl = this.shadowRoot.getElementById("v-load-l1")?.parentElement;
+      if (loadPh.every(v => v === null)) { if (phEl) phEl.style.display = "none"; }
+      else {
+        if (phEl) phEl.style.display = "";
+        loadPh.forEach((v, i) => this._setText(`v-load-l${i + 1}`, `L${i + 1}: ${v === null ? "—" : Math.round(v)} W`));
+      }
+    }
 
     // ── Day/Night energy from backend (server-side, 24/7) ──
     // Discovery: HA entity IDs depend on device name slugification — search by suffix
@@ -7754,8 +7223,8 @@ class SmartingHomePanel extends HTMLElement {
           label = "do pełna";
           color = "#2ecc71";
         } else {
-          // Rozładowanie → czas do 0%
-          remainKwh = (soc / 100) * battCap;
+          // Rozładowanie → czas do progu 5% (minimum pracy w szczycie)
+          remainKwh = (Math.max(0, soc - 5) / 100) * battCap;
           label = "do rozładowania";
           color = "#f39c12";
         }
@@ -7839,35 +7308,12 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-inv-p", this._pw(Math.abs(this._nm("inverter_power") || 0)));
     this._setText("v-inv-t", `${this._fm("inverter_temp")}°C`);
 
-    // Autarky / Self-consumption — compute from daily totals
+    // Autarky / Self-consumption — from the backend energy ledger
     {
-      const impToday = this._nm("grid_import_today") || 0;
-      const pvToday = parseFloat(this._fm("pv_today")) || 0;
-      if (pvToday > 0 || impToday > 0) {
-        const totalConsumed = pvToday + impToday;
-        const autarky = totalConsumed > 0 ? Math.min(100, Math.max(0, (pvToday / totalConsumed) * 100)) : 0;
-        this._setText("v-autarky", `${autarky.toFixed(0)}%`);
-      } else {
-        const pvNow = this._nm("pv_power") || 0;
-        const loadNow = this._nm("load_power") || 0;
-        if (loadNow > 0) {
-          const rtAutarky = Math.min(100, Math.max(0, (pvNow / loadNow) * 100));
-          this._setText("v-autarky", `${rtAutarky.toFixed(0)}%`);
-        } else {
-          this._setText("v-autarky", "0%");
-        }
-      }
-    }
-    {
-      const expToday = this._nm("grid_export_today") || 0;
-      const pvGen = parseFloat(this._fm("pv_today")) || 0;
-      if (pvGen > 0) {
-        const selfCons = Math.min(100, Math.max(0, ((pvGen - expToday) / pvGen) * 100));
-        this._setText("v-selfcons", `${selfCons.toFixed(0)}%`);
-      } else {
-        const pvNow = this._nm("pv_power") || 0;
-        this._setText("v-selfcons", pvNow > 0 ? "100%" : "0%");
-      }
+      const k = this._ledgerToday();
+      const pct = (v) => (typeof v === "number" ? `${Math.round(v)}%` : "—");
+      this._setText("v-autarky", pct(k?.autarky_pct));
+      this._setText("v-selfcons", pct(k?.self_consumption_pct));
     }
 
     // Weather — prefer Ecowitt if enabled, then auto-discover weather entity
@@ -8106,21 +7552,9 @@ class SmartingHomePanel extends HTMLElement {
     this._updateKeyStatus();
     // ROI Tab
     this._updateRoi();
-    // Overview daily financial KPIs
-    // GoodWe swap: g13_import_cost actually has export revenue, and vice versa
-    const ovCost = this._n("sensor.g13_export_revenue_today") ?? this._n("sensor.g13_export_revenue_daily") ?? 0;
-    const ovRev = this._n("sensor.g13_import_cost_today") ?? this._n("sensor.g13_import_cost_daily") ?? 0;
-    let ovSav = this._n("sensor.g13_self_consumption_savings_today") ?? this._n("sensor.g13_self_consumption_savings_daily") ?? 0;
-    // Fallback: compute savings from self-consumed PV × G13 avg price when sensor is 0
-    if (ovSav === 0) {
-      const pvToday = this._n("sensor.today_s_pv_generation") ?? 0;
-      // GoodWe swap: grid_import_daily = our export
-      const expKWh = this._n("sensor.grid_import_daily") ?? 0;
-      const selfConsumed = Math.max(pvToday - expKWh, 0);
-      if (selfConsumed > 0) ovSav = selfConsumed * this._getTariffAvgPrice();
-    }
-    // Always compute balance from corrected components (backend sensor has swapped sign)
-    const ovBal = ovRev + ovSav - ovCost;
+    // Overview daily financial KPIs (ledger)
+    const ovL = this._ledgerFields(this._ledgerSummary("day"));
+    const ovCost = ovL.costVal, ovRev = ovL.revVal, ovSav = ovL.savVal, ovBal = ovL.balVal;
     this._setText("ov-cost", `${ovCost.toFixed(2)} zł`);
     this._setText("ov-revenue", `${ovRev.toFixed(2)} zł`);
     this._setText("ov-savings", `${ovSav.toFixed(2)} zł`);
@@ -8288,13 +7722,12 @@ class SmartingHomePanel extends HTMLElement {
       this._setText("v-hems-rec-tariff", this._shS("hems_rce_recommendation") || this._s("sensor.hems_rce_recommendation") || "—");
     }
 
-    // Economics
-    // GoodWe swap: g13_import_cost has export revenue, and vice versa
-    const savings = this._n("sensor.g13_self_consumption_savings_today") ?? this._n("sensor.smartinghome_self_consumption_savings_today");
-    const expRev = this._n("sensor.g13_import_cost_today") ?? this._n("sensor.smartinghome_export_revenue_today");
-    const impCost = this._n("sensor.g13_export_revenue_today") ?? this._n("sensor.smartinghome_import_cost_today");
-    // Compute balance from corrected components (backend sensor has swapped sign)
-    const netBal = (expRev ?? 0) + (savings ?? 0) - (impCost ?? 0);
+    // Economics (ledger)
+    const ecoK = this._ledgerSummary("day");
+    const savings = ecoK ? ecoK.savings_pln : null;
+    const expRev = ecoK ? ecoK.export_revenue_pln : null;
+    const impCost = ecoK ? ecoK.import_cost_pln : null;
+    const netBal = (expRev ?? 0) - (impCost ?? 0);
     this._setText("v-savings", savings !== null ? savings.toFixed(2) : "—");
     this._setText("v-export-rev", expRev !== null ? expRev.toFixed(2) : "—");
     this._setText("v-import-cost", impCost !== null ? impCost.toFixed(2) : "—");
@@ -8349,11 +7782,12 @@ class SmartingHomePanel extends HTMLElement {
     const battEnergyOv = socOv > 0 ? (socOv / 100) * battCapOv : 0;
     this._setText("v-battery-energy-tab", `${battEnergyOv.toFixed(1)} kWh`);
     
-    // Battery runtime: energy / load
+    // Battery runtime: usable energy (down to 5%) / house load
     const loadOv = this._nm("load_power") || 0;
     const loadKwOv = loadOv > 0 ? loadOv / 1000 : 0;
-    if (battEnergyOv > 0 && loadKwOv > 0) {
-      const rtH = battEnergyOv / loadKwOv;
+    const usableOv = (Math.max(0, socOv - 5) / 100) * battCapOv;
+    if (usableOv > 0 && loadKwOv > 0) {
+      const rtH = usableOv / loadKwOv;
       this._setText("v-battery-runtime-tab", `${Math.floor(rtH)}h ${Math.round((rtH - Math.floor(rtH)) * 60)}min`);
     } else {
       this._setText("v-battery-runtime-tab", loadKwOv === 0 ? "∞" : "—");
@@ -8655,7 +8089,8 @@ class SmartingHomePanel extends HTMLElement {
       surplusEl2.style.color = enSurplus > 0 ? "#2ecc71" : "#e74c3c";
     }
     this._setText("v-en-batt-power", this._pw(Math.abs(enBatt)));
-    const battDir = enBatt > 50 ? "ŁAD." : enBatt < -50 ? "ROZŁAD." : "STANDBY";
+    // battery_power: + discharge / − charge
+    const battDir = enBatt < -50 ? "ŁAD." : enBatt > 50 ? "ROZŁAD." : "STANDBY";
     this._setText("v-en-batt-info", `${Math.round(enSoc)}% · ${battDir}`);
 
     // ROW 3: Grid Extended — currents & powers per phase
@@ -8693,11 +8128,10 @@ class SmartingHomePanel extends HTMLElement {
     const enPvToday = pvToday ?? 0;
     const enImpToday = gridImpToday;
     const enExpToday = gridExpToday;
-    const enHomeFromPvRaw = Math.max(0, enPvToday - enExpToday);
-    const enLoadToday2 = this._nm("load_today") || 0;
-    const enHomeFromPv = enLoadToday2 > 0 ? Math.min(enHomeFromPvRaw, enLoadToday2) : enHomeFromPvRaw;
-    const autarky = (enPvToday + enImpToday) > 0 ? Math.min(100, (enPvToday / (enPvToday + enImpToday)) * 100) : 0;
-    const selfCons = enPvToday > 0 ? Math.min(100, (enHomeFromPv / enPvToday) * 100) : 0;
+    const enK = this._ledgerToday();
+    const enHomeFromPv = enK?.pv_to_home_kwh ?? 0;
+    const autarky = enK?.autarky_pct ?? 0;
+    const selfCons = enK?.self_consumption_pct ?? 0;
     const enNetGrid = enExpToday - enImpToday;
     this._setText("v-en-autarky", `${Math.round(autarky)}%`);
     this._setText("v-en-selfcons", `${Math.round(selfCons)}%`);
@@ -8771,8 +8205,9 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-en-batt-energy", `${battEnergyAvail.toFixed(1)} kWh`);
     // Battery runtime estimate: energy available / current load
     const enLoadKw = enLoad > 0 ? enLoad / 1000 : 0;
-    if (battEnergyAvail > 0 && enLoadKw > 0) {
-      const runtimeH = battEnergyAvail / enLoadKw;
+    const enUsable = (Math.max(0, enSoc - 5) / 100) * battCapacity;
+    if (enUsable > 0 && enLoadKw > 0) {
+      const runtimeH = enUsable / enLoadKw;
       const rH = Math.floor(runtimeH);
       const rM = Math.round((runtimeH - rH) * 60);
       this._setText("v-en-batt-runtime", `${rH}h ${rM}min`);
@@ -8862,27 +8297,9 @@ class SmartingHomePanel extends HTMLElement {
     const suffixes = { day: "daily", week: "weekly", month: "monthly", year: "yearly" };
     const s = suffixes[p];
 
-    // PV
-    const pvVal = p === "day" ? (this._n("sensor.today_s_pv_generation") ?? 0) : (this._n(`sensor.pv_${s}`) ?? 0);
-
-    // Grid (GoodWe swap: grid_export = YOUR import, grid_import = YOUR export)
-    const impVal = this._n(`sensor.grid_export_${s}`) ?? 0;
-    const expVal = this._n(`sensor.grid_import_${s}`) ?? 0;
-    const selfUse = Math.max(0, pvVal - expVal);
-
-    // Battery
-    const batChg = p === "day" ? (this._n("sensor.today_battery_charge") ?? 0) : 0;
-    const batDischg = p === "day" ? (this._n("sensor.today_battery_discharge") ?? 0) : 0;
-
-    // G13 costs (also swapped in backend)
-    const costVal = p === "day" ? (this._n("sensor.g13_export_revenue_today") ?? 0) : (this._n(`sensor.g13_export_revenue_${s}`) ?? 0);
-    const revVal = p === "day" ? (this._n("sensor.g13_import_cost_today") ?? 0) : (this._n(`sensor.g13_import_cost_${s}`) ?? 0);
-    const savVal = p === "day" ? (this._n("sensor.g13_self_consumption_savings_today") ?? 0) : (this._n(`sensor.g13_self_consumption_savings_${s}`) ?? 0);
-    const balVal = revVal + savVal - costVal;
-
-    // Efficiency
-    const autarky = (pvVal + impVal) > 0 ? Math.min(100, (pvVal / (pvVal + impVal)) * 100) : 0;
-    const selfCons = pvVal > 0 ? Math.min(100, (selfUse / pvVal) * 100) : 0;
+    // Energy & money from the backend ledger
+    const L = this._ledgerFields(this._ledgerSummary(p));
+    const { pvVal, impVal, expVal, selfUse, batChg, batDischg, costVal, revVal, savVal, balVal, autarky, selfCons } = L;
 
     // String data
     const totalPv = this._nm('pv_power') || 1;
@@ -9005,6 +8422,22 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   async _fetchHistDayData(date) {
+    // Ledger first (exact: meter kWh × price at that moment); recorder estimate for older days
+    try {
+      const day = this._ymd(date);
+      const res = await this._hass.callWS({ type: "smartinghome/energy/ledger", start: day, end: day });
+      if (res?.summary?.days) {
+        const L = this._ledgerFields(res.summary);
+        const totalPv = this._nm('pv_power') || 1;
+        L.strings = [1, 2].map(i => {
+          const pw = this._nm(`pv${i}_power`) || 0;
+          const ratio = totalPv > 0 ? pw / totalPv : 0.5;
+          const label = (this._settings.pv_labels || {})[`pv${i}`] || `PV${i}`;
+          return { idx: i, label, power: pw, ratio, kwh: L.pvVal * ratio, pct: ratio * 100 };
+        });
+        return L;
+      }
+    } catch (e) { /* fall back to recorder */ }
     // Fetch historical data for a specific day from HA Recorder
     const start = new Date(date); start.setHours(0,0,0,0);
     const end = new Date(date); end.setHours(23,59,59,999);
@@ -12365,12 +11798,12 @@ class SmartingHomePanel extends HTMLElement {
               <div style="background:rgba(0,212,255,0.1); border-radius:12px; padding:14px; text-align:center">
                 <div style="font-size:10px; color:#00d4ff; text-transform:uppercase; letter-spacing:1px">🏦 Oszczędność</div>
                 <div style="font-size:24px; font-weight:800; color:#00d4ff; margin-top:4px" id="roi-savings">— zł</div>
-                <div style="font-size:9px; color:#94a3b8; margin-top:2px">(autokonsumpcja)</div>
+                <div style="font-size:9px; color:#94a3b8; margin-top:2px">(vs. bez PV i baterii)</div>
               </div>
               <div style="border-radius:12px; padding:14px; text-align:center; border:2px solid" id="roi-balance-card">
                 <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px">📊 Bilans netto</div>
                 <div style="font-size:28px; font-weight:900; margin-top:4px" id="roi-balance">— zł</div>
-                <div style="font-size:9px; color:#94a3b8; margin-top:2px">(przychód + oszczędność − koszt)</div>
+                <div style="font-size:9px; color:#94a3b8; margin-top:2px">(przychód − koszt importu)</div>
               </div>
             </div>
           </div>
@@ -13788,8 +13221,10 @@ class SmartingHomePanel extends HTMLElement {
 
               <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:14px">
                 <div>
-                  <div style="font-size:9px; color:#64748b; margin-bottom:3px">Cooldown (min)</div>
-                  <input type="number" id="notif-cooldown" value="15" min="1" max="120" style="width:100%; padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#e2e8f0; font-size:11px; outline:none; text-align:center">
+                  <div style="font-size:9px; color:#64748b; margin-bottom:3px">Raport dnia</div>
+                  <label style="display:flex; align-items:center; gap:5px; font-size:11px; color:#e2e8f0; cursor:pointer; padding:6px 0">
+                    <input type="checkbox" id="notif-daily-report" checked> 📊 po szczycie
+                  </label>
                 </div>
                 <div>
                   <div style="font-size:9px; color:#64748b; margin-bottom:3px">Cisza od</div>
@@ -13800,7 +13235,11 @@ class SmartingHomePanel extends HTMLElement {
                   <input type="time" id="notif-quiet-end" value="07:00" style="width:100%; padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#e2e8f0; font-size:11px; outline:none; text-align:center">
                 </div>
               </div>
-              <div style="font-size:9px; color:#64748b; margin-bottom:14px">⚡ Alerty krytyczne wysyłane zawsze — niezależnie od ciszy i filtrów</div>
+              <div style="font-size:9px; color:#64748b; margin-bottom:14px; line-height:1.5">
+                ⚡ Jedno powiadomienie na zdarzenie (wysyła serwer HA, nie przeglądarka) — gdy problem ustąpi, przychodzi „✅ wróciło do normy” w miejsce alertu.<br>
+                🔴 Krytyczne: zawsze, także w ciszy nocnej i e-mailem; przypomnienie co 2 h, jeśli trwa. 🟠 Ostrzeżenia z nocy — rano, jeśli nadal aktualne.<br>
+                📊 Raport dnia: bilans, koszty, wynik HEMS i plan — wysyłany cicho po wieczornym szczycie.
+              </div>
 
               <!-- Actions -->
               <div style="display:flex; gap:10px">
@@ -14125,7 +13564,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.60.6</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.61.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
