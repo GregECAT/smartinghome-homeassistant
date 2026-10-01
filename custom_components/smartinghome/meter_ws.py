@@ -103,8 +103,10 @@ async def _energy_statistics(hass: HomeAssistant) -> list[dict[str, str]]:
         out.append({"id": sid, "name": name, "unit": unit})
 
     def rank(item: dict[str, str]) -> tuple[int, str]:
+        # Hourly-balanced consumption is what the invoice bills (net-billing
+        # prosumers: raw meter import is much higher). Without PV both are equal.
         sid = item["id"]
-        if ":" in sid and sid.endswith("_consumption") and "balanced" not in sid:
+        if ":" in sid and sid.endswith("_balanced_consumption"):
             return (0, sid)
         if ":" in sid and sid.endswith("_consumption"):
             return (1, sid)

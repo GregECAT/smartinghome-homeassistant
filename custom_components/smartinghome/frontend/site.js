@@ -440,7 +440,10 @@ class SmartingHomeSitePanel extends HTMLElement {
   _weatherHtml() {
     const S = this._hass.states;
     const pref = this._cfg("weather_entity", "");
-    const id = (pref && S[pref]) ? pref : this._ids("weather").find((w) => this._primary(w) && S[w].state !== "unavailable");
+    const candidates = this._ids("weather").filter((w) => this._primary(w) && S[w].state !== "unavailable");
+    const local = (this._hass.config.location_name || "").toLowerCase();
+    const id = (pref && S[pref]) ? pref
+      : candidates.find((w) => (S[w].attributes.friendly_name || "").toLowerCase() === local) || candidates[0];
     const shortcuts = `<div class="shortcuts">
       <span class="btn" data-nav="/smartinghome-energia">⚡ Energia i koszty</span>
       ${this._hasPvPanel() ? `<span class="btn" data-nav="/smartinghome">☀️ Smarting HOME</span>` : ""}
