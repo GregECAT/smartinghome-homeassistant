@@ -31,6 +31,7 @@ from .const import DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 STORE_VERSION = 1
+SCHEMA = 2  # bump → stored days are dropped and rebuilt from the recorder
 KEEP_DAYS = 400
 MAX_STEP_S = 180          # longer gaps are not integrated (HA was down)
 MAX_METER_STEP_KWH = 5.0  # meter jump sanity limit per cycle
@@ -53,6 +54,7 @@ _FLOW_KEYS = (
     "grid_home", "grid_bat", "charge", "discharge",
     "peak_load", "peak_grid_home",
 )
+_STATE_KEYS = ("soc_start", "soc_end", "capacity")  # per-day states, never summed
 _MONEY_KEYS = (
     "import", "export", "import_offpeak", "import_cost", "export_revenue",
     "baseline_cost", "flow_import", "flow_export",
@@ -74,6 +76,7 @@ class Sample:
     sun_up: bool
     import_total: float | None = None
     export_total: float | None = None
+    mppt_w: tuple[float | None, ...] = ()   # per-MPPT PV power (pv1..pv4)
 
 
 @dataclass
@@ -143,6 +146,8 @@ class EnergyLedger:
             return
         self._loaded = True
         data = await self._store.async_load() or {}
+        if data.get("schema") != SCHEMA:
+            data = {}  # older format (no coverage/SOC fields) — rebuild from history
         for day, values in (data.get("days") or {}).items():
             self._days[day] = DayRecord(day, {k: float(v) for k, v in values.items()})
         pool = data.get("pool") or {}
@@ -157,6 +162,7 @@ class EnergyLedger:
         for day in [d for d in self._days if d < cutoff]:
             del self._days[day]
         await self._store.async_save({
+            "schema": SCHEMA,
             "days": {d: {k: round(v, 5) for k, v in r.values.items()} for d, r in self._days.items()},
             "pool": {"pv": round(self._pool_pv, 4), "grid": round(self._pool_grid, 4)},
         })
@@ -196,6 +202,10 @@ class EnergyLedger:
             self._sync_pool(sample.soc)
             return
         rec = self._record(sample.ts.date())
+        if sample.soc is not None:
+            rec.values.setdefault("soc_start", float(sample.soc))
+            rec.values["soc_end"] = float(sample.soc)
+            rec.values["capacity"] = self._capacity_kwh
         if prev.ts.date() != sample.ts.date():
             prev = None  # midnight: start the new day's integration fresh
         if prev is not None:
@@ -217,6 +227,10 @@ class EnergyLedger:
         kwh = {k: (f0[k] + f1[k]) / 2 * hours / 1000.0 for k in f0}
         pv_kwh = (max(0.0, prev.pv_w) + max(0.0, cur.pv_w)) / 2 * hours / 1000.0
         load = kwh["home"]
+        rec.add("covered_min", hours * 60)
+        for idx, (w0, w1) in enumerate(zip(prev.mppt_w, cur.mppt_w)):
+            if w0 is not None and w1 is not None:
+                rec.add(f"mppt{idx + 1}", (max(0.0, w0) + max(0.0, w1)) / 2 * hours / 1000.0)
         rec.add("pv", pv_kwh)
         rec.add("load", load)
         rec.add("load_day" if cur.sun_up else "load_night", load)
@@ -283,7 +297,8 @@ class EnergyLedger:
             if start.isoformat() <= key <= end.isoformat():
                 days += 1
                 for k, v in rec.values.items():
-                    total[k] = total.get(k, 0.0) + v
+                    if k not in _STATE_KEYS:
+                        total[k] = total.get(k, 0.0) + v
         total["days"] = days
         return total
 
@@ -333,6 +348,16 @@ class EnergyLedger:
             "offpeak_import_pct": round(_pct(v.get("import_offpeak", 0.0), imp), 1) if imp > 0.2 else None,
             "savings_pct": round(_pct(baseline - net_cost, baseline), 1) if baseline > 0.2 else None,
         }
+        # Battery efficiency over the day: what came out + change of stored energy, per kWh put in
+        charge = v.get("charge", 0.0)
+        if "soc_start" in v and "soc_end" in v and charge > 2.0:
+            stored = (v["soc_end"] - v["soc_start"]) / 100.0 * v.get("capacity", 10.2)
+            out["battery_efficiency_pct"] = round(max(0.0, min(100.0, (v.get("discharge", 0.0) + stored) / charge * 100)), 1)
+            out["soc_start"] = round(v["soc_start"])
+        else:
+            out["battery_efficiency_pct"] = None
+        out["coverage_h"] = round(v.get("covered_min", 0.0) / 60, 1)
+        out["pv_mppt_kwh"] = [round(v.get(f"mppt{i}", 0.0), 2) for i in range(1, 5) if f"mppt{i}" in v]
         if "days" in v:
             out["days"] = int(v["days"])
         return out
@@ -433,6 +458,7 @@ class EnergyLedger:
                 buy_price=buy, sell_price=sell, is_peak=peak, sun_up=sun_up(t),
                 import_total=value_at("import_total", t),
                 export_total=value_at("export_total", t),
+                mppt_w=tuple(value_at(f"pv{i}", t) for i in range(1, 5) if entity_ids.get(f"pv{i}")),
             ), capacity_kwh)
             t += timedelta(minutes=1)
         self._last = saved_last

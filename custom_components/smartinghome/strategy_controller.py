@@ -1596,11 +1596,17 @@ class StrategyController:
         hour_key = now.strftime("%Y%m%d%H") + ("a" if now.minute < 30 else "b")
         commit = self._arb_commit
         p = self._arb_params
-        opposite = {ACT_CHARGE_GRID: ACT_DISCHARGE, ACT_DISCHARGE: ACT_CHARGE_GRID}
-        if commit and commit[0] == hour_key and opposite.get(commit[1]) == action:
+        # Battery-in vs battery-out actions don't flip inside a block (seen 10:35–10:49:
+        # home → PV charge → sell 700 W → PV charge on near-equal re-plans)
+        opposite = {
+            ACT_CHARGE_GRID: {ACT_DISCHARGE},
+            ACT_PV_CHARGE: {ACT_DISCHARGE},
+            ACT_DISCHARGE: {ACT_CHARGE_GRID, ACT_PV_CHARGE},
+        }
+        if commit and commit[0] == hour_key and action in opposite.get(commit[1], ()):
             held = commit[1]
             infeasible = (
-                (held == ACT_CHARGE_GRID and soc >= p.max_soc - 1)
+                (held in (ACT_CHARGE_GRID, ACT_PV_CHARGE) and soc >= p.max_soc - 1)
                 or (held == ACT_DISCHARGE and soc <= p.peak_floor_soc + 1)
             )
             if not infeasible:
@@ -1753,14 +1759,14 @@ class StrategyController:
 
         Forecasts can be off by 2–3× on a given day (fog, wrong cloud model).
         Once the forecast expected ≥ 1 kWh so far, scale the rest of the day by
-        actual/expected (clamped 0.5–1.5), blending in as evidence grows.
+        actual/expected (clamped 0.5–2.0), blending in as evidence grows.
         """
         so_far = _safe_float(data.get("pv_forecast_so_far_kwh"))
         actual = _safe_float((data.get("energy_today") or {}).get("pv_kwh"))
         if so_far < 1.0 or actual <= 0:
             return 1.0
-        ratio = max(0.5, min(1.5, actual / so_far))
-        weight = min(1.0, so_far / 4.0)
+        ratio = max(0.5, min(2.0, actual / so_far))
+        weight = min(1.0, so_far / 2.5)
         return 1.0 + weight * (ratio - 1.0)
 
     def _sun_hours(self) -> tuple[float, float]:
