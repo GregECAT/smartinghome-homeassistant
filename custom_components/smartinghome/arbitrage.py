@@ -249,11 +249,16 @@ def build_inputs(
 
     out: list[HourInput] = []
     t = start_utc
+    slot_end = first_end_utc
     while t < end_utc:
-        slot_end = first_end_utc if not out else t + step
+        # Every pass moves t forward: the first slot ends on the grid boundary
+        # (strictly after now), the next ones are one step long. A stub shorter
+        # than ~1 min is skipped without being appended, so the slot end must
+        # not depend on `out` — that looped forever in the last 72 s before
+        # :00/:30 and froze the event loop.
         duration = (slot_end - t).total_seconds() / 3600
         if duration <= 0.02:
-            t = slot_end
+            t, slot_end = slot_end, slot_end + step
             continue
         lt = local(t)
         zone, buy = buy_price(lt, tariff, provider)
@@ -266,7 +271,7 @@ def build_inputs(
         pv = hourly_pv * duration
         load = max(load_profile_kw[lt.hour % 24], 0.0) * duration
         out.append(HourInput(lt, duration, buy, sell, load, pv, zone))
-        t = slot_end
+        t, slot_end = slot_end, slot_end + step
 
     # Tariff peaks: any slot pricier than the cheapest tariff slot of that day
     cheapest: dict[date, float] = {}
