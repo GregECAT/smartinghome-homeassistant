@@ -485,7 +485,7 @@ class EnergyManager:
         if max_voltage > VOLTAGE_THRESHOLD_CRITICAL:
             # Tier 3: > 254V → Restore battery charging
             await self._enable_charging()
-            await self._switch_on(SWITCH_BOILER)
+            await self._cascade_boiler(True)
             await self._switch_on(SWITCH_AC)
             self._voltage_cascade_active = True
             actions["cascade_active"] = True
@@ -499,7 +499,7 @@ class EnergyManager:
 
         elif max_voltage > VOLTAGE_THRESHOLD_HIGH:
             # Tier 2: > 253V → Boiler + AC
-            await self._switch_on(SWITCH_BOILER)
+            await self._cascade_boiler(True)
             await self._switch_on(SWITCH_AC)
             self._voltage_cascade_active = True
             actions["cascade_active"] = True
@@ -510,7 +510,7 @@ class EnergyManager:
 
         elif max_voltage > VOLTAGE_THRESHOLD_WARNING:
             # Tier 1: > 252V → Boiler only
-            await self._switch_on(SWITCH_BOILER)
+            await self._cascade_boiler(True)
             self._voltage_cascade_active = True
             actions["cascade_active"] = True
             actions["actions"] = ["boiler_on"]
@@ -520,7 +520,7 @@ class EnergyManager:
 
         elif max_voltage < VOLTAGE_THRESHOLD_RECOVERY and self._voltage_cascade_active:
             # Recovery: < 248V for 5 min
-            await self._switch_off(SWITCH_BOILER)
+            await self._cascade_boiler(False)
             await self._switch_off(SWITCH_AC)
             self._voltage_cascade_active = False
             actions["actions"] = ["cascade_recovered"]
@@ -550,7 +550,7 @@ class EnergyManager:
         # Emergency — SOC too low
         if soc < 50:
             if self._surplus_cascade_active:
-                await self._switch_off(SWITCH_BOILER)
+                await self._cascade_boiler(False)
                 await self._switch_off(SWITCH_AC)
                 await self._switch_off(SWITCH_SOCKET2)
                 self._surplus_cascade_active = False
@@ -560,7 +560,7 @@ class EnergyManager:
         # Not enough surplus — turn off
         if surplus_power < PV_SURPLUS_OFF:
             if self._surplus_cascade_active:
-                await self._switch_off(SWITCH_BOILER)
+                await self._cascade_boiler(False)
                 await self._switch_off(SWITCH_AC)
                 await self._switch_off(SWITCH_SOCKET2)
                 self._surplus_cascade_active = False
@@ -569,7 +569,7 @@ class EnergyManager:
 
         # Tier 3: > 4kW surplus + SOC > 90%
         if surplus_power > PV_SURPLUS_TIER3 and soc >= PV_SURPLUS_MIN_SOC_TIER3:
-            await self._switch_on(SWITCH_BOILER)
+            await self._cascade_boiler(True)
             await self._switch_on(SWITCH_AC)
             await self._switch_on(SWITCH_SOCKET2)
             self._surplus_cascade_active = True
@@ -578,7 +578,7 @@ class EnergyManager:
 
         # Tier 2: > 3kW surplus + SOC > 85%
         elif surplus_power > PV_SURPLUS_TIER2 and soc >= PV_SURPLUS_MIN_SOC_TIER2:
-            await self._switch_on(SWITCH_BOILER)
+            await self._cascade_boiler(True)
             await self._switch_on(SWITCH_AC)
             self._surplus_cascade_active = True
             actions["cascade_active"] = True
@@ -586,7 +586,7 @@ class EnergyManager:
 
         # Tier 1: > 2kW surplus + SOC > 80%
         elif surplus_power > PV_SURPLUS_TIER1 and soc >= PV_SURPLUS_MIN_SOC_TIER1:
-            await self._switch_on(SWITCH_BOILER)
+            await self._cascade_boiler(True)
             self._surplus_cascade_active = True
             actions["cascade_active"] = True
             actions["actions"] = ["boiler_on"]
@@ -1094,6 +1094,18 @@ class EnergyManager:
                 "value": value,
             },
         )
+
+    # The boiler has its own owner (boiler_surplus.py) when that is enabled;
+    # the voltage / PV-surplus cascades then switch only the other loads.
+    boiler_owned_elsewhere: bool = False
+
+    async def _cascade_boiler(self, on: bool) -> None:
+        if self.boiler_owned_elsewhere:
+            return
+        if on:
+            await self._switch_on(SWITCH_BOILER)
+        else:
+            await self._switch_off(SWITCH_BOILER)
 
     async def _switch_on(self, entity_id: str) -> None:
         """Turn on a switch."""
