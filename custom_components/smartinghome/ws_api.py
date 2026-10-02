@@ -338,15 +338,38 @@ async def ws_voltage_report(hass: HomeAssistant, connection, msg: dict[str, Any]
         t = dt_util.utc_from_timestamp(ts) if isinstance(ts, (int, float)) else ts
         return dt_util.as_local(t).replace(tzinfo=None)
 
-    ids = set(phases.values()) | {SENSOR_GRID_POWER_TOTAL}
+    # Older history may sit under another integration (GoodWe SEMS cloud: grid_N_ac_voltage)
+    import re as _re
+
+    from homeassistant.components.recorder.statistics import list_statistic_ids
+
+    known = await inst.async_add_executor_job(list_statistic_ids, hass, None, "mean")
+    extra: dict[str, list[str]] = {}
+    for item in known:
+        m = _re.match(r"^sensor\..*_grid_([123])_ac_voltage$", item["statistic_id"])
+        if m:
+            extra.setdefault(f"L{m.group(1)}", []).append(item["statistic_id"])
+    ids = set(phases.values()) | {SENSOR_GRID_POWER_TOTAL} | {i for v in extra.values() for i in v}
     hourly_raw = await inst.async_add_executor_job(
         statistics_during_period, hass, dt_util.as_utc(start), None, ids, "hour", None, {"mean", "max"})
     five_raw = await inst.async_add_executor_job(
         statistics_during_period, hass, dt_util.as_utc(max(start, now - _td(days=10))), None,
         set(phases.values()), "5minute", None, {"mean"})
-    hourly = {p: [(local(r["start"]), r.get("mean"), r.get("max")) for r in hourly_raw.get(sid, [])]
-              for p, sid in phases.items()}
-    five = {p: [(local(r["start"]), r["mean"]) for r in five_raw.get(sid, []) if r.get("mean") is not None]
+    def valid(x):
+        return x if x is not None and 150 < x < 300 else None  # 0 V = inverter offline
+
+    hourly = {}
+    for p, sid in phases.items():
+        rows: dict = {}
+        for alt in extra.get(p, []):  # fallback first, the inverter's own sensor wins
+            for r in hourly_raw.get(alt, []):
+                if valid(r.get("max")) is not None:
+                    rows[local(r["start"])] = (valid(r.get("mean")), valid(r.get("max")))
+        for r in hourly_raw.get(sid, []):
+            if valid(r.get("max")) is not None:
+                rows[local(r["start"])] = (valid(r.get("mean")), valid(r.get("max")))
+        hourly[p] = [(t, mean, mx) for t, (mean, mx) in sorted(rows.items())]
+    five = {p: [(local(r["start"]), r["mean"]) for r in five_raw.get(sid, []) if valid(r.get("mean")) is not None]
             for p, sid in phases.items()}
     grid = {local(r["start"]): r["mean"] for r in hourly_raw.get(SENSOR_GRID_POWER_TOTAL, [])
             if r.get("mean") is not None}
