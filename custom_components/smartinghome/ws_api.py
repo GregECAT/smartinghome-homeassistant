@@ -30,6 +30,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_energy_monthly)
     websocket_api.async_register_command(hass, ws_forecast_status)
     websocket_api.async_register_command(hass, ws_wind_today)
+    websocket_api.async_register_command(hass, ws_wind_calendar)
 
     from .meter_ws import async_register as _register_meter_ws
     _register_meter_ws(hass)
@@ -271,6 +272,24 @@ def ws_wind_today(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
         cal = entry_data.get("wind_calendar") if isinstance(entry_data, dict) else None
         if cal is not None:
             connection.send_result(msg["id"], {"today": cal.get_today_status(), "turbine": cal._get_turbine_params()})
+            return
+    _not_ready(connection, msg)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smartinghome/wind/calendar",
+    vol.Optional("start_date"): vol.Any(str, None),
+    vol.Optional("end_date"): vol.Any(str, None),
+})
+@callback
+def ws_wind_calendar(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Wind calendar days for a date range — answered directly, not as a bus event
+    (the payload is too large for the recorder's event table)."""
+    for entry_data in hass.data.get(DOMAIN, {}).values():
+        cal = entry_data.get("wind_calendar") if isinstance(entry_data, dict) else None
+        if cal is not None:
+            connection.send_result(msg["id"], cal.get_calendar_data(
+                msg.get("start_date") or None, msg.get("end_date") or None))
             return
     _not_ready(connection, msg)
 

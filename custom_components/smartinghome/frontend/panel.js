@@ -3807,13 +3807,6 @@ class SmartingHomePanel extends HTMLElement {
   _initWindCalendar() {
     if (this._wcListenersAttached) return;
     this._wcListenersAttached = true;
-    // Listen for backend calendar data events
-    if (this._hass) {
-      this._hass.connection.subscribeEvents((ev) => {
-        this._wcData = ev.data;
-        this._renderWindCalendarUI();
-      }, 'smartinghome_wind_calendar_data');
-    }
     // Initial load
     this._windCalNavigate(0);
   }
@@ -3844,10 +3837,9 @@ class SmartingHomePanel extends HTMLElement {
     const labelEl = this.shadowRoot.getElementById('wc-period-label');
     if (labelEl) labelEl.textContent = label;
 
-    this._hass.callService('smartinghome', 'get_wind_calendar', {
-      start_date: start,
-      end_date: end,
-    }).catch(e => console.warn('[SH] Wind calendar fetch error:', e));
+    this._hass.callWS({ type: 'smartinghome/wind/calendar', start_date: start, end_date: end })
+      .then(data => { this._wcData = data; this._renderWindCalendarUI(); })
+      .catch(e => console.warn('[SH] Wind calendar fetch error:', e));
   }
 
   _getWindCalRange() {
@@ -4400,8 +4392,9 @@ class SmartingHomePanel extends HTMLElement {
     // Prosumer sell price (RCE × 1.23) — same value as on the Taryfy tab
     const rceKwh = rceMwh / 1000 * 1.23;
     const rceNext = parseFloat(this._s("sensor.rce_pse_cena_nastepny_okres") || "0");  // v2: was cena_nastepnej_godziny
-    const rceCheapWin = this._s("binary_sensor.rce_pse_tanie_okno_aktywne");  // v2: was aktywne_najtansze_okno_dzisiaj
-    const rceExpWin = this._s("binary_sensor.rce_pse_drogie_okno_aktywne");  // v2: was aktywne_najdrozsze_okno_dzisiaj
+    // Entity names differ between RCE PSE releases — take whichever exists
+    const rceCheapWin = this._s("binary_sensor.rce_pse_tanie_okno_aktywne") ?? this._s("binary_sensor.rce_pse_aktywne_najtansze_okno_dzisiaj");
+    const rceExpWin = this._s("binary_sensor.rce_pse_drogie_okno_aktywne") ?? this._s("binary_sensor.rce_pse_aktywne_najdrozsze_okno_dzisiaj");
 
     // Forecast & Weather
     // Integration forecast (Open-Meteo per plane, or Forecast.Solar when selected)
@@ -14176,7 +14169,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.66.7</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.66.8</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
