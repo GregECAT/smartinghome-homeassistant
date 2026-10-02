@@ -4304,7 +4304,8 @@ class SmartingHomePanel extends HTMLElement {
               <option value="open_meteo" ${src === 'open_meteo' ? 'selected' : ''}>Open-Meteo</option>
               <option value="forecast_solar" ${src === 'forecast_solar' ? 'selected' : ''}>Forecast.Solar</option>
             </select>
-            <input type="password" placeholder="Klucz API Open-Meteo (opcjonalnie, użytek komercyjny)" value="${this._settings.open_meteo_api_key ? '••••••••' : ''}"
+            <input type="text" name="sh-open-meteo-key" autocomplete="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore
+              placeholder="Klucz API Open-Meteo (tylko płatny plan — zwykle puste)" value="${this._settings.open_meteo_api_key ? '•••••••• (zapisany)' : ''}"
               onchange="this.getRootNode().host._setOpenMeteoKey(this.value)"
               style="flex:1; min-width:180px; background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px" />
           </div>
@@ -4326,7 +4327,14 @@ class SmartingHomePanel extends HTMLElement {
   _setForecastSource(v) { this._savePanelSettings({ pv_forecast_source: v }); setTimeout(() => this._loadForecastStatus(), 1500); }
   _setOpenMeteoKey(v) {
     if (v && v.startsWith('••')) return;
-    this._savePanelSettings({ open_meteo_api_key: (v || '').trim() });
+    const key = (v || '').trim();
+    // Open-Meteo customer keys are long tokens — reject anything that looks like a typed/autofilled password
+    if (key && !/^[A-Za-z0-9_-]{16,}$/.test(key)) {
+      window.alert('To nie wygląda na klucz API Open-Meteo (długi ciąg liter i cyfr z płatnego planu) — nie zapisano.');
+      this._renderForecastStatus();
+      return;
+    }
+    this._savePanelSettings({ open_meteo_api_key: key });
   }
 
   _guardConfig() {
@@ -14191,7 +14199,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.66.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.66.4</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
