@@ -830,6 +830,11 @@ class EnergyManager:
             return
         current_dod = state.state
         dod = max(0, min(dod, DEFAULT_DOD_ON_GRID))
+        try:
+            if round(float(current_dod)) == dod:
+                return  # already set — don't rewrite the inverter register
+        except (TypeError, ValueError):
+            pass
         _LOGGER.warning(
             "Setting DOD on-grid: %s → %d%% (current: %s)",
             entity, dod, current_dod,
