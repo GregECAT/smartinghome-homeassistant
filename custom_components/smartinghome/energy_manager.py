@@ -331,6 +331,16 @@ class EnergyManager:
         self._current_mode = HEMSMode.PEAK_SAVE
         self.intent = "home"
 
+    async def pv_export(self) -> None:
+        """PV surplus to the grid now, battery charging deferred (planner: cheaper RCE later).
+
+        Same inverter state as battery_to_home (general mode, charging blocked —
+        the battery still covers the house), but its own intent so the W0 guard
+        does not undo it.
+        """
+        await self.battery_to_home()
+        self.intent = "pv_export"
+
     async def battery_hold(self) -> None:
         """Keep the battery idle — no charge, no discharge (house runs on PV/grid)."""
         if self._inverter_brand == INVERTER_BRAND_SOFAR:

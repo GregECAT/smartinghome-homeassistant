@@ -28,6 +28,7 @@ from .const import PGE_G11_PRICE, TAURON_G11_PRICE, EnergyProvider
 # Actions the executor maps to inverter modes
 ACT_CHARGE_GRID = "charge_grid"   # EMS charge_battery (PV + grid)
 ACT_PV_CHARGE = "pv_charge"       # general mode — PV surplus charges the battery
+ACT_PV_EXPORT = "pv_export"       # general mode, charging blocked — PV surplus goes to the grid now, the battery charges later (cheaper RCE)
 ACT_HOLD = "hold"                 # battery standby — house on grid, energy kept
 ACT_HOME = "home"                 # general mode — battery covers the house
 ACT_DISCHARGE = "discharge"       # EMS discharge_battery at a set power (home + export)
@@ -35,6 +36,7 @@ ACT_DISCHARGE = "discharge"       # EMS discharge_battery at a set power (home +
 ACTION_LABELS = {
     ACT_CHARGE_GRID: "⚡ Ładuj z sieci",
     ACT_PV_CHARGE: "☀️ Ładuj z PV",
+    ACT_PV_EXPORT: "☀️➡️ Oddawaj PV (bateria później)",
     ACT_HOLD: "⏸️ Trzymaj",
     ACT_HOME: "🏠 Zasilaj dom",
     ACT_DISCHARGE: "💰 Sprzedaż",
@@ -49,6 +51,7 @@ class ArbitrageParams:
     peak_floor_soc: float = 5.0   # % in tariff peaks the house runs on the battery down to this
     peak_import_penalty: float = 5.0  # zł/kWh — grid import in a peak is "forbidden"
     peak_load_margin: float = 1.25  # plan peaks for 25 % more load than the profile (sell only a sure surplus)
+    peak_sell_buffer_kwh: float = 1.0  # selling in a peak keeps the rest of the peak's house load + this
     pv_confidence: float = 0.7    # share of the PV forecast the plan relies on
     charge_margin: float = 0.9    # plan with 90 % of max charge power (executed at 100 %)
     max_soc: float = 100.0        # % upper limit for grid charging
@@ -77,6 +80,7 @@ class ArbitrageParams:
         # DOD 95 % → the inverter never goes below 5 %
         params.peak_floor_soc = min(max(params.peak_floor_soc, 5.0), params.reserve_soc)
         params.pv_confidence = min(max(params.pv_confidence, 0.0), 1.0)
+        params.peak_sell_buffer_kwh = min(max(params.peak_sell_buffer_kwh, 0.0), params.capacity_kwh / 2)
         return params
 
 
@@ -363,6 +367,19 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
                 break
         greedy[t] = not pricier_later
 
+    # Energy the battery must still hold after slot t for the rest of its peak
+    # block (house deficit until the peak ends). Selling in a peak never leaves
+    # less than that plus a buffer — 2026-10-01 it sold at 18–19 (RCE 1.14) and
+    # the empty battery bought at 20:00 for the same 1.40 zł, distribution unpaid.
+    need_after = [0.0] * n
+    running = 0.0
+    for t in range(n - 1, -1, -1):
+        if inputs[t].no_import:
+            need_after[t] = running
+            running += max(deficits[t], 0.0) / p.eff_discharge
+        else:
+            running = 0.0
+
     INF = float("inf")
     value = [[INF] * len(levels) for _ in range(n + 1)]
     choice = [[-1] * len(levels) for _ in range(n)]
@@ -386,6 +403,12 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
                     continue
                 if delta < 0 and e2 < floor - 1e-9:
                     continue  # never discharge below the reserve (5 % in peaks)
+                if (
+                    h.no_import and delta < 0
+                    and -delta * p.eff_discharge - max(d, 0.0) > 1e-6
+                    and e2 < e_peak + need_after[t] + p.peak_sell_buffer_kwh - 1e-9
+                ):
+                    continue  # selling now would leave too little for the rest of the peak
                 imp, exp, dis = _flows(delta, d, p)
                 cost = imp * (h.buy + penalty) - exp * h.sell + dis * cycle_cost + value[t + 1][j]
                 if delta > 0:
@@ -410,7 +433,9 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
         imp, exp, _dis = _flows(delta, d, p)
         cost = imp * h.buy - exp * h.sell
         total += cost
-        action, power = classify(delta, d, h.duration, p, sell=h.sell, greedy=greedy[t])
+        action, power = classify(
+            delta, d, h.duration, p, sell=h.sell, greedy=greedy[t], room=e2 < e_max - step / 2,
+        )
         plan.hours.append(HourPlan(
             start=h.start.strftime("%Y-%m-%d %H:%M"),
             zone=h.zone,
@@ -459,7 +484,7 @@ def _summarise(plan: ArbitragePlan, inputs: list[HourInput], p: ArbitrageParams)
 
 def classify(
     delta: float, d: float, duration: float, p: ArbitrageParams, sell: float | None = None,
-    greedy: bool = False,
+    greedy: bool = False, room: bool = False,
 ) -> tuple[str, int]:
     """Map a planned stored-energy change to an inverter action (+ power W).
 
@@ -471,6 +496,10 @@ def classify(
     greedy — a tariff peak with no pricier slot ahead: the battery covers the
     whole house (general mode) unless the plan also exports from it; a fixed
     discharge power below the house load would buy the rest at the peak price.
+
+    room — the battery is not full after this slot. A PV surplus the plan does
+    NOT store (it charges later, at a cheaper RCE) is exported with charging
+    blocked; general mode would let the GoodWe charge from PV anyway.
     """
     eps = 0.05 * duration
     if greedy and delta <= eps and d > eps:
@@ -499,6 +528,8 @@ def classify(
         return ACT_DISCHARGE, max(power, 300)            # partial: fixed battery power
     if d > eps:
         return ACT_HOLD, 0
+    if room and d < -eps:
+        return ACT_PV_EXPORT, 0
     return ACT_PV_CHARGE, 0
 
 
