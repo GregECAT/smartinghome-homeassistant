@@ -31,6 +31,8 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_forecast_status)
     websocket_api.async_register_command(hass, ws_wind_today)
     websocket_api.async_register_command(hass, ws_wind_calendar)
+    websocket_api.async_register_command(hass, ws_deposit_status)
+    websocket_api.async_register_command(hass, ws_voltage_report)
 
     from .meter_ws import async_register as _register_meter_ws
     _register_meter_ws(hass)
@@ -294,6 +296,78 @@ def ws_wind_calendar(hass: HomeAssistant, connection, msg: dict[str, Any]) -> No
     _not_ready(connection, msg)
 
 
+@websocket_api.websocket_command({
+    vol.Required("type"): "smartinghome/deposit/status",
+    vol.Optional("force", default=False): bool,
+})
+@websocket_api.async_response
+async def ws_deposit_status(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Prosumer deposit: monthly account, balance, expiry, export value for the autopilot."""
+    from .deposit_service import get_tracker
+
+    try:
+        connection.send_result(msg["id"], await get_tracker(hass).async_status(force=msg["force"]))
+    except Exception as err:  # noqa: BLE001
+        connection.send_error(msg["id"], "deposit_failed", f"{type(err).__name__}: {err}")
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smartinghome/voltage/report",
+    vol.Optional("days", default=30): vol.All(int, vol.Range(min=1, max=400)),
+})
+@websocket_api.async_response
+async def ws_voltage_report(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Grid voltage report (recorder statistics) + the guard's state and exceedance log."""
+    from datetime import timedelta as _td
+
+    from homeassistant.components.recorder import get_instance
+    from homeassistant.components.recorder.statistics import statistics_during_period
+    from homeassistant.util import dt as dt_util
+
+    from .const import (
+        SENSOR_GRID_POWER_TOTAL, SENSOR_GRID_VOLTAGE_L1, SENSOR_GRID_VOLTAGE_L2, SENSOR_GRID_VOLTAGE_L3,
+    )
+    from .voltage_report import build_report, window_start
+
+    phases = {"L1": SENSOR_GRID_VOLTAGE_L1, "L2": SENSOR_GRID_VOLTAGE_L2, "L3": SENSOR_GRID_VOLTAGE_L3}
+    now = dt_util.now()
+    start = window_start(now, msg["days"])
+    inst = get_instance(hass)
+
+    def local(ts):
+        t = dt_util.utc_from_timestamp(ts) if isinstance(ts, (int, float)) else ts
+        return dt_util.as_local(t).replace(tzinfo=None)
+
+    ids = set(phases.values()) | {SENSOR_GRID_POWER_TOTAL}
+    hourly_raw = await inst.async_add_executor_job(
+        statistics_during_period, hass, dt_util.as_utc(start), None, ids, "hour", None, {"mean", "max"})
+    five_raw = await inst.async_add_executor_job(
+        statistics_during_period, hass, dt_util.as_utc(max(start, now - _td(days=10))), None,
+        set(phases.values()), "5minute", None, {"mean"})
+    hourly = {p: [(local(r["start"]), r.get("mean"), r.get("max")) for r in hourly_raw.get(sid, [])]
+              for p, sid in phases.items()}
+    five = {p: [(local(r["start"]), r["mean"]) for r in five_raw.get(sid, []) if r.get("mean") is not None]
+            for p, sid in phases.items()}
+    grid = {local(r["start"]): r["mean"] for r in hourly_raw.get(SENSOR_GRID_POWER_TOTAL, [])
+            if r.get("mean") is not None}
+
+    ctrl = getattr(_coordinator(hass), "_strategy_controller", None)
+    guard = getattr(ctrl, "_vguard", None)
+    limit = float(guard.cfg.get("limit_v", 253.0)) if guard else 253.0
+    report = await hass.async_add_executor_job(build_report, hourly, five, grid, limit)
+    events = []
+    if ctrl is not None:
+        cutoff = start.timestamp()
+        events = [e for e in await ctrl._voltage_events() if e.get("start", 0) >= cutoff]
+    connection.send_result(msg["id"], {
+        **report,
+        "days_requested": msg["days"],
+        "guard": guard.status() if guard else None,
+        "events": events[-200:],
+        "generated": now.isoformat(timespec="minutes"),
+    })
+
+
 @websocket_api.websocket_command({vol.Required("type"): "smartinghome/forecast/status"})
 @callback
 def ws_forecast_status(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
@@ -345,6 +419,7 @@ def ws_forecast_status(hass: HomeAssistant, connection, msg: dict[str, Any]) -> 
         "plan": {k: plan.get(k) for k in ("pv_source", "load_source", "load_ratio", "pv_factor", "updated")},
         "guard": guard.status() if guard is not None else None,
         "boiler": ctrl._boiler.status() if ctrl is not None and hasattr(ctrl, "_boiler") else None,
+        "voltage": ctrl._vguard.status() if ctrl is not None and hasattr(ctrl, "_vguard") else None,
     })
 
 

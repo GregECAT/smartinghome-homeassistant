@@ -20,6 +20,7 @@ from homeassistant.util import dt as dt_util
 
 from .pl_holidays import tariff_weekday
 from .boiler_surplus import BoilerInput, BoilerSurplus
+from .voltage_guard import VoltageGuard, VoltageInput
 from .load_guard import GuardInput, LoadGuard
 from .arbitrage import buy_price as arb_buy_price
 from .arbitrage import (
@@ -352,6 +353,11 @@ class StrategyController:
         self._em.boiler_owned_elsewhere = self._boiler.enabled  # before the first W4 cascade tick
         self._boiler_cfg_ts = 0.0
         self._boiler_restored = False
+        # W4 voltage guard (10-min mean, battery → export limit) + exceedance log
+        self._vguard = VoltageGuard()
+        self._vguard_cfg_ts = 0.0
+        self._vguard_store: Any = None
+        self._vguard_events: list[dict[str, Any]] | None = None
         # W5 peak load guard
         self._load_guard = LoadGuard()
         self._guard_cfg_ts = 0.0
@@ -954,10 +960,8 @@ class StrategyController:
         # W5: Peak load guard — big loads off the grid in expensive tariff hours
         actions_taken.extend(await self._execute_w5_peak_load_guard(data, soc, grid))
 
-        # W4: Voltage cascade (if daytime)
-        if pv > 50:  # only during solar hours
-            v_actions = await self._execute_w4_voltage_cascade(v_l1, v_l2, v_l3, soc)
-            actions_taken.extend(v_actions)
+        # W4: Voltage guard (10-min mean → battery, export limit); old cascade if disabled
+        actions_taken.extend(await self._execute_w4_voltage(data, soc, grid, pv, v_l1, v_l2, v_l3))
 
         # W4: PV Surplus cascade
         surplus_actions = await self._execute_w4_pv_surplus_cascade(surplus, soc)
@@ -1146,10 +1150,8 @@ class StrategyController:
         )
         actions_taken.extend(w0_actions)
 
-        # W4: Voltage cascade
-        if pv > 50:
-            v_actions = await self._execute_w4_voltage_cascade(v_l1, v_l2, v_l3, soc)
-            actions_taken.extend(v_actions)
+        # W4: Voltage guard (10-min mean → battery, export limit); old cascade if disabled
+        actions_taken.extend(await self._execute_w4_voltage(data, soc, grid, pv, v_l1, v_l2, v_l3))
 
         # W4: PV Surplus cascade
         surplus_actions = await self._execute_w4_pv_surplus_cascade(surplus, soc)
@@ -1596,6 +1598,74 @@ class StrategyController:
     # ------------------------------------------------------------------
     #  W4 — Voltage Cascade
     # ------------------------------------------------------------------
+
+    async def _execute_w4_voltage(
+        self, data: dict[str, Any], soc: float, grid: float, pv: float,
+        v_l1: float, v_l2: float, v_l3: float,
+    ) -> list[str]:
+        """W4: grid voltage — the guard (voltage_guard.py), or the legacy load cascade."""
+        from .settings_io import read_async
+
+        guard = self._vguard
+        if time.time() - self._vguard_cfg_ts > 300:
+            guard.configure((await read_async(self.hass)).get("voltage_guard"))
+            self._vguard_cfg_ts = time.time()
+        if not guard.enabled and guard.cap_w is None:
+            if pv > 50:
+                return await self._execute_w4_voltage_cascade(v_l1, v_l2, v_l3, soc)
+            return []
+
+        msgs: list[str] = []
+        # Switching from the legacy cascade: the loads it switched on go off once
+        if self._voltage_cascade_active or self._em._voltage_cascade_active:
+            self._voltage_cascade_active = False
+            self._em._voltage_cascade_active = False
+            await self._em._switch_off(SWITCH_AC)
+
+        inp = VoltageInput(
+            v=(v_l1, v_l2, v_l3),
+            export_w=max(grid, 0.0),
+            pv_w=pv,
+            soc=soc,
+            battery_w=_safe_float(data.get(SENSOR_BATTERY_POWER)),
+            export_limit_w=self._em.current_export_limit(),
+        )
+        for action, value, reason in guard.decide(inp):
+            try:
+                if action == "charge":
+                    await self._em._enable_charging()
+                    msg = f"W4: ⚡🔋 {reason}"
+                else:
+                    await self._em.set_export_cap(value)
+                    msg = f"W4: ⚡ {reason}"
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("Voltage guard %s failed: %s", action, err)
+                continue
+            msgs.append(msg)
+            self._log_cascade("voltage", f"voltage_{action}", msg)
+
+        done = guard.track_exceedance(inp)
+        if done:
+            await self._record_voltage_event(done)
+        return msgs
+
+    async def _voltage_events(self) -> list[dict[str, Any]]:
+        if self._vguard_events is None:
+            from homeassistant.helpers.storage import Store
+
+            self._vguard_store = Store(self.hass, 1, f"{DOMAIN}.voltage_events")
+            data = await self._vguard_store.async_load() or {}
+            self._vguard_events = list(data.get("events", []))
+        return self._vguard_events
+
+    async def _record_voltage_event(self, event: dict[str, Any]) -> None:
+        events = await self._voltage_events()
+        events.append(event)
+        del events[:-2000]
+        await self._vguard_store.async_save({"events": events})
+        msg = (f"W4: ⚠️ Napięcie ponad {self._vguard.cfg['limit_v']:.0f} V (średnia 10 min) przez "
+               f"{event['minutes']} min — max {event['max_mean']} V, {', '.join(event['phases'])}")
+        self._log_decision("voltage_exceedance", msg)
 
     async def _execute_w4_voltage_cascade(
         self, v_l1: float, v_l2: float, v_l3: float, soc: float,
@@ -2113,6 +2183,22 @@ class StrategyController:
             pv_hourly_kwh=pv_hourly,
             load_kw_at=load_kw_at,
         )
+        # Prosumer deposit: when the deposit won't all be used within its 12 months,
+        # an exported kWh is worth only the refund share — selling loses its appeal
+        deposit_factor = 1.0
+        try:
+            from .deposit_service import get_tracker
+
+            tracker = get_tracker(self.hass)
+            deposit_factor = tracker.export_value_factor
+            if time.time() - tracker._status_ts > 3 * 3600 and not tracker._busy:
+                self.hass.async_create_task(tracker.async_status())
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Deposit factor unavailable: %s", err)
+        if deposit_factor < 1.0:
+            for slot in inputs:
+                slot.sell *= deposit_factor
+        self._arb_deposit_factor = deposit_factor
         if inputs:
             # Current slot: what PV and the house do right now beats the forecast
             pv_kw = _safe_float(data.get(SENSOR_PV_POWER)) / 1000
@@ -2139,6 +2225,7 @@ class StrategyController:
             "radiation_nowcast": data.get("radiation_nowcast"),
             "load_source": "history" if load_kw_at is not None else "profile",
             "load_ratio": round(getattr(self, "_arb_load_ratio", 1.0), 2),
+            "deposit_factor": getattr(self, "_arb_deposit_factor", 1.0),
         }
 
     @staticmethod

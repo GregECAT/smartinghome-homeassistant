@@ -176,6 +176,8 @@ class SmartingHomePanel extends HTMLElement {
     if (tab === 'winter') { this._initWinterTab(); this._loadWinterData(); }
     if (tab === 'wind') { this._initWindTab(); this._loadWindData(); this._fetchWindHistoricalStats(); this._initWindCalendar(); }
     if (tab === 'hems') { this._updateHEMSArbitrage(); this._loadForecastStatus(); }
+    if (tab === 'tariff') { this._loadDeposit(); }
+    if (tab === 'energy') { this._loadVoltageReport(); }
     if (tab === 'history') { this._updateHistoryTab(); }
     if (tab === 'autopilot') { this._updateAutopilot(); }
     if (tab === 'energy' || tab === 'battery' || tab === 'overview') { this._updateForecastCharts(); }
@@ -4172,6 +4174,7 @@ class SmartingHomePanel extends HTMLElement {
     this._renderForecastStatus();
     this._renderBoilerSurplus();
     this._renderPeakGuard();
+    this._renderVoltageGuard();
   }
 
   _renderBoilerSurplus() {
@@ -4216,6 +4219,270 @@ class SmartingHomePanel extends HTMLElement {
     await this._savePanelSettings({ boiler_surplus: cfg });
     const el = v('w4b-saved'); if (el) el.textContent = '✓ Zapisano — autopilot użyje w ciągu 5 min';
     setTimeout(() => this._loadForecastStatus(), 1500);
+  }
+
+  /* ── Prosumer deposit (Taryfy & RCE) ───────────────── */
+  async _loadDeposit(force = false) {
+    const el = this.shadowRoot.getElementById('deposit-content');
+    if (!el || !this._hass?.connection) return;
+    if (force) el.style.opacity = '0.5';
+    try {
+      this._deposit = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/deposit/status', force });
+    } catch (e) {
+      this._deposit = { error: e.message || e.code || String(e) };
+    }
+    el.style.opacity = '';
+    this._renderDeposit();
+  }
+
+  _renderDeposit() {
+    const el = this.shadowRoot.getElementById('deposit-content');
+    if (!el) return;
+    const d = this._deposit || {};
+    const zl = (v) => v == null ? '—' : `${Number(v).toFixed(2).replace('.', ',')} zł`;
+    const kwh = (v) => v == null ? '—' : `${Number(v).toFixed(0)} kWh`;
+    const plMonth = (m) => { const [y, mm] = String(m).split('-'); return `${['sty','lut','mar','kwi','maj','cze','lip','sie','wrz','paź','lis','gru'][+mm - 1]} ${y}`; };
+    if (d.error) {
+      el.innerHTML = d.error === 'no_source'
+        ? `<div style="color:#e67e22">Brak danych godzinowych o energii oddanej i pobranej. Zainstaluj integrację Tauron (eLicznik) albo wskaż licznik w „Energia i koszty”.</div>`
+        : `<div style="color:#e74c3c">Nie udało się policzyć depozytu: ${this._esc(d.error)}</div>`;
+      return;
+    }
+    const cfg = d.settings || {};
+    const f = d.export_value_factor ?? 1;
+    const factorTxt = f >= 1
+      ? `<span style="color:#2ecc71">✅ cały depozyt zostanie wykorzystany</span> — każda oddana kWh jest warta pełne RCE × 1,23, autopilot liczy sprzedaż normalnie.`
+      : f > 0
+        ? `<span style="color:#e67e22">⚠️ część depozytu przepadnie</span> — kolejna oddana kWh jest warta tylko zwrot (30%). Autopilot obniża wartość sprzedaży do ${Math.round(f * 100)}%.`
+        : `<span style="color:#e74c3c">⛔ depozyt przekracza rachunki za energię na rok naprzód</span> — kolejna oddana kWh nic nie da. Autopilot nie planuje sprzedaży z baterii.`;
+    const tile = (label, val, sub, color) => `
+      <div style="background:rgba(15,23,42,0.5); border:1px solid #1e293b; border-radius:10px; padding:10px">
+        <div style="font-size:9px; color:#64748b; text-transform:uppercase">${label}</div>
+        <div style="font-size:20px; font-weight:800; color:${color || '#e2e8f0'}">${val}</div>
+        <div style="font-size:10px; color:#64748b">${sub || ''}</div>
+      </div>`;
+    const months = (d.months || []).slice().reverse();
+    const rows = months.map(m => `<tr>
+        <td>${plMonth(m.month)}${m.month === d.current_month ? ' <span style="color:#64748b">(trwa)</span>' : ''}</td>
+        <td style="text-align:right">${kwh(m.export_kwh)}</td>
+        <td style="text-align:right; color:#2ecc71">${zl(m.deposit)}</td>
+        <td style="text-align:right">${kwh(m.import_kwh)}</td>
+        <td style="text-align:right">${zl(m.energy_charge)}</td>
+        <td style="text-align:right; color:#00d4ff">${zl(m.deposit_used)}</td>
+        <td style="text-align:right">${zl(m.to_pay_energy)}</td>
+        <td style="text-align:right; font-weight:700">${zl(m.balance_after)}</td></tr>`).join('');
+    const credits = (d.credits || []).map(c => `<tr>
+        <td>${c.accruing ? 'naliczany teraz' : plMonth(c.earned)}</td><td>${plMonth(c.credited)}</td>
+        <td>${plMonth(c.expires)}</td><td style="text-align:right">${zl(c.amount)}</td>
+        <td style="text-align:right; font-weight:700">${zl(c.left_now)}</td>
+        <td style="text-align:right; color:${c.projected_lost > 0 ? '#e74c3c' : '#64748b'}">${c.projected_lost > 0 ? zl(c.projected_lost) : '—'}</td></tr>`).join('');
+    const rec = (d.reconcile || []).map(r => `<span style="margin-right:12px">${plMonth(r.month)}: faktura ${zl(r.invoice)}, policzone ${zl(r.computed)}
+        ${r.diff != null ? `<b style="color:${Math.abs(r.diff) < 2 ? '#2ecc71' : '#e67e22'}">(${r.diff > 0 ? '+' : ''}${r.diff.toFixed(2).replace('.', ',')} zł)</b>` : ''}</span>`).join('');
+    const inp = 'background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px';
+    const opening = (cfg.opening || [])[0] || {};
+    const invoices = Object.entries(cfg.invoices || {}).map(([k, v]) => `${k}=${v}`).join(', ');
+    el.innerHTML = `
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; margin-bottom:10px">
+        ${tile('Saldo depozytu', zl(d.balance_now), 'do wykorzystania na rachunkach')}
+        ${tile('Naliczany w tym miesiącu', zl(d.accruing_now), 'trafi na konto w przyszłym miesiącu', '#2ecc71')}
+        ${tile('Wygasa w ciągu 3 mies.', zl(d.expiring_3m), '', d.expiring_3m > 0 ? '#e67e22' : null)}
+        ${tile('Przepadło dotąd', zl(d.lost_total), d.refund_total > 0 ? `zwrot: ${zl(d.refund_total)}` : 'po 12 miesiącach', d.lost_total > 0 ? '#e74c3c' : null)}
+        ${tile('Przepadnie (prognoza)', zl(d.projected_lost), 'przy rachunkach jak rok temu', d.projected_lost > 0 ? '#e74c3c' : '#2ecc71')}
+      </div>
+      <div style="font-size:12px; color:#cbd5e1; margin-bottom:10px">Wartość eksportu dla autopilota: ${factorTxt}</div>
+      <div style="overflow-x:auto"><table class="sh-table" style="width:100%; font-size:11px; border-collapse:collapse">
+        <thead><tr style="color:#64748b; text-align:right"><th style="text-align:left">Miesiąc</th><th>Oddane</th><th>Depozyt (RCE×1,23)</th><th>Pobrane</th><th>Energia (brutto)</th><th>Pokryte depozytem</th><th>Do zapłaty za energię</th><th>Saldo po</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="8" style="color:#64748b">Brak miesięcy od początku rozliczenia</td></tr>'}</tbody></table></div>
+      ${credits ? `<div style="font-size:11px; color:#94a3b8; margin:10px 0 4px">Depozyty na koncie (zużywane od najstarszego, ważne 12 miesięcy)</div>
+      <div style="overflow-x:auto"><table style="width:100%; font-size:11px"><thead><tr style="color:#64748b"><th style="text-align:left">Za miesiąc</th><th style="text-align:left">Na koncie od</th><th style="text-align:left">Ważny do</th><th style="text-align:right">Kwota</th><th style="text-align:right">Zostało</th><th style="text-align:right">Przepadnie</th></tr></thead><tbody>${credits}</tbody></table></div>` : ''}
+      ${rec ? `<div style="font-size:11px; margin-top:8px; color:#cbd5e1">Porównanie z fakturami: ${rec}</div>` : ''}
+      <div style="font-size:10px; color:#64748b; margin-top:8px; line-height:1.5">
+        Dane: ${d.source === 'tauron' ? 'eLicznik Tauron (energia zbilansowana godzinowo)' : 'licznik falownika'}${d.data_until ? `, do ${String(d.data_until).replace('T', ' ')}` : ''};
+        ceny RCE z PSE (średnia z kwadransów w godzinie, ujemne = 0); cena energii z taryfy ${this._esc(d.tariff || '')} w „Energia i koszty”.
+        Depozyt pokrywa tylko energię, nie dystrybucję ani opłaty stałe. To szacunek — wiążąca jest faktura.
+      </div>
+      <details style="margin-top:8px"><summary style="cursor:pointer; font-size:11px; color:#94a3b8">⚙️ Ustawienia depozytu</summary>
+        <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:8px; font-size:11px">
+          <span>Rozliczenie godzinowe od <input type="date" id="dep-start" value="${this._esc(cfg.start || '')}" style="${inp}"/></span>
+          <span>Saldo początkowe: <input type="month" id="dep-open-m" value="${this._esc(opening.month || '')}" style="${inp}"/>
+            <input type="number" step="0.01" min="0" id="dep-open-a" value="${opening.amount ?? ''}" placeholder="zł" style="${inp}; width:80px"/></span>
+          <span title="Depozyt naliczony za dany miesiąc, z faktury — np. 2026-07=43.90">Depozyty z faktur: <input type="text" id="dep-inv" value="${this._esc(invoices)}" placeholder="2026-07=43.90, 2026-08=…" style="${inp}; width:220px"/></span>
+          <label style="display:flex; gap:4px; align-items:center"><input type="checkbox" id="dep-auto" ${cfg.use_in_autopilot !== false ? 'checked' : ''}/> uwzględniaj w autopilocie</label>
+          <button onclick="this.getRootNode().host._saveDepositSettings()" style="background:#2ecc71;color:#0f172a;border:none;border-radius:6px;padding:5px 12px;font-weight:700;cursor:pointer">💾 Zapisz i przelicz</button>
+          <span id="dep-saved" style="color:#2ecc71"></span>
+        </div>
+      </details>`;
+  }
+
+  async _saveDepositSettings() {
+    const v = (id) => this.shadowRoot.getElementById(id);
+    const invoices = {};
+    for (const part of (v('dep-inv').value || '').split(/[,;\n]/)) {
+      const m = part.trim().match(/^(\d{4}-\d{2})\s*[=:]\s*([\d.,]+)$/);
+      if (m) invoices[m[1]] = parseFloat(m[2].replace(',', '.'));
+    }
+    const amount = parseFloat(String(v('dep-open-a').value).replace(',', '.'));
+    const cfg = {
+      ...(this._settings.prosumer_deposit || {}),
+      start: v('dep-start').value || '2026-03-19',
+      opening: v('dep-open-m').value && amount > 0 ? [{ month: v('dep-open-m').value, amount }] : [],
+      invoices,
+      use_in_autopilot: v('dep-auto').checked,
+    };
+    await this._savePanelSettings({ prosumer_deposit: cfg });
+    const s = v('dep-saved'); if (s) s.textContent = '✓ Zapisano';
+    this._loadDeposit(true);
+  }
+
+  /* ── Grid voltage report (Energia) ───────────────── */
+  async _loadVoltageReport(days) {
+    const el = this.shadowRoot.getElementById('vrep-content');
+    if (!el || !this._hass?.connection) return;
+    this._vrepDays = days || this._vrepDays || 30;
+    el.style.opacity = '0.5';
+    try {
+      this._vrep = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/voltage/report', days: this._vrepDays });
+    } catch (e) {
+      this._vrep = { error: e.message || e.code || String(e) };
+    }
+    el.style.opacity = '';
+    this._renderVoltageReport();
+  }
+
+  _renderVoltageReport() {
+    const el = this.shadowRoot.getElementById('vrep-content');
+    if (!el) return;
+    const r = this._vrep || {};
+    if (r.error) { el.innerHTML = `<div style="color:#e74c3c">Nie udało się przygotować raportu: ${this._esc(r.error)}</div>`; return; }
+    const s = r.summary || {};
+    const lim = r.limit_v || 253;
+    const btn = (d) => `<button onclick="this.getRootNode().host._loadVoltageReport(${d})" style="background:${this._vrepDays === d ? '#00d4ff' : '#1e293b'};color:${this._vrepDays === d ? '#0f172a' : '#cbd5e1'};border:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px">${d} dni</button>`;
+    const tile = (label, val, sub, color) => `
+      <div style="background:rgba(15,23,42,0.5); border:1px solid #1e293b; border-radius:10px; padding:10px">
+        <div style="font-size:9px; color:#64748b; text-transform:uppercase">${label}</div>
+        <div style="font-size:20px; font-weight:800; color:${color || '#e2e8f0'}">${val}</div>
+        <div style="font-size:10px; color:#64748b">${sub || ''}</div></div>`;
+    const days = (r.days || []).filter(d => d.hours_max_over || d.ten_min_over || d.hours_high_no_export).slice().reverse();
+    const dayRows = days.map(d => `<tr><td>${d.date}</td><td style="text-align:right; color:${d.max_v > lim ? '#e74c3c' : '#cbd5e1'}">${d.max_v.toFixed(1)} V</td>
+      <td style="text-align:right">${d.max_hour_mean.toFixed(1)} V</td><td style="text-align:right">${d.hours_max_over}</td>
+      <td style="text-align:right">${d.ten_min_over ?? '—'}</td><td style="text-align:right">${d.hours_high_no_export}</td></tr>`).join('');
+    const weeks = (r.weeks || []).map(w => `<span style="margin-right:12px">${w.week}: <b style="color:${w.ok ? '#2ecc71' : '#e74c3c'}">${w.within_pct}%</b> w normie</span>`).join('');
+    const ev = (r.events || []).slice().reverse().slice(0, 15).map(e => `<tr><td>${new Date(e.start * 1000).toLocaleString('pl-PL')}</td>
+      <td style="text-align:right">${e.minutes} min</td><td style="text-align:right; color:#e74c3c">${e.max_mean} V</td>
+      <td>${(e.phases || []).join(', ')}</td><td style="text-align:right">${e.max_export_w} W</td><td>${e.capped ? 'limit eksportu' : '—'}</td></tr>`).join('');
+    el.innerHTML = `
+      <div style="display:flex; gap:6px; margin-bottom:10px; flex-wrap:wrap">${[7, 30, 90, 365].map(btn).join('')}
+        <span style="flex:1"></span>
+        <button onclick="this.getRootNode().host._voltageCsv()" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px">⬇️ CSV</button>
+        <button onclick="this.getRootNode().host._voltageComplaint()" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px">📄 Treść reklamacji</button>
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:8px; margin-bottom:10px">
+        ${tile('Maks. napięcie', s.max_v != null ? `${s.max_v.toFixed(1)} V` : '—', `od ${s.first_day || '—'}`, s.max_v > lim ? '#e74c3c' : null)}
+        ${tile('Dni z przekroczeniem', `${s.days_over ?? 0} / ${s.days ?? 0}`, `chwilowo > ${lim} V`, s.days_over ? '#e67e22' : '#2ecc71')}
+        ${tile('Godziny > ' + lim + ' V', s.hours_max_over ?? 0, `średnia godzinowa > ${lim} V: ${s.hours_mean_over ?? 0}`)}
+        ${tile('10-min średnie > ' + lim + ' V', s.ten_min_over ?? 0, 'ostatnie 10 dni (falownik się wyłącza)', s.ten_min_over ? '#e74c3c' : '#2ecc71')}
+        ${tile('Wysokie bez eksportu', s.hours_high_no_export ?? 0, `godziny ≥ ${lim - 3} V, gdy dom nie oddawał`, s.hours_high_no_export ? '#e67e22' : null)}
+      </div>
+      ${weeks ? `<div style="font-size:11px; color:#cbd5e1; margin-bottom:8px">PN-EN 50160 (95% średnich 10-min w 207–253 V w tygodniu): ${weeks}</div>` : ''}
+      ${dayRows ? `<div style="overflow-x:auto; max-height:260px"><table style="width:100%; font-size:11px"><thead><tr style="color:#64748b"><th style="text-align:left">Dzień</th><th style="text-align:right">Maks.</th><th style="text-align:right">Maks. śr. godz.</th><th style="text-align:right">Godz. > ${lim} V</th><th style="text-align:right">10-min > ${lim} V</th><th style="text-align:right">Wysokie bez eksportu</th></tr></thead><tbody>${dayRows}</tbody></table></div>`
+        : `<div style="color:#2ecc71; font-size:12px">✅ W tym okresie napięcie nie przekraczało ${lim} V.</div>`}
+      ${ev ? `<div style="font-size:11px; color:#94a3b8; margin:10px 0 4px">Zarejestrowane przekroczenia (średnia 10-min > ${lim} V)</div>
+      <div style="overflow-x:auto"><table style="width:100%; font-size:11px"><thead><tr style="color:#64748b"><th style="text-align:left">Początek</th><th style="text-align:right">Czas</th><th style="text-align:right">Maks. średnia</th><th style="text-align:left">Fazy</th><th style="text-align:right">Eksport</th><th style="text-align:left">Reakcja</th></tr></thead><tbody>${ev}</tbody></table></div>` : ''}
+      <div style="font-size:10px; color:#64748b; margin-top:8px; line-height:1.5">Źródło: statystyki Home Assistant z falownika (godzinowe średnie i maksima; średnie 5-min z ostatnich 10 dni).
+        Napięcie wysokie także wtedy, gdy dom nic nie oddaje, pokazuje, że problem leży po stronie sieci, a nie instalacji PV.</div>`;
+  }
+
+  _voltageCsv() {
+    const r = this._vrep || {};
+    const lines = ['dzien;max_V;max_srednia_godz_V;godziny_powyzej;srednie_10min_powyzej;wysokie_bez_eksportu'];
+    for (const d of r.days || []) lines.push([d.date, d.max_v, d.max_hour_mean, d.hours_max_over, d.ten_min_over ?? '', d.hours_high_no_export].join(';'));
+    lines.push('', 'poczatek_10min;faza;srednia_V;moc_sieci_W');
+    for (const w of r.worst_10min || []) lines.push([w.start, w.phase, w.mean_v, w.grid_w].join(';'));
+    lines.push('', 'godzina;faza;srednia_V;moc_sieci_W (bez eksportu)');
+    for (const h of r.high_without_export || []) lines.push([h.hour, h.phase, h.mean_v, h.grid_w].join(';'));
+    const blob = new Blob(['﻿' + lines.join('\n').replace(/\./g, ',')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `napiecie_sieci_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  _voltageComplaint() {
+    const r = this._vrep || {}, s = r.summary || {}, lim = r.limit_v || 253;
+    const worst = (r.days || []).filter(d => d.hours_max_over || d.ten_min_over).sort((a, b) => b.max_v - a.max_v).slice(0, 10);
+    const text = `Reklamacja parametrów jakościowych energii elektrycznej — za wysokie napięcie w sieci
+
+Zgłaszam, że w moim punkcie poboru napięcie w sieci przekracza wartość dopuszczalną 230 V + 10% (${lim} V).
+Pomiary pochodzą z falownika instalacji fotowoltaicznej (pomiar ciągły, wszystkie trzy fazy).
+
+Okres: ${s.first_day || '—'} – ${new Date().toISOString().slice(0, 10)}
+- najwyższe zmierzone napięcie: ${s.max_v != null ? s.max_v.toFixed(1) : '—'} V,
+- dni z napięciem powyżej ${lim} V: ${s.days_over ?? 0},
+- godziny z napięciem powyżej ${lim} V: ${s.hours_max_over ?? 0} (w tym ze średnią godzinową powyżej ${lim} V: ${s.hours_mean_over ?? 0}),
+- średnie 10-minutowe powyżej ${lim} V w ostatnich 10 dniach: ${s.ten_min_over ?? 0},
+- godziny z napięciem co najmniej ${lim - 3} V, gdy instalacja nie oddawała energii do sieci: ${s.hours_high_no_export ?? 0}.
+
+Dni z najwyższym napięciem:
+${worst.map(d => `- ${d.date}: maks. ${d.max_v.toFixed(1)} V, godzin powyżej ${lim} V: ${d.hours_max_over}`).join('\n') || '- brak'}
+
+Przy średniej 10-minutowej powyżej ${lim} V falownik zgodnie z normą PN-EN 50549-1 odłącza się od sieci, przez co tracę produkcję energii.
+Napięcie jest wysokie również w godzinach, w których instalacja nie oddaje energii, co wskazuje na ustawienia sieci (np. zaczepy transformatora SN/nN).
+
+Proszę o:
+1. wykonanie pomiarów jakości napięcia w moim punkcie poboru zgodnie z PN-EN 50160,
+2. doprowadzenie napięcia do wartości dopuszczalnych,
+3. udzielenie bonifikaty za niedotrzymanie parametrów jakościowych energii, jeśli przysługuje.
+
+W załączniku: zestawienie pomiarów (CSV).`;
+    this._showModal(`<div style="font-size:13px; font-weight:700; margin-bottom:8px">📄 Treść reklamacji do operatora sieci</div>
+      <textarea id="vrep-text" style="width:100%; height:360px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:8px; padding:8px; font-size:12px" readonly>${this._esc(text)}</textarea>
+      <div style="font-size:11px; color:#64748b; margin-top:6px">Uzupełnij dane klienta i numer PPE. Wyślij do Tauron Dystrybucja (formularz reklamacji na tauron-dystrybucja.pl) z plikiem CSV w załączniku.</div>
+      <div style="display:flex; gap:8px; margin-top:10px; justify-content:flex-end">
+        <button onclick="navigator.clipboard.writeText(this.getRootNode().getElementById('vrep-text').value); this.textContent='✓ Skopiowano'" style="background:#00d4ff;color:#0f172a;border:none;border-radius:6px;padding:6px 14px;font-weight:700;cursor:pointer">Kopiuj</button>
+        <button onclick="this.getRootNode().host._closeModal()" style="background:#1e293b;color:#cbd5e1;border:none;border-radius:6px;padding:6px 14px;cursor:pointer">Zamknij</button>
+      </div>`);
+  }
+
+  /* ── W4 voltage guard (HEMS) ───────────────── */
+  _renderVoltageGuard() {
+    const el = this.shadowRoot.getElementById('hems-vguard-content');
+    if (!el) return;
+    const st = (this._fcStatus || {}).voltage || {};
+    const cfg = { enabled: true, target_v: 251.5, limit_v: 253, release_v: 250, step_w: 1000, min_export_w: 0,
+      ...(this._settings.voltage_guard || {}) };
+    const means = (st.mean_10min || []).map((m, i) => `L${i + 1}: <b style="color:${m >= cfg.limit_v ? '#e74c3c' : m >= cfg.target_v ? '#e67e22' : '#2ecc71'}">${m != null ? m.toFixed(1) + ' V' : '—'}</b>`).join(' · ');
+    const inp = 'background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px;width:70px';
+    el.innerHTML = `
+      <div style="color:#94a3b8; margin-bottom:8px">Falownik wyłącza się, gdy średnia 10-minutowa napięcia przekroczy ${cfg.limit_v} V.
+        Przy eksporcie i średniej ≥ ${cfg.target_v} V: najpierw bateria przejmuje energię, bojler włącza W4b, potem limit oddawania do sieci spada co ${cfg.step_w} W
+        (co najmniej co 3 min). Gdy średnia spadnie poniżej ${cfg.release_v} V na 10 min, limit wraca. Klimatyzator nie jest już włączany „na marne”.</div>
+      <div style="margin-bottom:8px">Średnia 10 min: ${means || '—'}
+        ${st.cap_w != null ? ` · <b style="color:#e67e22">limit oddawania ${st.cap_w} W</b>` : ' · bez ograniczeń'}
+        ${st.exceeding ? ' · <b style="color:#e74c3c">przekroczenie trwa</b>' : ''}
+        ${st.reason ? `<div style="font-size:11px; color:#64748b">Ostatnio: ${this._esc(st.reason)}</div>` : ''}</div>
+      <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center">
+        <label style="display:flex; gap:6px; align-items:center; cursor:pointer"><input type="checkbox" id="vg-en" ${cfg.enabled ? 'checked' : ''}/> <b>Włączony</b></label>
+        <span>Reaguj od <input type="number" id="vg-target" step="0.5" min="245" max="253" value="${cfg.target_v}" style="${inp}"/> V</span>
+        <span>Przywracaj poniżej <input type="number" id="vg-release" step="0.5" min="240" max="252" value="${cfg.release_v}" style="${inp}"/> V</span>
+        <span>Krok <input type="number" id="vg-step" step="100" min="200" max="5000" value="${cfg.step_w}" style="${inp}"/> W</span>
+        <button onclick="this.getRootNode().host._saveVoltageGuard()" style="background:#2ecc71;color:#0f172a;border:none;border-radius:6px;padding:6px 14px;font-weight:700;cursor:pointer">💾 Zapisz</button>
+        <span id="vg-saved" style="font-size:11px; color:#2ecc71"></span>
+      </div>
+      <div style="font-size:10px; color:#64748b; margin-top:6px">Wyłączony = dawna kaskada (bojler → klimatyzator → ładowanie). Raport przekroczeń do reklamacji: zakładka ⚡ Energia.</div>`;
+  }
+
+  async _saveVoltageGuard() {
+    const v = (id) => this.shadowRoot.getElementById(id);
+    const cfg = {
+      ...(this._settings.voltage_guard || {}),
+      enabled: v('vg-en').checked,
+      target_v: parseFloat(v('vg-target').value) || 251.5,
+      release_v: parseFloat(v('vg-release').value) || 250,
+      step_w: parseInt(v('vg-step').value) || 1000,
+    };
+    await this._savePanelSettings({ voltage_guard: cfg });
+    const el = v('vg-saved'); if (el) el.textContent = '✓ Zapisano — autopilot użyje w ciągu 5 min';
   }
 
   _renderForecastStatus() {
@@ -11440,10 +11707,23 @@ class SmartingHomePanel extends HTMLElement {
 
           </div>
 
+          <div class="card" style="margin-top:14px">
+            <div class="card-title">⚡ Jakość napięcia sieci — raport do reklamacji</div>
+            <div id="vrep-content" style="font-size:12px; color:#cbd5e1">Ładowanie…</div>
+          </div>
+
         </div>
 
         <!-- ═══════ TAB: TARIFF & RCE ═══════ -->
         <div class="tab-content" data-tab="tariff">
+
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-title" style="display:flex; justify-content:space-between; align-items:center">
+              <span>💼 Depozyt prosumencki (net-billing)</span>
+              <button onclick="this.getRootNode().host._loadDeposit(true)" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;border-radius:6px;padding:3px 10px;cursor:pointer;font-size:11px">↻ Przelicz</button>
+            </div>
+            <div id="deposit-content" style="font-size:12px; color:#cbd5e1">Ładowanie… (pierwsze liczenie pobiera ceny RCE z PSE)</div>
+          </div>
 
           <!-- ROW 1: RCE Price Cards -->
                     <div class="g4" style="margin-bottom:14px">
@@ -12138,7 +12418,7 @@ class SmartingHomePanel extends HTMLElement {
               <div class="hl-left">
                 <span class="hl-tag" style="background:rgba(155,89,182,0.15);color:#9b59b6">W4</span>
                 <span class="hl-name">Kaskady napięcia + nadwyżki PV</span>
-                <span style="font-size:10px;color:#64748b" id="hems-w4-count">10 automatyzacji</span>
+                <span style="font-size:10px;color:#64748b" id="hems-w4-count">9 automatyzacji</span>
               </div>
               <span class="hl-chevron">▼</span>
             </div>
@@ -12152,23 +12432,10 @@ class SmartingHomePanel extends HTMLElement {
                   <span class="hs-label">Bojler:</span><span class="hs-val" id="hac-vb-blr">—</span>
                 </div>
               </div>
-              <!-- Napięcie: Klima -->
-              <div class="hems-auto-card" id="hac-volt-ac">
-                <div class="hac-top"><span class="hac-icon">⚡⚡</span><span class="hac-name">Napięcie → Klima</span><span class="hac-status" id="hac-volt-ac-st">—</span></div>
-                <div class="hac-desc">&gt;253V → Klima ON (bojler już działa).</div>
-                <div class="hac-sensors">
-                  <span class="hs-label">V max:</span><span class="hs-val" id="hac-va-vmax">—</span>
-                  <span class="hs-label">Klima:</span><span class="hs-val" id="hac-va-ac">—</span>
-                </div>
-              </div>
-              <!-- Napięcie: Ładuj baterię -->
-              <div class="hems-auto-card" id="hac-volt-chrg">
-                <div class="hac-top"><span class="hac-icon">🔴</span><span class="hac-name">Krytyczne napięcie</span><span class="hac-status" id="hac-volt-chrg-st">—</span></div>
-                <div class="hac-desc">&gt;254V → Ładuj baterię natychmiast!</div>
-                <div class="hac-sensors">
-                  <span class="hs-label">V max:</span><span class="hs-val" id="hac-vc-vmax">—</span>
-                  <span class="hs-label">SOC:</span><span class="hs-val" id="hac-vc-soc">—</span>
-                </div>
+              <!-- Napięcie: strażnik (średnia 10 min → bateria → limit eksportu) -->
+              <div class="hems-auto-card" id="hac-volt-guard" style="grid-column:1/-1">
+                <div class="hac-top"><span class="hac-icon">🛡️</span><span class="hac-name">Strażnik napięcia</span></div>
+                <div style="font-size:12px; color:#cbd5e1" id="hems-vguard-content">Ładowanie…</div>
               </div>
               <!-- Nadwyżka: Bojler -->
               <div class="hems-auto-card" id="hac-sur-blr">
@@ -14169,7 +14436,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.66.8</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.67.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -14291,8 +14558,8 @@ class SmartingHomePanel extends HTMLElement {
         { id: 'soc_emergency', cat: 'w3_soc', icon: '🚨', name: 'EMERGENCY SOC < 5%', desc: 'Ładuj awaryjnie NIEZALEŻNIE od taryfy do 15%!', always: true, slots: ['battery_soc'] },
         // W4 Voltage
         { id: 'voltage_boiler', cat: 'w4_voltage', icon: '⚡', name: 'Napięcie → Bojler', desc: '>252V → Bojler ON.', always: true, slots: ['voltage_l1', 'boiler'] },
-        { id: 'voltage_klima', cat: 'w4_voltage', icon: '⚡⚡', name: 'Napięcie → Klima', desc: '>253V → Klima ON (bojler już działa).', always: true, slots: ['voltage_l1', 'ac'] },
-        { id: 'voltage_critical', cat: 'w4_voltage', icon: '🔴', name: 'Krytyczne napięcie', desc: '>254V → Ładuj baterię natychmiast!', always: true, slots: ['voltage_l1', 'battery_soc'] },
+        { id: 'voltage_klima', cat: 'w4_voltage', icon: '⚡⚡', name: 'Napięcie → Klima', desc: '>253V → Klima ON — tylko przy wyłączonym strażniku napięcia (domyślnie: limit eksportu).', always: true, slots: ['voltage_l1', 'ac'] },
+        { id: 'voltage_critical', cat: 'w4_voltage', icon: '🔴', name: 'Krytyczne napięcie', desc: 'Strażnik napięcia: średnia 10 min ≥ 251,5 V → ładowanie baterii, potem limit eksportu.', always: true, slots: ['voltage_l1', 'battery_soc'] },
         // W4 Surplus
         { id: 'surplus_boiler', cat: 'w4_surplus', icon: '☀️', name: 'Nadwyżka → Bojler', desc: '>2kW nadwyżki + SOC >80% → Bojler ON.', always: true, slots: ['pv_surplus', 'battery_soc'] },
         { id: 'surplus_klima', cat: 'w4_surplus', icon: '❄️', name: 'Nadwyżka → Klima', desc: '>3kW nadwyżki + SOC >85% → Klima ON.', always: true, slots: ['pv_surplus', 'battery_soc'] },

@@ -111,6 +111,10 @@ class EnergyManager:
         self._surplus_cascade_active = False
         self._last_charge_current = None
         self._last_export_limit = None
+        # Voltage guard: export limit ceiling while the grid voltage is high (None = off).
+        # Every other export limit request is clamped to it and restored when it goes.
+        self.export_cap_w: int | None = None
+        self._requested_export_limit: int | None = None
         self._control_error: str | None = None
         # What the inverter was last told to do: "charge_grid" | "sell" | "hold" |
         # "home" | "general". Safety layers (W0) must not undo deliberate grid
@@ -778,8 +782,28 @@ class EnergyManager:
                 },
             )
 
+    def current_export_limit(self) -> int | None:
+        """The inverter's export limit as reported by its number entity."""
+        entity = self._find_goodwe_number(NUMBER_EXPORT_LIMIT, "grid_export_limit")
+        state = self.hass.states.get(entity) if entity else None
+        val = _safe_int(state.state, -1) if state else -1
+        return val if val >= 0 else None
+
+    async def set_export_cap(self, cap: int | None) -> None:
+        """Voltage guard: cap the export (W), or None to restore the limit the
+        rest of the system asked for (or the one the inverter had before)."""
+        if cap is not None and self.export_cap_w is None and self._requested_export_limit is None:
+            self._requested_export_limit = self.current_export_limit()
+        self.export_cap_w = cap
+        await self._set_export_limit(
+            self._requested_export_limit if self._requested_export_limit is not None else DEFAULT_EXPORT_LIMIT
+        )
+
     async def _set_export_limit(self, limit: int) -> None:
-        """Set grid export limit."""
+        """Set grid export limit (clamped by the voltage guard's cap)."""
+        self._requested_export_limit = limit
+        if self.export_cap_w is not None:
+            limit = min(limit, self.export_cap_w)
         if self._is_sofar:
             if self._last_export_limit == limit:
                 return
