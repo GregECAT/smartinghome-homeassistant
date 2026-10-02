@@ -305,6 +305,9 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.ledger = EnergyLedger(hass, entry.entry_id)
         self._ledger_backfilled = False
         self._is_peak = False
+        self._reconcile_ts = -1e9
+        self._reconcile_base_day = ""
+        self._reconcile_base: dict[str, float] = {}
 
         # ── Alerts & notifications (backend — one push per incident) ──
         self.alerts = AlertEngine(hass, entry.entry_id, settings_read_async)
@@ -574,6 +577,57 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         sell = (rce_mwh or 0.0) / 1000 * RCE_PROSUMER_COEFFICIENT
         return buy, sell, peak
 
+    def _lifetime_counters(self) -> dict[str, str]:
+        """Inverter / meter lifetime counters (kWh) per ledger key."""
+        m = self._sensor_map
+
+        def pick(key: str, *fallbacks: str) -> str:
+            if m.get(key):
+                return m[key]
+            return next((e for e in fallbacks if self.hass.states.get(e)), "")
+
+        return {
+            "pv": pick("total_production", "sensor.total_pv_generation", "sensor.goodwe_total_pv_generation"),
+            "load": pick("total_load_consumption", "sensor.total_load", "sensor.goodwe_total_load"),
+            "charge": pick("total_battery_charge", "sensor.total_battery_charge", "sensor.goodwe_total_battery_charge"),
+            "discharge": pick("total_battery_discharge", "sensor.total_battery_discharge",
+                              "sensor.goodwe_total_battery_discharge"),
+            "import": m.get("total_energy_import", ""),
+            "export": m.get("total_energy_export", ""),
+        }
+
+    async def _async_reconcile_ledger(self, now: datetime, data: dict[str, Any]) -> None:
+        """Fill today's ledger from the lifetime counters (outages / restarts lose samples)."""
+        counters = {k: e for k, e in self._lifetime_counters().items() if e}
+        if not counters:
+            return
+        today = now.date().isoformat()
+        if self._reconcile_base_day != today:
+            midnight = dt_util.start_of_local_day(now)
+            at_midnight = await self._async_totals_at_midnight(list(counters.values()), midnight)
+            self._reconcile_base = {k: at_midnight[e] for k, e in counters.items() if e in at_midnight}
+            self._reconcile_base_day = today
+        counted: dict[str, float | None] = {}
+        for key, entity_id in counters.items():
+            current = self._read_total(entity_id)
+            base = self._reconcile_base.get(key)
+            if current is None or base is None or current < base:
+                continue
+            counted[key] = current - base
+        if not counted:
+            return
+        buy, peak = self._tariff_price(now)
+        added = self.ledger.reconcile(
+            now.date(), counted,
+            buy_price=buy, sell_price=_safe_float(data.get("rce_sell_price")), is_peak=peak,
+            elapsed_min=(now - dt_util.start_of_local_day(now)).total_seconds() / 60,
+        )
+        if added:
+            _LOGGER.info(
+                "Energy ledger: filled a data gap from the counters — %s",
+                ", ".join(f"{k} {v:.2f} kWh" for k, v in added.items() if v > 0.01),
+            )
+
     def _ledger_entities(self) -> dict[str, str]:
         m = self._sensor_map
         return {
@@ -677,6 +731,9 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if (eid := self._sensor_map.get(f"pv{i}_power"))
                 ),
             ), cap)
+        if pv is not None and time.monotonic() - self._reconcile_ts > 600:
+            self._reconcile_ts = time.monotonic()
+            await self._async_reconcile_ledger(now, data)
         await ledger.async_save()
 
         kpi = EnergyLedger.summarise(ledger.day(now.date()))

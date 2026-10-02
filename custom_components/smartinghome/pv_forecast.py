@@ -165,8 +165,8 @@ class PVForecaster:
         for back in range(1, PAST_DAYS):
             day = today - timedelta(days=back)
             rec = ledger.day(day)
-            if rec.get("covered_min", 0) < 20 * 60:
-                continue  # incomplete day (outage / no data)
+            if rec.get("covered_min", 0) < 20 * 60 or rec.get("gap_pv", 0) > 1.0:
+                continue  # incomplete day (outage / no data) or per-MPPT energy missing
             model_day = self.day_by_mppt(day, calibrated=False)
             if not model_day:
                 continue

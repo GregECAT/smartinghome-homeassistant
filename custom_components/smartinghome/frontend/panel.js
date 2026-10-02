@@ -4233,7 +4233,7 @@ class SmartingHomePanel extends HTMLElement {
     const state = ent?.state || 'brak encji';
     const sumEl = this.shadowRoot.getElementById('hems-w4b-sum');
     if (sumEl) sumEl.textContent = !cfg.enabled ? 'wyłączony'
-      : `${cfg.window[0]}:00–${cfg.window[1]}:00 · bojler ${state === 'on' ? 'grzeje' : state === 'off' ? 'czeka' : state}`;
+      : `${cfg.window[0]}:00–${cfg.window[1]}:00 · bojler ${state === 'on' ? 'włączony' : state === 'off' ? 'czeka' : state}`;
     const inputStyle = 'background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px;width:70px';
     el.innerHTML = `
       <div style="color:#94a3b8; margin-bottom:8px">Woda jest grzana piecem C.O.; bojler służy tylko do odebrania nadwyżki PV.
@@ -4248,7 +4248,7 @@ class SmartingHomePanel extends HTMLElement {
         <button onclick="this.getRootNode().host._saveBoilerSurplus()" style="background:#2ecc71;color:#0f172a;border:none;border-radius:6px;padding:6px 14px;font-weight:700;cursor:pointer">💾 Zapisz</button>
         <span id="w4b-saved" style="font-size:11px; color:#2ecc71"></span>
       </div>
-      <div>Bojler (<code>${cfg.entity}</code>): <b style="color:${state === 'on' ? '#f7b731' : state === 'off' ? '#94a3b8' : '#e67e22'}">${state === 'on' ? '🔥 grzeje' : state === 'off' ? 'wyłączony' : state}</b>
+      <div>Bojler (<code>${cfg.entity}</code>): <b style="color:${state === 'on' ? '#f7b731' : state === 'off' ? '#94a3b8' : '#e67e22'}">${state === 'on' ? '🔥 włączony (grzeje, gdy termostat bojlera tego wymaga)' : state === 'off' ? 'wyłączony' : state}</b>
         ${st.owned ? ' · włączony przez autopilota' : ''}${st.reason ? ` · ostatnio: ${st.reason}` : ''}</div>`;
   }
 
@@ -8386,7 +8386,10 @@ class SmartingHomePanel extends HTMLElement {
     // DOD & charge rate
     const dod = this._n("number.goodwe_depth_of_discharge_on_grid");
     this._setText("v-batt-dod-tab", dod !== null ? `${dod}%` : "—%");
-    this._setText("v-batt-charge-rate-tab", "18.5 A");
+    // BMS limits (live) instead of a fixed value
+    const bmsChg = this._shN("battery_charge_limit_a") ?? this._shN("battery_charge_limit") ?? this._n("sensor.battery_charge_limit");
+    const bmsDis = this._shN("battery_discharge_limit_a") ?? this._shN("battery_discharge_limit") ?? this._n("sensor.battery_discharge_limit");
+    this._setText("v-batt-charge-rate-tab", bmsChg !== null ? `${bmsChg.toFixed(0)} A` : "— A");
 
     // Daily charge/discharge — measured battery power (ledger); inverter's own counter as a hint
     const bk = this._ledgerToday();
@@ -8397,7 +8400,9 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-batt-charge-tab", `${chargeToday.toFixed(1)} kWh`);
     this._setText("v-batt-discharge-tab", `${dischargeToday.toFixed(1)} kWh`);
     const cntEl = this.shadowRoot.getElementById("v-batt-inv-counters");
-    if (cntEl) cntEl.textContent = (invChg !== null || invDis !== null) ? `licznik falownika: ↑ ${(invChg ?? 0).toFixed(1)} · ↓ ${(invDis ?? 0).toFixed(1)} kWh` : "";
+    // GoodWe daily counters don't reset at midnight (night selling is missing there);
+    // the ledger is reconciled with the lifetime counters since midnight instead
+    if (cntEl) cntEl.textContent = bk ? "od północy · uzgodnione z licznikami falownika" : "";
 
     // Cycles (full equivalent cycles of the configured capacity)
     const capKwh = this._settings.battery_capacity_kwh || 10.2;
@@ -8411,8 +8416,12 @@ class SmartingHomePanel extends HTMLElement {
     this._setText("v-batt-model", this._settings.battery_model || "LiFePO4");
     this._setText("v-batt-capacity-spec", `${capKwh.toFixed(1).replace('.', ',')} kWh`);
     this._setText("v-batt-voltage-spec", `${this._fm("battery_voltage")} V`);
-    const chgLim = this._shN("battery_charge_limit_a");
-    this._setText("v-batt-chglim-spec", chgLim ? `${chgLim.toFixed(1)} A` : "—");
+    this._setText("v-batt-chglim-spec", bmsChg !== null
+      ? `ładowanie ${bmsChg.toFixed(0)} A · rozładowanie ${bmsDis !== null ? bmsDis.toFixed(0) : '—'} A` : "—");
+    const dodNow = this._n("number.goodwe_depth_of_discharge_on_grid");
+    const bmsFloor = this._settings.battery_bms_floor_soc;
+    this._setText("v-batt-dod-spec", `${dodNow !== null ? dodNow.toFixed(0) : 95}%`
+      + (bmsFloor ? ` · BMS odcina przy ~${Math.round(bmsFloor)}% SOC` : ` (min SOC ${100 - (dodNow ?? 95)}%)`));
     const wear = this._settings.arbitrage_params?.wear_cost ?? 0.16;
     this._setText("v-batt-wear-spec", `${(dischargeToday / capKwh).toFixed(2)} · ${(dischargeToday * wear).toFixed(2)} zł (${wear.toFixed(2)} zł/kWh)`);
 
@@ -11687,7 +11696,7 @@ class SmartingHomePanel extends HTMLElement {
                 </div>
               </div>
               <div class="dr"><span class="lb">DOD on-grid</span><span class="vl" id="v-batt-dod-tab">—%</span></div>
-              <div class="dr"><span class="lb">Prąd ładowania (maks.)</span><span class="vl" id="v-batt-charge-rate-tab">— A</span></div>
+              <div class="dr"><span class="lb">Prąd ładowania (maks. BMS)</span><span class="vl" id="v-batt-charge-rate-tab">— A</span></div>
               <div class="dr"><span class="lb">Pojemność nominalna</span><span class="vl">10.2 kWh (LiFePO4)</span></div>
             </div>
           </div>
@@ -11720,12 +11729,12 @@ class SmartingHomePanel extends HTMLElement {
               <div>
                 <div class="dr"><span class="lb">Model</span><span class="vl" style="color:#2ecc71" id="v-batt-model">—</span></div>
                 <div class="dr"><span class="lb">Pojemność</span><span class="vl" id="v-batt-capacity-spec">—</span></div>
-                <div class="dr"><span class="lb">DOD maks.</span><span class="vl">95% (min SOC 5%)</span></div>
+                <div class="dr"><span class="lb">DOD maks.</span><span class="vl" id="v-batt-dod-spec">—</span></div>
                 <div class="dr"><span class="lb">Cykle dziś / koszt zużycia</span><span class="vl" id="v-batt-wear-spec">—</span></div>
               </div>
               <div>
                 <div class="dr"><span class="lb">Napięcie pracy</span><span class="vl" id="v-batt-voltage-spec">—</span></div>
-                <div class="dr"><span class="lb">Prąd ładowania maks. (BMS)</span><span class="vl" id="v-batt-chglim-spec">—</span></div>
+                <div class="dr"><span class="lb">Limity prądu (BMS)</span><span class="vl" id="v-batt-chglim-spec">—</span></div>
                 <div class="dr"><span class="lb">Zakres temp. pracy</span><span class="vl">0°C – 50°C</span></div>
                 <div class="dr"><span class="lb">Ostrzeżenia</span><span class="vl" id="v-batt-warning-tab" style="color:#2ecc71">Brak</span></div>
               </div>
@@ -14179,7 +14188,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.66.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.66.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
