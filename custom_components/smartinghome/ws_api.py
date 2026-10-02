@@ -274,7 +274,29 @@ def ws_forecast_status(hass: HomeAssistant, connection, msg: dict[str, Any]) -> 
     ctrl = getattr(coordinator, "_strategy_controller", None)
     guard = getattr(ctrl, "_load_guard", None)
     plan = getattr(ctrl, "_arb_status", None) or {}
+    # Hourly forecasts around now (charts): {"YYYY-MM-DDTHH": kW mean}
+    from datetime import timedelta as _td
+
+    from homeassistant.util import dt as dt_util
+
+    now = dt_util.now().replace(tzinfo=None, minute=0, second=0, microsecond=0)
+    pvf = getattr(coordinator, "pv_forecaster", None)
+    lf = getattr(coordinator, "load_forecaster", None)
+    temps = pvf.daily_temps() if pvf is not None else None
+    pv_hourly: dict[str, float] = {}
+    load_hourly: dict[str, float] = {}
+    for i in range(-13, 26):
+        t = now + _td(hours=i)
+        key = t.strftime("%Y-%m-%dT%H")
+        if pvf is not None and pvf.available and data.get("pv_forecast_source") == "open_meteo":
+            pv_hourly[key] = round(pvf.hour_kwh(t), 3)
+        if lf is not None and lf.model.days >= 3:
+            kw = lf.kw(t, temps)
+            if kw is not None:
+                load_hourly[key] = round(kw, 3)
     connection.send_result(msg["id"], {
+        "pv_hourly": pv_hourly,
+        "load_hourly": load_hourly,
         "pv": data.get("pv_forecast_status") or {},
         "pv_forecast_solar": {
             "today": data.get("pv_forecast_today_total_fs"),
