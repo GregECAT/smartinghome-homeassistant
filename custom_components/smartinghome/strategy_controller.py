@@ -2071,6 +2071,15 @@ class StrategyController:
                 key: kwh * (pv_today_conf if key[0] == local_now.date() else params.pv_confidence)
                 for key, kwh in pvf.hourly().items()
             }
+            # Local station: clouds right now (irradiance vs forecast, learned sensor scale)
+            # correct the next hours — fading out over ~2 h
+            rad_nc = data.get("radiation_nowcast")
+            if rad_nc is not None:
+                for ahead in range(0, 4):
+                    t = local_now + timedelta(hours=ahead)
+                    key = (t.date(), t.hour)
+                    if key in pv_hourly:
+                        pv_hourly[key] *= 1 + (float(rad_nc) - 1) * math.exp(-ahead / 2)
         # House load: HA-history model (day type + temperature) × the live deviation, fading
         load_kw_at = None
         lf = self._load_forecaster
@@ -2127,6 +2136,7 @@ class StrategyController:
             "compute_ms": compute_ms,
             "pv_factor": round(pv_factor, 2),
             "pv_source": "open_meteo" if pv_hourly is not None else "forecast_solar",
+            "radiation_nowcast": data.get("radiation_nowcast"),
             "load_source": "history" if load_kw_at is not None else "profile",
             "load_ratio": round(getattr(self, "_arb_load_ratio", 1.0), 2),
         }

@@ -236,7 +236,43 @@ def build_sensor_map(
     for key in SENSOR_MAP_KEYS:
         entity_id = user_map.get(key) or brand_defaults.get(key, "")
         result[key] = _resolve_goodwe_entity(hass, entity_id) if resolve else entity_id
+    if hass is not None:
+        _discover_local_station(hass, result)
     return result
+
+
+# Local weather station (Ecowitt) — entity id patterns per sensor_map key
+_LOCAL_STATION_PATTERNS: dict[str, str] = {
+    "local_temp": r"outdoor_temp(erature)?(_\w+)?$",
+    "local_humidity": r"outdoor_humidity(_\w+)?$",
+    "local_dewpoint": r"dew_?point(_\w+)?$",
+    "local_wind_speed": r"(?<!max_daily_)wind_speed(_\w+)?$",
+    "local_wind_gust": r"(?<!max_daily_)wind_gust(_\w+)?$",
+    "local_wind_direction": r"wind_direction(_\w+)?$",
+    "local_rain_rate": r"rain_rate(_\w+)?$",
+    "local_daily_rain": r"daily_rain(_\w+)?$",
+    "local_solar_radiation": r"solar_radiation(_\w+)?$",
+    "local_solar_lux": r"solar_lux(_\w+)?$",
+    "local_uv_index": r"uv_index(_\w+)?$",
+    "local_pressure": r"pressure_relative(_\w+)?$",
+    "local_feels_like": r"feels_like_temp(_\w+)?$",
+}
+
+
+def _discover_local_station(hass: HomeAssistant, result: dict[str, str]) -> None:
+    """Fill unmapped local_* keys with the Ecowitt station's entities (sensor.ecowitt_*)."""
+    import re
+
+    candidates = [e for e in hass.states.async_entity_ids("sensor") if e.startswith("sensor.ecowitt")]
+    if not candidates:
+        return
+    for key, pattern in _LOCAL_STATION_PATTERNS.items():
+        if result.get(key):
+            continue
+        rx = re.compile(r"^sensor\.ecowitt\w*?_" + pattern)
+        match = sorted(e for e in candidates if rx.search(e))
+        if match:
+            result[key] = match[0]
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -306,6 +342,8 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._ledger_backfilled = False
         self._is_peak = False
         self._reconcile_ts = -1e9
+        self._rad_scale = 0.0  # local irradiance sensor ÷ forecast GHI on clear hours (learned)
+        self._rad_scale_saved = -1e9
         self._reconcile_base_day = ""
         self._reconcile_base: dict[str, float] = {}
 
@@ -461,7 +499,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.warning("Energy ledger update failed: %s", ledger_err, exc_info=True)
 
             # Read Ecowitt sensors if enabled
-            if self._ecowitt_enabled:
+            if self._ecowitt_enabled or self._sensor_map.get("local_solar_radiation") or self._sensor_map.get("local_temp"):
                 ecowitt = self._read_ecowitt_sensors()
                 computed.update(ecowitt)
 
@@ -474,6 +512,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     computed["wind_calendar_today"] = (
                         self._wind_calendar.get_today_status()
                     )
+                self._update_radiation_nowcast(raw, computed)
 
             # Evaluate schedule manager (if enabled)
             schedule_result = {}
@@ -582,6 +621,44 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         buy, peak = self._tariff_price(when)
         sell = (rce_mwh or 0.0) / 1000 * RCE_PROSUMER_COEFFICIENT
         return buy, sell, peak
+
+    def _update_radiation_nowcast(self, raw: dict[str, Any], data: dict[str, Any]) -> None:
+        """Local station irradiance vs the forecast for this hour → cloudiness right now.
+
+        The station's sensor reads its own way (WH90 on bobrek ≈ half of the
+        forecast GHI on a clear day), so its scale is learned: in hours when PV
+        matches its forecast (clear sky), scale = measured / forecast irradiance.
+        radiation_nowcast = (measured / forecast) / scale — 1.0 as forecast,
+        0.3 a thick cloud. pv_expected_now_w = PV forecast for this hour × that.
+        """
+        pvf = self.pv_forecaster
+        rad = data.get("ecowitt_solar_radiation")
+        now = dt_util.now()
+        if rad is None or not pvf.available:
+            return
+        fc_ghi = pvf.ghi_now(now)
+        fc_pv_w = pvf.power_now_w(now)
+        pv_w = _safe_float(raw.get(SENSOR_PV_POWER), -1.0)
+        if not fc_ghi or fc_ghi < 150 or fc_pv_w < 500:
+            return
+        if not self._rad_scale:
+            saved = _safe_float(self._forecast_settings.get("radiation_sensor_scale"))
+            self._rad_scale = saved if 0.1 < saved < 2.5 else 0.0
+        ratio = rad / fc_ghi
+        clear = pv_w > 0 and 0.85 <= pv_w / fc_pv_w <= 1.3
+        if clear and 0.1 < ratio < 2.5:
+            self._rad_scale = ratio if not self._rad_scale else self._rad_scale + 0.05 * (ratio - self._rad_scale)
+        if not self._rad_scale:
+            return
+        if clear and time.monotonic() - self._rad_scale_saved > 1800:
+            self._rad_scale_saved = time.monotonic()
+            from .settings_io import write_async
+
+            self.hass.async_create_task(write_async(self.hass, {"radiation_sensor_scale": round(self._rad_scale, 3)}))
+        nowcast = min(max(ratio / self._rad_scale, 0.1), 1.4)
+        data["radiation_nowcast"] = round(nowcast, 2)
+        data["radiation_sensor_scale"] = round(self._rad_scale, 2)
+        data["pv_expected_now_w"] = round(fc_pv_w * nowcast)
 
     def _lifetime_counters(self) -> dict[str, str]:
         """Inverter / meter lifetime counters (kWh) per ledger key."""

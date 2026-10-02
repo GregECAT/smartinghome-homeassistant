@@ -4271,7 +4271,7 @@ class SmartingHomePanel extends HTMLElement {
     const el = this.shadowRoot.getElementById('hems-fc-content');
     if (!el) return;
     const st = this._fcStatus || {};
-    const pv = st.pv || {}, fs = st.pv_forecast_solar || {}, ld = st.load || {}, plan = st.plan || {};
+    const pv = st.pv || {}, fs = st.pv_forecast_solar || {}, ld = st.load || {}, plan = st.plan || {}, stn = st.station || {};
     const src = this._settings.pv_forecast_source || 'auto';
     const n = (v, d = 1) => (v === null || v === undefined || isNaN(v)) ? '—' : Number(v).toFixed(d).replace('.', ',');
     const cal = Object.entries(pv.calibration || {}).map(([k, v]) => {
@@ -4316,6 +4316,9 @@ class SmartingHomePanel extends HTMLElement {
           <div>Ogrzewanie: ${ld.kwh_per_degree > 0 ? `<b>+${n(ld.kwh_per_degree, 2)} kWh/dzień</b> na każdy °C poniżej 15,5 °C (baza ${n(ld.base_kwh)} kWh)` : 'brak zależności od temperatury (lub za mało dni)'}</div>
           <div style="color:#94a3b8">Planer: ${plan.load_source === 'history' ? 'model z historii' : 'profil uczony na bieżąco (za mało historii)'}${plan.load_ratio && plan.load_ratio !== 1 ? ` · ostatnie 2 h: ×${n(plan.load_ratio, 2)} względem prognozy` : ''}</div>
           <div style="color:#94a3b8">PV w planie: ${plan.pv_source === 'open_meteo' ? 'godzinowo z Open-Meteo' : 'rozkład dzienny'}${plan.pv_factor ? ` · korekta bieżąca ×${n(plan.pv_factor, 2)}` : ''}</div>
+          <div style="color:#94a3b8">🌦️ Stacja Ecowitt: ${stn.radiation != null ? `${n(stn.radiation, 0)} W/m², ${n(stn.temp, 1)} °C` : 'brak danych'}${stn.nowcast != null
+            ? ` · chmury teraz ×${n(stn.nowcast, 2)} (oczekiwane PV ${n((stn.pv_expected_w || 0) / 1000, 1)} kW, skala czujnika ${n(stn.scale, 2)})`
+            : stn.radiation != null ? ' · uczę się skali czujnika (potrzebna pogodna godzina)' : ''}</div>
         </div>
       </div>`;
   }
@@ -14188,7 +14191,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.66.2</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.66.3</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
