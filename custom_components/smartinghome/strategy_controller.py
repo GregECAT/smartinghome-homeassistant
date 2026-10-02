@@ -329,6 +329,7 @@ class StrategyController:
         self._arb_cmd: tuple[str, int] | None = None
         self._arb_cmd_ts: float = 0.0
         self._arb_log_key: tuple = ()
+        self._offline_since = 0.0  # inverter data missing since (0 = online)
         self._v_cap_until = 0.0   # sell power reduced near the 253 V limit until …
         self._v_cap_w = 0
         self._arb_status: dict[str, Any] = {}
@@ -855,6 +856,24 @@ class StrategyController:
         actions_taken: list[str] = []
         strategy = self._active_strategy
 
+        # No data from the inverter (connection lost / reload): "unavailable" reads as
+        # SOC 0 % and used to trigger the SOC emergency — grid charging commands sent
+        # to an unreachable inverter (and, if it came back, buying at the peak price).
+        if self._inverter_offline(data):
+            return {
+                "enabled": True,
+                "strategy": strategy.value,
+                "strategy_label": AUTOPILOT_STRATEGY_LABELS.get(strategy, ""),
+                "actions": ["📡 Brak danych z falownika — autopilot czeka, nie wysyła poleceń"],
+                "soc": None, "pv": None, "load": None, "surplus": None,
+                "g13_zone": g13_zone.value, "g13_price": g13_price,
+                "rce_price_mwh": rce_mwh, "ai_reasoning": "",
+                "timestamp": now.strftime("%H:%M:%S"),
+                "action_states": self._get_action_states_for_ai(),
+                "manual_hold_until": self._manual_hold_until,
+                "arbitrage": self._arb_status if strategy == AutopilotStrategy.MAX_PROFIT else None,
+            }
+
         # Update financial tracker on each tick
         self._update_daily_balance(data)
 
@@ -1090,6 +1109,14 @@ class StrategyController:
         g13_zone = _get_g13_zone(hour, month, weekday)
 
         actions_taken: list[str] = []
+
+        if self._inverter_offline(data):
+            return {
+                "enabled": False, "safety_only": True, "strategy": "manual_schedule",
+                "actions": ["📡 Brak danych z falownika — warstwy bezpieczeństwa czekają"],
+                "soc": None, "pv": None, "surplus": None,
+                "timestamp": now.strftime("%H:%M:%S"),
+            }
 
         # W3: SOC Emergency
         from .const import DEFAULT_BATTERY_MIN_SOC
@@ -1902,6 +1929,19 @@ class StrategyController:
             if values:
                 out[h] = max(sum(values) / len(values) / 1000, 0.1)
         return out
+
+    def _inverter_offline(self, data: dict[str, Any]) -> bool:
+        """SOC or battery power missing (coordinator maps unavailable/unknown to None)."""
+        offline = data.get(SENSOR_BATTERY_SOC) is None or data.get(SENSOR_BATTERY_POWER) is None
+        if offline and not self._offline_since:
+            self._offline_since = time.time()
+            self._log_decision("inverter_offline", "📡 Brak danych z falownika — autopilot wstrzymany do powrotu połączenia")
+        elif not offline and self._offline_since:
+            mins = (time.time() - self._offline_since) / 60
+            self._offline_since = 0.0
+            self._arb_cmd = None  # re-assert the plan once the inverter is back
+            self._log_decision("inverter_online", f"📡 Falownik znów odpowiada (przerwa {mins:.0f} min) — autopilot wznowiony")
+        return offline
 
     def set_forecasters(self, pv_forecaster: Any, load_forecaster: Any) -> None:
         self._pv_forecaster = pv_forecaster
