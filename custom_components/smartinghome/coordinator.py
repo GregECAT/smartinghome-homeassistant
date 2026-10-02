@@ -328,6 +328,12 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Update a single sensor mapping in-memory (no restart needed)."""
         self._sensor_map[key] = entity_id
 
+    def _read_power(self, entity_id: str) -> float | None:
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if not state or state.state in ("unknown", "unavailable"):
+            return None
+        return _safe_float(state.state)
+
     def _read_total(self, entity_id: str) -> float | None:
         """Read a lifetime energy counter; None if missing/invalid."""
         if not entity_id:
@@ -621,6 +627,10 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             now.date(), counted,
             buy_price=buy, sell_price=_safe_float(data.get("rce_sell_price")), is_peak=peak,
             elapsed_min=(now - dt_util.start_of_local_day(now)).total_seconds() / 60,
+            mppt_weights=tuple(
+                self._read_power(eid) for i in range(1, 5)
+                if (eid := self._sensor_map.get(f"pv{i}_power"))
+            ),
         )
         if added:
             _LOGGER.info(
