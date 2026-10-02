@@ -486,6 +486,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             # Read all source sensors
             raw = self._read_source_sensors()
+            self._normalize_rce(raw)
 
             # Compute derived values
             computed = self._compute_derived(raw)
@@ -624,7 +625,9 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _ledger_price_at(self, when: datetime, rce_mwh: float | None) -> tuple[float, float, bool]:
         buy, peak = self._tariff_price(when)
-        sell = (rce_mwh or 0.0) / 1000 * RCE_PROSUMER_COEFFICIENT
+        from .rce_units import market_scale
+
+        sell = max(rce_mwh or 0.0, 0.0) * market_scale(self.hass) / 1000 * RCE_PROSUMER_COEFFICIENT
         return buy, sell, peak
 
     def _update_radiation_nowcast(self, raw: dict[str, Any], data: dict[str, Any]) -> None:
@@ -967,6 +970,27 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         active = self.alerts.active
         lines.append(f"⚠️ Aktywne alerty: {len(active)}" if active else "✅ Bez aktywnych alertów")
         return title, "\n".join(lines)
+
+    def _normalize_rce(self, raw: dict[str, Any]) -> None:
+        """RCE PSE prices → market PLN/MWh (its gross / PLN/kWh options, see rce_units)."""
+        from .rce_units import market_scale, unit_scale
+
+        scale, unit = market_scale(self.hass), unit_scale(self.hass)
+        self._rce_scale = scale
+        if scale == 1.0 and unit == 1.0:
+            return
+        for eid in (SENSOR_RCE_PRICE, SENSOR_RCE_NEXT_PERIOD, SENSOR_RCE_PREV_PERIOD,
+                    SENSOR_RCE_AVG_TODAY, SENSOR_RCE_MIN_TODAY, SENSOR_RCE_MAX_TODAY,
+                    SENSOR_RCE_MEDIAN_TODAY, SENSOR_RCE_PRICE_TOMORROW, SENSOR_RCE_AVG_TOMORROW,
+                    SENSOR_RCE_CHEAP_WINDOW_AVG, SENSOR_RCE_EXPENSIVE_WINDOW_AVG,
+                    SENSOR_RCE_SELL_PROSUMER):
+            value = raw.get(eid)
+            if value is None:
+                continue
+            try:
+                raw[eid] = float(value) * (unit if eid == SENSOR_RCE_SELL_PROSUMER else scale)
+            except (TypeError, ValueError):
+                continue
 
     def _read_source_sensors(self) -> dict[str, Any]:
         """Read current values from HA state machine.
@@ -1618,7 +1642,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if entry_time >= target_time_cmp:
                         result[f"rce_lookahead_{offset}h_mwh"] = float(
                             entry.get("rce_pln", 0)
-                        )
+                        ) * getattr(self, "_rce_scale", 1.0)
                         break
                 except (ValueError, TypeError) as exc:
                     _LOGGER.debug("RCE lookahead parse error: %s (entry=%s)", exc, entry)

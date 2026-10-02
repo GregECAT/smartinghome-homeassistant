@@ -2128,9 +2128,12 @@ class StrategyController:
 
         rce: dict = {}
         rce_slot: dict = {}
+        from .rce_units import market_scale, scale_prices
+
+        rce_scale = market_scale(self.hass)
         for eid in ("sensor.rce_pse_cena", "sensor.rce_pse_cena_jutro"):
             state = self.hass.states.get(eid)
-            prices = state.attributes.get("prices") if state else None
+            prices = scale_prices(state.attributes.get("prices") if state else None, rce_scale)
             rce.update(rce_hourly(prices))
             rce_slot.update(rce_slots(prices, params.slot_minutes))
         sunrise, sunset = self._sun_hours()

@@ -240,6 +240,22 @@ class SmartingHomePanel extends HTMLElement {
     }
   }
   _s(id) { return id && this._hass?.states[id] ? this._hass.states[id].state : null; }
+  // RCE PSE can publish gross prices (× 1.23) and PLN/kWh; the panel works with the
+  // market price in PLN/MWh. Gross mode: the prosumer sensor equals the price itself.
+  _rceScale() {
+    const st = this._hass?.states?.["sensor.rce_pse_cena"];
+    const unit = st?.attributes?.unit_of_measurement === "PLN/kWh" ? 1000 : 1;
+    const cena = parseFloat(st?.state), pros = parseFloat(this._s("sensor.rce_pse_cena_sprzedazy_prosument"));
+    if (cena > 0 && pros > 0) this._rceGross = Math.abs(pros - cena) < Math.abs(pros - cena * 1.23);
+    return unit / (this._rceGross ? 1.23 : 1);
+  }
+  _rceN(id) { const v = parseFloat(this._s(id)); return isNaN(v) ? null : v * this._rceScale(); }
+  _rcePrices(id) {
+    const p = this._hass?.states?.[id]?.attributes?.prices;
+    if (!Array.isArray(p)) return null;
+    const k = this._rceScale();
+    return k === 1 ? p : p.map(e => ({ ...e, rce_pln: parseFloat(e.rce_pln) * k }));
+  }
   _n(id) {
     const v = parseFloat(this._s(id));
     if (!isNaN(v)) {
@@ -4726,10 +4742,10 @@ W załączniku: zestawienie pomiarów (CSV).`;
     const vMax = Math.max(v1, v2, v3);
 
     // RCE data — v2.0 entity names (NC-RCE PSE migration)
-    const rceMwh = parseFloat(this._s("sensor.rce_pse_cena") || "0");
+    const rceMwh = this._rceN("sensor.rce_pse_cena") ?? 0;
     // Prosumer sell price (RCE × 1.23) — same value as on the Taryfy tab
     const rceKwh = rceMwh / 1000 * 1.23;
-    const rceNext = parseFloat(this._s("sensor.rce_pse_cena_nastepny_okres") || "0");  // v2: was cena_nastepnej_godziny
+    const rceNext = this._rceN("sensor.rce_pse_cena_nastepny_okres") ?? 0;  // v2: was cena_nastepnej_godziny
     // Entity names differ between RCE PSE releases — take whichever exists
     const rceCheapWin = this._s("binary_sensor.rce_pse_tanie_okno_aktywne") ?? this._s("binary_sensor.rce_pse_aktywne_najtansze_okno_dzisiaj");
     const rceExpWin = this._s("binary_sensor.rce_pse_drogie_okno_aktywne") ?? this._s("binary_sensor.rce_pse_aktywne_najdrozsze_okno_dzisiaj");
@@ -8376,8 +8392,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
     // All zł/kWh values are prosumer sell prices (RCE × 1.23), incl. the big "RCE teraz" tile.
     const RCE_COEF = 1.23;
     const toSell = (mwh) => (mwh === null ? null : mwh / 1000 * RCE_COEF);
-    const rcePseState = this._hass?.states?.["sensor.rce_pse_cena"];
-    const rcePrices = Array.isArray(rcePseState?.attributes?.prices) ? rcePseState.attributes.prices : null;
+    const rcePrices = this._rcePrices("sensor.rce_pse_cena");
     // RCE PSE v2 entry: { dtime: period END "YYYY-MM-DD HH:MM:SS", period: "HH:MM - HH:MM", rce_pln }
     const _entryStartHour = (p) => {
       const h = parseInt(String(p.period || "").substring(0, 2), 10);
@@ -8402,7 +8417,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
     this._setText("v-g13-price-tab", g13Price !== null ? `${g13Price.toFixed(2)} zł/kWh` : "— zł/kWh");
 
     // RCE now — sell price (zł/kWh) + raw market price (PLN/MWh)
-    const rceNowMwh = this._n("sensor.rce_pse_cena");
+    const rceNowMwh = this._rceN("sensor.rce_pse_cena");
     let rceSell = this._shN("rce_sell_price");
     if (rceSell === null || (rceSell === 0 && rceNowMwh)) rceSell = toSell(rceNowMwh);
     this._setText("v-rce-sell", rceSell !== null ? `${rceSell.toFixed(4)} zł/kWh` : "— zł/kWh");
@@ -8426,7 +8441,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
 
     // RCE +1h, +2h, +3h
     const nowTs = Date.now();
-    const rce1h = this._shN("rce_sell_price_next_hour") ?? toSell(this._n("sensor.rce_pse_cena_nastepny_okres"));
+    const rce1h = this._shN("rce_sell_price_next_hour") ?? toSell(this._rceN("sensor.rce_pse_cena_nastepny_okres"));
     const rce2h = this._shN("rce_sell_price_2h") ?? toSell(_priceMwhAt(nowTs + 2 * 3600000));
     const rce3h = this._shN("rce_sell_price_3h") ?? toSell(_priceMwhAt(nowTs + 3 * 3600000));
     this._setText("v-rce-1h", rce1h !== null ? rce1h.toFixed(2) : "—");
@@ -8434,9 +8449,9 @@ W załączniku: zestawienie pomiarów (CSV).`;
     this._setText("v-rce-3h", rce3h !== null ? rce3h.toFixed(2) : "—");
 
     // RCE Statistics (zł/kWh, sell price)
-    const rceAvg = this._shN("rce_average_today") ?? toSell(this._n("sensor.rce_pse_srednia_cena_dzisiaj"));
-    const rceMin = this._shN("rce_min_today") ?? toSell(this._n("sensor.rce_pse_minimalna_cena_dzisiaj"));
-    const rceMax = this._shN("rce_max_today") ?? toSell(this._n("sensor.rce_pse_maksymalna_cena_dzisiaj"));
+    const rceAvg = this._shN("rce_average_today") ?? toSell(this._rceN("sensor.rce_pse_srednia_cena_dzisiaj"));
+    const rceMin = this._shN("rce_min_today") ?? toSell(this._rceN("sensor.rce_pse_minimalna_cena_dzisiaj"));
+    const rceMax = this._shN("rce_max_today") ?? toSell(this._rceN("sensor.rce_pse_maksymalna_cena_dzisiaj"));
     this._setText("v-rce-avg2", rceAvg !== null ? rceAvg.toFixed(2) : "—");
     this._setText("v-rce-min", rceMin !== null ? rceMin.toFixed(2) : "—");
     this._setText("v-rce-max", rceMax !== null ? rceMax.toFixed(2) : "—");
@@ -8458,7 +8473,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
     // Trend — enum values: "rising", "falling", "stable" (fallback: next period vs now, ±10%)
     let rceTrend = this._shS("rce_price_trend");
     if (!rceTrend) {
-      const nextMwh = this._n("sensor.rce_pse_cena_nastepny_okres");
+      const nextMwh = this._rceN("sensor.rce_pse_cena_nastepny_okres");
       const chg = (rceNowMwh > 0 && nextMwh !== null) ? (nextMwh - rceNowMwh) / rceNowMwh * 100 : 0;
       rceTrend = chg > 10 ? "rising" : chg < -10 ? "falling" : "stable";
     }
@@ -8493,14 +8508,13 @@ W załączniku: zestawienie pomiarów (CSV).`;
       };
     };
     {
-      const attrs = rcePseState?.attributes || {};
-      const todayWindows = _findWindows(attrs.prices || attrs.forecast || attrs.price_list || null);
+      const todayWindows = _findWindows(rcePrices);
       this._setText("v-cheapest-window", todayWindows.cheap);
       this._setText("v-expensive-window", todayWindows.expensive);
 
       // Net-billing strategy from today's real prices (not a fixed summer pattern)
       const stratEl = this.shadowRoot.getElementById("v-rce-strategy");
-      const prices = attrs.prices || attrs.forecast || attrs.price_list || null;
+      const prices = rcePrices;
       if (stratEl && Array.isArray(prices) && prices.length) {
         const hourly = {};
         for (const p of prices) {
@@ -8544,14 +8558,14 @@ W załączniku: zestawienie pomiarów (CSV).`;
     }
 
     // RCE median + tomorrow stats
-    const rceMedianMwh = this._n("sensor.rce_pse_mediana_cen_dzisiaj");
+    const rceMedianMwh = this._rceN("sensor.rce_pse_mediana_cen_dzisiaj");
     this._setText("v-rce-median", rceMedianMwh !== null ? `${toSell(rceMedianMwh).toFixed(4)} zł` : "— zł");
-    const rceAvgTomorrowMwh = this._n("sensor.rce_pse_srednia_cena_jutro");
+    const rceAvgTomorrowMwh = this._rceN("sensor.rce_pse_srednia_cena_jutro");
     this._setText("v-rce-avg-tomorrow", rceAvgTomorrowMwh !== null ? `${toSell(rceAvgTomorrowMwh).toFixed(4)} zł` : "— zł");
     const rceTomorrowVs = this._n("sensor.rce_pse_jutro_vs_dzisiaj_srednia");
     this._setText("v-rce-tomorrow-vs", rceTomorrowVs !== null ? `${rceTomorrowVs > 0 ? '+' : ''}${rceTomorrowVs.toFixed(1)}%` : "—%");
     {
-      const tomorrowPrices = this._hass?.states?.["sensor.rce_pse_cena_jutro"]?.attributes?.prices;
+      const tomorrowPrices = this._rcePrices("sensor.rce_pse_cena_jutro");
       const tomorrowWindows = _findWindows(tomorrowPrices);
       this._setText("v-cheapest-tomorrow", tomorrowWindows.cheap);
       this._setText("v-expensive-tomorrow", tomorrowWindows.expensive);
@@ -14512,7 +14526,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.68.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.68.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -15192,8 +15206,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
     const reserveKwh = Math.max(0, (sellTarget - 5) / 100 * batCapKwh); // 5% = hardware min
 
     // Revenue estimate — use current RCE
-    const rceState = this._hass?.states['sensor.rce_pse_cena'];
-    const rceMwh = rceState ? parseFloat(rceState.state) || 500 : 500;
+    const rceMwh = this._rceN('sensor.rce_pse_cena') || 500;
     const rceSellKwh = rceMwh / 1000 * 1.23; // prosumer coefficient
     const revenue = sellKwh * rceSellKwh;
 
@@ -15215,7 +15228,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
       ? String(this._shN('pv_forecast_today_total'))
       : (g('sensor.energy_production_today') || g('sensor.energy_production_today_2'));
     const soc = g(smap.battery_soc || 'sensor.battery_state_of_charge');
-    const rce = g('sensor.rce_pse_cena');
+    const rce = this._rceN('sensor.rce_pse_cena');
 
     const setEl = (id, val) => { const el = this.shadowRoot.getElementById(id); if (el) el.textContent = val; };
 
