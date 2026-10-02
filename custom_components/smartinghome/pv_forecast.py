@@ -95,6 +95,7 @@ class PVForecaster:
         self.calibration: dict[int, float] = {}
         self._fetched = 0.0
         self._config_key = ""
+        self._key_rejected = False
         self.error = ""
 
     # ── fetch ─────────────────────────────────────────────────────
@@ -128,11 +129,20 @@ class PVForecaster:
                     "forecast_days": "3",
                 }
                 url = OPEN_METEO_URL
-                if api_key:
+                if api_key and not self._key_rejected:
                     url, params["apikey"] = OPEN_METEO_CUSTOMER_URL, api_key
                 async with session.get(url, params=params, timeout=20) as resp:
-                    resp.raise_for_status()
-                    payload = await resp.json()
+                    if resp.status in (400, 401, 403) and "apikey" in params:
+                        # invalid key — never retry it, use the free endpoint
+                        self._key_rejected = True
+                        _LOGGER.warning("Open-Meteo rejected the API key (HTTP %s) — using the free API", resp.status)
+                        params.pop("apikey")
+                        async with session.get(OPEN_METEO_URL, params=params, timeout=20) as resp2:
+                            resp2.raise_for_status()
+                            payload = await resp2.json()
+                    else:
+                        resp.raise_for_status()
+                        payload = await resp.json()
                 hourly = payload.get("hourly") or {}
                 for ts, gti, temp, sw in zip(
                     hourly.get("time") or [],
@@ -151,8 +161,8 @@ class PVForecaster:
                     slot = model.setdefault(start, {})
                     slot[plane.mppt] = slot.get(plane.mppt, 0.0) + plane_energy(float(gti), temp, plane.kwp)
         except Exception as err:  # noqa: BLE001 — keep the last forecast on network errors
-            self.error = str(err)[:200]
-            _LOGGER.warning("Open-Meteo PV forecast failed: %s", err)
+            self.error = (type(err).__name__ + ": " + str(getattr(err, "status", "") or err).split("url=")[0])[:120]
+            _LOGGER.warning("Open-Meteo PV forecast failed: %s", self.error)
             return bool(self._model)
         self.planes, self._model, self.temps, self.ghi = planes, model, temps, ghi
         self._fetched, self._config_key, self.error = time.time(), key, ""
