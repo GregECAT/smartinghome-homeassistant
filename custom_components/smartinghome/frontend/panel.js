@@ -13262,6 +13262,7 @@ class SmartingHomePanel extends HTMLElement {
               <label>Min. zysk (zł/kWh)<input type="number" id="arb-min_profit" oninput="this.getRootNode().host._arbParamsTouched = true" min="0" max="2" step="0.01"></label>
               <label>Pewność prognozy PV (0–1)<input type="number" id="arb-pv_confidence" oninput="this.getRootNode().host._arbParamsTouched = true" min="0" max="1" step="0.05"></label>
               <label>Zużycie baterii (zł/kWh)<input type="number" id="arb-wear_cost" oninput="this.getRootNode().host._arbParamsTouched = true" min="0" max="2" step="0.01"></label>
+              <label title="Sprzedaż z baterii w szczycie taryfy zostawia energię na resztę szczytu (zużycie domu + 25%) plus ten bufor">Bufor sprzedaży w szczycie (kWh)<input type="number" id="arb-peak_sell_buffer_kwh" oninput="this.getRootNode().host._arbParamsTouched = true" min="0" max="5" step="0.1"></label>
               <button class="test-btn" onclick="this.getRootNode().host._saveArbitrageParams(this)">💾 Zapisz</button>
             </div>
             <div id="ap-arb-plan" style="margin-top:10px; font-size:11px; color:#64748b">Plan pojawi się po pierwszym cyklu strategii Max Zysk.</div>
@@ -14178,7 +14179,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.65.8</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.66.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -14750,7 +14751,7 @@ class SmartingHomePanel extends HTMLElement {
     }
     const params = plan?.params;
     if (params && !this._arbParamsTouched) {
-      ['peak_floor_soc', 'reserve_soc', 'max_soc', 'min_profit', 'wear_cost', 'pv_confidence'].forEach(k => {
+      ['peak_floor_soc', 'reserve_soc', 'max_soc', 'min_profit', 'wear_cost', 'pv_confidence', 'peak_sell_buffer_kwh'].forEach(k => {
         const el = this.shadowRoot.getElementById(`arb-${k}`);
         if (el && document.activeElement !== el && this.shadowRoot.activeElement !== el) el.value = params[k];
       });
@@ -14768,8 +14769,8 @@ class SmartingHomePanel extends HTMLElement {
       badge.textContent = `${sv >= 0 ? '+' : ''}${sv.toFixed(2)} zł / 30 h`;
       badge.style.color = sv >= 0 ? '#2ecc71' : '#e74c3c';
     }
-    const labels = { charge_grid: '⚡ Ładuj z sieci', pv_charge: '☀️ Ładuj z PV', hold: '⏸️ Trzymaj', home: '🏠 Zasilaj dom', discharge: '💰 Sprzedaż / oddaj' };
-    const colors = { charge_grid: '#00d4ff', pv_charge: '#f7b731', hold: '#94a3b8', home: '#2ecc71', discharge: '#e67e22' };
+    const labels = { charge_grid: '⚡ Ładuj z sieci', pv_charge: '☀️ Ładuj z PV', pv_export: '☀️➡️ Oddawaj PV', hold: '⏸️ Trzymaj', home: '🏠 Zasilaj dom', discharge: '💰 Sprzedaż / oddaj' };
+    const colors = { charge_grid: '#00d4ff', pv_charge: '#f7b731', pv_export: '#a3e635', hold: '#94a3b8', home: '#2ecc71', discharge: '#e67e22' };
     const zones = { off_peak: 'tania', morning_peak: 'przedpoł.', afternoon_peak: 'szczyt', peak: 'szczyt', flat: 'stała' };
     const rows = plan.hours.slice(0, 26).map((h, i) => {
       const t = h.start.slice(11, 16);
@@ -14795,13 +14796,17 @@ class SmartingHomePanel extends HTMLElement {
 
   async _saveArbitrageParams(btn) {
     const params = {};
-    ['peak_floor_soc', 'reserve_soc', 'max_soc', 'min_profit', 'wear_cost', 'pv_confidence'].forEach(k => {
+    ['peak_floor_soc', 'reserve_soc', 'max_soc', 'min_profit', 'wear_cost', 'pv_confidence', 'peak_sell_buffer_kwh'].forEach(k => {
       const v = parseFloat(this.shadowRoot.getElementById(`arb-${k}`)?.value);
       if (!isNaN(v)) params[k] = v;
     });
     const orig = btn?.innerHTML;
     try {
-      await this._hass.connection.sendMessagePromise({ type: 'smartinghome/settings/update', settings: { arbitrage_params: params } });
+      // Merge into the stored params — fields without an input here (peak_load_margin,
+      // capacity…) must survive a save; settings are merged per top-level key only
+      const stored = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/settings/get', keys: ['arbitrage_params'] });
+      const merged = { ...((stored && stored.arbitrage_params) || {}), ...params };
+      await this._hass.connection.sendMessagePromise({ type: 'smartinghome/settings/update', settings: { arbitrage_params: merged } });
       this._arbParamsTouched = false;
       if (btn) btn.innerHTML = '✅ Zapisano — plan przeliczy się w ciągu minuty';
     } catch (e) {

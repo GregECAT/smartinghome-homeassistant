@@ -27,6 +27,7 @@ from .arbitrage import (
     ACT_DISCHARGE,
     ACT_HOLD,
     ACT_PV_CHARGE,
+    ACT_PV_EXPORT,
     ACTION_LABELS,
     ArbitragePlan,
     ArbitrageParams,
@@ -1508,7 +1509,8 @@ class StrategyController:
         actions: list[str] = []
 
         # Deliberate grid charging (arbitrage, manual, W3), holding or selling
-        if self._em.intent in ("charge_grid", "hold", "sell") or self.manual_hold_active:
+        # pv_export: charging blocked on purpose, the battery still covers the house
+        if self._em.intent in ("charge_grid", "hold", "sell", "pv_export") or self.manual_hold_active:
             return actions
 
         # ══════════════════════════════════════════════════════════
@@ -1842,7 +1844,8 @@ class StrategyController:
         # home → PV charge → sell 700 W → PV charge on near-equal re-plans)
         opposite = {
             ACT_CHARGE_GRID: {ACT_DISCHARGE},
-            ACT_PV_CHARGE: {ACT_DISCHARGE},
+            ACT_PV_CHARGE: {ACT_DISCHARGE, ACT_PV_EXPORT},
+            ACT_PV_EXPORT: {ACT_PV_CHARGE, ACT_CHARGE_GRID},
             ACT_DISCHARGE: {ACT_CHARGE_GRID, ACT_PV_CHARGE},
         }
         if commit and commit[0] == hour_key and action in opposite.get(commit[1], ()):
@@ -1898,6 +1901,8 @@ class StrategyController:
             await self._em.force_discharge(power_w=power_w or None)
         elif action == ACT_HOLD:
             await self._em.battery_hold()
+        elif action == ACT_PV_EXPORT:
+            await self._em.pv_export()
         else:  # home / pv_charge — battery follows the house, PV charges it
             await self._em.set_general_mode()
 
