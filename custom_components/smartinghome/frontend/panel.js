@@ -3341,15 +3341,15 @@ class SmartingHomePanel extends HTMLElement {
 
   /* ── Wind Power Tab ─────────────────────── */
   _windTurbinePresets = {
-    small:  { label: '🌬️ Mała (1 kW)',   power_kw: 1, rotor_diameter: 1.8, cut_in: 2.5, rated_speed: 11, investment: 8000,  price_kwh: 0, sensor_height: 6, hub_height: 10 },
-    medium: { label: '💨 Średnia (3 kW)', power_kw: 3, rotor_diameter: 3.2, cut_in: 3.0, rated_speed: 12, investment: 25000, price_kwh: 0, sensor_height: 6, hub_height: 12 },
-    large:  { label: '🌪️ Duża (5 kW)',   power_kw: 5, rotor_diameter: 5.0, cut_in: 2.5, rated_speed: 13, investment: 45000, price_kwh: 0, sensor_height: 6, hub_height: 15 },
+    small:  { label: '🌬️ Mała (1 kW)',   power_kw: 1, rotor_diameter: 1.8, cut_in: 2.5, rated_speed: 11, investment: 8000,  price_kwh: 0 },
+    medium: { label: '💨 Średnia (3 kW)', power_kw: 3, rotor_diameter: 3.2, cut_in: 3.0, rated_speed: 12, investment: 25000, price_kwh: 0 },
+    large:  { label: '🌪️ Duża (5 kW)',   power_kw: 5, rotor_diameter: 5.0, cut_in: 2.5, rated_speed: 13, investment: 45000, price_kwh: 0 },
   };
-  _windTurbineDefaults = { power_kw: 3, rotor_diameter: 3.2, cut_in: 3.0, rated_speed: 12, investment: 25000, price_kwh: 0, sensor_height: 6, hub_height: 12 };
+  _windTurbineDefaults = { power_kw: 3, rotor_diameter: 3.2, cut_in: 3.0, rated_speed: 12, investment: 25000, price_kwh: 0, sensor_height: 8, hub_height: 8, count: 1 };
   static WIND_FIELDS = [
     ['wind-turbine-power', 'power_kw'], ['wind-turbine-diameter', 'rotor_diameter'], ['wind-turbine-cutin', 'cut_in'],
     ['wind-turbine-rated', 'rated_speed'], ['wind-turbine-investment', 'investment'], ['wind-turbine-price', 'price_kwh'],
-    ['wind-turbine-sensor-h', 'sensor_height'], ['wind-turbine-hub-h', 'hub_height'],
+    ['wind-turbine-sensor-h', 'sensor_height'], ['wind-turbine-hub-h', 'hub_height'], ['wind-turbine-count', 'count'],
   ];
 
   /* Same model as the backend (wind_calendar.py): hub-height wind, power curve, gust spread */
@@ -3360,6 +3360,7 @@ class SmartingHomePanel extends HTMLElement {
       const v = parseFloat(this.shadowRoot.getElementById(id)?.value);
       t[key] = key === 'price_kwh' ? (v > 0 ? v : 0) : (v > 0 ? v : d[key]);
     });
+    t.count = Math.max(1, Math.min(20, Math.round(t.count)));
     t.rated_speed = Math.max(t.rated_speed, t.cut_in + 0.5);
     t.cut_out = 25;
     return t;
@@ -3378,7 +3379,7 @@ class SmartingHomePanel extends HTMLElement {
       const pdf = (Math.PI * v / (2 * meanHub * meanHub)) * Math.exp(-Math.PI * v * v / (4 * meanHub * meanHub));
       total += pdf * this._windCurve(v, t) * 0.25;
     }
-    return total * 8760 / 1000;
+    return total * 8760 / 1000 * t.count;
   }
   _windActivePreset = 'medium';
 
@@ -3537,10 +3538,10 @@ class SmartingHomePanel extends HTMLElement {
 
     // Instantaneous power potential — wind moved to hub height, turbine power curve
     const t = this._windTurbine();
-    const nominalPower = t.power_kw * 1000; // W
+    const nominalPower = t.power_kw * 1000 * t.count; // W, all turbines
     const windMs = this._windHub((wind || 0) / 3.6, t);
     const cutIn = t.cut_in;
-    const instantPower = this._windCurve(windMs, t);
+    const instantPower = this._windCurve(windMs, t) * t.count;
 
     this._setText('wind-instant-power', instantPower >= 1000 ? `${(instantPower / 1000).toFixed(2)} kW` : `${Math.round(instantPower)} W`);
     const powerBar = this.shadowRoot.getElementById('wind-power-bar-fill');
@@ -3661,8 +3662,8 @@ class SmartingHomePanel extends HTMLElement {
 
   _recalcWindProfitability() {
     const t = this._windTurbine();
-    const nominalKw = t.power_kw;
-    const investment = t.investment;
+    const nominalKw = t.power_kw * t.count;
+    const investment = t.investment * t.count;
     const sum = this._wcData?.summary;
     // Value of a kWh: fixed price, else what the calendar earned per kWh at the tariff prices
     const priceKwh = t.price_kwh > 0 ? t.price_kwh
@@ -3985,8 +3986,8 @@ class SmartingHomePanel extends HTMLElement {
     if (!el) return;
 
     const t = this._windTurbine();
-    const investment = t.investment;
-    const nominalKw = t.power_kw;
+    const investment = t.investment * t.count;
+    const nominalKw = t.power_kw * t.count;
     const priceKwh = summary.total_kwh > 0 ? summary.total_revenue / summary.total_kwh : (t.price_kwh || 0.9);
 
     if (totalDays < 7) {
@@ -4029,7 +4030,7 @@ class SmartingHomePanel extends HTMLElement {
         </div>
       </div>
       <div style="font-size:10px; color:#64748b; text-align:center; line-height:1.5">
-        📋 Obliczenia na podstawie <strong>${totalDays}</strong> dni pomiarów (wiatr godzinowy, piasta ${t.hub_height} m, porywy w godzinie) · Turbina: ${nominalKw} kW · Wartość energii: ${priceKwh.toFixed(2)} zł/kWh${t.price_kwh > 0 ? '' : ' (taryfa godzinowo)'}${totalDays < 300 ? ' · ⚠️ ekstrapolacja niepełnego roku — zima zwykle wietrzniejsza' : ''}
+        📋 Obliczenia na podstawie <strong>${totalDays}</strong> dni pomiarów (wiatr godzinowy, piasta ${t.hub_height} m, porywy w godzinie) · Turbiny: ${t.count} × ${t.power_kw} kW · Wartość energii: ${priceKwh.toFixed(2)} zł/kWh${t.price_kwh > 0 ? '' : ' (taryfa godzinowo)'}${totalDays < 300 ? ' · ⚠️ ekstrapolacja niepełnego roku — zima zwykle wietrzniejsza' : ''}
       </div>`;
   }
 
@@ -12790,7 +12791,13 @@ class SmartingHomePanel extends HTMLElement {
               </div>
               <div class="settings-field">
                 <label style="font-size:10px; color:#64748b; text-transform:uppercase">Wysokość piasty turbiny (m)</label>
-                <input type="number" id="wind-turbine-hub-h" step="0.5" min="1" placeholder="12"
+                <input type="number" id="wind-turbine-hub-h" step="0.5" min="1" placeholder="8"
+                  style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
+                  onchange="this.getRootNode().host._onWindFieldManualChange()" />
+              </div>
+              <div class="settings-field">
+                <label style="font-size:10px; color:#64748b; text-transform:uppercase">Liczba turbin (koszt = cena × liczba)</label>
+                <input type="number" id="wind-turbine-count" step="1" min="1" max="20" placeholder="1"
                   style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
                   onchange="this.getRootNode().host._onWindFieldManualChange()" />
               </div>
@@ -14169,7 +14176,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.66.6</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.66.7</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

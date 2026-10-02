@@ -43,8 +43,9 @@ DEFAULT_TURBINE: dict[str, float] = {
     "cut_out": 25,        # m/s — storm stop
     "investment": 25000,
     "price_kwh": 0,       # 0 = value energy at the tariff price of each hour
-    "sensor_height": 6,   # m — anemometer above ground
-    "hub_height": 12,     # m — turbine hub above ground
+    "sensor_height": 8,   # m — anemometer above ground
+    "hub_height": 8,      # m — turbine hub above ground
+    "count": 1,           # number of identical turbines (e.g. on the house corners)
 }
 AIR_DENSITY = 1.225       # kg/m³
 TURBINE_EFFICIENCY = 0.35  # Cp of a small turbine (Betz limit 0.593)
@@ -66,6 +67,8 @@ def sanitize_turbine(raw: dict[str, Any] | None) -> dict[str, float]:
             continue
         if key == "price_kwh":
             out[key] = max(val, 0.0)
+        elif key == "count":
+            out[key] = float(max(1, min(int(val), 20))) if val > 0 else 1.0
         elif val > 0:
             out[key] = val
     out["rated_speed"] = max(out["rated_speed"], out["cut_in"] + 0.5)
@@ -125,7 +128,7 @@ def rayleigh_annual_kwh(mean_hub_ms: float, t: dict[str, float]) -> float:
         v = i * step
         pdf = (math.pi * v / (2 * mean_hub_ms ** 2)) * math.exp(-math.pi * v * v / (4 * mean_hub_ms ** 2))
         total += pdf * power_curve_w(v, t) * step
-    return total * 8760 / 1000
+    return total * 8760 / 1000 * t.get("count", 1)
 
 
 def day_record(
@@ -134,12 +137,13 @@ def day_record(
     price_at: Callable[[int], float],
     gust_max_kmh: float = 0.0,
 ) -> dict[str, Any]:
-    """One day from hourly mean winds (km/h at the anemometer)."""
-    rated_w = t["power_kw"] * 1000
+    """One day from hourly mean winds (km/h at the anemometer), all turbines together."""
+    n = t.get("count", 1)
+    rated_w = t["power_kw"] * 1000 * n
     kwh = revenue = peak = 0.0
     productive = 0
     for hour, kmh in hourly_kmh.items():
-        p = expected_power_w(kmh / 3.6, t)
+        p = expected_power_w(kmh / 3.6, t) * n
         e = p / 1000
         kwh += e
         revenue += e * (t["price_kwh"] if t["price_kwh"] > 0 else price_at(hour))
@@ -424,7 +428,7 @@ class WindCalendar:
         cur = hours.get(now.hour)
         if cur is not None:
             share = now.minute / 60
-            p_cur = expected_power_w(cur / 3.6, turbine) / 1000
+            p_cur = expected_power_w(cur / 3.6, turbine) * turbine.get("count", 1) / 1000
             rec["kwh_produced"] = round(rec["kwh_produced"] - p_cur * (1 - share), 3)
         return {
             "date": now.strftime("%Y-%m-%d"),
@@ -438,7 +442,7 @@ class WindCalendar:
             "productive_pct": round(rec["productive_hours"] / len(hours) * 100, 1) if hours else 0,
             "elapsed_hours": round(now.hour + now.minute / 60, 1),
             "hub_wind_ms": round(hub_speed((cur if cur is not None else 0) / 3.6, turbine), 1),
-            "power_now_w": round(expected_power_w((cur if cur is not None else 0) / 3.6, turbine)),
+            "power_now_w": round(expected_power_w((cur if cur is not None else 0) / 3.6, turbine) * turbine.get("count", 1)),
         }
 
     async def close_day(self) -> dict[str, Any] | None:
@@ -482,7 +486,7 @@ class WindCalendar:
         hours = sum(r.get("samples", 24) for r in days.values()) or 1
         annual_revenue = total_revenue / total_days * 365
         annual_kwh = total_kwh / total_days * 365
-        investment = turbine["investment"]
+        investment = turbine["investment"] * turbine.get("count", 1)  # price per turbine × count
         payback = round(investment / annual_revenue, 1) if annual_revenue > 0 else None
         return {
             "total_days": total_days,
@@ -495,7 +499,7 @@ class WindCalendar:
             "avg_wind_kmh": round(avg_wind, 1),
             "avg_wind_ms": round(avg_wind / 3.6, 1),
             "avg_hub_wind_ms": round(hub_speed(avg_wind / 3.6, turbine), 1),
-            "avg_capacity_factor": round(total_kwh / (turbine["power_kw"] * hours), 4),
+            "avg_capacity_factor": round(total_kwh / (turbine["power_kw"] * turbine.get("count", 1) * hours), 4),
             "best_day": {"date": best[0], "kwh": best[1].get("kwh_produced", 0)},
             "worst_productive_day": {"date": worst[0], "kwh": worst[1].get("kwh_produced", 0)},
             "wind_distribution": dist,
