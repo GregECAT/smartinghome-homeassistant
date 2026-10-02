@@ -305,6 +305,7 @@ def ws_forecast_status(hass: HomeAssistant, connection, msg: dict[str, Any]) -> 
         "load": data.get("load_forecast_status") or {},
         "plan": {k: plan.get(k) for k in ("pv_source", "load_source", "load_ratio", "pv_factor", "updated")},
         "guard": guard.status() if guard is not None else None,
+        "boiler": ctrl._boiler.status() if ctrl is not None and hasattr(ctrl, "_boiler") else None,
     })
 
 

@@ -19,6 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .pl_holidays import tariff_weekday
+from .boiler_surplus import BoilerInput, BoilerSurplus
 from .load_guard import GuardInput, LoadGuard
 from .arbitrage import buy_price as arb_buy_price
 from .arbitrage import (
@@ -341,6 +342,11 @@ class StrategyController:
         # Forecasts owned by the coordinator (Open-Meteo PV per plane, HA-history load model)
         self._pv_forecaster: Any = None
         self._load_forecaster: Any = None
+        # W4b boiler on PV surplus
+        self._boiler = BoilerSurplus()
+        self._em.boiler_owned_elsewhere = self._boiler.enabled  # before the first W4 cascade tick
+        self._boiler_cfg_ts = 0.0
+        self._boiler_restored = False
         # W5 peak load guard
         self._load_guard = LoadGuard()
         self._guard_cfg_ts = 0.0
@@ -934,6 +940,9 @@ class StrategyController:
         surplus_actions = await self._execute_w4_pv_surplus_cascade(surplus, soc)
         actions_taken.extend(surplus_actions)
 
+        # W4b: Boiler on PV surplus (battery full + export in the midday window)
+        actions_taken.extend(await self._execute_w4b_boiler_surplus(data, soc, grid, max(v_l1, v_l2, v_l3)))
+
         # W6: Thermal Throttling — protect inverter from overheating
         thermal_status = data.get("inverter_thermal_status", "ok")
         if thermal_status in ("hot", "critical"):
@@ -1114,6 +1123,9 @@ class StrategyController:
         # W4: PV Surplus cascade
         surplus_actions = await self._execute_w4_pv_surplus_cascade(surplus, soc)
         actions_taken.extend(surplus_actions)
+
+        # W4b: Boiler on PV surplus (battery full + export in the midday window)
+        actions_taken.extend(await self._execute_w4b_boiler_surplus(data, soc, grid, max(v_l1, v_l2, v_l3)))
 
         return {
             "enabled": False,
@@ -1349,6 +1361,50 @@ class StrategyController:
     #  W0 — Grid Import Guard
     # ------------------------------------------------------------------
 
+    async def _execute_w4b_boiler_surplus(
+        self, data: dict[str, Any], soc: float, grid: float, max_voltage: float,
+    ) -> list[str]:
+        """W4b: the boiler heats water only from PV surplus (boiler_surplus.py)."""
+        from .settings_io import read_async, write_async
+
+        boiler = self._boiler
+        if time.time() - self._boiler_cfg_ts > 300:
+            settings = await read_async(self.hass)
+            boiler.configure(settings.get("boiler_surplus"))
+            if not self._boiler_restored:
+                boiler.owned = bool(settings.get("boiler_surplus_owned"))  # survives restarts
+                self._boiler_restored = True
+            self._boiler_cfg_ts = time.time()
+        self._em.boiler_owned_elsewhere = boiler.enabled
+        if not boiler.enabled:
+            return []
+        st = self.hass.states.get(boiler.entity)
+        owned_before = boiler.owned
+        decision = boiler.decide(BoilerInput(
+            hour=dt_util.now().hour,
+            soc=soc,
+            export_w=max(grid, 0.0),
+            import_w=max(-grid, 0.0),
+            battery_w=_safe_float(data.get(SENSOR_BATTERY_POWER)),
+            max_voltage=max_voltage,
+            state=st.state if st else "unavailable",
+        ))
+        msgs: list[str] = []
+        if decision:
+            service, reason = decision
+            try:
+                await self.hass.services.async_call("homeassistant", service, {"entity_id": boiler.entity})
+                icon, verb = ("🔥", "włączony") if service == "turn_on" else ("⏹️", "wyłączony")
+                msg = f"W4b: {icon} Bojler {verb} — {reason}"
+                msgs.append(msg)
+                self._log_decision("w4b_boiler", msg)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("W4b boiler %s failed: %s", service, err)
+                boiler.owned = owned_before
+        if boiler.owned != owned_before:
+            await write_async(self.hass, {"boiler_surplus_owned": boiler.owned})
+        return msgs
+
     async def _execute_w5_peak_load_guard(self, data: dict[str, Any], soc: float, grid: float) -> list[str]:
         """W5: switch configured loads off in a tariff peak (load_guard.py), back on after it."""
         from .settings_io import read_async, write_async
@@ -1363,6 +1419,10 @@ class StrategyController:
                     guard.shed.setdefault(entity, ("restart", 0.0))
                 self._guard_restored = True
             self._guard_cfg_ts = time.time()
+        if self._boiler.enabled:
+            # the boiler has its own owner (W4b) — the guard never switches it
+            guard.devices = [d for d in guard.devices if d.get("entity") != self._boiler.entity]
+            guard.shed.pop(self._boiler.entity, None)
         if not guard.devices:
             return []
 
@@ -3054,6 +3114,13 @@ class StrategyController:
         restored: list[str] = []
 
         for entity_id in list(self._disabled_automations):
+            if self._boiler.enabled:
+                config = await self._get_automation_config(entity_id)
+                if config and self._boiler.entity in str(config):
+                    # The boiler runs only on PV surplus now (W4b) — its time
+                    # schedules / old HEMS boiler automations stay off
+                    _LOGGER.info("Not restoring %s — the boiler is managed by W4b", entity_id)
+                    continue
             try:
                 await self.hass.services.async_call(
                     "automation", "turn_on",

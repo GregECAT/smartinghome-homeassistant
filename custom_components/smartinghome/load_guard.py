@@ -27,7 +27,6 @@ HOLD_S = 60                # condition must last this long before switching
 STEP_S = 60                # one shed step per minute
 
 DEFAULT_DEVICES = [
-    {"entity": "switch.bojler_3800", "name": "Bojler", "power_w": 3800, "mode": "block_peak"},
     {"entity": "switch.drugie_gniazdko", "name": "Grzejnik", "power_w": 2000, "mode": "shed"},
     {"entity": "switch.klimatyzacja_socket_1", "name": "Klimatyzator", "power_w": 1200, "mode": "off"},
 ]

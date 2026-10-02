@@ -4209,7 +4209,6 @@ class SmartingHomePanel extends HTMLElement {
     off: 'Bez sterowania',
   };
   static GUARD_DEFAULTS = [
-    { entity: 'switch.bojler_3800', name: 'Bojler', power_w: 3800, mode: 'block_peak' },
     { entity: 'switch.drugie_gniazdko', name: 'Grzejnik', power_w: 2000, mode: 'shed' },
     { entity: 'switch.klimatyzacja_socket_1', name: 'Klimatyzator', power_w: 1200, mode: 'off' },
   ];
@@ -4220,7 +4219,52 @@ class SmartingHomePanel extends HTMLElement {
       this._fcStatus = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/forecast/status' });
     } catch (e) { this._fcStatus = null; }
     this._renderForecastStatus();
+    this._renderBoilerSurplus();
     this._renderPeakGuard();
+  }
+
+  _renderBoilerSurplus() {
+    const el = this.shadowRoot.getElementById('hems-w4b-content');
+    if (!el) return;
+    const st = (this._fcStatus || {}).boiler || {};
+    const cfg = { enabled: true, entity: 'switch.bojler_3800', window: [10, 16], min_soc: 98, min_export_w: 3000,
+      ...(this._settings.boiler_surplus || {}) };
+    const ent = this._hass?.states?.[cfg.entity];
+    const state = ent?.state || 'brak encji';
+    const sumEl = this.shadowRoot.getElementById('hems-w4b-sum');
+    if (sumEl) sumEl.textContent = !cfg.enabled ? 'wyłączony'
+      : `${cfg.window[0]}:00–${cfg.window[1]}:00 · bojler ${state === 'on' ? 'grzeje' : state === 'off' ? 'czeka' : state}`;
+    const inputStyle = 'background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px;width:70px';
+    el.innerHTML = `
+      <div style="color:#94a3b8; margin-bottom:8px">Woda jest grzana piecem C.O.; bojler służy tylko do odebrania nadwyżki PV.
+        W oknie południowym, gdy bateria jest pełna i energia płynie do sieci, bojler się włącza zamiast sprzedawać tanio.
+        Wyłącza się, gdy nadwyżka zniknie (bateria zaczyna oddawać prąd, dom bierze z sieci) lub kończy się okno.
+        Wysokie napięcie przy eksporcie (≥ 252 V) też go włącza. Harmonogram godzinowy bojlera pozostaje wyłączony.</div>
+      <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-bottom:8px">
+        <label style="display:flex; gap:6px; align-items:center; cursor:pointer"><input type="checkbox" id="w4b-en" ${cfg.enabled ? 'checked' : ''}/> <b>Włączony</b></label>
+        <span>Okno: <input type="number" id="w4b-start" min="0" max="23" value="${cfg.window[0]}" style="${inputStyle}"/> – <input type="number" id="w4b-end" min="1" max="24" value="${cfg.window[1]}" style="${inputStyle}"/> h</span>
+        <span>Bateria ≥ <input type="number" id="w4b-soc" min="80" max="100" value="${cfg.min_soc}" style="${inputStyle}"/> %</span>
+        <span>Eksport ≥ <input type="number" id="w4b-exp" min="300" step="100" value="${cfg.min_export_w}" style="${inputStyle}"/> W</span>
+        <button onclick="this.getRootNode().host._saveBoilerSurplus()" style="background:#2ecc71;color:#0f172a;border:none;border-radius:6px;padding:6px 14px;font-weight:700;cursor:pointer">💾 Zapisz</button>
+        <span id="w4b-saved" style="font-size:11px; color:#2ecc71"></span>
+      </div>
+      <div>Bojler (<code>${cfg.entity}</code>): <b style="color:${state === 'on' ? '#f7b731' : state === 'off' ? '#94a3b8' : '#e67e22'}">${state === 'on' ? '🔥 grzeje' : state === 'off' ? 'wyłączony' : state}</b>
+        ${st.owned ? ' · włączony przez autopilota' : ''}${st.reason ? ` · ostatnio: ${st.reason}` : ''}</div>`;
+  }
+
+  async _saveBoilerSurplus() {
+    const v = (id) => this.shadowRoot.getElementById(id);
+    const prev = this._settings.boiler_surplus || {};
+    const cfg = {
+      ...prev,
+      enabled: v('w4b-en').checked,
+      window: [parseInt(v('w4b-start').value) || 10, parseInt(v('w4b-end').value) || 16],
+      min_soc: parseFloat(v('w4b-soc').value) || 98,
+      min_export_w: parseInt(v('w4b-exp').value) || 3000,
+    };
+    await this._savePanelSettings({ boiler_surplus: cfg });
+    const el = v('w4b-saved'); if (el) el.textContent = '✓ Zapisano — autopilot użyje w ciągu 5 min';
+    setTimeout(() => this._loadForecastStatus(), 1500);
   }
 
   _renderForecastStatus() {
@@ -12086,6 +12130,21 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
+          <!-- ═══ W4b: BOJLER Z NADWYŻKI PV ═══ -->
+          <div class="hems-layer" id="hems-layer-w4b">
+            <div class="hems-layer-header" onclick="this.getRootNode().host._toggleHEMSSection('w4b')">
+              <div class="hl-left">
+                <span class="hl-tag" style="background:rgba(247,183,49,0.15);color:#f7b731">W4b</span>
+                <span class="hl-name">Bojler z nadwyżki PV</span>
+                <span style="font-size:10px;color:#64748b" id="hems-w4b-sum">—</span>
+              </div>
+              <span class="hl-chevron">▼</span>
+            </div>
+            <div class="hems-layer-body" id="hems-w4b-body">
+              <div style="grid-column:1/-1; font-size:12px; color:#cbd5e1" id="hems-w4b-content">Ładowanie…</div>
+            </div>
+          </div>
+
           <!-- ═══ W5: ODBIORNIKI W SZCZYCIE ═══ -->
           <div class="hems-layer" id="hems-layer-w5">
             <div class="hems-layer-header" onclick="this.getRootNode().host._toggleHEMSSection('w5')">
@@ -12115,7 +12174,7 @@ class SmartingHomePanel extends HTMLElement {
               <!-- Napięcie: Bojler -->
               <div class="hems-auto-card" id="hac-volt-blr">
                 <div class="hac-top"><span class="hac-icon">⚡</span><span class="hac-name">Napięcie → Bojler</span><span class="hac-status" id="hac-volt-blr-st">—</span></div>
-                <div class="hac-desc">&gt;252V → Bojler ON (zagospodarowanie nadwyżki).</div>
+                <div class="hac-desc">&gt;252V przy eksporcie → Bojler ON — realizuje W4b (bojler z nadwyżki PV).</div>
                 <div class="hac-sensors">
                   <span class="hs-label">V max:</span><span class="hs-val" id="hac-vb-vmax">—</span>
                   <span class="hs-label">Bojler:</span><span class="hs-val" id="hac-vb-blr">—</span>
@@ -12142,7 +12201,7 @@ class SmartingHomePanel extends HTMLElement {
               <!-- Nadwyżka: Bojler -->
               <div class="hems-auto-card" id="hac-sur-blr">
                 <div class="hac-top"><span class="hac-icon">☀️</span><span class="hac-name">Nadwyżka → Bojler</span><span class="hac-status" id="hac-sur-blr-st">—</span></div>
-                <div class="hac-desc">&gt;2kW nadwyżki + SOC &gt;80% → Bojler ON.</div>
+                <div class="hac-desc">Bojlerem steruje W4b: okno południowe, bateria pełna, eksport do sieci.</div>
                 <div class="hac-sensors">
                   <span class="hs-label">Nadwyżka:</span><span class="hs-val" id="hac-sb-sur">—</span>
                   <span class="hs-label">SOC:</span><span class="hs-val" id="hac-sb-soc">—</span>
@@ -12151,7 +12210,7 @@ class SmartingHomePanel extends HTMLElement {
               <!-- Nadwyżka: Klima -->
               <div class="hems-auto-card" id="hac-sur-ac">
                 <div class="hac-top"><span class="hac-icon">❄️</span><span class="hac-name">Nadwyżka → Klima</span><span class="hac-status" id="hac-sur-ac-st">—</span></div>
-                <div class="hac-desc">&gt;3kW nadwyżki + SOC &gt;85% + bojler ON → Klima ON.</div>
+                <div class="hac-desc">&gt;3kW nadwyżki + SOC &gt;85% → Klima ON.</div>
                 <div class="hac-sensors">
                   <span class="hs-label">Nadwyżka:</span><span class="hs-val" id="hac-sa-sur">—</span>
                   <span class="hs-label">SOC:</span><span class="hs-val" id="hac-sa-soc">—</span>
@@ -12160,7 +12219,7 @@ class SmartingHomePanel extends HTMLElement {
               <!-- Nadwyżka: Gniazdko -->
               <div class="hems-auto-card" id="hac-sur-sock">
                 <div class="hac-top"><span class="hac-icon">🔌</span><span class="hac-name">Nadwyżka → Gniazdko 2</span><span class="hac-status" id="hac-sur-sock-st">—</span></div>
-                <div class="hac-desc">&gt;4kW nadwyżki + SOC &gt;90% + bojler + klima → Gniazdko ON.</div>
+                <div class="hac-desc">&gt;4kW nadwyżki + SOC &gt;90% + klima → Gniazdko ON.</div>
                 <div class="hac-sensors">
                   <span class="hs-label">Nadwyżka:</span><span class="hs-val" id="hac-ss-sur">—</span>
                   <span class="hs-label">SOC:</span><span class="hs-val" id="hac-ss-soc">—</span>
@@ -14119,7 +14178,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.65.4</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.65.5</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
