@@ -42,7 +42,7 @@ METER_TARIFFS: dict[str, dict[str, Any]] = {
         "zones": ["flat"],
         "energy": {"flat": 0.0},
         "dist": {"flat": 0.0},
-        "fixed": {"handlowa": 0.0, "abonament": 0.0, "mocowa": 0.0},
+        "fixed": {"handlowa": 0.0, "abonament": 0.0, "mocowa": 0.0, "bierna": 0.0},
         "contract_rate": 0.0,
         "needs_input": True,
     },
@@ -54,7 +54,7 @@ METER_TARIFFS: dict[str, dict[str, Any]] = {
         "zones": ["morning", "afternoon", "off_peak"],
         "energy": {"morning": 1.01, "afternoon": 1.25, "off_peak": 0.932},
         "dist": {"morning": 0.2155, "afternoon": 0.3192, "off_peak": 0.1527},
-        "fixed": {"handlowa": 35.0, "abonament": 2.28, "mocowa": 10.31},
+        "fixed": {"handlowa": 35.0, "abonament": 2.28, "mocowa": 10.31, "bierna": 0.0},
         "contract_rate": 5.73,
         "needs_input": False,
     },
@@ -109,6 +109,9 @@ FIXED_LABELS: dict[str, str] = {
     "abonament": "Opłata abonamentowa",
     "mocowa": "Opłata mocowa",
     "stala": "Opłata stała sieciowa",
+    # Reactive energy (C tariffs) is billed per kvarh; with a constant source it is
+    # close to a fixed monthly sum — taken from the last invoice, 0 when there is none
+    "bierna": "Energia bierna (średnio z faktury)",
 }
 
 

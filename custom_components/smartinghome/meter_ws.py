@@ -174,7 +174,15 @@ def summarize(
         current["forecast_kwh"] = round(current["kwh"] * f, 1)
         current["forecast_variable"] = round(current["variable"] * f, 2)
         current["forecast_total"] = round(current["variable"] * f + fixed_total, 2)
-    previous = month_block(prev, monthrange(prev_start.year, prev_start.month)[1], fixed_total)
+    prev_days = monthrange(prev_start.year, prev_start.month)[1]
+    prev_with_data = len({t.date() for t, _ in prev})
+    # A month the meter covers only partly (new eLicznik account) carries the fixed
+    # fees of the days with data — a full month of fees on one day of kWh misleads
+    prev_complete = prev_with_data >= prev_days - 1
+    previous = month_block(prev, prev_days,
+                           fixed_total if prev_complete else fixed_total * prev_with_data / prev_days)
+    previous["complete"] = prev_complete
+    previous["fixed_month"] = fixed_total
 
     # Daily series (last 31 days with zone split)
     by_day: dict[str, list[tuple[datetime, float]]] = {}
@@ -185,7 +193,9 @@ def summarize(
     for day in sorted(by_day):
         c = mt.cost_hours(tariff, by_day[day])
         d = datetime.fromisoformat(day).date()
+        # hours < 23: the day eLicznik has not finished yet (23/25 h on DST days)
         daily.append({"date": day, "free": mt.is_free_day(d), "kwh": c["kwh"],
+                      "hours": len(by_day[day]),
                       "variable": c["variable"],
                       "zones": {z: v["kwh"] for z, v in c["zones"].items()}})
 

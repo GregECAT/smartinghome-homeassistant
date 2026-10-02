@@ -302,7 +302,8 @@ class SmartingHomeMeterPanel extends HTMLElement {
     const bl = d.baseload || {};
     const alertW = Number(s.baseload_alert_w) || 0;
     const blCls = bl.w && alertW && bl.w > alertW * 2 ? "bad" : bl.w && alertW && bl.w > alertW ? "warn" : "";
-    const delta = cm.forecast_total && pm.total ? (cm.forecast_total - pm.total) / pm.total * 100 : null;
+    const pmFull = pm.total && pm.complete !== false;
+    const delta = cm.forecast_total && pmFull ? (cm.forecast_total - pm.total) / pm.total * 100 : null;
 
     const kpis = `
       <div class="grid kpis">
@@ -319,7 +320,7 @@ class SmartingHomeMeterPanel extends HTMLElement {
         <div class="card kpi">
           <div class="lbl">Prognoza rachunku</div>
           <div class="val">${costHidden || cm.forecast_total === undefined ? "—" : this._zl(cm.forecast_total, 0)}</div>
-          <div class="note">${cm.forecast_total === undefined && !costHidden ? "po 3 dniach danych · " : ""}${pm.total && !costHidden ? `poprzedni miesiąc ${this._zl(pm.total, 0)}` : "za cały miesiąc"}
+          <div class="note">${cm.forecast_total === undefined && !costHidden ? "po 3 dniach danych · " : ""}${pmFull && !costHidden ? `poprzedni miesiąc ${this._zl(pm.total, 0)}` : "za cały miesiąc"}
             ${delta !== null && isFinite(delta) && !costHidden ? ` · <span class="${delta > 0 ? "up" : "down"}">${delta > 0 ? "▲" : "▼"} ${this._num(Math.abs(delta), 0)}%</span>` : ""}</div>
         </div>
         <div class="card kpi ${blCls}">
@@ -342,7 +343,7 @@ class SmartingHomeMeterPanel extends HTMLElement {
       <div class="foot">
         Źródło: ${esc(d.source.name)} (${esc(d.source.id)}) · dane do ${d.data_until ? esc(d.data_until.replace("T", " ")) : "—"}<br>
         Kwoty ${this._showGross ? "brutto (z VAT 23%)" : "netto"} · ceny z Ustawień panelu (domyślnie taryfy TAURON 2026) ·
-        bez energii biernej i rozliczeń korygujących. Moc szczytowa to średnia godzinowa — licznik rozlicza maksimum 15-minutowe.
+        ${d.fixed_breakdown && d.fixed_breakdown.bierna ? "energia bierna jako średnia z faktury" : "bez energii biernej"} i rozliczeń korygujących. Moc szczytowa to średnia godzinowa — licznik rozlicza maksimum 15-minutowe.
       </div>`;
   }
 
@@ -361,12 +362,14 @@ class SmartingHomeMeterPanel extends HTMLElement {
     const money = hidden ? "" : `
       <div class="row" style="margin-top:6px"><span class="k">Energia czynna</span><span class="v">${this._zl(m.energy)}</span></div>
       <div class="row"><span class="k">Dystrybucja zmienna</span><span class="v">${this._zl(m.dist)}</span></div>
-      <div class="row"><span class="k">${m.fixed_month && m.fixed_month !== m.fixed ? `Opłaty stałe (${m.days_with_data !== undefined ? "do dziś" : "miesiąc"})` : "Opłaty stałe (miesiąc)"}</span><span class="v">${this._zl(m.fixed)}</span></div>
+      <div class="row"><span class="k">${m.complete === false ? `Opłaty stałe (${m.days_with_data} z ${m.days} dni)` : m.fixed_month && m.fixed_month !== m.fixed ? "Opłaty stałe (do dziś)" : "Opłaty stałe (miesiąc)"}</span><span class="v">${this._zl(m.fixed)}</span></div>
       ${fixedRows}
       <div class="row total"><span class="k" style="color:#e0e6ed">Razem</span><span class="v">${this._zl(m.total)}</span></div>
       ${m.kwh && m.days_with_data >= 3 ? `<div class="hint">Średnio <b>${this._zl(m.total / m.kwh)}</b> za 1 kWh wraz z opłatami stałymi.</div>` : ""}`;
+    const partial = m.complete === false
+      ? `<div class="hint">Licznik ma dane tylko z ${m.days_with_data} z ${m.days} dni tego miesiąca — to nie jest cały rachunek.</div>` : "";
     return `<div class="card"><h3>${esc(title)} <small>${this._num(m.kwh, 1)} kWh · ${m.days_with_data || 0} dni z danymi</small></h3>
-      <div class="stack">${bar}</div><div class="rows">${zoneRows}${money}</div></div>`;
+      <div class="stack">${bar}</div><div class="rows">${zoneRows}${money}</div>${partial}</div>`;
   }
 
   _baseloadCard(bl, alertW) {
@@ -390,7 +393,8 @@ class SmartingHomeMeterPanel extends HTMLElement {
 
   _peakCard(d) {
     const kw = Number(d.contract_kw) || 0;
-    const peak = (d.peak && (d.peak.current_month || d.peak.previous_month)) || null;
+    const pc = d.peak && d.peak.current_month, pp = d.peak && d.peak.previous_month;
+    const peak = pc && pp ? (pc.kw >= pp.kw ? pc : pp) : pc || pp || null;
     if (!kw && !peak) return "";
     const pk = peak ? peak.kw : 0;
     const scale = Math.max(kw, pk) * 1.1 || 1;
@@ -424,7 +428,8 @@ class SmartingHomeMeterPanel extends HTMLElement {
       return `<div class="card"><h3>Jakość energii · energia bierna</h3>
         <div class="hint">Licznik w eLiczniku nie pokazuje współczynnika mocy na bieżąco, a w taryfach C operator
         dolicza <b>energię bierną pojemnościową</b> (zasilacze, UPS-y, LED, kondensatory w rozdzielnicy) —
-        potrafi to być nawet kilkadziesiąt procent rachunku.<br><br>
+        potrafi to być nawet kilkadziesiąt procent rachunku.${this._data && this._data.fixed_breakdown && this._data.fixed_breakdown.bierna
+          ? ` Tutaj według faktury to <b>${this._zl(this._data.fixed_breakdown.bierna)}</b> miesięcznie.` : ""}<br><br>
         Miernik typu <b>Shelly Pro 3EM</b> w rozdzielnicy pokaże moc i <b>cos φ</b> na każdej fazie na żywo.
         Dodaj jego czujnik współczynnika mocy w Ustawieniach.</div></div>`;
     }
@@ -474,17 +479,18 @@ class SmartingHomeMeterPanel extends HTMLElement {
     const H = 220, padL = 34, padB = 22, padT = 8;
     const max = Math.max(...daily.map((d) => d.kwh), 0.1);
     const step = (W - padL) / daily.length;
-    const bw = Math.max(3, step * 0.7);
+    const bw = Math.min(48, Math.max(3, step * 0.7));
     const y = (v) => padT + (H - padT - padB) * (1 - v / max);
     let bars = "";
     daily.forEach((d, i) => {
       let acc = 0;
+      const part = d.hours !== undefined && d.hours < 23; // eLicznik has not finished the day
       const x = padL + i * step + (step - bw) / 2;
       zones.forEach((z) => {
         const v = (d.zones && d.zones[z]) || 0;
         if (v <= 0) return;
         const y1 = y(acc + v), y0 = y(acc);
-        bars += `<rect x="${x.toFixed(1)}" y="${y1.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0.5, y0 - y1).toFixed(1)}" fill="${ZONE_COLORS[z] || "#00d4ff"}" opacity="${d.free ? 0.55 : 0.9}"><title>${esc(d.date)} · ${esc(this._zoneLabel(z))}: ${this._num(v, 1)} kWh</title></rect>`;
+        bars += `<rect x="${x.toFixed(1)}" y="${y1.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0.5, y0 - y1).toFixed(1)}" fill="${ZONE_COLORS[z] || "#00d4ff"}" opacity="${part ? 0.3 : d.free ? 0.55 : 0.9}"><title>${esc(d.date)} · ${esc(this._zoneLabel(z))}: ${this._num(v, 1)} kWh</title></rect>`;
         acc += v;
       });
       const dd = d.date.slice(8, 10);
@@ -492,11 +498,13 @@ class SmartingHomeMeterPanel extends HTMLElement {
       if (i % every === 0) {
         bars += `<text x="${(x + bw / 2).toFixed(1)}" y="${H - 6}" text-anchor="middle"${d.free ? ' style="fill:#a78bfa"' : ""}>${dd}</text>`;
       }
-      bars += `<rect x="${x.toFixed(1)}" y="${padT}" width="${bw.toFixed(1)}" height="${H - padT - padB}" fill="transparent"><title>${esc(d.date)}${d.free ? " (dzień wolny)" : ""}: ${this._num(d.kwh, 1)} kWh${tariff && !tariff.needs_input ? " · " + this._zl(d.variable) : ""}</title></rect>`;
+      bars += `<rect x="${x.toFixed(1)}" y="${padT}" width="${bw.toFixed(1)}" height="${H - padT - padB}" fill="transparent"><title>${esc(d.date)}${d.free ? " (dzień wolny)" : ""}${part ? ` (niepełny — ${d.hours} h danych)` : ""}: ${this._num(d.kwh, 1)} kWh${tariff && !tariff.needs_input ? " · " + this._zl(d.variable) : ""}</title></rect>`;
     });
     const grid = [0.5, 1].map((f) => `<line x1="${padL}" x2="${W}" y1="${y(max * f)}" y2="${y(max * f)}" stroke="rgba(255,255,255,0.06)"/><text x="${padL - 4}" y="${y(max * f) + 3}" text-anchor="end">${this._num(max * f, max * f < 10 ? 1 : 0)}</text>`).join("");
     const legend = zones.map((z) => `<span><i style="background:${ZONE_COLORS[z] || "#00d4ff"}"></i>${esc(this._zoneLabel(z))}</span>`).join("")
-      + `<span><i style="background:#a78bfa"></i>dzień wolny (bledszy słupek)</span><span>kWh / dzień</span>`;
+      + `<span><i style="background:#a78bfa"></i>dzień wolny (bledszy słupek)</span>`
+      + (daily.some((d) => d.hours !== undefined && d.hours < 23) ? `<span><i style="background:#2ecc71;opacity:.3"></i>dzień niepełny (eLicznik jeszcze nie przysłał)</span>` : "")
+      + `<span>kWh / dzień</span>`;
     return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="max-width:100%;display:block">${grid}${bars}</svg><div class="legend">${legend}</div>`;
   }
 
