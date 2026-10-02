@@ -351,28 +351,33 @@ async def ws_voltage_report(hass: HomeAssistant, connection, msg: dict[str, Any]
             extra.setdefault(f"L{m.group(1)}", []).append(item["statistic_id"])
     ids = set(phases.values()) | {SENSOR_GRID_POWER_TOTAL} | {i for v in extra.values() for i in v}
     hourly_raw = await inst.async_add_executor_job(
-        statistics_during_period, hass, dt_util.as_utc(start), None, ids, "hour", None, {"mean", "max"})
+        statistics_during_period, hass, dt_util.as_utc(start), None, ids, "hour", None, {"mean", "max", "min"})
     five_raw = await inst.async_add_executor_job(
         statistics_during_period, hass, dt_util.as_utc(max(start, now - _td(days=10))), None,
         set(phases.values()), "5minute", None, {"mean"})
     def valid(x):
         return x if x is not None and 150 < x < 300 else None  # 0 V = inverter offline
 
+    def live(r) -> bool:
+        # A real voltage moves within an hour; a flat line is a stuck (cloud) sensor
+        mx, mn = valid(r.get("max")), valid(r.get("min"))
+        return mx is not None and mn is not None and mx - mn >= 0.1
+
     hourly = {}
     for p, sid in phases.items():
         rows: dict = {}
         for alt in extra.get(p, []):  # fallback first, the inverter's own sensor wins
             for r in hourly_raw.get(alt, []):
-                if valid(r.get("max")) is not None:
+                if live(r):
                     rows[local(r["start"])] = (valid(r.get("mean")), valid(r.get("max")))
         for r in hourly_raw.get(sid, []):
-            if valid(r.get("max")) is not None:
+            if live(r):
                 rows[local(r["start"])] = (valid(r.get("mean")), valid(r.get("max")))
         hourly[p] = [(t, mean, mx) for t, (mean, mx) in sorted(rows.items())]
     five = {p: [(local(r["start"]), r["mean"]) for r in five_raw.get(sid, []) if valid(r.get("mean")) is not None]
             for p, sid in phases.items()}
     grid = {local(r["start"]): r["mean"] for r in hourly_raw.get(SENSOR_GRID_POWER_TOTAL, [])
-            if r.get("mean") is not None}
+            if r.get("mean") is not None and (r.get("max") or 0) - (r.get("min") or 0) > 1}
 
     ctrl = getattr(_coordinator(hass), "_strategy_controller", None)
     guard = getattr(ctrl, "_vguard", None)
