@@ -209,10 +209,34 @@ class DepositTracker:
         res = pd.settle(flows, first_month=first_month, current_month=current,
                         opening=cfg.get("opening"), projection=projection)
         res["reconcile"] = pd.reconcile(res["months"], cfg.get("invoices"))
+        res["bills"] = await self._bills(meter, tariff, imports, exports, res["months"], source,
+                                         settings.get("invoice_entries"), now.replace(tzinfo=None))
         data_until = max((t for t, _ in imports), default=None)
         return {**base, **res,
                 "data_until": data_until.isoformat(timespec="minutes") if data_until else None,
                 "history": {k: v for k, v in flows.items() if k < first_month}}
+
+
+    async def _bills(self, meter, tariff, imports, exports, months, source, entries, now) -> list[dict[str, Any]]:
+        """Invoice lines rebuilt from the meter (last 13 months) + the inverter's own meter."""
+        from .invoice_compare import compare, monthly_bills
+
+        cutoff = (now - timedelta(days=400)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        meter_kwh: dict[str, dict[str, float]] = {}
+        if source == "tauron":
+            try:
+                for key, sid in (("import_kwh", FALLBACK_IMPORT), ("export_kwh", FALLBACK_EXPORT)):
+                    for t, k in await self._hours(sid, cutoff):
+                        row = meter_kwh.setdefault(pd.month_key(t), {"import_kwh": 0.0, "export_kwh": 0.0})
+                        row[key] += k
+            except Exception as err:  # noqa: BLE001 — no inverter meter statistics
+                _LOGGER.debug("Inverter meter statistics unavailable: %s", err)
+        bills = monthly_bills(
+            [(t, k) for t, k in imports if t >= cutoff], [(t, k) for t, k in exports if t >= cutoff],
+            tariff, mt._num(meter.get("contract_kw")), {m["month"]: m["deposit_used"] for m in months},
+            now, meter_kwh,
+        )
+        return compare(bills, entries)
 
 
 def get_tracker(hass: HomeAssistant) -> DepositTracker:
