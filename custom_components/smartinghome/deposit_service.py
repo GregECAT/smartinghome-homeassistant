@@ -13,6 +13,7 @@ Settings "prosumer_deposit":
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import datetime, timedelta
 from typing import Any
@@ -40,6 +41,11 @@ FALLBACK_EXPORT = "sensor.meter_total_energy_export"
 FALLBACK_IMPORT = "sensor.meter_total_energy_import"
 
 
+def _parse_dtime(text: str) -> datetime:
+    """PSE local time; the repeated hour on the October DST change is "02a" / "02b"."""
+    return datetime.fromisoformat(re.sub(r"(?<=\d)[ab](?=:)", "", str(text))[:19])
+
+
 class DepositTracker:
     """Computes the deposit status on demand; cached for a few hours."""
 
@@ -65,7 +71,7 @@ class DepositTracker:
         cached = self._rce.get(month)
         current = month == pd.month_key(now)
         if cached and (cached.get("complete") or time.time() - cached.get("ts", 0) < 6 * 3600):
-            return [(datetime.fromisoformat(t), p) for t, p in cached["q"]]
+            return [(_parse_dtime(t), p) for t, p in cached["q"]]
         first = datetime.fromisoformat(f"{month}-01")
         last = (first + timedelta(days=32)).replace(day=1) - timedelta(days=1)
         if current:
@@ -82,7 +88,7 @@ class DepositTracker:
                 rows = (await resp.json()).get("value", [])
         except Exception as err:  # noqa: BLE001
             _LOGGER.warning("RCE history %s: PSE API error (%s)", month, type(err).__name__)
-            return [(datetime.fromisoformat(t), p) for t, p in (cached or {}).get("q", [])]
+            return [(_parse_dtime(t), p) for t, p in (cached or {}).get("q", [])]
         q = []
         for r in rows:
             try:
@@ -93,7 +99,7 @@ class DepositTracker:
         self._rce[month] = {"ts": time.time(), "complete": not current and len(q) >= days * 24 * 4 - 8,
                             "q": q}
         await self._store.async_save({"months": self._rce})
-        return [(datetime.fromisoformat(t), p) for t, p in q]
+        return [(_parse_dtime(t), p) for t, p in q]
 
     # ── energy statistics ──
     async def _sources(self, meter_cfg: dict[str, Any]) -> tuple[str | None, str | None, str]:
