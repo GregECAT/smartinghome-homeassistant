@@ -4224,6 +4224,7 @@ class SmartingHomePanel extends HTMLElement {
           <div style="color:#94a3b8">Płaszczyzny: ${(pv.planes || []).join(', ') || '— (skonfiguruj stringi PV w ustawieniach MPPT)'}</div>
           <div style="color:#94a3b8">Kalibracja z pomiarów: ${cal}</div>
           ${pv.error ? `<div style="color:#e74c3c">⚠️ ${pv.error}</div>` : ''}
+          ${pv.source === 'open_meteo' ? '<div style="font-size:10px; color:#64748b; margin-top:4px">Dane pogodowe: <a href="https://open-meteo.com/" target="_blank" rel="noopener" style="color:#64748b">Open-Meteo.com</a> (<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener" style="color:#64748b">CC BY 4.0</a>)</div>' : ''}
           <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; align-items:center">
             <select onchange="this.getRootNode().host._setForecastSource(this.value)" style="background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px">
               <option value="auto" ${src === 'auto' ? 'selected' : ''}>Automatycznie (Open-Meteo, gdy są stringi)</option>
@@ -4360,15 +4361,11 @@ class SmartingHomePanel extends HTMLElement {
     const rceExpWin = this._s("binary_sensor.rce_pse_drogie_okno_aktywne");  // v2: was aktywne_najdrozsze_okno_dzisiaj
 
     // Forecast & Weather
-    const fcstTmrw1 = parseFloat(this._s("sensor.energy_production_tomorrow") || "0");
-    const fcstTmrw2 = parseFloat(this._s("sensor.energy_production_tomorrow_2") || "0");
-    const fcstTmrw = fcstTmrw1 + fcstTmrw2;
-    const fcstRem1 = parseFloat(this._s("sensor.energy_production_today_remaining") || "0");
-    const fcstRem2 = parseFloat(this._s("sensor.energy_production_today_remaining_2") || "0");
-    const fcstRem = fcstRem1 + fcstRem2;
-    const fcstToday1 = parseFloat(this._s("sensor.energy_production_today") || "0");
-    const fcstToday2 = parseFloat(this._s("sensor.energy_production_today_2") || "0");
-    const fcstToday = fcstToday1 + fcstToday2;
+    // Integration forecast (Open-Meteo per plane, or Forecast.Solar when selected)
+    const fsSum = (a, b) => (parseFloat(this._s(a) || "0") + parseFloat(this._s(b) || "0"));
+    const fcstTmrw = this._shN("pv_forecast_tomorrow_total") ?? fsSum("sensor.energy_production_tomorrow", "sensor.energy_production_tomorrow_2");
+    const fcstRem = this._shN("pv_forecast_remaining_today_total") ?? fsSum("sensor.energy_production_today_remaining", "sensor.energy_production_today_remaining_2");
+    const fcstToday = this._shN("pv_forecast_today_total") ?? fsSum("sensor.energy_production_today", "sensor.energy_production_today_2");
     const radiation = parseFloat(this._s("sensor.ecowitt_solar_radiation_9747") || "0");
     const rainRate = parseFloat(this._s("sensor.ecowitt_rain_rate_9747") || "0");
     const uvIndex = parseFloat(this._s("sensor.ecowitt_uv_index_9747") || "0");
@@ -5578,12 +5575,35 @@ class SmartingHomePanel extends HTMLElement {
       console.warn('[SH] Forecast chart: Recorder query failed', e);
     }
 
+    // ── 2a. Hourly forecasts from the integration (Open-Meteo PV per plane, HA-history load model) ──
+    let backendFc = null;
+    try {
+      backendFc = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/forecast/status' });
+      this._fcStatus = backendFc;
+    } catch (e) { backendFc = null; }
+    const hourKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}`;
+    const fromBackend = (hourly) => {
+      // timeline hour → W, for the window now−12 h … now+12 h
+      const out = {};
+      if (!hourly || !Object.keys(hourly).length) return null;
+      for (let i = -12; i <= 12; i++) {
+        const t = new Date(now); t.setMinutes(0, 0, 0); t.setHours(t.getHours() + i);
+        const v = hourly[hourKey(t)];
+        if (v !== undefined) out[t.getHours()] = Math.round(v * 1000);
+      }
+      return out;
+    };
+    const backendPv = fromBackend(backendFc?.pv_hourly);
+    const backendLoad = fromBackend(backendFc?.load_hourly);
+
     // ── 2. Forecast data from Forecast.Solar (via Recorder + live sensors) ──
     // Standard HA Forecast.Solar does NOT expose 'watts' attribute.
     // We use: (a) Recorder history of sensor.power_production_now for past forecast
     //         (b) Remaining energy + bell curve for future hours projection
     let pvForecast = {};
-    try {
+    if (backendPv) {
+      pvForecast = backendPv;
+    } else try {
       const fsPower1 = 'sensor.power_production_now';
       const fsPower2 = 'sensor.power_production_now_2';
 
@@ -5638,9 +5658,11 @@ class SmartingHomePanel extends HTMLElement {
       console.warn('[SH] Forecast chart: Forecast.Solar fetch failed', e);
     }
 
-    // ── 3. Load profile forecast (7-day average from today's pattern) ──
+    // ── 3. Load profile forecast (backend model, else 7-day average) ──
     let loadForecast = {};
-    try {
+    if (backendLoad) {
+      loadForecast = backendLoad;
+    } else try {
       // Use 7-day average from Recorder for load profile
       const loadEntity = this._m('load_power') || 'sensor.load';
       const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate() - 7); weekAgo.setHours(0, 0, 0, 0);
@@ -8864,7 +8886,7 @@ class SmartingHomePanel extends HTMLElement {
     this._setText('hist-yield-val', installedKWp > 0 ? `${yieldVal.toFixed(2)} kWh/kWp` : '— (skonfiguruj stringi)');
 
     // Performance ratio
-    const forecastToday = this._n('sensor.energy_production_today') ?? 0;
+    const forecastToday = this._shN('pv_forecast_today_total') ?? this._n('sensor.energy_production_today') ?? 0;
     const perfRatio = forecastToday > 0 && d.pvVal > 0 ? Math.min(100, (d.pvVal / forecastToday) * 100) : 0;
     this._setText('hist-perf-val', forecastToday > 0 ? `${perfRatio.toFixed(0)}%` : '—');
     const prBar = this.shadowRoot.getElementById('hist-perf-bar');
@@ -13278,7 +13300,7 @@ class SmartingHomePanel extends HTMLElement {
             <div style="position:relative">
               <div class="card-title">☀️ Prognoza Solarna AI — Smarting HOME</div>
               <div style="font-size:11px; color:#94a3b8; margin-bottom:4px">Dokładna prognoza produkcji PV + inteligentne rekomendacje sterowania energią</div>
-              <div style="font-size:10px; color:#475569">Dane: Open-Meteo Solar Radiation • Kalibracja Kalman • Silnik Decyzji</div>
+              <div style="font-size:10px; color:#475569">Dane: <a href="https://open-meteo.com/" target="_blank" rel="noopener" style="color:#475569">Open-Meteo.com</a> (CC BY 4.0) • Kalibracja Kalman • Silnik Decyzji</div>
             </div>
             <div class="fc-kpi-grid">
               <div class="fc-kpi">
@@ -14065,7 +14087,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.65.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.65.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -14760,7 +14782,9 @@ class SmartingHomePanel extends HTMLElement {
     const g = (id) => { const s = d[id]; return s && s.state !== 'unavailable' && s.state !== 'unknown' ? s.state : null; };
 
     const smap = this._sensorMap || {};
-    const pvForecast = g('sensor.energy_production_today') || g('sensor.energy_production_today_2');
+    const pvForecast = (this._shN('pv_forecast_today_total') ?? null) !== null
+      ? String(this._shN('pv_forecast_today_total'))
+      : (g('sensor.energy_production_today') || g('sensor.energy_production_today_2'));
     const soc = g(smap.battery_soc || 'sensor.battery_state_of_charge');
     const rce = g('sensor.rce_pse_cena');
 

@@ -144,7 +144,8 @@ class LoadForecaster:
             local = dt_util.as_local(begin)
             hourly.setdefault(local.date(), {})[local.hour] = max(float(mean), 0.0) / 1000
         self.model = fit(hourly, self.daily_temps, now.date())
-        self._fetched = time.time()
+        # Not a single complete day yet (fresh install / restart at night): retry in 10 min
+        self._fetched = time.time() if self.model.days else time.time() - REFRESH_S + 600
 
     def kw(self, when: datetime, temps: dict[date, float] | None = None) -> float | None:
         temp = (temps or self.daily_temps).get(when.date())
