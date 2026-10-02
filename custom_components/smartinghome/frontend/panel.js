@@ -4233,6 +4233,7 @@ class SmartingHomePanel extends HTMLElement {
     }
     el.style.opacity = '';
     this._renderDeposit();
+    this._renderInvoiceCompare();
   }
 
   _renderDeposit() {
@@ -4483,6 +4484,76 @@ W załączniku: zestawienie pomiarów (CSV).`;
     };
     await this._savePanelSettings({ voltage_guard: cfg });
     const el = v('vg-saved'); if (el) el.textContent = '✓ Zapisano — autopilot użyje w ciągu 5 min';
+  }
+
+  /* ── Invoice vs Home Assistant (Taryfy & RCE) ───────────────── */
+  static INVOICE_FIELDS = [
+    ['import_kwh', 'Pobrano z sieci', 'kWh'], ['export_kwh', 'Wprowadzono do sieci', 'kWh'],
+    ['sale_gross', 'Sprzedaż energii', 'zł'], ['dist_gross', 'Dystrybucja energii', 'zł'],
+    ['total_gross', 'Wynik rozliczenia', 'zł'], ['deposit', 'Rozliczenie depozytu', 'zł'], ['to_pay', 'Do zapłaty', 'zł'],
+  ];
+
+  _renderInvoiceCompare() {
+    const el = this.shadowRoot.getElementById('invoice-content');
+    if (!el) return;
+    const d = this._deposit || {};
+    const bills = (d.bills || []).slice().reverse();
+    if (!bills.length) { el.innerHTML = `<div style="color:#64748b">${d.error ? 'Brak danych z licznika.' : 'Ładowanie…'}</div>`; return; }
+    const F = SmartingHomePanel.INVOICE_FIELDS;
+    const fmt = (v, unit) => v == null ? '—' : unit === 'kWh' ? `${Number(v).toFixed(0)}` : Number(v).toFixed(2).replace('.', ',');
+    const plMonth = (m) => { const [y, mm] = String(m).split('-'); return `${['sty','lut','mar','kwi','maj','cze','lip','sie','wrz','paź','lis','gru'][+mm - 1]} ${y}`; };
+    const diffCell = (v, unit) => {
+      if (v == null) return '<td></td>';
+      const tol = unit === 'kWh' ? 2 : 1;
+      const c = Math.abs(v) <= tol ? '#2ecc71' : Math.abs(v) <= tol * 5 ? '#e67e22' : '#e74c3c';
+      return `<td style="text-align:right; color:${c}">${v > 0 ? '+' : ''}${fmt(v, unit === 'kWh' ? 'x' : unit)}</td>`;
+    };
+    const head = `<tr style="color:#64748b"><th style="text-align:left">Miesiąc</th>${F.map(([, l, u]) => `<th style="text-align:right">${l}<br><span style="font-weight:400">${u}</span></th>`).join('')}</tr>`;
+    const body = bills.map(b => {
+      const zones = Object.entries(b.zones_kwh || {}).map(([z, v]) => `${({ morning: 'rano', afternoon: 'szczyt', off_peak: 'poza', flat: 'całodobowo', peak: 'dzień' })[z] || z} ${v}`).join(' · ');
+      const meter = b.inverter_meter ? `<div style="font-size:9px; color:#64748b">licznik falownika: ${fmt(b.inverter_meter.import_kwh, 'kWh')} / ${fmt(b.inverter_meter.export_kwh, 'kWh')} kWh</div>` : '';
+      let html = `<tr style="border-top:1px solid #1e293b"><td title="${this._esc(zones)}">${plMonth(b.month)}${b.partial ? ' <span style="color:#64748b">(niepełny)</span>' : ''}<div style="font-size:9px; color:#64748b">HA: ${this._esc(zones)}</div>${meter}</td>
+        ${F.map(([k, , u]) => `<td style="text-align:right">${fmt(b[k], u)}</td>`).join('')}</tr>`;
+      if (b.invoice) {
+        html += `<tr style="color:#94a3b8"><td>faktura</td>${F.map(([k, , u]) => `<td style="text-align:right">${fmt(b.invoice[k], u)}</td>`).join('')}</tr>`;
+        html += `<tr><td style="color:#64748b">różnica HA − faktura</td>${F.map(([k, , u]) => (b.diff || {})[k] != null ? diffCell(b.diff[k], u) : '<td></td>').join('')}</tr>`;
+      }
+      return html;
+    }).join('');
+    const months = bills.filter(b => !b.partial || b.month !== d.current_month).map(b => b.month);
+    const inp = 'background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px;width:82px';
+    const sel = this._invMonth && months.includes(this._invMonth) ? this._invMonth : months[0];
+    const cur = ((this._settings.invoice_entries || {})[sel]) || {};
+    el.innerHTML = `
+      <div style="overflow-x:auto"><table style="width:100%; font-size:11px; border-collapse:collapse"><thead>${head}</thead><tbody>${body}</tbody></table></div>
+      <div style="font-size:10px; color:#64748b; margin-top:6px; line-height:1.5">HA liczy fakturę z godzinowych danych eLicznika (energia zbilansowana) i cen z „Energia i koszty”:
+        sprzedaż = energia + opłata handlowa, dystrybucja = stawki zmienne, opłaty jakościowa/OZE/kogeneracyjna, abonament, mocowa, stała; brutto z VAT 23%.
+        Różnica do ±1 zł to zaokrąglenia; większa oznacza inną cenę w taryfie albo brak danych licznika.</div>
+      <details style="margin-top:8px" ${this._invOpen ? 'open' : ''} ontoggle="this.getRootNode().host._invOpen = this.open"><summary style="cursor:pointer; font-size:11px; color:#94a3b8">✏️ Wpisz dane z faktury</summary>
+        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:8px; font-size:11px">
+          <select id="inv-month" style="${inp}; width:auto" onchange="this.getRootNode().host._invMonth = this.value; this.getRootNode().host._renderInvoiceCompare()">
+            ${months.map(m => `<option value="${m}" ${m === sel ? 'selected' : ''}>${plMonth(m)}</option>`).join('')}</select>
+          ${F.map(([k, l, u]) => `<label style="display:flex; flex-direction:column; gap:2px">${l} (${u})<input type="number" step="0.01" id="inv-${k}" value="${cur[k] ?? ''}" style="${inp}"/></label>`).join('')}
+          <button onclick="this.getRootNode().host._saveInvoiceEntry()" style="background:#2ecc71;color:#0f172a;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer; align-self:flex-end">💾 Zapisz</button>
+          <span id="inv-saved" style="color:#2ecc71; align-self:flex-end"></span>
+        </div>
+      </details>`;
+  }
+
+  async _saveInvoiceEntry() {
+    const v = (id) => this.shadowRoot.getElementById(id);
+    const month = v('inv-month').value;
+    const entry = {};
+    for (const [k] of SmartingHomePanel.INVOICE_FIELDS) {
+      const x = parseFloat(String(v(`inv-${k}`).value).replace(',', '.'));
+      if (!Number.isNaN(x)) entry[k] = x;
+    }
+    const all = { ...(this._settings.invoice_entries || {}) };
+    if (Object.keys(entry).length) all[month] = entry; else delete all[month];
+    this._invMonth = month;
+    this._invOpen = true;
+    await this._savePanelSettings({ invoice_entries: all });
+    this._loadDeposit(true);
   }
 
   _renderForecastStatus() {
@@ -11725,6 +11796,11 @@ W załączniku: zestawienie pomiarów (CSV).`;
             <div id="deposit-content" style="font-size:12px; color:#cbd5e1">Ładowanie… (pierwsze liczenie pobiera ceny RCE z PSE)</div>
           </div>
 
+          <div class="card" style="margin-bottom:14px">
+            <div class="card-title">🧾 Faktura vs Home Assistant</div>
+            <div id="invoice-content" style="font-size:12px; color:#cbd5e1">Ładowanie…</div>
+          </div>
+
           <!-- ROW 1: RCE Price Cards -->
                     <div class="g4" style="margin-bottom:14px">
             <div class="card" style="text-align:center; padding:14px 8px">
@@ -14436,7 +14512,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.67.4</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.68.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
