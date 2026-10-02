@@ -308,6 +308,11 @@ class EnergyLedger:
             rec.add(f"mppt{idx + 1}", short * w / sum(weights))
         return True
 
+    def set_value(self, day: date, key: str, value: float) -> None:
+        """Overwrite one value of a day (a figure recomputed from better data)."""
+        self._record(day).values[key] = float(value)
+        self._dirty = True
+
     def update_gap(self) -> None:
         """Inputs unavailable this cycle — don't integrate across the gap."""
         self._last = None

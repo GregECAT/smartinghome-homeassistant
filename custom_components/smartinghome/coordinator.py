@@ -755,11 +755,38 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 day, counted, buy_price=buy, sell_price=sell, is_peak=False,
                 elapsed_min=(end - start).total_seconds() / 60,
             )
+        # Money of the export hour by hour: meter kWh × RCE of that hour from PSE (the
+        # same prices as the prosumer deposit) — a gap priced at the day's average
+        # sold midday energy at the morning's prices
+        revenue = await self._async_export_revenue_by_hour(day, start, end)
+        if revenue is not None:
+            ledger.set_value(day, "export_revenue", revenue)
         if day == now.date():
             self._reconcile_base_day = None  # re-read the midnight baseline on the next tick
         await ledger.async_save(force=True)
         return {"rebuilt": True, "gap_filled": {k: round(x, 2) for k, x in added.items()},
                 "summary": EnergyLedger.summarise(ledger.day(day))}
+
+    async def _async_export_revenue_by_hour(
+        self, day: date, start: datetime, end: datetime
+    ) -> float | None:
+        """Σ hourly export (grid meter statistics) × max(RCE, 0) × 1.23 for one day."""
+        export_id = self._sensor_map.get("total_energy_export", "")
+        if not export_id:
+            return None
+        try:
+            from . import prosumer_deposit as pd
+            from .deposit_service import get_tracker
+
+            tracker = get_tracker(self.hass)
+            rce = pd.hourly_rce(await tracker._rce_month(pd.month_key(day), dt_util.now()))
+            hours = [(t, k) for t, k in await tracker._hours(export_id, start) if t.date() == day]
+        except Exception as err:  # noqa: BLE001 — recorder / PSE unavailable
+            _LOGGER.debug("Export revenue by hour unavailable: %s", err)
+            return None
+        if not hours or any(t not in rce for t, k in hours if k > 0):
+            return None
+        return round(sum(k * max(rce[t], 0.0) / 1000 * RCE_PROSUMER_COEFFICIENT for t, k in hours), 2)
 
     def _ledger_entities(self) -> dict[str, str]:
         m = self._sensor_map
