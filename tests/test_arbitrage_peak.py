@@ -89,3 +89,20 @@ def test_classify_pv_export_needs_room_and_surplus():
     assert arb.classify(0.0, -1.0, 1.0, p, sell=0.5, room=True)[0] == arb.ACT_PV_EXPORT
     assert arb.classify(0.0, -1.0, 1.0, p, sell=0.5, room=False)[0] == arb.ACT_PV_CHARGE
     assert arb.classify(0.0, 1.0, 1.0, p, sell=0.5, room=True)[0] == arb.ACT_HOLD
+
+
+def test_peak_never_charges_from_grid():
+    # 2026-10-02 16:41: SOC 99 %, a 5-minute first slot in the afternoon peak, PV ≈ load.
+    # The 99 → 100 % top-up was planned as "charge from grid" and ran at full power.
+    p = arb.ArbitrageParams(slot_minutes=15)
+    inputs = _inputs(16)
+    first = inputs[0]
+    inputs[0] = arb.HourInput(first.start.replace(minute=40), 5 / 60, first.buy, first.sell,
+                              2.8 * 5 / 60, 3.0 * 5 / 60, "")
+    inputs[0].no_import = True
+    plan = arb.optimize(99, inputs, p)
+    for hp in plan.hours:
+        if hp.no_import:
+            assert hp.action != arb.ACT_CHARGE_GRID, hp
+            assert hp.grid_import < 0.01 or hp.battery_kwh <= 0.0, hp
+    assert arb.classify(0.1, -0.02, 5 / 60, p, sell=1.1, no_import=True)[0] == arb.ACT_PV_CHARGE

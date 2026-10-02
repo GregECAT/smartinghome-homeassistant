@@ -1822,6 +1822,10 @@ class StrategyController:
             return actions
 
         action, power_w = self._commit_hour_action(now, first.action, first.power_w, soc)
+        if action == ACT_CHARGE_GRID and first.no_import:
+            # Never buy at the tariff peak to fill the battery (2026-10-02 16:25–16:42:
+            # a 99 → 100 % top-up ran EMS charge_battery at full power from the grid)
+            action, power_w = ACT_PV_CHARGE, 0
         if action == ACT_DISCHARGE and first.no_import:
             # Tariff peak: a fixed discharge power must cover the house as it is
             # now plus the planned export — never leave part of the house on the grid
