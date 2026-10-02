@@ -29,6 +29,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_tariffs)
     websocket_api.async_register_command(hass, ws_energy_monthly)
     websocket_api.async_register_command(hass, ws_forecast_status)
+    websocket_api.async_register_command(hass, ws_wind_today)
 
     from .meter_ws import async_register as _register_meter_ws
     _register_meter_ws(hass)
@@ -260,6 +261,18 @@ def ws_alerts(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
         _not_ready(connection, msg)
         return
     connection.send_result(msg["id"], engine.snapshot())
+
+
+@websocket_api.websocket_command({vol.Required("type"): "smartinghome/wind/today"})
+@callback
+def ws_wind_today(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Today's wind-turbine estimate (recorder hours + live hour) and the turbine used."""
+    for entry_data in hass.data.get(DOMAIN, {}).values():
+        cal = entry_data.get("wind_calendar") if isinstance(entry_data, dict) else None
+        if cal is not None:
+            connection.send_result(msg["id"], {"today": cal.get_today_status(), "turbine": cal._get_turbine_params()})
+            return
+    _not_ready(connection, msg)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "smartinghome/forecast/status"})

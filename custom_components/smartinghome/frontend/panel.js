@@ -3341,11 +3341,45 @@ class SmartingHomePanel extends HTMLElement {
 
   /* ── Wind Power Tab ─────────────────────── */
   _windTurbinePresets = {
-    small:  { label: '🌬️ Mała (1 kW)',   power_kw: 1, rotor_diameter: 1.8, cut_in: 2.5, rated_speed: 11, investment: 8000,  price_kwh: 0.87 },
-    medium: { label: '💨 Średnia (3 kW)', power_kw: 3, rotor_diameter: 3.2, cut_in: 3.0, rated_speed: 12, investment: 25000, price_kwh: 0.87 },
-    large:  { label: '🌪️ Duża (5 kW)',   power_kw: 5, rotor_diameter: 5.0, cut_in: 2.5, rated_speed: 13, investment: 45000, price_kwh: 0.87 },
+    small:  { label: '🌬️ Mała (1 kW)',   power_kw: 1, rotor_diameter: 1.8, cut_in: 2.5, rated_speed: 11, investment: 8000,  price_kwh: 0, sensor_height: 6, hub_height: 10 },
+    medium: { label: '💨 Średnia (3 kW)', power_kw: 3, rotor_diameter: 3.2, cut_in: 3.0, rated_speed: 12, investment: 25000, price_kwh: 0, sensor_height: 6, hub_height: 12 },
+    large:  { label: '🌪️ Duża (5 kW)',   power_kw: 5, rotor_diameter: 5.0, cut_in: 2.5, rated_speed: 13, investment: 45000, price_kwh: 0, sensor_height: 6, hub_height: 15 },
   };
-  _windTurbineDefaults = { power_kw: 3, rotor_diameter: 3.2, cut_in: 3.0, rated_speed: 12, investment: 25000, price_kwh: 0.87 };
+  _windTurbineDefaults = { power_kw: 3, rotor_diameter: 3.2, cut_in: 3.0, rated_speed: 12, investment: 25000, price_kwh: 0, sensor_height: 6, hub_height: 12 };
+  static WIND_FIELDS = [
+    ['wind-turbine-power', 'power_kw'], ['wind-turbine-diameter', 'rotor_diameter'], ['wind-turbine-cutin', 'cut_in'],
+    ['wind-turbine-rated', 'rated_speed'], ['wind-turbine-investment', 'investment'], ['wind-turbine-price', 'price_kwh'],
+    ['wind-turbine-sensor-h', 'sensor_height'], ['wind-turbine-hub-h', 'hub_height'],
+  ];
+
+  /* Same model as the backend (wind_calendar.py): hub-height wind, power curve, gust spread */
+  _windTurbine() {
+    const d = this._windTurbineDefaults;
+    const t = {};
+    SmartingHomePanel.WIND_FIELDS.forEach(([id, key]) => {
+      const v = parseFloat(this.shadowRoot.getElementById(id)?.value);
+      t[key] = key === 'price_kwh' ? (v > 0 ? v : 0) : (v > 0 ? v : d[key]);
+    });
+    t.rated_speed = Math.max(t.rated_speed, t.cut_in + 0.5);
+    t.cut_out = 25;
+    return t;
+  }
+  _windHub(vSensorMs, t) { return vSensorMs * Math.pow(t.hub_height / t.sensor_height, 0.25); }
+  _windCurve(vHub, t) {
+    if (vHub < t.cut_in || vHub >= t.cut_out) return 0;
+    const rated = t.power_kw * 1000;
+    if (vHub >= t.rated_speed) return rated;
+    return Math.min(rated, this._calcWindPower(vHub * 3.6, t.rotor_diameter));
+  }
+  _windRayleighKwh(meanHub, t) {
+    if (meanHub <= 0) return 0;
+    let total = 0;
+    for (let v = 0.25; v < 35; v += 0.25) {
+      const pdf = (Math.PI * v / (2 * meanHub * meanHub)) * Math.exp(-Math.PI * v * v / (4 * meanHub * meanHub));
+      total += pdf * this._windCurve(v, t) * 0.25;
+    }
+    return total * 8760 / 1000;
+  }
   _windActivePreset = 'medium';
 
   _initWindTab() {
@@ -3366,17 +3400,12 @@ class SmartingHomePanel extends HTMLElement {
       this._windLoading = false;
       return;
     }
-    const fields = [
-      ['wind-turbine-power', wt.power_kw],
-      ['wind-turbine-diameter', wt.rotor_diameter],
-      ['wind-turbine-cutin', wt.cut_in],
-      ['wind-turbine-rated', wt.rated_speed],
-      ['wind-turbine-investment', wt.investment],
-      ['wind-turbine-price', wt.price_kwh],
-    ];
-    fields.forEach(([id, val]) => {
+    // Zeros / missing values (an old all-zero save) fall back to the defaults
+    const d = this._windTurbineDefaults;
+    SmartingHomePanel.WIND_FIELDS.forEach(([id, key]) => {
       const el = this.shadowRoot.getElementById(id);
-      if (el && val !== undefined) el.value = val;
+      const v = parseFloat(wt[key]);
+      if (el) el.value = key === 'price_kwh' ? (v > 0 ? v : 0) : (v > 0 ? v : d[key]);
     });
     this._windActivePreset = this._settings.wind_turbine_preset || 'custom';
     this._updateWindPresetButtons();
@@ -3387,20 +3416,8 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   _saveWindData() {
-    const g = (id) => parseFloat(this.shadowRoot.getElementById(id)?.value) || 0;
-    const wt = {
-      power_kw: g('wind-turbine-power'),
-      rotor_diameter: g('wind-turbine-diameter'),
-      cut_in: g('wind-turbine-cutin'),
-      rated_speed: g('wind-turbine-rated'),
-      investment: g('wind-turbine-investment'),
-      price_kwh: g('wind-turbine-price'),
-    };
-    // Safety: never save all-zero config (protects against save when inputs are empty/hidden)
-    if (wt.power_kw === 0 && wt.rotor_diameter === 0 && wt.investment === 0) {
-      console.warn('[SH] Wind save blocked — all values are zero (inputs not loaded yet)');
-      return;
-    }
+    const wt = this._windTurbine();  // empty / zero fields → defaults (never an all-zero turbine)
+    delete wt.cut_out;
     this._savePanelSettings({ wind_turbine: wt, wind_turbine_preset: this._windActivePreset });
     const st = this.shadowRoot.getElementById('wind-save-status');
     if (st) { st.textContent = '✅ Zapisano konfigurację turbiny!'; setTimeout(() => { st.textContent = ''; }, 4000); }
@@ -3416,17 +3433,9 @@ class SmartingHomePanel extends HTMLElement {
     const preset = this._windTurbinePresets[key];
     if (!preset) return;
     this._windActivePreset = key;
-    const fields = [
-      ['wind-turbine-power', preset.power_kw],
-      ['wind-turbine-diameter', preset.rotor_diameter],
-      ['wind-turbine-cutin', preset.cut_in],
-      ['wind-turbine-rated', preset.rated_speed],
-      ['wind-turbine-investment', preset.investment],
-      ['wind-turbine-price', preset.price_kwh],
-    ];
-    fields.forEach(([id, val]) => {
+    SmartingHomePanel.WIND_FIELDS.forEach(([id, key]) => {
       const el = this.shadowRoot.getElementById(id);
-      if (el) el.value = val;
+      if (el && preset[key] !== undefined) el.value = preset[key];
     });
     this._updateWindPresetButtons();
     this._recalcWindProfitability();
@@ -3441,6 +3450,11 @@ class SmartingHomePanel extends HTMLElement {
     this._windActivePreset = 'custom';
     this._updateWindPresetButtons();
     this._recalcWindProfitability();
+    // Save (and recalculate the calendar) only after a real edit — not on every refresh
+    if (!this._windLoading && this._windDataLoaded) {
+      if (this._windSaveTimeout) clearTimeout(this._windSaveTimeout);
+      this._windSaveTimeout = setTimeout(() => this._saveWindData(), 1500);
+    }
   }
 
   _updateWindPresetButtons() {
@@ -3521,19 +3535,12 @@ class SmartingHomePanel extends HTMLElement {
     const needle = this.shadowRoot.getElementById('wind-compass-needle');
     if (needle && windDir !== null) needle.setAttribute('transform', `rotate(${windDir}, 60, 60)`);
 
-    // Instantaneous power potential
-    const g = (id) => parseFloat(this.shadowRoot.getElementById(id)?.value) || 0;
-    const diameter = g('wind-turbine-diameter') || 3.2;
-    const cutIn = g('wind-turbine-cutin') || 3;
-    const ratedSpeed = g('wind-turbine-rated') || 12;
-    const nominalPower = (g('wind-turbine-power') || 3) * 1000; // W
-    const windMs = (wind || 0) / 3.6;
-
-    let instantPower = 0;
-    if (windMs >= cutIn) {
-      instantPower = this._calcWindPower(wind || 0, diameter);
-      if (instantPower > nominalPower) instantPower = nominalPower;
-    }
+    // Instantaneous power potential — wind moved to hub height, turbine power curve
+    const t = this._windTurbine();
+    const nominalPower = t.power_kw * 1000; // W
+    const windMs = this._windHub((wind || 0) / 3.6, t);
+    const cutIn = t.cut_in;
+    const instantPower = this._windCurve(windMs, t);
 
     this._setText('wind-instant-power', instantPower >= 1000 ? `${(instantPower / 1000).toFixed(2)} kW` : `${Math.round(instantPower)} W`);
     const powerBar = this.shadowRoot.getElementById('wind-power-bar-fill');
@@ -3559,18 +3566,8 @@ class SmartingHomePanel extends HTMLElement {
       }
     }
 
-    // Daily estimation
-    const avgWindToday = wind || 0;
-    const dailyHours = 24;
-    let avgPower = 0;
-    if ((avgWindToday / 3.6) >= cutIn) {
-      avgPower = this._calcWindPower(avgWindToday, diameter);
-      if (avgPower > nominalPower) avgPower = nominalPower;
-    }
-    const dailyKwh = (avgPower * dailyHours) / 1000;
-    const priceKwh = g('wind-turbine-price') || 0.87;
-    this._setText('wind-daily-est', `${dailyKwh.toFixed(2)} kWh`);
-    this._setText('wind-daily-revenue', `${(dailyKwh * priceKwh).toFixed(2)} zł`);
+    // Today so far — backend (recorder hours + live hour), refreshed every minute
+    this._loadWindToday();
 
     // Recalc profitability
     this._recalcWindProfitability();
@@ -3663,14 +3660,15 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   _recalcWindProfitability() {
-    const g = (id) => parseFloat(this.shadowRoot.getElementById(id)?.value) || 0;
-    const nominalKw = g('wind-turbine-power') || 3;
-    const diameter = g('wind-turbine-diameter') || 3.2;
-    const investment = g('wind-turbine-investment') || 25000;
-    const priceKwh = g('wind-turbine-price') || 0.87;
-    const cutIn = g('wind-turbine-cutin') || 3;
+    const t = this._windTurbine();
+    const nominalKw = t.power_kw;
+    const investment = t.investment;
+    const sum = this._wcData?.summary;
+    // Value of a kWh: fixed price, else what the calendar earned per kWh at the tariff prices
+    const priceKwh = t.price_kwh > 0 ? t.price_kwh
+      : (sum && sum.total_kwh > 0 ? sum.total_revenue / sum.total_kwh : 0.9);
 
-    // Use historical average if available, otherwise fall back to current reading
+    // Your location: measured calendar (≥ 30 days) or the long-term mean wind at hub height
     let userWindKmh = 0;
     let dataSource = 'bieżący odczyt';
     let daysInfo = '';
@@ -3679,38 +3677,28 @@ class SmartingHomePanel extends HTMLElement {
       dataSource = 'średnia historyczna';
       daysInfo = ` (${this._windHistData.daysCollected} dni)`;
     } else {
-      const n = (id) => { const st = this._hass?.states?.[id]; return (st && st.state !== 'unknown' && st.state !== 'unavailable') ? parseFloat(st.state) : null; };
-      userWindKmh = n('sensor.ecowitt_wind_speed_9747') || 0;
+      const st = this._hass?.states?.['sensor.ecowitt_wind_speed_9747'];
+      userWindKmh = st && !isNaN(parseFloat(st.state)) ? parseFloat(st.state) : 0;
     }
+    const userHub = this._windHub(userWindKmh / 3.6, t);
+    const calendarKwh = sum && sum.total_days >= 30 ? sum.annual_kwh_est : null;
+    if (calendarKwh !== null) { dataSource = `kalendarz ${sum.total_days} dni (godzinowo)`; daysInfo = ''; }
 
-    // Average wind classes for Poland (m/s)
+    // Reference classes: long-term mean wind at hub height (Rayleigh distribution)
     const windClasses = [
-      { name: 'Słaby (3 m/s)', speed: 10.8 },
-      { name: 'Umiarkowany (4 m/s)', speed: 14.4 },
-      { name: 'Dobry (5 m/s)', speed: 18 },
-      { name: 'Bardzo dobry (6 m/s)', speed: 21.6 },
-      { name: 'Twoja lokalizacja', speed: userWindKmh },
+      { name: 'Słaby (3 m/s)', hub: 3 },
+      { name: 'Umiarkowany (4 m/s)', hub: 4 },
+      { name: 'Dobry (5 m/s)', hub: 5 },
+      { name: 'Bardzo dobry (6 m/s)', hub: 6 },
+      { name: 'Twoja lokalizacja', hub: userHub, kwh: calendarKwh },
     ];
-
     const profitEl = this.shadowRoot.getElementById('wind-profit-cards');
     if (!profitEl) return;
 
     const cards = windClasses.map((wc, i) => {
       const isUser = i === windClasses.length - 1;
-      const windMs = wc.speed / 3.6;
-      let avgPower = 0;
-      if (windMs >= cutIn) {
-        avgPower = this._calcWindPower(wc.speed, diameter);
-        if (avgPower > nominalKw * 1000) avgPower = nominalKw * 1000;
-      }
-      // Capacity factor: for reference classes use fixed values, for user calculate from real wind
-      let capacityFactor;
-      if (isUser) {
-        capacityFactor = nominalKw > 0 ? Math.min(0.45, avgPower / (nominalKw * 1000)) : 0;
-      } else {
-        capacityFactor = i === 0 ? 0.12 : i === 1 ? 0.18 : i === 2 ? 0.22 : 0.28;
-      }
-      const yearlyKwh = nominalKw * 8760 * capacityFactor;
+      const yearlyKwh = wc.kwh ?? this._windRayleighKwh(wc.hub, t);
+      const capacityFactor = nominalKw > 0 ? yearlyKwh / (nominalKw * 8760) : 0;
       const yearlySavings = yearlyKwh * priceKwh;
       const payback = investment > 0 && yearlySavings > 0 ? investment / yearlySavings : null;
       const profit20 = yearlySavings * 20 - investment;
@@ -3722,7 +3710,7 @@ class SmartingHomePanel extends HTMLElement {
       return `<div style="background:${bg}; border:1px solid ${border}; border-radius:14px; padding:16px; position:relative">
         ${isUser ? `<div style="position:absolute; top:8px; right:8px; font-size:8px; color:#00d4ff; font-weight:700">📍 TWOJA LOKALIZACJA${daysInfo}</div>` : ''}
         <div style="font-size:12px; font-weight:700; color:${color}; margin-bottom:8px">${wc.name}</div>
-        ${isUser ? `<div style="font-size:9px; color:#64748b; margin-bottom:6px">Źródło: ${dataSource} · ${(userWindKmh / 3.6).toFixed(1)} m/s · ${userWindKmh.toFixed(1)} km/h</div>` : ''}
+        ${isUser ? `<div style="font-size:9px; color:#64748b; margin-bottom:6px">Źródło: ${dataSource} · czujnik ${(userWindKmh / 3.6).toFixed(1)} m/s → piasta ${t.hub_height} m: ${userHub.toFixed(1)} m/s</div>` : `<div style="font-size:9px; color:#64748b; margin-bottom:6px">średnia roczna na wysokości piasty · CF ${(capacityFactor * 100).toFixed(0)}%</div>`}
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:10px">
           <div style="color:#64748b">Roczna produkcja:</div><div style="color:#f7b731; font-weight:600">${yearlyKwh.toFixed(0)} kWh</div>
           <div style="color:#64748b">Roczne oszczędności:</div><div style="color:#2ecc71; font-weight:600">${yearlySavings.toFixed(0)} zł</div>
@@ -3757,11 +3745,6 @@ class SmartingHomePanel extends HTMLElement {
 
     // Monthly bar chart
     this._renderWindMonthlyChart();
-    // Auto-save wind data with debounce (1.5s) — skip during initial load AND before data is loaded
-    if (!this._windLoading && this._windDataLoaded) {
-      if (this._windSaveTimeout) clearTimeout(this._windSaveTimeout);
-      this._windSaveTimeout = setTimeout(() => this._saveWindData(), 1500);
-    }
   }
 
   _renderWindMonthlyChart() {
@@ -3769,32 +3752,16 @@ class SmartingHomePanel extends HTMLElement {
     if (!chartEl) return;
 
     const monthNames = ['Sty','Lut','Mar','Kwi','Maj','Cze','Lip','Sie','Wrz','Paź','Lis','Gru'];
-    const g = (id) => parseFloat(this.shadowRoot.getElementById(id)?.value) || 0;
-    const nominalKw = g('wind-turbine-power') || 3;
-    const diameter = g('wind-turbine-diameter') || 3.2;
-    const cutIn = g('wind-turbine-cutin') || 3;
-
-    // Fallback: hardcoded monthly capacity factors for Poland
-    const fallbackFactors = [0.28, 0.26, 0.24, 0.20, 0.16, 0.14, 0.12, 0.13, 0.16, 0.22, 0.26, 0.28];
+    const t = this._windTurbine();
+    const days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     const hasHistData = this._windHistData && Object.keys(this._windHistData.monthlyAvg).length > 0;
-
+    // Same model for every month: monthly mean wind at hub height, Rayleigh distribution.
+    // Months without data use the overall mean (estimate, orange).
+    const overall = hasHistData ? this._windHistData.overallAvgKmh : 0;
     const monthlyData = monthNames.map((name, i) => {
-      let kwh;
-      if (hasHistData && this._windHistData.monthlyAvg[i] !== undefined) {
-        // Real data: compute kWh from average wind speed in this month
-        const avgKmh = this._windHistData.monthlyAvg[i];
-        const avgMs = avgKmh / 3.6;
-        let power = 0;
-        if (avgMs >= cutIn) {
-          power = this._calcWindPower(avgKmh, diameter);
-          if (power > nominalKw * 1000) power = nominalKw * 1000;
-        }
-        kwh = (power * 730) / 1000; // ~730 hours per month
-      } else {
-        // Fallback
-        kwh = nominalKw * 730 * fallbackFactors[i];
-      }
       const isReal = hasHistData && this._windHistData.monthlyAvg[i] !== undefined;
+      const kmh = isReal ? this._windHistData.monthlyAvg[i] : overall;
+      const kwh = this._windRayleighKwh(this._windHub(kmh / 3.6, t), t) * days[i] / 365;
       return { month: name, kwh, isReal };
     });
 
@@ -4017,10 +3984,10 @@ class SmartingHomePanel extends HTMLElement {
     const el = this.shadowRoot.getElementById('wc-roi-content');
     if (!el) return;
 
-    const g = (id) => parseFloat(this.shadowRoot.getElementById(id)?.value) || 0;
-    const investment = g('wind-turbine-investment') || 25000;
-    const nominalKw = g('wind-turbine-power') || 3;
-    const priceKwh = g('wind-turbine-price') || 0.87;
+    const t = this._windTurbine();
+    const investment = t.investment;
+    const nominalKw = t.power_kw;
+    const priceKwh = summary.total_kwh > 0 ? summary.total_revenue / summary.total_kwh : (t.price_kwh || 0.9);
 
     if (totalDays < 7) {
       el.innerHTML = '<div style="text-align:center; color:#64748b; font-size:12px; padding:16px">Potrzebujesz minimum 7 dni danych aby wyświetlić analizę opłacalności.</div>';
@@ -4062,7 +4029,7 @@ class SmartingHomePanel extends HTMLElement {
         </div>
       </div>
       <div style="font-size:10px; color:#64748b; text-align:center; line-height:1.5">
-        📋 Obliczenia na podstawie <strong>${totalDays}</strong> dni rzeczywistych pomiarów · Turbina: ${nominalKw} kW · Cena: ${priceKwh} zł/kWh
+        📋 Obliczenia na podstawie <strong>${totalDays}</strong> dni pomiarów (wiatr godzinowy, piasta ${t.hub_height} m, porywy w godzinie) · Turbina: ${nominalKw} kW · Wartość energii: ${priceKwh.toFixed(2)} zł/kWh${t.price_kwh > 0 ? '' : ' (taryfa godzinowo)'}${totalDays < 300 ? ' · ⚠️ ekstrapolacja niepełnego roku — zima zwykle wietrzniejsza' : ''}
       </div>`;
   }
 
@@ -4113,34 +4080,25 @@ class SmartingHomePanel extends HTMLElement {
       const st = this._hass.states[id];
       return (st && st.state !== 'unknown' && st.state !== 'unavailable') ? parseFloat(st.state) : null;
     };
-    const wind = n('sensor.ecowitt_wind_speed_9747');
-    if (wind === null) return;
+    const td = this._windToday;
+    if (!td) return;
+    this._setText('wc-today-samples', `${td.hours || 0} h`);
+    this._setText('wc-today-avgwind', `${(td.avg_wind_kmh || 0).toFixed(1)} km/h`);
+    this._setText('wc-today-kwh', (td.est_kwh || 0).toFixed(2));
+    this._setText('wc-today-revenue', `${(td.est_revenue || 0).toFixed(2)} zł`);
+    this._setText('wc-today-productive', td.productive_hours > 0 ? `✅ ${td.productive_hours} h` : '⏸️ Nie');
+  }
 
-    const g = (id) => parseFloat(this.shadowRoot.getElementById(id)?.value) || 0;
-    const cutIn = g('wind-turbine-cutin') || 3;
-    const diameter = g('wind-turbine-diameter') || 3.2;
-    const nominalKw = g('wind-turbine-power') || 3;
-    const priceKwh = g('wind-turbine-price') || 0.87;
-    const windMs = wind / 3.6;
-
-    // Estimate instantaneous power
-    let power = 0;
-    if (windMs >= cutIn) {
-      power = this._calcWindPower(wind, diameter);
-      if (power > nominalKw * 1000) power = nominalKw * 1000;
-    }
-    const dailyKwh = (power * 24) / 1000; // rough estimate based on current speed
-    const dailyRevenue = dailyKwh * priceKwh;
-
-    // Use _windCalSamples to track how many updates we've seen
-    if (!this._windCalSamples) this._windCalSamples = 0;
-    this._windCalSamples++;
-
-    this._setText('wc-today-samples', this._windCalSamples);
-    this._setText('wc-today-avgwind', `${wind.toFixed(1)} km/h`);
-    this._setText('wc-today-kwh', dailyKwh.toFixed(2));
-    this._setText('wc-today-revenue', `${dailyRevenue.toFixed(2)} zł`);
-    this._setText('wc-today-productive', windMs >= cutIn ? '✅ Tak' : '⏸️ Nie');
+  async _loadWindToday() {
+    if (!this._hass?.connection || (this._windTodayTs && Date.now() - this._windTodayTs < 60000)) return;
+    this._windTodayTs = Date.now();
+    try {
+      const r = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/wind/today' });
+      this._windToday = r.today;
+      this._setText('wind-daily-est', `${(r.today.est_kwh || 0).toFixed(2)} kWh`);
+      this._setText('wind-daily-revenue', `${(r.today.est_revenue || 0).toFixed(2)} zł`);
+      this._updateWindCalendarToday();
+    } catch (e) { /* backend not ready */ }
   }
 
   _calcHEMSScore() {
@@ -12819,8 +12777,20 @@ class SmartingHomePanel extends HTMLElement {
                   onchange="this.getRootNode().host._onWindFieldManualChange()" />
               </div>
               <div class="settings-field">
-                <label style="font-size:10px; color:#64748b; text-transform:uppercase">Cena prądu (zł/kWh)</label>
-                <input type="number" id="wind-turbine-price" step="0.01" min="0" placeholder="0.87"
+                <label style="font-size:10px; color:#64748b; text-transform:uppercase">Cena prądu (zł/kWh, 0 = taryfa godzinowo)</label>
+                <input type="number" id="wind-turbine-price" step="0.01" min="0" placeholder="0"
+                  style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
+                  onchange="this.getRootNode().host._onWindFieldManualChange()" />
+              </div>
+              <div class="settings-field">
+                <label style="font-size:10px; color:#64748b; text-transform:uppercase">Wysokość anemometru (m)</label>
+                <input type="number" id="wind-turbine-sensor-h" step="0.5" min="1" placeholder="6"
+                  style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
+                  onchange="this.getRootNode().host._onWindFieldManualChange()" />
+              </div>
+              <div class="settings-field">
+                <label style="font-size:10px; color:#64748b; text-transform:uppercase">Wysokość piasty turbiny (m)</label>
+                <input type="number" id="wind-turbine-hub-h" step="0.5" min="1" placeholder="12"
                   style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
                   onchange="this.getRootNode().host._onWindFieldManualChange()" />
               </div>
@@ -12993,10 +12963,10 @@ class SmartingHomePanel extends HTMLElement {
             <div class="card-title">📖 Skala Beauforta — Referencja</div>
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:6px; margin-top:8px">
               <div style="background:rgba(100,116,139,0.1); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🍃</div><div style="font-size:10px; font-weight:700; color:#64748b">0 — Cisza</div><div style="font-size:9px; color:#94a3b8">&lt; 1 km/h (&lt; 0.3 m/s)</div></div>
-              <div style="background:rgba(46,204,113,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🌿</div><div style="font-size:10px; font-weight:700; color:#2ecc71">2-3 — Słaby/Łagodny</div><div style="font-size:9px; color:#94a3b8">6–19 km/h (1.7–5.3 m/s)</div></div>
-              <div style="background:rgba(247,183,49,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🌬️</div><div style="font-size:10px; font-weight:700; color:#f7b731">4-5 — Umiarkowany</div><div style="font-size:9px; color:#94a3b8">20–38 km/h (5.6–10.6 m/s)</div><div style="font-size:8px; color:#00d4ff; margin-top:2px">⚡ START turbiny</div></div>
-              <div style="background:rgba(231,76,60,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">💨</div><div style="font-size:10px; font-weight:700; color:#e67e22">6-7 — Silny</div><div style="font-size:9px; color:#94a3b8">39–61 km/h (10.8–16.9 m/s)</div><div style="font-size:8px; color:#2ecc71; margin-top:2px">⚡ Optymalna moc</div></div>
-              <div style="background:rgba(192,57,43,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🌪️</div><div style="font-size:10px; font-weight:700; color:#c0392b">8+ — Sztorm</div><div style="font-size:9px; color:#94a3b8">&gt; 62 km/h (&gt; 17.2 m/s)</div><div style="font-size:8px; color:#e74c3c; margin-top:2px">⛔ STOP bezpieczeństwa</div></div>
+              <div style="background:rgba(46,204,113,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🌿</div><div style="font-size:10px; font-weight:700; color:#2ecc71">2-3 — Słaby/Łagodny</div><div style="font-size:9px; color:#94a3b8">6–19 km/h (1.7–5.3 m/s)</div><div style="font-size:8px; color:#00d4ff; margin-top:2px">⚡ START turbiny (~3 m/s na piaście)</div></div>
+              <div style="background:rgba(247,183,49,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🌬️</div><div style="font-size:10px; font-weight:700; color:#f7b731">4-5 — Umiarkowany</div><div style="font-size:9px; color:#94a3b8">20–38 km/h (5.6–10.6 m/s)</div><div style="font-size:8px; color:#f7b731; margin-top:2px">🔄 Produkcja szybko rośnie (∝ v³)</div></div>
+              <div style="background:rgba(231,76,60,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">💨</div><div style="font-size:10px; font-weight:700; color:#e67e22">6-7 — Silny</div><div style="font-size:9px; color:#94a3b8">39–61 km/h (10.8–16.9 m/s)</div><div style="font-size:8px; color:#2ecc71; margin-top:2px">⚡ Moc znamionowa (~12 m/s)</div></div>
+              <div style="background:rgba(192,57,43,0.08); border-radius:8px; padding:8px; text-align:center"><div style="font-size:16px">🌪️</div><div style="font-size:10px; font-weight:700; color:#c0392b">8+ — Sztorm</div><div style="font-size:9px; color:#94a3b8">&gt; 62 km/h (&gt; 17.2 m/s)</div><div style="font-size:8px; color:#e74c3c; margin-top:2px">⛔ STOP od ~25 m/s (Bft 10)</div></div>
             </div>
           </div>
 
