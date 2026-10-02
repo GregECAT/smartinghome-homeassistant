@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -128,6 +129,12 @@ class WindCalendar:
         self._meta: dict[str, Any] = {}
         self._loaded = False
 
+        # Turbine parameters (settings["wind_turbine"]), cached for 5 min and
+        # refreshed off the event loop — see _get_turbine_params().
+        self._turbine_params: dict[str, Any] = DEFAULT_TURBINE
+        self._turbine_loaded_at: float | None = None
+        self._turbine_refreshing = False
+
     # ── Public API ──────────────────────────────────────────────
 
     async def async_load(self) -> None:
@@ -136,6 +143,7 @@ class WindCalendar:
         settings = await self.hass.async_add_executor_job(read_sync, self.hass)
         self._calendar = settings.get(WIND_CALENDAR_KEY, {})
         self._meta = settings.get(WIND_CALENDAR_META_KEY, {})
+        self._set_turbine_params(settings)
         self._loaded = True
         _LOGGER.info(
             "Wind calendar loaded: %d days, oldest=%s",
@@ -183,7 +191,7 @@ class WindCalendar:
 
         date_key = self._current_date or datetime.now().strftime("%Y-%m-%d")
         avg_wind = sum(self._samples) / len(self._samples)
-        turbine = self._get_turbine_params()
+        turbine = await self._async_get_turbine_params()
 
         # Calculate production
         production = calc_day_production(avg_wind, turbine)
@@ -332,7 +340,7 @@ class WindCalendar:
                     daily_gusts[date_key] = float(mean_val)
 
             # Compute daily records
-            turbine = self._get_turbine_params()
+            turbine = await self._async_get_turbine_params()
             bootstrapped = 0
 
             for date_key, values in daily_buckets.items():
@@ -416,7 +424,7 @@ class WindCalendar:
 
         Returns number of days recalculated.
         """
-        turbine = self._get_turbine_params()
+        turbine = await self._async_get_turbine_params()
         count = 0
 
         for date_key, record in self._calendar.items():
@@ -532,28 +540,53 @@ class WindCalendar:
 
     # ── Private helpers ─────────────────────────────────────────
 
+    _TURBINE_CACHE_S = 300
+
+    def _turbine_stale(self) -> bool:
+        return (
+            self._turbine_loaded_at is None
+            or time.monotonic() - self._turbine_loaded_at >= self._TURBINE_CACHE_S
+        )
+
+    def _set_turbine_params(self, settings: dict[str, Any]) -> None:
+        wt = settings.get("wind_turbine")
+        self._turbine_params = wt if wt and isinstance(wt, dict) else DEFAULT_TURBINE
+        self._turbine_loaded_at = time.monotonic()
+
+    async def _async_refresh_turbine_params(self) -> None:
+        """Re-read turbine parameters from settings in the executor."""
+        from .settings_io import read_async
+        try:
+            settings = await read_async(self.hass)
+        except Exception:  # noqa: BLE001
+            settings = {}
+        self._set_turbine_params(settings)
+
+    async def _async_get_turbine_params(self) -> dict[str, Any]:
+        """Turbine parameters for async callers (refreshed first if stale)."""
+        if self._turbine_stale():
+            await self._async_refresh_turbine_params()
+        return self._turbine_params
+
     def _get_turbine_params(self) -> dict[str, Any]:
         """Turbine parameters from settings, cached for 5 min.
 
-        Called every coordinator tick in the event loop — reading and parsing
-        the whole settings file each time was a blocking call HA warned about.
+        Called every coordinator tick in the event loop, so it never touches
+        the disk: it returns the cached value and, once that is older than
+        5 min, schedules a re-read in the executor (settings_io.read_async).
+        The cache is first filled by async_load().
         """
-        import time as _time
+        if self._turbine_stale() and not self._turbine_refreshing:
+            self._turbine_refreshing = True
 
-        now = _time.monotonic()
-        cache = getattr(self, "_turbine_cache", None)
-        if cache is not None and now - cache[0] < 300:
-            return cache[1]
-        params = DEFAULT_TURBINE
-        try:
-            from .settings_io import read_sync
-            wt = read_sync(self.hass).get("wind_turbine")
-            if wt and isinstance(wt, dict):
-                params = wt
-        except Exception:
-            pass
-        self._turbine_cache = (now, params)
-        return params
+            async def _refresh() -> None:
+                try:
+                    await self._async_refresh_turbine_params()
+                finally:
+                    self._turbine_refreshing = False
+
+            self.hass.async_create_task(_refresh())
+        return self._turbine_params
 
     async def _close_day_async(self) -> None:
         """Async wrapper for close_day (called from midnight rollover)."""
