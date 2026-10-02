@@ -361,6 +361,8 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def set_wind_calendar(self, calendar) -> None:
         """Set the wind calendar for daily wind energy tracking."""
         self._wind_calendar = calendar
+        calendar.set_price_fn(lambda when: self._tariff_price(when)[0])
+        calendar.set_sources(self._sensor_map.get("local_wind_speed"), self._sensor_map.get("local_wind_gust"))
 
     def update_sensor_map(self, key: str, entity_id: str) -> None:
         """Update a single sensor mapping in-memory (no restart needed)."""
@@ -505,6 +507,9 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                 # Feed wind data to calendar accumulator
                 if self._wind_calendar:
+                    self._wind_calendar.set_sources(
+                        self._sensor_map.get("local_wind_speed"), self._sensor_map.get("local_wind_gust"),
+                    )
                     self._wind_calendar.accumulate_sample(
                         ecowitt.get("ecowitt_wind_speed"),
                         ecowitt.get("ecowitt_wind_gust"),
