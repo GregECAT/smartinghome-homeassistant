@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import (
 )
 from homeassistant.util import dt as dt_util
 
+from .grid_sign import pcc_to_meter, split_grid_power
 from .pl_holidays import is_day_off
 from .const import (
     is_grid_only,
@@ -874,7 +875,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             if has_any_phase:
                 # Sofar PCC: positive I = import → negate for GoodWe convention (+export)
-                grid_for_store = -grid_total if is_sofar else grid_total
+                grid_for_store = pcc_to_meter(grid_total, is_sofar)
                 data[SENSOR_GRID_POWER_TOTAL] = str(round(grid_for_store))
                 _LOGGER.debug(
                     "Synthetic grid_power from V×I: %.0f W (phases: %s, sofar=%s)",
@@ -942,9 +943,8 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # —— Grid directional power ——
         meter = _safe_float(raw.get(SENSOR_GRID_POWER_TOTAL))
-        # Canonical grid power: + export / − import
-        data["grid_import_power"] = max(-meter, 0)
-        data["grid_export_power"] = max(meter, 0)
+        # Canonical grid power: + export / − import (grid_sign.py)
+        data["grid_import_power"], data["grid_export_power"] = split_grid_power(meter)
 
         # —— Synthetic sensors for brands without native load/grid ——
         # These become HA entities: sensor.smarting_home_*_load_power_computed etc.
@@ -1655,10 +1655,11 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             statuses.append(f"Charging: {battery_power:.0f}W")
         elif battery_power < -50:
             statuses.append(f"Discharging: {abs(battery_power):.0f}W")
-        if meter > 100:
-            statuses.append(f"Importing: {meter:.0f}W")
-        elif meter < -100:
-            statuses.append(f"Exporting: {abs(meter):.0f}W")
+        # Meter: + export / − import
+        if meter < -100:
+            statuses.append(f"Importing: {abs(meter):.0f}W")
+        elif meter > 100:
+            statuses.append(f"Exporting: {meter:.0f}W")
 
         statuses.append(f"SOC: {soc:.0f}%")
         return " | ".join(statuses) if statuses else "System idle"

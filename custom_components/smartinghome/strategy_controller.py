@@ -2487,9 +2487,8 @@ class StrategyController:
                         and bat_power <= 50  # battery_power: +discharge / -charge → not discharging
                     ):
                         # Check if grid is importing significantly (home is pulling from grid)
-                        grid_state = self.hass.states.get(SENSOR_GRID_POWER_TOTAL)
-                        # Meter: +export / -import
-                        grid_power = -_safe_float(grid_state.state if grid_state else None)
+                        # Meter (sensor_map grid_power, canonical key): +export / -import
+                        grid_power = -_safe_float(data.get(SENSOR_GRID_POWER_TOTAL))
                         if grid_power > 500:  # >500W import from grid
                             drifted = True
                             # Read DOD to diagnose root cause
