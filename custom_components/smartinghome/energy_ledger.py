@@ -220,6 +220,7 @@ class EnergyLedger:
     def reconcile(
         self, day: date, counted: dict[str, float | None], *,
         buy_price: float, sell_price: float, is_peak: bool, elapsed_min: float,
+        mppt_weights: tuple[float | None, ...] = (),
     ) -> dict[str, float]:
         """Add what the sample integration missed today (inverter outage, HA restart).
 
@@ -240,6 +241,8 @@ class EnergyLedger:
         chg, dis = miss("charge"), miss("discharge")
         imp, exp = miss("import"), miss("export")
         if max(pv, load, chg, dis) < RECONCILE_MIN_KWH and max(imp, exp) < RECONCILE_MIN_KWH:
+            if self._topup_mppt(rec, mppt_weights):
+                self._dirty = True
             return {}
         pv_home = min(pv, load)
         rest_home = load - pv_home
@@ -254,6 +257,7 @@ class EnergyLedger:
         f["bat_grid"] = max(0.0, dis - f["bat_home"])
         f["grid_home"] = max(0.0, rest_home - f["bat_home"])
         rec.add("pv", pv)
+        self._topup_mppt(rec, mppt_weights)
         rec.add("load", load)
         rec.add("load_day" if pv > RECONCILE_MIN_KWH else "load_night", load)
         for key, val in f.items():
@@ -283,6 +287,19 @@ class EnergyLedger:
         v["covered_min"] = max(v.get("covered_min", 0.0), elapsed_min)
         self._dirty = True
         return {"pv": pv, "load": load, "charge": chg, "discharge": dis, "import": imp, "export": exp}
+
+    @staticmethod
+    def _topup_mppt(rec: DayRecord, weights_in: tuple[float | None, ...]) -> bool:
+        """Per-MPPT energy short of the day's PV (a filled gap) → split by the strings' power now."""
+        v = rec.values
+        weights = [max(w or 0.0, 0.0) for w in weights_in]
+        mppt_sum = sum(v.get(f"mppt{i + 1}", 0.0) for i in range(len(weights)))
+        short = v.get("pv", 0.0) - mppt_sum
+        if not weights or sum(weights) <= 50 or short <= 1.0:
+            return False
+        for idx, w in enumerate(weights):
+            rec.add(f"mppt{idx + 1}", short * w / sum(weights))
+        return True
 
     def update_gap(self) -> None:
         """Inputs unavailable this cycle — don't integrate across the gap."""
