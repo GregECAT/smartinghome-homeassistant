@@ -8701,7 +8701,10 @@ class SmartingHomePanel extends HTMLElement {
       ?? this._n("sensor.energy_production_today")
       ?? this._n("sensor.solcast_pv_forecast_today")
       ?? this._n("sensor.forecast_solar_energy_production_today");
-    const fAccuracy = (fTodayVal && fTodayVal > 0 && enPvToday > 0) ? Math.min(200, (enPvToday / fTodayVal) * 100) : null;
+    // Backend: actual PV vs the forecast for the hours already passed (not the whole day)
+    const fAccBackend = this._shN("pv_forecast_accuracy_today");
+    const fAccuracy = (fAccBackend !== null && fAccBackend > 0) ? fAccBackend
+      : (fTodayVal && fTodayVal > 0 && enPvToday > 0 && new Date().getHours() >= 20) ? Math.min(200, (enPvToday / fTodayVal) * 100) : null;
     this._setText("v-en-forecast-accuracy", fAccuracy !== null ? `${Math.round(fAccuracy)}%` : "—%");
 
     // ROW 4: Inverter & Battery details
@@ -14116,7 +14119,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.65.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.65.4</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
