@@ -331,6 +331,7 @@ class StrategyController:
         self._arb_cmd_ts: float = 0.0
         self._arb_log_key: tuple = ()
         self._offline_since = 0.0  # inverter data missing since (0 = online)
+        self._cascade_logged: dict[str, tuple[str, float]] = {}
         self._v_cap_until = 0.0   # sell power reduced near the 253 V limit until …
         self._v_cap_w = 0
         self._arb_status: dict[str, Any] = {}
@@ -1607,25 +1608,25 @@ class StrategyController:
             if await self._throttled_action("v_cascade_t3"):
                 await self._em.check_voltage_protection(v_l1, v_l2, v_l3, soc)
                 self._voltage_cascade_active = True
-                msg = f"W4: ⚡ Napięcie krytyczne {max_v:.0f}V — kaskada T3 (bojler+AC+ładowanie)"
+                msg = f"W4: ⚡ Napięcie krytyczne {max_v:.0f}V — kaskada T3 ({self._cascade_loads('AC+ładowanie')})"
                 actions.append(msg)
-                self._log_decision("voltage_t3", msg)
+                self._log_cascade("voltage", "voltage_t3", msg)
 
         elif max_v > VOLTAGE_THRESHOLD_HIGH:
             if await self._throttled_action("v_cascade_t2"):
                 await self._em.check_voltage_protection(v_l1, v_l2, v_l3, soc)
                 self._voltage_cascade_active = True
-                msg = f"W4: ⚡ Napięcie wysokie {max_v:.0f}V — kaskada T2 (bojler+AC)"
+                msg = f"W4: ⚡ Napięcie wysokie {max_v:.0f}V — kaskada T2 ({self._cascade_loads('AC')})"
                 actions.append(msg)
-                self._log_decision("voltage_t2", msg)
+                self._log_cascade("voltage", "voltage_t2", msg)
 
         elif max_v > VOLTAGE_THRESHOLD_WARNING:
             if await self._throttled_action("v_cascade_t1"):
                 await self._em.check_voltage_protection(v_l1, v_l2, v_l3, soc)
                 self._voltage_cascade_active = True
-                msg = f"W4: ⚡ Napięcie podwyższone {max_v:.0f}V — kaskada T1 (bojler)"
+                msg = f"W4: ⚡ Napięcie podwyższone {max_v:.0f}V — kaskada T1 ({self._cascade_loads('')})"
                 actions.append(msg)
-                self._log_decision("voltage_t1", msg)
+                self._log_cascade("voltage", "voltage_t1", msg)
 
         elif max_v < VOLTAGE_THRESHOLD_RECOVERY and self._voltage_cascade_active:
             if await self._throttled_action("v_cascade_recovery"):
@@ -1633,7 +1634,7 @@ class StrategyController:
                 self._voltage_cascade_active = False
                 msg = f"W4: ✅ Napięcie znormalizowane {max_v:.0f}V — odzyskiwanie"
                 actions.append(msg)
-                self._log_decision("voltage_recovery", msg)
+                self._log_cascade("voltage", "voltage_recovery", msg)
 
         return actions
 
@@ -1660,25 +1661,25 @@ class StrategyController:
             if await self._throttled_action("surplus_t3"):
                 await self._em.check_pv_surplus(surplus, soc)
                 self._surplus_cascade_active = True
-                msg = f"W4: ☀️ Nadwyżka {surplus:.0f}W — T3: bojler+AC+gniazdko"
+                msg = f"W4: ☀️ Nadwyżka {surplus:.0f}W — T3: {self._cascade_loads('AC+gniazdko')}"
                 actions.append(msg)
-                self._log_decision("surplus_t3", msg)
+                self._log_cascade("surplus", "surplus_t3", msg)
 
         elif surplus > PV_SURPLUS_TIER2 and soc >= PV_SURPLUS_MIN_SOC_TIER2:
             if await self._throttled_action("surplus_t2"):
                 await self._em.check_pv_surplus(surplus, soc)
                 self._surplus_cascade_active = True
-                msg = f"W4: ☀️ Nadwyżka {surplus:.0f}W — T2: bojler+AC"
+                msg = f"W4: ☀️ Nadwyżka {surplus:.0f}W — T2: {self._cascade_loads('AC')}"
                 actions.append(msg)
-                self._log_decision("surplus_t2", msg)
+                self._log_cascade("surplus", "surplus_t2", msg)
 
         elif surplus > PV_SURPLUS_TIER1 and soc >= PV_SURPLUS_MIN_SOC_TIER1:
             if await self._throttled_action("surplus_t1"):
                 await self._em.check_pv_surplus(surplus, soc)
                 self._surplus_cascade_active = True
-                msg = f"W4: ☀️ Nadwyżka {surplus:.0f}W — T1: bojler"
+                msg = f"W4: ☀️ Nadwyżka {surplus:.0f}W — T1: {self._cascade_loads('')}"
                 actions.append(msg)
-                self._log_decision("surplus_t1", msg)
+                self._log_cascade("surplus", "surplus_t1", msg)
 
         elif surplus < PV_SURPLUS_OFF and self._surplus_cascade_active:
             if await self._throttled_action("surplus_off"):
@@ -1686,7 +1687,7 @@ class StrategyController:
                 self._surplus_cascade_active = False
                 msg = f"W4: Nadwyżka spadła do {surplus:.0f}W — wyłączanie odbiorników"
                 actions.append(msg)
-                self._log_decision("surplus_off", msg)
+                self._log_cascade("surplus", "surplus_off", msg)
 
         return actions
 
@@ -2855,6 +2856,21 @@ class StrategyController:
     # ------------------------------------------------------------------
     #  Helpers
     # ------------------------------------------------------------------
+
+    def _cascade_loads(self, others: str) -> str:
+        """Loads a W4 cascade tier switches — the boiler only when W4b doesn't own it."""
+        if self._boiler.enabled:
+            return others or "bojler steruje W4b"
+        return "bojler" + ("+" + others if others else "")
+
+    def _log_cascade(self, cascade: str, action: str, msg: str) -> None:
+        """Log a cascade step only when its tier changes (or every 15 min) — not every tick."""
+        last = self._cascade_logged.get(cascade)
+        now = time.time()
+        if last and last[0] == action and now - last[1] < 900:
+            return
+        self._cascade_logged[cascade] = (action, now)
+        self._log_decision(action, msg)
 
     async def _throttled_action(self, action_name: str, cooldown: int | None = None) -> bool:
         """Return True if the action can execute (not throttled).

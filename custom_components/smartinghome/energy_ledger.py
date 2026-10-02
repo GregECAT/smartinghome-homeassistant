@@ -54,6 +54,7 @@ _FLOW_KEYS = (
     "grid_home", "grid_bat", "charge", "discharge",
     "peak_load", "peak_grid_home",
 )
+RECONCILE_MIN_KWH = 0.3  # below this the counters and the integration agree
 _STATE_KEYS = ("soc_start", "soc_end", "capacity")  # per-day states, never summed
 _MONEY_KEYS = (
     "import", "export", "import_offpeak", "import_cost", "export_revenue",
@@ -215,6 +216,73 @@ class EnergyLedger:
             self._meter(rec, prev, sample)
         self._sync_pool(sample.soc)
         self._dirty = True
+
+    def reconcile(
+        self, day: date, counted: dict[str, float | None], *,
+        buy_price: float, sell_price: float, is_peak: bool, elapsed_min: float,
+    ) -> dict[str, float]:
+        """Add what the sample integration missed today (inverter outage, HA restart).
+
+        counted — kWh since local midnight from the inverter's lifetime counters:
+        pv / load / charge / discharge / import / export. Whatever the counters show
+        above the ledger is booked as one aggregate interval: PV serves the house
+        first, then the battery, then the grid (same rule as split_flows). Running
+        it again adds nothing — afterwards the ledger matches the counters.
+        """
+        rec = self._record(day)
+        v = rec.values
+
+        def miss(key: str) -> float:
+            c = counted.get(key)
+            return max(0.0, float(c) - v.get(key, 0.0)) if c is not None else 0.0
+
+        pv, load = miss("pv"), miss("load")
+        chg, dis = miss("charge"), miss("discharge")
+        imp, exp = miss("import"), miss("export")
+        if max(pv, load, chg, dis) < RECONCILE_MIN_KWH and max(imp, exp) < RECONCILE_MIN_KWH:
+            return {}
+        pv_home = min(pv, load)
+        rest_home = load - pv_home
+        pv_rest = pv - pv_home
+        f = {
+            "pv_home": pv_home,
+            "pv_bat": min(pv_rest, chg),
+            "bat_home": min(dis, rest_home),
+        }
+        f["grid_bat"] = max(0.0, chg - f["pv_bat"])
+        f["pv_grid"] = max(0.0, pv_rest - f["pv_bat"])
+        f["bat_grid"] = max(0.0, dis - f["bat_home"])
+        f["grid_home"] = max(0.0, rest_home - f["bat_home"])
+        rec.add("pv", pv)
+        rec.add("load", load)
+        rec.add("load_day" if pv > RECONCILE_MIN_KWH else "load_night", load)
+        for key, val in f.items():
+            rec.add(key, val)
+        rec.add("charge", chg)
+        rec.add("discharge", dis)
+        pool = self._pool_pv + self._pool_grid
+        pv_share = self._pool_pv / pool if pool > 1e-6 else 0.5
+        rec.add("bat_home_pv", f["bat_home"] * pv_share)
+        rec.add("flow_import", f["grid_home"] + f["grid_bat"])
+        rec.add("flow_export", f["pv_grid"] + f["bat_grid"])
+        rec.add("baseline_cost", load * buy_price)
+        if is_peak:
+            rec.add("peak_load", load)
+            rec.add("peak_grid_home", f["grid_home"])
+        if imp > 0:
+            rec.add("import", imp)
+            rec.add("import_cost", imp * buy_price)
+            if not is_peak:
+                rec.add("import_offpeak", imp)
+        if exp > 0:
+            rec.add("export", exp)
+            rec.add("export_revenue", exp * max(0.0, sell_price))
+        rec.add("gap_load", load)
+        rec.add("gap_pv", pv)  # per-MPPT energy of the gap is unknown
+        # the day is complete again up to now
+        v["covered_min"] = max(v.get("covered_min", 0.0), elapsed_min)
+        self._dirty = True
+        return {"pv": pv, "load": load, "charge": chg, "discharge": dis, "import": imp, "export": exp}
 
     def update_gap(self) -> None:
         """Inputs unavailable this cycle — don't integrate across the gap."""
