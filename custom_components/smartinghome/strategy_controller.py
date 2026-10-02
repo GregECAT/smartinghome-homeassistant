@@ -329,6 +329,8 @@ class StrategyController:
         self._arb_cmd: tuple[str, int] | None = None
         self._arb_cmd_ts: float = 0.0
         self._arb_log_key: tuple = ()
+        self._v_cap_until = 0.0   # sell power reduced near the 253 V limit until …
+        self._v_cap_w = 0
         self._arb_status: dict[str, Any] = {}
         self._arb_drift_since: float = 0.0
         self._arb_planning: bool = False  # a plan is being computed
@@ -1726,6 +1728,30 @@ class StrategyController:
             live_deficit = max(load - pv, 0.0)
             max_w = self._arb_params.discharge_kw * 1000
             power_w = int(min(max(power_w, live_deficit + first.export_w), max_w))
+        if action == ACT_DISCHARGE:
+            # Selling pushes the grid voltage up — near the inverter's 253 V limit
+            # sell less (the house is still covered) instead of risking a disconnect
+            v_max = max(_safe_float(data.get(SENSOR_GRID_VOLTAGE_L1)), _safe_float(data.get(SENSOR_GRID_VOLTAGE_L2)),
+                        _safe_float(data.get(SENSOR_GRID_VOLTAGE_L3)))
+            now_ts = time.time()
+            if v_max >= 252.0:
+                # hold the reduction 10 min — otherwise the voltage drops, the power
+                # goes back up and the inverter gets a new setpoint every tick
+                step = 1500 if v_max >= 252.5 else 800
+                if now_ts > self._v_cap_until or step > self._v_cap_w:
+                    self._v_cap_w = step
+                self._v_cap_until = now_ts + 600
+            if now_ts < self._v_cap_until:
+                house_w = max(load - pv, 0.0)
+                capped = int(max(house_w, power_w - self._v_cap_w))
+                if capped < power_w:
+                    if time.time() - getattr(self, "_v_cap_logged", 0) > 900:
+                        self._v_cap_logged = time.time()
+                        self._log_decision(
+                            "arbitrage_voltage",
+                            f"⚡ Napięcie {v_max:.1f} V — sprzedaż z baterii ograniczona {power_w} → {capped} W",
+                        )
+                    power_w = capped
         cmd = (action, int(round(power_w / 500.0)) * 500)
         changed = cmd != self._arb_cmd
         if (

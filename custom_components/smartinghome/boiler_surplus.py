@@ -84,7 +84,8 @@ class BoilerSurplus:
         if inp.state == "off":
             self.owned = False  # off (by us or by hand) — nothing of ours is running
             surplus = in_window and inp.soc >= min_soc and inp.export_w >= min_export
-            high_v = inp.max_voltage >= VOLTAGE_ON and inp.export_w >= 1000
+            # high voltage counts only when the export is PV — not the battery being sold
+            high_v = inp.max_voltage >= VOLTAGE_ON and inp.export_w >= 1000 and inp.battery_w <= 300
             if (self._held("on", surplus or high_v, ON_HOLD_S, now)
                     and now - self._last_switch >= MIN_OFF_S):
                 self._last_switch, self.owned = now, True

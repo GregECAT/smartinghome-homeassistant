@@ -505,7 +505,7 @@ class EnergyManager:
             actions["cascade_active"] = True
             actions["actions"] = ["boiler_on", "ac_on"]
             _LOGGER.warning(
-                "Voltage cascade T2: %.1fV — Boiler + AC ON", max_voltage
+                "Voltage cascade T2: %.1fV — AC ON%s", max_voltage, "" if self.boiler_owned_elsewhere else " + Boiler ON"
             )
 
         elif max_voltage > VOLTAGE_THRESHOLD_WARNING:
@@ -515,7 +515,7 @@ class EnergyManager:
             actions["cascade_active"] = True
             actions["actions"] = ["boiler_on"]
             _LOGGER.warning(
-                "Voltage cascade T1: %.1fV — Boiler ON", max_voltage
+                "Voltage cascade T1: %.1fV — Boiler ON%s", max_voltage, " (via W4b)" if self.boiler_owned_elsewhere else ""
             )
 
         elif max_voltage < VOLTAGE_THRESHOLD_RECOVERY and self._voltage_cascade_active:
