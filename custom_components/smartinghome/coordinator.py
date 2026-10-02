@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -719,6 +719,44 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "Energy ledger: filled a data gap from the counters — %s",
                 ", ".join(f"{k} {v:.2f} kWh" for k, v in added.items() if v > 0.01),
             )
+
+    async def async_rebuild_ledger_day(self, day: date) -> dict[str, Any]:
+        """Rebuild a day of the energy ledger from recorder history, then fill its
+        gaps from the lifetime counters at the start and end of that day."""
+        ledger = self.ledger
+        ok = await ledger.async_backfill_day(
+            day, self._ledger_entities(), self._ledger_price_at, self._battery_capacity_kwh())
+        if not ok:
+            return {"rebuilt": False}
+        counters = {k: e for k, e in self._lifetime_counters().items() if e}
+        start = dt_util.start_of_local_day(day)
+        now = dt_util.now()
+        end = min(start + timedelta(days=1), now)
+        at_start = await self._async_totals_at_midnight(list(counters.values()), start)
+        if end >= now:
+            at_end = {e: v for e in counters.values() if (v := self._read_total(e)) is not None}
+        else:
+            at_end = await self._async_totals_at_midnight(list(counters.values()), end)
+        counted = {
+            k: at_end[e] - at_start[e] for k, e in counters.items()
+            if e in at_start and e in at_end and at_end[e] >= at_start[e]
+        }
+        added: dict[str, float] = {}
+        if counted:
+            # One aggregate interval at the day's average prices
+            buy, peak = self._tariff_price(start + timedelta(hours=12))
+            v = ledger.day(day)
+            exp = v.get("export", 0.0)
+            sell = v.get("export_revenue", 0.0) / exp if exp > 0.05 else 0.0
+            added = ledger.reconcile(
+                day, counted, buy_price=buy, sell_price=sell, is_peak=False,
+                elapsed_min=(end - start).total_seconds() / 60,
+            )
+        if day == now.date():
+            self._reconcile_base_day = None  # re-read the midnight baseline on the next tick
+        await ledger.async_save(force=True)
+        return {"rebuilt": True, "gap_filled": {k: round(x, 2) for k, x in added.items()},
+                "summary": EnergyLedger.summarise(ledger.day(day))}
 
     def _ledger_entities(self) -> dict[str, str]:
         m = self._sensor_map

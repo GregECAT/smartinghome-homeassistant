@@ -33,6 +33,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_wind_calendar)
     websocket_api.async_register_command(hass, ws_deposit_status)
     websocket_api.async_register_command(hass, ws_voltage_report)
+    websocket_api.async_register_command(hass, ws_ledger_rebuild)
 
     from .meter_ws import async_register as _register_meter_ws
     _register_meter_ws(hass)
@@ -394,6 +395,27 @@ async def ws_voltage_report(hass: HomeAssistant, connection, msg: dict[str, Any]
         "events": events[-200:],
         "generated": now.isoformat(timespec="minutes"),
     })
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smartinghome/energy/rebuild_day",
+    vol.Required("date"): str,
+})
+@websocket_api.async_response
+async def ws_ledger_rebuild(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Rebuild one day of the energy ledger from recorder history + lifetime counters."""
+    from datetime import date as _date
+
+    coordinator = _coordinator(hass)
+    if coordinator is None:
+        _not_ready(connection, msg)
+        return
+    try:
+        day = _date.fromisoformat(msg["date"][:10])
+    except ValueError:
+        connection.send_error(msg["id"], "invalid_date", "YYYY-MM-DD")
+        return
+    connection.send_result(msg["id"], await coordinator.async_rebuild_ledger_day(day))
 
 
 @websocket_api.websocket_command({vol.Required("type"): "smartinghome/forecast/status"})

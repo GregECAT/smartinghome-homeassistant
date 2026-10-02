@@ -52,6 +52,9 @@ class ArbitrageParams:
     peak_import_penalty: float = 5.0  # zł/kWh — grid import in a peak is "forbidden"
     peak_load_margin: float = 1.25  # plan peaks for 25 % more load than the profile (sell only a sure surplus)
     peak_sell_buffer_kwh: float = 1.0  # selling in a peak keeps the rest of the peak's house load + this
+    # Last hours of a peak: the margin and the buffer fade to 0 at the peak's end, so the
+    # battery sells everything the house won't need before cheap energy is back
+    peak_endgame_h: float = 1.5
     pv_confidence: float = 0.7    # share of the PV forecast the plan relies on
     charge_margin: float = 0.9    # plan with 90 % of max charge power (executed at 100 %)
     max_soc: float = 100.0        # % upper limit for grid charging
@@ -347,8 +350,19 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
 
     # Peak slots after the current one: plan for a higher load than the profile,
     # so the battery is sold in a peak only when the surplus is sure
+    # Peak hours left after each slot (until the block of no-import slots ends)
+    n_in = len(inputs)
+    rest_after = [0.0] * n_in
+    for t in range(n_in - 2, -1, -1):
+        rest_after[t] = (inputs[t + 1].duration + rest_after[t + 1]) if inputs[t + 1].no_import else 0.0
+    endgame = max(p.peak_endgame_h, 1e-6)
+
+    def fade(t: int) -> float:
+        """1 far from the peak's end → 0 at its end (slot t's start)."""
+        return min(1.0, (rest_after[t] + inputs[t].duration) / endgame)
+
     deficits = [
-        h.load_kwh * (p.peak_load_margin if h.no_import and t > 0 else 1.0) - h.pv_kwh
+        h.load_kwh * (1 + (p.peak_load_margin - 1) * fade(t) if h.no_import and t > 0 else 1.0) - h.pv_kwh
         for t, h in enumerate(inputs)
     ]
     # Greedy peak slots: no pricier slot follows before cheap energy is back,
@@ -408,7 +422,7 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
                 if (
                     h.no_import and delta < 0
                     and -delta * p.eff_discharge - max(d, 0.0) > 1e-6
-                    and e2 < e_peak + need_after[t] + p.peak_sell_buffer_kwh - 1e-9
+                    and e2 < e_peak + need_after[t] + p.peak_sell_buffer_kwh * min(1.0, rest_after[t] / endgame) - 1e-9
                 ):
                     continue  # selling now would leave too little for the rest of the peak
                 imp, exp, dis = _flows(delta, d, p)
