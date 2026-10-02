@@ -295,6 +295,13 @@ def ws_forecast_status(hass: HomeAssistant, connection, msg: dict[str, Any]) -> 
             if kw is not None:
                 load_hourly[key] = round(kw, 3)
     connection.send_result(msg["id"], {
+        "station": {
+            "radiation": data.get("ecowitt_solar_radiation"),
+            "temp": data.get("ecowitt_temp"),
+            "nowcast": data.get("radiation_nowcast"),
+            "scale": data.get("radiation_sensor_scale"),
+            "pv_expected_w": data.get("pv_expected_now_w"),
+        },
         "pv_hourly": pv_hourly,
         "load_hourly": load_hourly,
         "pv": data.get("pv_forecast_status") or {},

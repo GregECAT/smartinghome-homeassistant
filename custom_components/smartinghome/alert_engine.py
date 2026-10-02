@@ -207,7 +207,7 @@ class AlertEngine:
         checks = (
             self._check_inverter_offline, self._check_control_lost, self._check_voltage,
             self._check_grid_outage, self._check_frequency, self._check_inverter_temp,
-            self._check_battery_temp, self._check_export_balance, self._check_pv_dead,
+            self._check_battery_temp, self._check_export_balance, self._check_pv_dead, self._check_pv_low,
             self._check_peak_import, self._check_planned_charge, self._check_autopilot_error,
         )
         if context.get("grid_only"):
@@ -492,6 +492,28 @@ class AlertEngine:
             resolved_text="Pomiar licznika znów spójny",
         )
 
+    def _check_pv_low(self, d, ctx, now_m) -> Alert | None:
+        """PV far below what the local station's irradiance says it should give."""
+        pv = _num(d, SENSOR_PV_POWER)
+        expected = _num(d, "pv_expected_now_w")
+        if pv is None or expected is None or expected < 1500 or pv <= 50 or pv >= 0.45 * expected:
+            return None  # pv ≤ 50 W in daylight is PV_ZERO's case
+        volts = [_num(d, k) for k in (SENSOR_GRID_VOLTAGE_L1, SENSOR_GRID_VOLTAGE_L2, SENSOR_GRID_VOLTAGE_L3)]
+        if max((v for v in volts if v is not None), default=0) >= 252:
+            return None  # the inverter derates at high grid voltage (P(U)) — not a PV fault
+        temp = _num(d, "ecowitt_temp")
+        snow = temp is not None and temp <= 2
+        return Alert(
+            id="PV_LOW", level="warning", source="PV", hold_s=1800,
+            title="Produkcja PV poniżej nasłonecznienia",
+            message=(f"PV {_fmt_w(pv)}, a przy obecnym nasłonecznieniu (stacja) powinno być ok. {_fmt_w(expected)} "
+                     f"— od 30 min ≤ 45 %." + (f" Temperatura {_pl(temp)} °C — możliwy śnieg lub szron na panelach." if snow else "")),
+            action="Sprawdź panele (zacienienie, śnieg, zabrudzenie) i stringi w zakładce Energia",
+            causes=(["Śnieg/szron na panelach"] if snow else []) + [
+                "Zacienienie lub zabrudzenie paneli", "Wyłączony string / rozłącznik DC", "Ograniczenie mocy falownika (temperatura)"],
+            resolved_text="Produkcja PV znów zgodna z nasłonecznieniem",
+        )
+
     def _check_pv_dead(self, d, ctx, now_m) -> Alert | None:
         pv = _num(d, SENSOR_PV_POWER)
         expected = _num(d, "pv_forecast_power_now_total") or 0
@@ -519,6 +541,9 @@ class AlertEngine:
             return None
         if ctx.get("intent") == "charge_grid":
             return None  # deliberate (rare) — reported by the plan check instead
+        bat = _num(d, SENSOR_BATTERY_POWER)
+        if bat is not None and bat >= 0.85 * ctx.get("battery_max_w", 3700):
+            return None  # the house is above the battery's max power — nothing to fix
         return Alert(
             id="PEAK_GRID_IMPORT", level="warning", source="Autopilot", hold_s=900,
             title="Szczyt: dom pobiera z sieci",

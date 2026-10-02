@@ -91,6 +91,7 @@ class PVForecaster:
         # raw model: {local hour start: {mppt: kWh}}
         self._model: dict[datetime, dict[int, float]] = {}
         self.temps: dict[datetime, float] = {}      # hourly outdoor temperature (°C)
+        self.ghi: dict[datetime, float] = {}        # hourly horizontal irradiance (W/m², mean of the hour)
         self.calibration: dict[int, float] = {}
         self._fetched = 0.0
         self._config_key = ""
@@ -113,12 +114,13 @@ class PVForecaster:
         session = async_get_clientsession(self.hass)
         model: dict[datetime, dict[int, float]] = {}
         temps: dict[datetime, float] = {}
+        ghi: dict[datetime, float] = {}
         try:
-            for plane in planes:
+            for n, plane in enumerate(planes):
                 params = {
                     "latitude": f"{self.lat:.4f}",
                     "longitude": f"{self.lon:.4f}",
-                    "hourly": "global_tilted_irradiance,temperature_2m",
+                    "hourly": "global_tilted_irradiance,temperature_2m" + (",shortwave_radiation" if n == 0 else ""),
                     "tilt": f"{plane.tilt:.0f}",
                     "azimuth": f"{plane.azimuth:.0f}",
                     "timezone": "auto",
@@ -132,13 +134,16 @@ class PVForecaster:
                     resp.raise_for_status()
                     payload = await resp.json()
                 hourly = payload.get("hourly") or {}
-                for ts, gti, temp in zip(
+                for ts, gti, temp, sw in zip(
                     hourly.get("time") or [],
                     hourly.get("global_tilted_irradiance") or [],
                     hourly.get("temperature_2m") or [],
+                    hourly.get("shortwave_radiation") or [None] * len(hourly.get("time") or []),
                 ):
                     # Open-Meteo radiation is the mean of the preceding hour
                     start = datetime.fromisoformat(ts) - timedelta(hours=1)
+                    if sw is not None:
+                        ghi[start] = float(sw)
                     if temp is not None:
                         temps[start] = float(temp)
                     if gti is None:
@@ -149,7 +154,7 @@ class PVForecaster:
             self.error = str(err)[:200]
             _LOGGER.warning("Open-Meteo PV forecast failed: %s", err)
             return bool(self._model)
-        self.planes, self._model, self.temps = planes, model, temps
+        self.planes, self._model, self.temps, self.ghi = planes, model, temps, ghi
         self._fetched, self._config_key, self.error = time.time(), key, ""
         if ledger is not None:
             self._calibrate(ledger)
@@ -217,6 +222,10 @@ class PVForecaster:
 
     def power_now_w(self, now: datetime) -> float:
         return self.hour_kwh(now.replace(tzinfo=None)) * 1000
+
+    def ghi_now(self, now: datetime) -> float | None:
+        """Forecast horizontal irradiance (W/m²) for the current hour."""
+        return self.ghi.get(now.replace(minute=0, second=0, microsecond=0, tzinfo=None))
 
     def hourly(self) -> dict[tuple[date, int], float]:
         """{(date, hour): kWh} calibrated — for the arbitrage planner."""
