@@ -2824,11 +2824,22 @@ class SmartingHomePanel extends HTMLElement {
       dayNames.push(d.toLocaleDateString('pl-PL', { weekday: 'short' }));
     }
     const s = (id) => this._hass.states[id]?.state;
+    // Real max/min temperature from the weather entity's daily forecast (the AccuWeather
+    // day sensors only carry RealFeel, which in the sun reads 3–4 °C above the air temperature)
+    this._loadDailyWeatherForecast();
+    const daily = this._dailyWeather || [];
+    const dayKey = (d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+    const byDay = {};
+    daily.forEach(f => { if (f.datetime) byDay[dayKey(new Date(f.datetime))] = f; });
     const cards = [];
     for (let i = 0; i < 5; i++) {
       const sun = s(`sensor.dom_godziny_sloneczne_dzien_${i}`);
       const uv = s(`sensor.dom_indeks_uv_dzien_${i}`);
-      const temp = s(`sensor.dom_maksymalna_temperatura_realfeel_dzien_${i}`);
+      const feel = s(`sensor.dom_maksymalna_temperatura_realfeel_dzien_${i}`);
+      const day = new Date(now); day.setDate(day.getDate() + i);
+      const fc = byDay[dayKey(day)];
+      const temp = fc?.temperature ?? feel;
+      const tempLow = fc?.templow;
       const cond = s(`sensor.dom_warunki_pogodowe_dzien_${i}`);
       const wind = s(`sensor.dom_predkosc_wiatru_dzien_${i}`);
       if (!sun && !temp) continue;
@@ -2838,7 +2849,8 @@ class SmartingHomePanel extends HTMLElement {
       cards.push(`<div style="flex:1; min-width:100px; padding:10px 8px; text-align:center; background:rgba(255,255,255,0.03); border-radius:10px; border:1px solid rgba(255,255,255,0.06)${i === 0 ? '; border-color:rgba(0,212,255,0.2); background:rgba(0,212,255,0.05)' : ''}">
         <div style="font-size:10px; font-weight:700; color:${i === 0 ? '#00d4ff' : '#94a3b8'}; text-transform:uppercase; letter-spacing:0.5px">${dayNames[i]}</div>
         <div style="font-size:24px; margin:4px 0">${emoji}</div>
-        <div style="font-size:16px; font-weight:800; color:#fff">${temp ? Math.round(parseFloat(temp)) + '°' : '—'}</div>
+        <div style="font-size:16px; font-weight:800; color:#fff">${temp != null && temp !== '' ? Math.round(parseFloat(temp)) + '°' : '—'}${tempLow != null ? `<span style="font-size:11px; font-weight:600; color:#64748b"> / ${Math.round(tempLow)}°</span>` : ''}</div>
+        ${fc && feel ? `<div style="font-size:9px; color:#64748b">odczuwalna ${Math.round(parseFloat(feel))}°</div>` : ''}
         <div style="font-size:9px; color:#94a3b8; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100px">${cond || '—'}</div>
         <div style="margin-top:6px; display:flex; justify-content:center; gap:8px">
           <div style="font-size:10px"><span style="color:${sunColor}; font-weight:700">${sun || '—'}h</span> <span style="color:#64748b">☀️</span></div>
@@ -2854,6 +2866,23 @@ class SmartingHomePanel extends HTMLElement {
       return;
     }
     el.innerHTML = cards.join('');
+  }
+
+  _loadDailyWeatherForecast() {
+    // weather/subscribe_forecast — first message is the current daily forecast; refreshed every 30 min
+    if (!this._hass?.connection || (this._dailyWeatherTs && Date.now() - this._dailyWeatherTs < 1800000)) return;
+    const entity = ['weather.dom', 'weather.home', 'weather.forecast_home', 'weather.forecast_dom']
+      .find(e => this._hass.states[e]) || Object.keys(this._hass.states).find(k => k.startsWith('weather.'));
+    if (!entity) return;
+    this._dailyWeatherTs = Date.now();
+    let unsub = null;
+    this._hass.connection.subscribeMessage((msg) => {
+      this._dailyWeather = msg?.forecast || [];
+      if (unsub) { unsub(); unsub = null; }
+      this._renderWeatherForecast();
+    }, { type: 'weather/subscribe_forecast', entity_id: entity, forecast_type: 'daily' })
+      .then(u => { unsub = u; if (this._dailyWeather) { u(); unsub = null; } })
+      .catch(() => { this._dailyWeatherTs = Date.now() - 1500000; });
   }
 
   _updateEcowittCard() {
@@ -14087,7 +14116,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.65.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.65.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
