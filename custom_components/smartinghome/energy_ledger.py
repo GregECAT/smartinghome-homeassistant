@@ -240,6 +240,13 @@ class EnergyLedger:
         pv, load = miss("pv"), miss("load")
         chg, dis = miss("charge"), miss("discharge")
         imp, exp = miss("import"), miss("export")
+        if counted.get("import") is not None and counted.get("export") is not None:
+            # The inverter's battery counters undercount (2026-10-02: SOC 99 → 10 %
+            # ≈ 9.4 kWh, the counter 7.4; a midday charge 12 → 99 % missing from
+            # it). PV, load and the grid meter are reliable — the battery's share
+            # of the gap is what balances them.
+            net = load + exp - pv - imp  # + battery gave energy, − battery took it
+            dis, chg = max(net, 0.0), max(-net, 0.0)
         if max(pv, load, chg, dis) < RECONCILE_MIN_KWH and max(imp, exp) < RECONCILE_MIN_KWH:
             if self._topup_mppt(rec, mppt_weights):
                 self._dirty = True

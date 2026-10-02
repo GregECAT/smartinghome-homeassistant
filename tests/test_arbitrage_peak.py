@@ -54,13 +54,18 @@ def _inputs(start_h: int, load: list[float] | None = None) -> list:
 def test_evening_peak_keeps_energy_for_the_rest_of_the_peak():
     # 18:00, SOC 77 %, the profile expects a light evening (1 kWh/h; reality 1.5–2.2)
     light = [1.0 if 18 <= h <= 20 else LOAD[h] for h in range(24)]
-    plan = arb.optimize(77, _inputs(18, light), arb.ArbitrageParams(slot_minutes=60))
+    p = arb.ArbitrageParams(slot_minutes=60)
+    plan = arb.optimize(77, _inputs(18, light), p)
     by_hour = {hp.start[11:13]: hp for hp in plan.hours}
-    # 19:00 must not sell any more: what is left covers 19–20 h × 1.25 + 1 kWh
-    assert by_hour["19"].action != arb.ACT_DISCHARGE
-    assert by_hour["19"].grid_export < 0.1
-    # the peak ends with the buffer still in the battery (≥ ~1 kWh above the 5 % floor)
-    assert by_hour["20"].soc_end >= 14.0
+    kwh_per_pct = p.capacity_kwh / 100
+    # Three hours before the end the sale keeps the rest of the peak × margin + the buffer
+    assert (by_hour["18"].soc_end - 5.0) * kwh_per_pct >= 2 * 1.0 * 1.1 + 0.9
+    # 19:00 still keeps the last hour's house load
+    assert (by_hour["19"].soc_end - 5.0) * kwh_per_pct >= 1.0
+    # Endgame (2026-10-02, owner's rule): the last hour sells everything the house
+    # won't need — the peak ends at the floor, not with a spare kWh
+    assert by_hour["20"].soc_end <= 6.0
+    assert by_hour["21"].soc_start <= 6.0
 
 
 def test_peak_sell_buffer_zero_restores_old_behaviour():
