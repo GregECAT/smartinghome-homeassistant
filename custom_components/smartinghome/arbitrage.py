@@ -403,6 +403,8 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
                     continue
                 if delta < 0 and e2 < floor - 1e-9:
                     continue  # never discharge below the reserve (5 % in peaks)
+                if h.no_import and delta > 1e-9 and delta / p.eff_charge - max(-d, 0.0) > 1e-6:
+                    continue  # tariff peak: charge only from a PV surplus, never from the grid
                 if (
                     h.no_import and delta < 0
                     and -delta * p.eff_discharge - max(d, 0.0) > 1e-6
@@ -435,6 +437,7 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
         total += cost
         action, power = classify(
             delta, d, h.duration, p, sell=h.sell, greedy=greedy[t], room=e2 < e_max - step / 2,
+            no_import=h.no_import,
         )
         plan.hours.append(HourPlan(
             start=h.start.strftime("%Y-%m-%d %H:%M"),
@@ -484,7 +487,7 @@ def _summarise(plan: ArbitragePlan, inputs: list[HourInput], p: ArbitrageParams)
 
 def classify(
     delta: float, d: float, duration: float, p: ArbitrageParams, sell: float | None = None,
-    greedy: bool = False, room: bool = False,
+    greedy: bool = False, room: bool = False, no_import: bool = False,
 ) -> tuple[str, int]:
     """Map a planned stored-energy change to an inverter action (+ power W).
 
@@ -508,6 +511,8 @@ def classify(
         if out - d > max(eps, 0.2 * duration) and (sell is None or sell >= p.wear_cost + p.min_profit):
             return ACT_DISCHARGE, max(int(round(out / duration * 1000 / 100) * 100), 300)
         return ACT_HOME, 0
+    if delta > eps and no_import:
+        return ACT_PV_CHARGE, 0  # tariff peak: the battery may only take PV, never the grid
     if delta > eps:
         bat_in = delta / p.eff_charge
         from_grid = bat_in - min(max(-d, 0.0), bat_in)
