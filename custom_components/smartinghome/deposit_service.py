@@ -41,9 +41,15 @@ FALLBACK_EXPORT = "sensor.meter_total_energy_export"
 FALLBACK_IMPORT = "sensor.meter_total_energy_import"
 
 
+_DTIME = re.compile(r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2})[ab]?:(\d{2})")
+
+
 def _parse_dtime(text: str) -> datetime:
     """PSE local time; the repeated hour on the October DST change is "02a" / "02b"."""
-    return datetime.fromisoformat(re.sub(r"(?<=\d)[ab](?=:)", "", str(text))[:19])
+    m = _DTIME.match(str(text))
+    if not m:
+        raise ValueError(f"PSE time {text!r}")
+    return datetime(*(int(x) for x in m.groups()))
 
 
 class DepositTracker:
@@ -92,7 +98,8 @@ class DepositTracker:
         q = []
         for r in rows:
             try:
-                q.append((str(r["dtime"])[:19].replace(" ", "T"), float(r["rce_pln"])))
+                _parse_dtime(r["dtime"])  # skip rows we couldn't read later
+                q.append((str(r["dtime"]).replace(" ", "T"), float(r["rce_pln"])))
             except (KeyError, TypeError, ValueError):
                 continue
         days = (last - first).days + 1
