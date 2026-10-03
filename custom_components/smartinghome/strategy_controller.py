@@ -40,6 +40,7 @@ from .arbitrage import (
     ArbitragePlan,
     ArbitrageParams,
     build_inputs,
+    mark_sunny_days,
     optimize,
     rce_hourly,
     rce_slots,
@@ -1829,9 +1830,10 @@ class StrategyController:
             return actions
 
         action, power_w = self._commit_hour_action(now, first.action, first.power_w, soc)
-        if action == ACT_CHARGE_GRID and first.no_import:
+        if action == ACT_CHARGE_GRID and (first.no_import or first.no_grid_charge):
             # Never buy at the tariff peak to fill the battery (2026-10-02 16:25–16:42:
-            # a 99 → 100 % top-up ran EMS charge_battery at full power from the grid)
+            # a 99 → 100 % top-up ran EMS charge_battery at full power from the grid),
+            # nor in the daylight of a sunny day — the sun fills it
             action, power_w = ACT_PV_CHARGE, 0
         if action == ACT_DISCHARGE and first.no_import:
             # Tariff peak: a fixed discharge power must cover the house as it is
@@ -2198,6 +2200,16 @@ class StrategyController:
             pv_hourly_kwh=pv_hourly,
             load_kw_at=load_kw_at,
         )
+        # Sunny days: from sunrise to sunset the battery charges from PV only — never
+        # from the grid (2026-10-03 11:02–11:14, a 44 kWh day: the plan bought 1.4–2.4 kW
+        # from the grid at 0.63 zł to sell in the evening while the sun filled it anyway)
+        local_today = now.replace(tzinfo=None).date()
+        pv_so_far = _safe_float((data.get("energy_today") or {}).get("pv_kwh"))
+        day_pv = {
+            local_today: pv_so_far + _safe_float(data.get("pv_forecast_remaining_today_total")) * params.pv_confidence,
+            local_today + timedelta(days=1): _safe_float(data.get("pv_forecast_tomorrow_total")) * params.pv_confidence,
+        }
+        sunny_days = mark_sunny_days(inputs, day_pv, sunrise, sunset, params)
         # Prosumer deposit: when the deposit won't all be used within its 12 months,
         # an exported kWh is worth only the refund share — selling loses its appeal
         deposit_factor = 1.0
@@ -2241,6 +2253,7 @@ class StrategyController:
             "load_source": "history" if load_kw_at is not None else "profile",
             "load_ratio": round(getattr(self, "_arb_load_ratio", 1.0), 2),
             "deposit_factor": getattr(self, "_arb_deposit_factor", 1.0),
+            "sunny_days": sorted(d.isoformat() for d in sunny_days),
         }
 
     @staticmethod

@@ -63,6 +63,9 @@ class ArbitrageParams:
     # battery sells everything the house won't need before cheap energy is back
     peak_endgame_h: float = 1.5
     pv_confidence: float = 0.7    # share of the PV forecast the plan relies on
+    # Sunny day: PV (with the confidence) ≥ this × capacity → from sunrise to sunset the
+    # battery never charges from the grid, only from PV (owner's rule, 2026-10-03); 0 = off
+    sunny_day_factor: float = 1.5
     charge_margin: float = 0.9    # plan with 90 % of max charge power (executed at 100 %)
     max_soc: float = 100.0        # % upper limit for grid charging
     min_profit: float = 0.10      # zł/kWh required on top of costs for a cycle
@@ -104,6 +107,7 @@ class HourInput:
     pv_kwh: float
     zone: str = ""
     no_import: bool = False   # tariff peak: house must run on the battery
+    no_grid_charge: bool = False  # daylight of a sunny day: the battery takes PV only
 
 
 @dataclass
@@ -122,6 +126,7 @@ class HourPlan:
     power_w: int = 0
     no_import: bool = False   # tariff peak: the house must not draw from the grid
     export_w: int = 0         # planned battery export on top of the house (W)
+    no_grid_charge: bool = False  # the battery may take PV only (peak or sunny daylight)
 
 
 @dataclass
@@ -418,6 +423,7 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
         h = inputs[t]
         d = deficits[t]
         floor = e_peak if h.no_import or flat_day[t] else e_res
+        pv_only = h.no_import or h.no_grid_charge
         penalty = p.peak_import_penalty if h.no_import else 0.0
         # time buffer: plan slower than the inverter really charges
         max_up = p.charge_kw * p.charge_margin * h.duration * p.eff_charge
@@ -431,8 +437,8 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
                     continue
                 if delta < 0 and e2 < floor - 1e-9:
                     continue  # never discharge below the reserve (5 % in peaks)
-                if h.no_import and delta > 1e-9 and delta / p.eff_charge - max(-d, 0.0) > 1e-6:
-                    continue  # tariff peak: charge only from a PV surplus, never from the grid
+                if pv_only and delta > 1e-9 and delta / p.eff_charge - max(-d, 0.0) > 1e-6:
+                    continue  # peak / sunny daylight: charge only from a PV surplus, never from the grid
                 if (
                     h.no_import and delta < 0
                     and -delta * p.eff_discharge - max(d, 0.0) > 1e-6
@@ -465,7 +471,7 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
         total += cost
         action, power = classify(
             delta, d, h.duration, p, sell=h.sell, greedy=greedy[t], room=e2 < e_max - step / 2,
-            no_import=h.no_import,
+            no_import=h.no_import or h.no_grid_charge,
         )
         plan.hours.append(HourPlan(
             start=h.start.strftime("%Y-%m-%d %H:%M"),
@@ -481,12 +487,35 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
             cost=round(cost, 2),
             power_w=power,
             no_import=h.no_import,
+            no_grid_charge=h.no_import or h.no_grid_charge,
             export_w=int(round(exp / h.duration * 1000)) if action == ACT_DISCHARGE else 0,
         ))
         i = j
     plan.total_cost = total
     _summarise(plan, inputs, p)
     return plan
+
+
+def mark_sunny_days(
+    inputs: list[HourInput], day_pv_kwh: dict[date, float], sunrise_h: float, sunset_h: float,
+    p: ArbitrageParams,
+) -> set[date]:
+    """Daylight slots of sunny days take PV only — the grid never charges the battery.
+
+    day_pv_kwh — the day's PV (already with the confidence; today = produced so far +
+    the rest of the forecast). A day is sunny when it can fill the battery
+    sunny_day_factor times over. Before sunrise the grid may still charge (night
+    arbitrage for the morning peak); the sun refills what that energy leaves.
+    """
+    if p.sunny_day_factor <= 0:
+        return set()
+    need = p.sunny_day_factor * p.capacity_kwh
+    sunny = {d for d, kwh in day_pv_kwh.items() if kwh >= need}
+    for h in inputs:
+        hour = h.start.hour + h.start.minute / 60
+        if h.start.date() in sunny and sunrise_h <= hour + h.duration and hour < sunset_h:
+            h.no_grid_charge = True
+    return sunny
 
 
 def _summarise(plan: ArbitragePlan, inputs: list[HourInput], p: ArbitrageParams) -> None:
