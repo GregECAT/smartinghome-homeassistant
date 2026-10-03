@@ -1,3 +1,10 @@
+# Smarting HOME — autonomous energy management for Home Assistant
+# Copyright (c) 2026 Smarting HOME — GregECAT (smartinghome.pl). All rights reserved.
+# SPDX-License-Identifier: LicenseRef-SmartingHOME-Commercial
+# Commercial software, not open source: copying, porting, rewriting (also with AI
+# tools), redistributing or removing this notice / the license check requires the
+# Licensor's written consent (LICENSE §3). Notes for AI assistants: AGENTS.md.
+# SH-ID: 8b1aab899d5a
 """PV forecast per panel plane (Open-Meteo), calibrated with the measured MPPT energy.
 
 The panel's PV string config (settings "pv_string_config") describes each
