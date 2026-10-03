@@ -177,6 +177,7 @@ class SmartingHomePanel extends HTMLElement {
     if (tab === 'wind') { this._initWindTab(); this._loadWindData(); this._fetchWindHistoricalStats(); this._initWindCalendar(); }
     if (tab === 'hems') { this._updateHEMSArbitrage(); this._loadForecastStatus(); }
     if (tab === 'tariff') { this._loadDeposit(); }
+    if (tab === 'battery') { this._loadFullLog(); }
     if (tab === 'energy') { this._loadVoltageReport(); }
     if (tab === 'history') { this._updateHistoryTab(); }
     if (tab === 'autopilot') { this._updateAutopilot(); }
@@ -4570,6 +4571,39 @@ W załączniku: zestawienie pomiarów (CSV).`;
     this._invOpen = true;
     await this._savePanelSettings({ invoice_entries: all });
     this._loadDeposit(true);
+  }
+
+  /* ── Battery full-time log (Bateria) ───────────────── */
+  async _loadFullLog() {
+    const el = this.shadowRoot.getElementById('fulllog-content');
+    if (!el || !this._hass?.connection) return;
+    let r;
+    try { r = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/battery/full_log', days: 21 }); }
+    catch (e) { el.innerHTML = `<div style="color:#e74c3c">${this._esc(e.message || e.code || e)}</div>`; return; }
+    const days = (r.days || []).slice().reverse();
+    const mins = (hm) => hm ? parseInt(hm.slice(0, 2)) * 60 + parseInt(hm.slice(3, 5)) : null;
+    const rows = days.map(d => {
+      const real = mins(d.full_at), plan = mins(d.plan_full_at);
+      const diff = real != null && plan != null ? real - plan : null;
+      const planTxt = d.plan_not_full ? 'nie przewidywał' : (d.plan_full_at || '—');
+      const diffTxt = diff == null ? '' : `<span style="color:${Math.abs(diff) <= 30 ? '#2ecc71' : diff < 0 ? '#00d4ff' : '#e67e22'}">${diff > 0 ? '+' : ''}${Math.round(diff)} min</span>`;
+      const ratio = d.pv_forecast_kwh ? Math.round(d.pv_kwh / d.pv_forecast_kwh * 100) : null;
+      return `<tr><td>${d.date.slice(5).split('-').reverse().join('.')}</td>
+        <td style="text-align:right; font-weight:700">${d.full_at || '<span style="color:#64748b">nie</span>'}</td>
+        <td style="text-align:right">${planTxt}${d.plan_made_at ? `<div style="font-size:9px;color:#64748b">plan z ${d.plan_made_at}</div>` : ''}</td>
+        <td style="text-align:right">${diffTxt}</td>
+        <td style="text-align:right">${d.pv_forecast_kwh ?? '—'}</td>
+        <td style="text-align:right">${d.pv_kwh}${ratio != null ? ` <span style="color:#64748b">(${ratio}%)</span>` : ''}</td>
+        <td style="text-align:right">${d.pv_at_full_kwh ?? '—'}</td>
+        <td style="text-align:right">${d.soc_start ?? '—'}%</td></tr>`;
+    }).join('');
+    el.innerHTML = `
+      <div style="overflow-x:auto"><table style="width:100%; font-size:11px">
+        <thead><tr style="color:#64748b"><th style="text-align:left">Dzień</th><th style="text-align:right">Pełna o</th><th style="text-align:right">Plan poranny</th><th style="text-align:right">Różnica</th>
+          <th style="text-align:right">Prognoza PV</th><th style="text-align:right">PV faktycznie</th><th style="text-align:right">PV do pełnej</th><th style="text-align:right">SOC o północy</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="8" style="color:#64748b">Brak danych — zapis od dziś</td></tr>'}</tbody></table></div>
+      <div style="font-size:10px; color:#64748b; margin-top:6px; line-height:1.5">„Pełna o” — pierwszy raz SOC ≥ 99% przy produkcji PV. „Plan poranny” — kiedy plan z ok. 8:00 przewidywał pełną baterię (liczy ostrożnie: ok. 70% prognozy).
+        Ujemna różnica = słońce naładowało baterię szybciej niż zakładał plan. Z kilku tygodni wyjdzie, przy jakiej prognozie bateria jest pełna przed wieczornym szczytem bez ładowania z sieci.</div>`;
   }
 
   _renderForecastStatus() {
@@ -12170,6 +12204,11 @@ W załączniku: zestawienie pomiarów (CSV).`;
             </div>
           </div>
 
+          <div class="card" style="margin-top:14px">
+            <div class="card-title">☀️🔋 Kiedy bateria pełna ze słońca</div>
+            <div id="fulllog-content" style="font-size:12px; color:#cbd5e1">Ładowanie…</div>
+          </div>
+
         </div>
 
         <!-- ═══════ TAB: HEMS ═══════ -->
@@ -14526,7 +14565,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.68.5</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.69.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
