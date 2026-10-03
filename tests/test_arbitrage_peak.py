@@ -131,3 +131,37 @@ def test_flat_price_day_morning_goes_to_the_floor():
     assert plan.hours[0].action == arb.ACT_DISCHARGE
     assert min(hp.soc_end for hp in plan.hours[:4]) < 12  # below the 15 % reserve
     assert max(hp.soc_end for hp in plan.hours[:10]) > 90  # the sun refills it
+
+
+def test_sunny_day_never_charges_from_grid_in_daylight():
+    # Saturday 2026-10-03 11:00, SOC 22 %: buying at 0.63 to sell at 1.31 in the evening
+    # pays on paper, but on a sunny day the battery takes PV only (owner's rule)
+    pv = {11: 2.0, 12: 2.1, 13: 2.0, 14: 1.8, 15: 1.4, 16: 0.9, 17: 0.3}
+    sell = {11: 0.356, 12: 0.172, 13: 0.125, 14: 0.202, 15: 0.51, 16: 0.805, 17: 1.05,
+            18: 1.231, 19: 1.309, 20: 1.238, 21: 1.166}
+
+    def inputs():
+        out = []
+        for k in range(11, 35):
+            h = k % 24
+            out.append(arb.HourInput(datetime(2026, 10, 3 + k // 24, h), 1.0, 0.626, sell.get(h, 0.9),
+                                     1.2, pv.get(h, 0.0), ""))
+        return out
+
+    p = arb.ArbitrageParams(slot_minutes=60, peak_floor_soc=9, reserve_soc=15)
+    plain = arb.optimize(22, inputs(), p)
+    # the old behaviour: grid top-ups while charging in daylight
+    assert any(hp.battery_kwh > 0 and hp.grid_import > 0.01 for hp in plain.hours[:7])
+
+    ins = inputs()
+    sunny = arb.mark_sunny_days(ins, {datetime(2026, 10, 3).date(): 30.0}, 6.8, 18.3, p)
+    assert sunny == {datetime(2026, 10, 3).date()}
+    plan = arb.optimize(22, ins, p)
+    for hp in plan.hours[:7]:
+        assert hp.action != arb.ACT_CHARGE_GRID, hp
+        assert hp.grid_import < 0.01 or hp.battery_kwh <= 0, hp
+        assert hp.no_grid_charge
+    # a cloudy day keeps grid charging possible
+    ins = inputs()
+    assert arb.mark_sunny_days(ins, {datetime(2026, 10, 3).date(): 8.0}, 6.8, 18.3, p) == set()
+    assert not any(h.no_grid_charge for h in ins)
