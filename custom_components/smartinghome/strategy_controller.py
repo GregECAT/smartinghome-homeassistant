@@ -2177,11 +2177,20 @@ class StrategyController:
             # PV so far is the fallback — never both.
             rad_nc = data.get("radiation_nowcast")
             now_factor, fade_h = (float(rad_nc), 2.0) if rad_nc is not None else (pv_factor, 3.0)
+            # The next hours are known better than the rest of the day: with the station
+            # measuring the sun now, the confidence rises towards pv_confidence_near for
+            # them, fading to the day's confidence (2026-10-03 11:00: at 0.7 for every hour
+            # the plan charged at RCE 0.36 instead of selling and charging at 0.12–0.20 —
+            # the sun filled the battery by 14:00 either way)
             for ahead in range(0, 6):
                 t = local_now + timedelta(hours=ahead)
                 key = (t.date(), t.hour)
                 if key in pv_hourly:
                     pv_hourly[key] *= 1 + (now_factor - 1) * math.exp(-ahead / fade_h)
+                    base = conf_today if key[0] <= local_today else conf_tomorrow
+                    if rad_nc is not None and 0 < base < params.pv_confidence_near:
+                        near = base + (params.pv_confidence_near - base) * math.exp(-ahead / 2.0)
+                        pv_hourly[key] *= near / base
         # House load: HA-history model (day type + temperature) × the live deviation, fading
         load_kw_at = None
         lf = self._load_forecaster

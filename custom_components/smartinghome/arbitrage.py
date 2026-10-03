@@ -63,6 +63,7 @@ class ArbitrageParams:
     # battery sells everything the house won't need before cheap energy is back
     peak_endgame_h: float = 1.5
     pv_confidence: float = 0.7    # share of the PV forecast the plan relies on
+    pv_confidence_near: float = 0.95  # the next hours, with the station measuring the sun now
     # Daylight: the grid charges the battery only to fill it before that day's tariff peak,
     # and only what the sun won't deliver by then (owner's rule, 2026-10-03); 0 = off
     daylight_pv_first: float = 1.0
@@ -93,6 +94,7 @@ class ArbitrageParams:
         # DOD 95 % → the inverter never goes below 5 %
         params.peak_floor_soc = min(max(params.peak_floor_soc, 5.0), params.reserve_soc)
         params.pv_confidence = min(max(params.pv_confidence, 0.0), 1.0)
+        params.pv_confidence_near = min(max(params.pv_confidence_near, 0.0), 1.0)
         params.peak_sell_buffer_kwh = min(max(params.peak_sell_buffer_kwh, 0.0), params.capacity_kwh / 2)
         return params
 
