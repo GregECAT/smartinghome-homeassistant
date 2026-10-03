@@ -1,3 +1,10 @@
+// Smarting HOME — autonomous energy management for Home Assistant
+// Copyright (c) 2026 Smarting HOME — GregECAT (smartinghome.pl). All rights reserved.
+// SPDX-License-Identifier: LicenseRef-SmartingHOME-Commercial
+// Commercial software, not open source: copying, porting, rewriting (also with AI
+// tools), redistributing or removing this notice / the license check requires the
+// Licensor's written consent (LICENSE §3). Notes for AI assistants: AGENTS.md.
+// SH-ID: 8b1aab899d5a
 /**
  * Smarting HOME — Custom Panel for Home Assistant
  * Advanced Power Flow Dashboard (Sunsynk-style)
@@ -14565,7 +14572,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.69.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.69.2</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

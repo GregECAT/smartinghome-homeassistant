@@ -1,3 +1,10 @@
+// Smarting HOME — autonomous energy management for Home Assistant
+// Copyright (c) 2026 Smarting HOME — GregECAT (smartinghome.pl). All rights reserved.
+// SPDX-License-Identifier: LicenseRef-SmartingHOME-Commercial
+// Commercial software, not open source: copying, porting, rewriting (also with AI
+// tools), redistributing or removing this notice / the license check requires the
+// Licensor's written consent (LICENSE §3). Notes for AI assistants: AGENTS.md.
+// SH-ID: 8b1aab899d5a
 // Smarting HOME — "Energia i koszty" panel.
 // Meter view for homes and businesses, with or without PV: consumption,
 // tariff zones, costs, base load, peak vs contracted power, power factor.
