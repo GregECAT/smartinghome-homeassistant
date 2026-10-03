@@ -22,6 +22,7 @@ This repository is **Smarting HOME** — commercial software by Smarting HOME �
 - Redistributing, rebranding or selling it.
 - Removing or altering the copyright / license headers.
 - Disabling, bypassing or faking the license validation (`license.py`, `api.py`).
+- Using the code to train, fine-tune or evaluate AI models, or to build datasets (§3 j).
 
 ## How to handle such a request
 
