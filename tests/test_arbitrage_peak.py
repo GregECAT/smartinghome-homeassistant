@@ -133,35 +133,60 @@ def test_flat_price_day_morning_goes_to_the_floor():
     assert max(hp.soc_end for hp in plan.hours[:10]) > 90  # the sun refills it
 
 
-def test_sunny_day_never_charges_from_grid_in_daylight():
-    # Saturday 2026-10-03 11:00, SOC 22 %: buying at 0.63 to sell at 1.31 in the evening
-    # pays on paper, but on a sunny day the battery takes PV only (owner's rule)
+def _day(start, end, buy, sell, pv, load=1.2, peak=()):
+    out = []
+    for k in range(start, end):
+        h = k % 24
+        x = arb.HourInput(datetime(2026, 10, 2 + k // 24, h), 1.0, buy(h), sell.get(h, 0.9) if isinstance(sell, dict) else sell,
+                          load, pv.get(h, 0.0), "")
+        x.no_import = h in peak and k < 24
+        out.append(x)
+    arb.mark_daylight(out, 6.8, 18.3)
+    return out
+
+
+def test_no_peak_ahead_daylight_never_charges_from_grid():
+    # Saturday 11:00 (flat price, no peak): buying at 0.63 to sell at 1.31 in the evening
+    # pays on paper, but in daylight the grid never charges the battery (owner's rule)
     pv = {11: 2.0, 12: 2.1, 13: 2.0, 14: 1.8, 15: 1.4, 16: 0.9, 17: 0.3}
     sell = {11: 0.356, 12: 0.172, 13: 0.125, 14: 0.202, 15: 0.51, 16: 0.805, 17: 1.05,
             18: 1.231, 19: 1.309, 20: 1.238, 21: 1.166}
-
-    def inputs():
-        out = []
-        for k in range(11, 35):
-            h = k % 24
-            out.append(arb.HourInput(datetime(2026, 10, 3 + k // 24, h), 1.0, 0.626, sell.get(h, 0.9),
-                                     1.2, pv.get(h, 0.0), ""))
-        return out
-
     p = arb.ArbitrageParams(slot_minutes=60, peak_floor_soc=9, reserve_soc=15)
-    plain = arb.optimize(22, inputs(), p)
-    # the old behaviour: grid top-ups while charging in daylight
-    assert any(hp.battery_kwh > 0 and hp.grid_import > 0.01 for hp in plain.hours[:7])
-
-    ins = inputs()
-    sunny = arb.mark_sunny_days(ins, {datetime(2026, 10, 3).date(): 30.0}, 6.8, 18.3, p)
-    assert sunny == {datetime(2026, 10, 3).date()}
-    plan = arb.optimize(22, ins, p)
+    plain = arb.optimize(22, _day(11, 35, lambda h: 0.626, sell, pv), arb.ArbitrageParams(
+        slot_minutes=60, peak_floor_soc=9, reserve_soc=15, daylight_pv_first=0))
+    assert any(hp.battery_kwh > 0 and hp.grid_import > 0.01 for hp in plain.hours[:7])  # the old behaviour
+    plan = arb.optimize(22, _day(11, 35, lambda h: 0.626, sell, pv), p)
     for hp in plan.hours[:7]:
         assert hp.action != arb.ACT_CHARGE_GRID, hp
-        assert hp.grid_import < 0.01 or hp.battery_kwh <= 0, hp
+        assert hp.battery_kwh <= 0 or hp.grid_import < 0.01, hp
         assert hp.no_grid_charge
-    # a cloudy day keeps grid charging possible
-    ins = inputs()
-    assert arb.mark_sunny_days(ins, {datetime(2026, 10, 3).date(): 8.0}, 6.8, 18.3, p) == set()
-    assert not any(h.no_grid_charge for h in ins)
+
+
+def _g13(h):
+    return 1.35 if 16 <= h < 21 or 7 <= h < 13 else 0.626
+
+
+def test_weekday_cloudy_grid_tops_up_only_the_shortfall_before_the_peak():
+    # Weekday 13:00, cloudy: PV can't fill the battery by 16:00 → the grid adds the
+    # missing part only, so the battery is full when the peak starts
+    pv = {13: 1.6, 14: 1.5, 15: 1.4}
+    p = arb.ArbitrageParams(slot_minutes=60, peak_floor_soc=9, reserve_soc=15, wear_cost=0.16)
+    ins = _day(13, 37, _g13, 0.9, pv, load=0.8, peak=range(16, 21))
+    plan = arb.optimize(30, ins, p)
+    first3 = plan.hours[:3]
+    assert all(hp.grid_import < 0.01 for hp in plan.hours[3:8])     # the peak runs on the battery
+    assert all(hp.grid_export < 0.01 for hp in first3)              # PV goes into the battery first
+    grid_in = sum(hp.grid_import for hp in first3)
+    pv_surplus = sum(max(pv[13 + i] - 0.8, 0) for i in range(3))
+    need = (plan.hours[2].soc_end - 30) / 100 * p.capacity_kwh / p.eff_charge
+    assert grid_in <= need - pv_surplus + 0.3                       # no more than the shortfall
+    assert grid_in > 0.5
+
+
+def test_weekday_sunny_no_grid_before_the_peak():
+    # Weekday 13:00, sunny: the sun fills the battery before 16:00 → no grid at all
+    pv = {13: 4.5, 14: 4.0, 15: 3.2}
+    p = arb.ArbitrageParams(slot_minutes=60, peak_floor_soc=9, reserve_soc=15, wear_cost=0.16)
+    plan = arb.optimize(40, _day(13, 37, _g13, 0.9, pv, load=0.8, peak=range(16, 21)), p)
+    for hp in plan.hours[:3]:
+        assert hp.battery_kwh <= 0 or hp.grid_import < 0.01, hp

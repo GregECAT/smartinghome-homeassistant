@@ -760,6 +760,52 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.ledger.set_value(now.date(), "plan_made_min", float(now.hour * 60 + now.minute))
         self.ledger.set_value(now.date(), "pv_forecast_morning", _safe_float(data.get("pv_forecast_today_total")))
 
+    async def _async_refresh_pv_calibration(self, now: datetime) -> None:
+        """Learn this installation's PV forecast confidence (per sky class) from its
+        history: the ledger's morning forecast vs the day's PV, plus a recorder
+        backfill (forecast sensor statistics vs PV power) for the days before."""
+        from . import pv_calibration as pc
+
+        today = now.date()
+        rows: dict[date, tuple[date, float, float]] = {}
+        try:
+            from homeassistant.components.recorder import get_instance
+            from homeassistant.components.recorder.statistics import statistics_during_period
+            from homeassistant.helpers import entity_registry as er
+
+            fc_id = er.async_get(self.hass).async_get_entity_id(
+                "sensor", DOMAIN, f"{DOMAIN}_{self.entry.entry_id}_pv_forecast_today_total"
+            )
+            pv_id = self._sensor_map.get("pv_power") or SENSOR_PV_POWER
+            if fc_id:
+                stats = await get_instance(self.hass).async_add_executor_job(
+                    statistics_during_period, self.hass, dt_util.as_utc(now - timedelta(days=90)), None,
+                    {fc_id, pv_id}, "hour", None, {"state", "mean"},
+                )
+
+                def hours(sid: str, field: str) -> list[tuple[date, int, float]]:
+                    out = []
+                    for row in stats.get(sid, []):
+                        ts, val = row.get("start"), row.get(field)
+                        if ts is None or val is None:
+                            continue
+                        t = dt_util.as_local(dt_util.utc_from_timestamp(ts) if isinstance(ts, (int, float)) else ts)
+                        out.append((t.date(), t.hour, float(val)))
+                    return out
+
+                for r in pc.daily_rows(hours(fc_id, "state"), hours(pv_id, "mean"), today):
+                    rows[r[0]] = r
+        except Exception as err:  # noqa: BLE001 — no recorder / statistics
+            _LOGGER.debug("PV calibration backfill unavailable: %s", err)
+        if self.ledger is not None:
+            for r in self.ledger.forecast_rows(today):
+                rows[r[0]] = r  # the ledger's own record beats the backfill
+        model = pc.learn(list(rows.values()))
+        model["updated"] = now.isoformat(timespec="minutes")
+        self.pv_calibration = model
+        if self._strategy_controller is not None:
+            self._strategy_controller.pv_calibration = model
+
     async def async_rebuild_ledger_day(self, day: date) -> dict[str, Any]:
         """Rebuild a day of the energy ledger from recorder history, then fill its
         gaps from the lifetime counters at the start and end of that day."""
@@ -929,6 +975,9 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ),
             ), cap)
         self._note_plan_full_time(now, data)
+        if time.monotonic() - getattr(self, "_pv_cal_ts", -1e9) > 6 * 3600:
+            self._pv_cal_ts = time.monotonic()
+            self.hass.async_create_task(self._async_refresh_pv_calibration(now))
         if pv is not None and time.monotonic() - self._reconcile_ts > 600:
             self._reconcile_ts = time.monotonic()
             await self._async_reconcile_ledger(now, data)
