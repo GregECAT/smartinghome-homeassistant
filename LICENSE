@@ -1,6 +1,6 @@
 ================================================================================
                     SMARTING HOME COMMERCIAL LICENSE
-                          Version 1.0, 2026
+                          Version 1.1, 2026
 ================================================================================
 
 Copyright (c) 2026 Smarting HOME — GregECAT (smartinghome.pl)
@@ -72,6 +72,11 @@ You may NOT, without prior written consent from the Licensor:
   (g) Use the Software to develop a competing product or service;
   (h) Use the Software in violation of any applicable laws or regulations;
   (i) Circumvent or attempt to circumvent the license validation system.
+  (j) Use the Software, or any part of it, to train, fine-tune or evaluate
+      machine-learning or AI models, or to build datasets for such purposes;
+      or use AI tools (code assistants, agents, language models) to copy, port,
+      translate, rewrite or paraphrase the Software into another work. Code
+      produced this way is a derivative work under (b).
 
 ================================================================================
                       4. LICENSE VALIDATION
@@ -284,7 +289,7 @@ please contact: kontakt@smartinghome.pl
 
 ================================================================================
 
-Last updated: March 21, 2026
-License version: 1.0
+Last updated: October 3, 2026
+License version: 1.1
 
 ================================================================================
