@@ -2144,19 +2144,20 @@ class StrategyController:
         pvf = self._pv_forecaster
         if pvf is not None and pvf.available and data.get("pv_forecast_source") == "open_meteo":
             local_now = now.replace(tzinfo=None)
-            pv_hourly = {
-                key: kwh * (pv_today_conf if key[0] == local_now.date() else params.pv_confidence)
-                for key, kwh in pvf.hourly().items()
-            }
-            # Local station: clouds right now (irradiance vs forecast, learned sensor scale)
-            # correct the next hours — fading out over ~2 h
+            pv_hourly = {key: kwh * params.pv_confidence for key, kwh in pvf.hourly().items()}
+            # Clouds right now correct the NEXT hours, fading out — not the whole day
+            # (2026-10-03: morning fog → 0.73 for the whole day × the station's 0.68 for
+            # the next hours; the plan saw half the forecast, kept the battery and the
+            # house bought from the grid at 8:00 although PV refilled it by noon).
+            # The station's irradiance is the direct measurement; actual-vs-forecast
+            # PV so far is the fallback — never both.
             rad_nc = data.get("radiation_nowcast")
-            if rad_nc is not None:
-                for ahead in range(0, 4):
-                    t = local_now + timedelta(hours=ahead)
-                    key = (t.date(), t.hour)
-                    if key in pv_hourly:
-                        pv_hourly[key] *= 1 + (float(rad_nc) - 1) * math.exp(-ahead / 2)
+            now_factor, fade_h = (float(rad_nc), 2.0) if rad_nc is not None else (pv_factor, 3.0)
+            for ahead in range(0, 6):
+                t = local_now + timedelta(hours=ahead)
+                key = (t.date(), t.hour)
+                if key in pv_hourly:
+                    pv_hourly[key] *= 1 + (now_factor - 1) * math.exp(-ahead / fade_h)
         # House load: HA-history model (day type + temperature) × the live deviation, fading
         load_kw_at = None
         lf = self._load_forecaster
