@@ -54,7 +54,8 @@ _FLOW_KEYS = (
     "grid_home", "grid_bat", "charge", "discharge",
     "peak_load", "peak_grid_home",
 )
-RECONCILE_MIN_KWH = 0.3  # below this the counters and the integration agree
+RECONCILE_MIN_KWH = 0.3
+FULL_SOC = 99.0  # % — "battery full" for the daily full-time log  # below this the counters and the integration agree
 _STATE_KEYS = ("soc_start", "soc_end", "capacity")  # per-day states, never summed
 _MONEY_KEYS = (
     "import", "export", "import_offpeak", "import_cost", "export_revenue",
@@ -207,6 +208,11 @@ class EnergyLedger:
             rec.values.setdefault("soc_start", float(sample.soc))
             rec.values["soc_end"] = float(sample.soc)
             rec.values["capacity"] = self._capacity_kwh
+            if sample.soc >= FULL_SOC and "full_at_min" not in rec.values and sample.pv_w > 100:
+                # First time the battery is full from the sun today (a grid-charged
+                # full battery at night doesn't count) — with the PV made by then
+                rec.values["full_at_min"] = float(sample.ts.hour * 60 + sample.ts.minute)
+                rec.values["pv_at_full"] = rec.values.get("pv", 0.0)
         if prev.ts.date() != sample.ts.date():
             prev = None  # midnight: start the new day's integration fresh
         if prev is not None:
@@ -307,6 +313,30 @@ class EnergyLedger:
         for idx, w in enumerate(weights):
             rec.add(f"mppt{idx + 1}", short * w / sum(weights))
         return True
+
+    def full_log(self, days: int) -> list[dict[str, Any]]:
+        """Per day: when the battery got full from the sun vs the morning plan and forecast."""
+        out = []
+        for key in sorted(self._days)[-days:]:
+            v = self._days[key].values
+
+            def hm(minutes: float | None) -> str | None:
+                if minutes is None or minutes < 0:
+                    return None
+                return f"{int(minutes) // 60:02d}:{int(minutes) % 60:02d}"
+
+            out.append({
+                "date": key,
+                "full_at": hm(v.get("full_at_min")),
+                "plan_full_at": hm(v.get("plan_full_at_min")),
+                "plan_not_full": v.get("plan_full_at_min") == -1,
+                "plan_made_at": hm(v.get("plan_made_min")),
+                "pv_forecast_kwh": round(v["pv_forecast_morning"], 1) if "pv_forecast_morning" in v else None,
+                "pv_kwh": round(v.get("pv", 0.0), 1),
+                "pv_at_full_kwh": round(v["pv_at_full"], 1) if "pv_at_full" in v else None,
+                "soc_start": round(v["soc_start"]) if "soc_start" in v else None,
+            })
+        return out
 
     def set_value(self, day: date, key: str, value: float) -> None:
         """Overwrite one value of a day (a figure recomputed from better data)."""

@@ -34,6 +34,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_deposit_status)
     websocket_api.async_register_command(hass, ws_voltage_report)
     websocket_api.async_register_command(hass, ws_ledger_rebuild)
+    websocket_api.async_register_command(hass, ws_battery_full_log)
 
     from .meter_ws import async_register as _register_meter_ws
     _register_meter_ws(hass)
@@ -416,6 +417,20 @@ async def ws_ledger_rebuild(hass: HomeAssistant, connection, msg: dict[str, Any]
         connection.send_error(msg["id"], "invalid_date", "YYYY-MM-DD")
         return
     connection.send_result(msg["id"], await coordinator.async_rebuild_ledger_day(day))
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smartinghome/battery/full_log",
+    vol.Optional("days", default=21): vol.All(int, vol.Range(min=1, max=120)),
+})
+@callback
+def ws_battery_full_log(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """When the battery got full from the sun each day vs the morning plan and forecast."""
+    coordinator = _coordinator(hass)
+    if coordinator is None:
+        _not_ready(connection, msg)
+        return
+    connection.send_result(msg["id"], {"days": coordinator.ledger.full_log(msg["days"])})
 
 
 @websocket_api.websocket_command({vol.Required("type"): "smartinghome/forecast/status"})

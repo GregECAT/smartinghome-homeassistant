@@ -723,6 +723,34 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ", ".join(f"{k} {v:.2f} kWh" for k, v in added.items() if v > 0.01),
             )
 
+    def _note_plan_full_time(self, now: datetime, data: dict[str, Any]) -> None:
+        """Once a day (first plan from 8:00): when the plan expects the battery full
+        from the sun, and the PV forecast it had — compared later with the real time."""
+        if now.hour < 8 or now.hour >= 16:
+            return
+        today = self.ledger.day(now.date())
+        if "plan_full_at_min" in today:
+            return
+        ctrl = self._strategy_controller
+        plan = getattr(ctrl, "_arb_plan", None) if ctrl else None
+        params = getattr(ctrl, "_arb_params", None) if ctrl else None
+        if plan is None or not plan.hours or params is None:
+            return
+        day_key = now.strftime("%Y-%m-%d")
+        if not plan.hours[0].start.startswith(day_key):
+            return
+        full = -1.0
+        for hp in plan.hours:
+            if not hp.start.startswith(day_key):
+                break
+            if hp.soc_end >= min(99.0, params.max_soc - 0.5):
+                t = datetime.strptime(hp.start, "%Y-%m-%d %H:%M") + timedelta(minutes=params.slot_minutes)
+                full = float(t.hour * 60 + t.minute)
+                break
+        self.ledger.set_value(now.date(), "plan_full_at_min", full)
+        self.ledger.set_value(now.date(), "plan_made_min", float(now.hour * 60 + now.minute))
+        self.ledger.set_value(now.date(), "pv_forecast_morning", _safe_float(data.get("pv_forecast_today_total")))
+
     async def async_rebuild_ledger_day(self, day: date) -> dict[str, Any]:
         """Rebuild a day of the energy ledger from recorder history, then fill its
         gaps from the lifetime counters at the start and end of that day."""
@@ -891,6 +919,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if (eid := self._sensor_map.get(f"pv{i}_power"))
                 ),
             ), cap)
+        self._note_plan_full_time(now, data)
         if pv is not None and time.monotonic() - self._reconcile_ts > 600:
             self._reconcile_ts = time.monotonic()
             await self._async_reconcile_ledger(now, data)
