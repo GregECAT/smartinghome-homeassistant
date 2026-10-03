@@ -394,6 +394,13 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
         else:
             running = 0.0
 
+    # Days with one buy price all day (G13 weekends and holidays): the reserve kept for a
+    # later tariff peak protects nothing — the battery may go down to its floor (owner's
+    # rule, 2026-10-03: on a sunny Saturday morning empty it, selling at the morning RCE,
+    # and let the PV refill it)
+    peak_days = {h.start.date() for h in inputs if h.no_import}
+    flat_day = [h.start.date() not in peak_days for h in inputs]
+
     INF = float("inf")
     value = [[INF] * len(levels) for _ in range(n + 1)]
     choice = [[-1] * len(levels) for _ in range(n)]
@@ -403,7 +410,7 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
     for t in range(n - 1, -1, -1):
         h = inputs[t]
         d = deficits[t]
-        floor = e_peak if h.no_import else e_res
+        floor = e_peak if h.no_import or flat_day[t] else e_res
         penalty = p.peak_import_penalty if h.no_import else 0.0
         # time buffer: plan slower than the inverter really charges
         max_up = p.charge_kw * p.charge_margin * h.duration * p.eff_charge

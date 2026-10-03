@@ -111,3 +111,23 @@ def test_peak_never_charges_from_grid():
             assert hp.action != arb.ACT_CHARGE_GRID, hp
             assert hp.grid_import < 0.01 or hp.battery_kwh <= 0.0, hp
     assert arb.classify(0.1, -0.02, 5 / 60, p, sell=1.1, no_import=True)[0] == arb.ACT_PV_CHARGE
+
+
+def test_flat_price_day_morning_goes_to_the_floor():
+    # Saturday 2026-10-03 8:00, SOC 32 %, sunny forecast, one buy price all day:
+    # empty the battery to its floor selling at the morning RCE, PV refills it by noon
+    pv = {8: 1.8, 9: 2.9, 10: 3.7, 11: 4.2, 12: 4.3, 13: 4.1, 14: 3.5, 15: 2.8, 16: 1.9, 17: 0.8}
+    sell = {8: 0.906, 9: 0.752, 10: 0.528, 11: 0.356, 12: 0.172, 13: 0.125, 14: 0.202,
+            15: 0.51, 16: 0.805, 17: 1.05, 18: 1.231, 19: 1.309, 20: 1.238, 21: 1.166}
+    inputs = []
+    for k in range(8, 32):
+        h = k % 24
+        x = arb.HourInput(datetime(2026, 10, 3 + k // 24, h), 1.0, 0.626, sell.get(h, 0.9),
+                          1.2, pv.get(h, 0.0), "")
+        x.no_import = False
+        inputs.append(x)
+    p = arb.ArbitrageParams(slot_minutes=60, peak_floor_soc=9, reserve_soc=15)
+    plan = arb.optimize(32, inputs, p)
+    assert plan.hours[0].action == arb.ACT_DISCHARGE
+    assert min(hp.soc_end for hp in plan.hours[:4]) < 12  # below the 15 % reserve
+    assert max(hp.soc_end for hp in plan.hours[:10]) > 90  # the sun refills it
