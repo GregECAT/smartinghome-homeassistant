@@ -4663,6 +4663,16 @@ W załączniku: zestawienie pomiarów (CSV).`;
           <div>Ogrzewanie: ${ld.kwh_per_degree > 0 ? `<b>+${n(ld.kwh_per_degree, 2)} kWh/dzień</b> na każdy °C poniżej 15,5 °C (baza ${n(ld.base_kwh)} kWh)` : 'brak zależności od temperatury (lub za mało dni)'}</div>
           <div style="color:#94a3b8">Planer: ${plan.load_source === 'history' ? 'model z historii' : 'profil uczony na bieżąco (za mało historii)'}${plan.load_ratio && plan.load_ratio !== 1 ? ` · ostatnie 2 h: ×${n(plan.load_ratio, 2)} względem prognozy` : ''}</div>
           <div style="color:#94a3b8">PV w planie: ${plan.pv_source === 'open_meteo' ? 'godzinowo z Open-Meteo' : 'rozkład dzienny'}${plan.pv_factor ? ` · korekta bieżąca ×${n(plan.pv_factor, 2)}` : ''}</div>
+          ${(() => {
+            const used = plan.pv_confidence_used || {};
+            const today = Object.keys(used).sort()[0];
+            if (!today) return '';
+            const u = used[today];
+            const sky = { sunny: 'słonecznie', mixed: 'zmiennie', cloudy: 'pochmurno' }[u.sky];
+            const cal = plan.pv_calibration || {};
+            const src = sky ? `${sky}, z historii ${cal.samples || 0} dni` : 'ustawiona — za mało historii (min. 7 dni)';
+            return `<div style="color:#94a3b8">Pewność prognozy PV dziś: ${Math.round(u.confidence * 100)}% (${src})</div>`;
+          })()}
           <div style="color:#94a3b8">🌦️ Stacja Ecowitt: ${stn.radiation != null ? `${n(stn.radiation, 0)} W/m², ${n(stn.temp, 1)} °C` : 'brak danych'}${stn.nowcast != null
             ? ` · chmury teraz ×${n(stn.nowcast, 2)} (oczekiwane PV ${n((stn.pv_expected_w || 0) / 1000, 1)} kW, skala czujnika ${n(stn.scale, 2)})`
             : stn.radiation != null ? ' · uczę się skali czujnika (potrzebna pogodna godzina)' : ''}</div>
@@ -13656,7 +13666,6 @@ W załączniku: zestawienie pomiarów (CSV).`;
               <label>Pewność prognozy PV (0–1)<input type="number" id="arb-pv_confidence" oninput="this.getRootNode().host._arbParamsTouched = true" min="0" max="1" step="0.05"></label>
               <label>Zużycie baterii (zł/kWh)<input type="number" id="arb-wear_cost" oninput="this.getRootNode().host._arbParamsTouched = true" min="0" max="2" step="0.01"></label>
               <label title="Sprzedaż z baterii w szczycie taryfy zostawia energię na resztę szczytu (zużycie domu + 25%) plus ten bufor">Bufor sprzedaży w szczycie (kWh)<input type="number" id="arb-peak_sell_buffer_kwh" oninput="this.getRootNode().host._arbParamsTouched = true" min="0" max="5" step="0.1"></label>
-              <label title="Gdy prognoza PV na dzień (z pewnością prognozy) wystarcza na tyle pojemności baterii, od wschodu do zachodu bateria ładuje się tylko z PV — nigdy z sieci. 0 = wyłączone">Słoneczny dzień: bez ładowania z sieci (× pojemność)<input type="number" id="arb-sunny_day_factor" oninput="this.getRootNode().host._arbParamsTouched = true" min="0" max="5" step="0.1"></label>
               <button class="test-btn" onclick="this.getRootNode().host._saveArbitrageParams(this)">💾 Zapisz</button>
             </div>
             <div id="ap-arb-plan" style="margin-top:10px; font-size:11px; color:#64748b">Plan pojawi się po pierwszym cyklu strategii Max Zysk.</div>
@@ -14573,7 +14582,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.69.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.69.4</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -15145,7 +15154,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
     }
     const params = plan?.params;
     if (params && !this._arbParamsTouched) {
-      ['peak_floor_soc', 'reserve_soc', 'max_soc', 'min_profit', 'wear_cost', 'pv_confidence', 'peak_sell_buffer_kwh', 'sunny_day_factor'].forEach(k => {
+      ['peak_floor_soc', 'reserve_soc', 'max_soc', 'min_profit', 'wear_cost', 'pv_confidence', 'peak_sell_buffer_kwh'].forEach(k => {
         const el = this.shadowRoot.getElementById(`arb-${k}`);
         if (el && document.activeElement !== el && this.shadowRoot.activeElement !== el) el.value = params[k];
       });
@@ -15190,7 +15199,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
 
   async _saveArbitrageParams(btn) {
     const params = {};
-    ['peak_floor_soc', 'reserve_soc', 'max_soc', 'min_profit', 'wear_cost', 'pv_confidence', 'peak_sell_buffer_kwh', 'sunny_day_factor'].forEach(k => {
+    ['peak_floor_soc', 'reserve_soc', 'max_soc', 'min_profit', 'wear_cost', 'pv_confidence', 'peak_sell_buffer_kwh'].forEach(k => {
       const v = parseFloat(this.shadowRoot.getElementById(`arb-${k}`)?.value);
       if (!isNaN(v)) params[k] = v;
     });

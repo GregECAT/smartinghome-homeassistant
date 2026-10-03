@@ -40,7 +40,7 @@ from .arbitrage import (
     ArbitragePlan,
     ArbitrageParams,
     build_inputs,
-    mark_sunny_days,
+    mark_daylight,
     optimize,
     rce_hourly,
     rce_slots,
@@ -1833,7 +1833,7 @@ class StrategyController:
         if action == ACT_CHARGE_GRID and (first.no_import or first.no_grid_charge):
             # Never buy at the tariff peak to fill the battery (2026-10-02 16:25–16:42:
             # a 99 → 100 % top-up ran EMS charge_battery at full power from the grid),
-            # nor in the daylight of a sunny day — the sun fills it
+            # nor in daylight without a peak ahead that day — the sun fills it
             action, power_w = ACT_PV_CHARGE, 0
         if action == ACT_DISCHARGE and first.no_import:
             # Tariff peak: a fixed discharge power must cover the house as it is
@@ -2147,13 +2147,28 @@ class StrategyController:
             rce_slot.update(rce_slots(prices, params.slot_minutes))
         sunrise, sunset = self._sun_hours()
         pv_factor = self._pv_nowcast_factor(data)
-        pv_today_conf = min(1.0, params.pv_confidence * pv_factor)
+        # PV confidence learned from this installation's history (per sky class),
+        # the configured one until there are enough days
+        from .pv_calibration import confidence as pv_conf_for
+
+        local_today = now.replace(tzinfo=None).date()
+        cal = getattr(self, "pv_calibration", None)
+        day_conf = {
+            local_today: pv_conf_for(cal, _safe_float(data.get("pv_forecast_today_total")), params.pv_confidence),
+            local_today + timedelta(days=1): pv_conf_for(
+                cal, _safe_float(data.get("pv_forecast_tomorrow_total")), params.pv_confidence),
+        }
+        conf_today, conf_tomorrow = day_conf[local_today][0], day_conf[local_today + timedelta(days=1)][0]
+        pv_today_conf = min(1.0, conf_today * pv_factor)
         # Hourly PV forecast (Open-Meteo per plane) when available — same confidence as the totals
         pv_hourly = None
         pvf = self._pv_forecaster
         if pvf is not None and pvf.available and data.get("pv_forecast_source") == "open_meteo":
             local_now = now.replace(tzinfo=None)
-            pv_hourly = {key: kwh * params.pv_confidence for key, kwh in pvf.hourly().items()}
+            pv_hourly = {
+                key: kwh * (conf_today if key[0] <= local_today else conf_tomorrow)
+                for key, kwh in pvf.hourly().items()
+            }
             # Clouds right now correct the NEXT hours, fading out — not the whole day
             # (2026-10-03: morning fog → 0.73 for the whole day × the station's 0.68 for
             # the next hours; the plan saw half the forecast, kept the battery and the
@@ -2191,7 +2206,7 @@ class StrategyController:
             load_profile_kw=profile,
             # Rely on part of the forecast only — a cloudy peak must not hit the grid
             pv_today_remaining_kwh=_safe_float(data.get("pv_forecast_remaining_today_total")) * pv_today_conf,
-            pv_tomorrow_kwh=_safe_float(data.get("pv_forecast_tomorrow_total")) * params.pv_confidence,
+            pv_tomorrow_kwh=_safe_float(data.get("pv_forecast_tomorrow_total")) * conf_tomorrow,
             sunrise_h=sunrise,
             sunset_h=sunset,
             horizon_h=params.horizon_h,
@@ -2200,16 +2215,10 @@ class StrategyController:
             pv_hourly_kwh=pv_hourly,
             load_kw_at=load_kw_at,
         )
-        # Sunny days: from sunrise to sunset the battery charges from PV only — never
-        # from the grid (2026-10-03 11:02–11:14, a 44 kWh day: the plan bought 1.4–2.4 kW
-        # from the grid at 0.63 zł to sell in the evening while the sun filled it anyway)
-        local_today = now.replace(tzinfo=None).date()
-        pv_so_far = _safe_float((data.get("energy_today") or {}).get("pv_kwh"))
-        day_pv = {
-            local_today: pv_so_far + _safe_float(data.get("pv_forecast_remaining_today_total")) * params.pv_confidence,
-            local_today + timedelta(days=1): _safe_float(data.get("pv_forecast_tomorrow_total")) * params.pv_confidence,
-        }
-        sunny_days = mark_sunny_days(inputs, day_pv, sunrise, sunset, params)
+        # Daylight: the grid charges the battery only for the coming peak's shortfall —
+        # never to sell later (2026-10-03 11:02–11:14, a sunny Saturday: the plan bought
+        # 1.4–2.4 kW from the grid at 0.63 zł to sell in the evening)
+        mark_daylight(inputs, sunrise, sunset)
         # Prosumer deposit: when the deposit won't all be used within its 12 months,
         # an exported kWh is worth only the refund share — selling loses its appeal
         deposit_factor = 1.0
@@ -2253,7 +2262,8 @@ class StrategyController:
             "load_source": "history" if load_kw_at is not None else "profile",
             "load_ratio": round(getattr(self, "_arb_load_ratio", 1.0), 2),
             "deposit_factor": getattr(self, "_arb_deposit_factor", 1.0),
-            "sunny_days": sorted(d.isoformat() for d in sunny_days),
+            "pv_confidence_used": {d.isoformat(): {"confidence": c, "sky": s} for d, (c, s) in day_conf.items()},
+            "pv_calibration": cal,
         }
 
     @staticmethod

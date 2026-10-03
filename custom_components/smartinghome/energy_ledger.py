@@ -345,6 +345,15 @@ class EnergyLedger:
             })
         return out
 
+    def forecast_rows(self, before: date) -> list[tuple[date, float, float]]:
+        """(day, morning PV forecast kWh, actual PV kWh) for finished days."""
+        out = []
+        for key, rec in sorted(self._days.items()):
+            v = rec.values
+            if key < before.isoformat() and "pv_forecast_morning" in v:
+                out.append((date.fromisoformat(key), float(v["pv_forecast_morning"]), float(v.get("pv", 0.0))))
+        return out
+
     def set_value(self, day: date, key: str, value: float) -> None:
         """Overwrite one value of a day (a figure recomputed from better data)."""
         self._record(day).values[key] = float(value)
