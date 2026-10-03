@@ -729,7 +729,9 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if now.hour < 8 or now.hour >= 16:
             return
         today = self.ledger.day(now.date())
-        if "plan_full_at_min" in today:
+        # Kept once a day; a "not full" from before v1.69.1 (99 % threshold vs the plan's
+        # level grid topping out at ~98 %) is retried until noon
+        if "plan_full_at_min" in today and not (today["plan_full_at_min"] == -1 and now.hour < 12):
             return
         ctrl = self._strategy_controller
         plan = getattr(ctrl, "_arb_plan", None) if ctrl else None
@@ -743,7 +745,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for hp in plan.hours:
             if not hp.start.startswith(day_key):
                 break
-            if hp.soc_end >= min(99.0, params.max_soc - 0.5):
+            if hp.soc_end >= params.max_soc - 3.0:  # the plan's SOC levels top out a step below 100
                 t = datetime.strptime(hp.start, "%Y-%m-%d %H:%M") + timedelta(minutes=params.slot_minutes)
                 full = float(t.hour * 60 + t.minute)
                 break
