@@ -1423,6 +1423,7 @@ class StrategyController:
             return []
         st = self.hass.states.get(boiler.entity)
         owned_before = boiler.owned
+        snapshot = (boiler.owned, boiler.mode, boiler._last_switch, boiler.reason)
         decision = boiler.decide(BoilerInput(
             hour=dt_util.now().hour,
             soc=soc,
@@ -1437,14 +1438,21 @@ class StrategyController:
         if decision:
             service, reason = decision
             try:
-                await self.hass.services.async_call("homeassistant", service, {"entity_id": boiler.entity})
+                # blocking: a cloud plug (Tuya) can fail — 2026-10-04 15:19 "sign invalid": the
+                # off command was lost, the boiler ran from the grid for 1.5 h and was never retried
+                await self.hass.services.async_call(
+                    "homeassistant", service, {"entity_id": boiler.entity}, blocking=True
+                )
                 icon, verb = ("🔥", "włączony") if service == "turn_on" else ("⏹️", "wyłączony")
                 msg = f"W4b: {icon} Bojler {verb} — {reason}"
                 msgs.append(msg)
                 self._log_decision("w4b_boiler", msg)
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("W4b boiler %s failed: %s", service, err)
-                boiler.owned = owned_before
+                # undo the decision so the next tick tries again
+                boiler.owned, boiler.mode, boiler._last_switch, boiler.reason = snapshot
+                boiler._since.clear()
+                self._log_decision("w4b_boiler_error", f"W4b: ⚠️ Bojler nie odpowiedział ({service}) — ponowię")
         if boiler.owned != owned_before:
             await write_async(self.hass, {"boiler_surplus_owned": boiler.owned})
         return msgs
@@ -1649,7 +1657,7 @@ class StrategyController:
                     msg = f"W4: ⚡🔋 {reason}"
                 elif action == "sink":
                     await self.hass.services.async_call(
-                        "homeassistant", "turn_on", {"entity_id": self._boiler.entity}
+                        "homeassistant", "turn_on", {"entity_id": self._boiler.entity}, blocking=True
                     )
                     self._boiler.force_on(reason)
                     from .settings_io import write_async

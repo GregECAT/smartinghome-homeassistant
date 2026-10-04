@@ -16,7 +16,7 @@
   "requirements": [
     "aiohttp>=3.9.0"
   ],
-  "version": "1.69.7",
+  "version": "1.69.8",
   "dependencies": [
     "websocket_api"
   ]
