@@ -149,3 +149,26 @@ def test_voltage_boiler_not_switched_off_for_battery_soc():
     out = [b.decide(_binp(state="on", soc=70.0, export_cap_w=None, max_voltage=247.0), now=t)
            for t in range(1200, 1600, 30)]
     assert any(o and o[0] == "turn_off" for o in out)
+
+
+def test_phase_balance_spread_and_highest_phase():
+    from datetime import datetime, timedelta
+    t0 = datetime(2026, 10, 4, 0)
+    hourly = {ph: [] for ph in ("L1", "L2", "L3")}
+    grid = {}
+    for h in range(24):
+        t = t0 + timedelta(hours=h)
+        base = 240 + (8 if 10 <= h < 16 else 0)
+        hourly["L1"].append((t, base + 7, base + 9))   # L1 always ~7 V above
+        hourly["L2"].append((t, base, base + 2))
+        hourly["L3"].append((t, base + 1, base + 3))
+        grid[t] = 2000 if 10 <= h < 16 else -500
+    pb = vr.phase_balance(hourly, {}, grid)
+    s = pb["summary"]
+    assert s["hours"] == 24
+    assert s["highest_share"]["L1"] == 100.0
+    assert abs(s["avg_spread_no_export"] - 7.0) < 0.01 and abs(s["avg_spread_export"] - 7.0) < 0.01
+    assert pb["days"][0]["hours_spread_over"] == 24 and pb["days"][0]["mostly_high"] == "L1"
+    assert 1.5 < s["max_unbalance_pct"] < 2.0
+    rep = vr.build_report(hourly, {}, grid)
+    assert rep["phases"]["summary"]["hours"] == 24

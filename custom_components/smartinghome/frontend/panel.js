@@ -4413,8 +4413,39 @@ class SmartingHomePanel extends HTMLElement {
         : `<div style="color:#2ecc71; font-size:12px">✅ W tym okresie napięcie nie przekraczało ${lim} V.</div>`}
       ${ev ? `<div style="font-size:11px; color:#94a3b8; margin:10px 0 4px">Zarejestrowane przekroczenia (średnia 10-min > ${lim} V)</div>
       <div style="overflow-x:auto"><table style="width:100%; font-size:11px"><thead><tr style="color:#64748b"><th style="text-align:left">Początek</th><th style="text-align:right">Czas</th><th style="text-align:right">Maks. średnia</th><th style="text-align:left">Fazy</th><th style="text-align:right">Eksport</th><th style="text-align:left">Reakcja</th></tr></thead><tbody>${ev}</tbody></table></div>` : ''}
+      ${this._renderPhaseBalance(r.phases)}
       <div style="font-size:10px; color:#64748b; margin-top:8px; line-height:1.5">Źródło: statystyki Home Assistant z falownika (godzinowe średnie i maksima; średnie 5-min z ostatnich 10 dni).
         Napięcie wysokie także wtedy, gdy dom nic nie oddaje, pokazuje, że problem leży po stronie sieci, a nie instalacji PV.</div>`;
+  }
+
+  _renderPhaseBalance(pb) {
+    if (!pb || !(pb.summary || {}).hours) return '';
+    const s = pb.summary;
+    const n = (x, d = 1) => x == null ? '—' : Number(x).toFixed(d).replace('.', ',');
+    const share = Object.entries(s.highest_share || {}).sort((a, b) => b[1] - a[1]);
+    const top = share[0] || ['—', 0];
+    const tile = (label, val, sub, color) => `
+      <div style="background:rgba(15,23,42,0.5); border:1px solid #1e293b; border-radius:10px; padding:10px">
+        <div style="font-size:9px; color:#64748b; text-transform:uppercase">${label}</div>
+        <div style="font-size:18px; font-weight:800; color:${color || '#e2e8f0'}">${val}</div>
+        <div style="font-size:10px; color:#64748b">${sub || ''}</div></div>`;
+    const weeks = (pb.weeks || []).map(w => `<span style="margin-right:12px">${w.week}: <b style="color:${w.ok ? '#2ecc71' : '#e74c3c'}">${n(w.within_pct, 1)}%</b></span>`).join('');
+    const days = (pb.days || []).filter(d => d.hours_spread_over).slice().reverse().slice(0, 60).map(d => `<tr><td>${d.date}</td>
+      <td style="text-align:right">${n(d.avg_spread)} V</td><td style="text-align:right; color:${d.max_spread >= 10 ? '#e74c3c' : '#cbd5e1'}">${n(d.max_spread)} V</td>
+      <td style="text-align:right">${d.hours_spread_over}</td><td style="text-align:right">${n(d.max_unbalance_pct, 2)}%</td><td>${d.mostly_high}</td></tr>`).join('');
+    return `
+      <div style="font-size:12px; font-weight:700; color:#e2e8f0; margin:14px 0 6px">⚖️ Asymetria faz (różnice napięć między L1, L2, L3)</div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:8px; margin-bottom:8px">
+        ${tile('Średnia różnica faz', `${n(s.avg_spread)} V`, `maks. ${n(s.max_spread)} V`)}
+        ${tile('Bez eksportu', `${n(s.avg_spread_no_export)} V`, `przy eksporcie: ${n(s.avg_spread_export)} V`, (s.avg_spread_no_export || 0) >= 4 ? '#e67e22' : null)}
+        ${tile('Najwyższa faza', top[0], `${n(top[1])}% godzin (${share.map(([p, v]) => `${p} ${n(v, 0)}%`).join(' · ')})`, top[1] >= 60 ? '#e67e22' : null)}
+        ${tile(`Godziny różnicy ≥ ${n(s.spread_limit_v, 0)} V`, s.hours_spread_over ?? 0, `z ${s.hours} godzin`)}
+        ${tile('Maks. asymetria', `${n(s.max_unbalance_pct, 2)}%`, `norma: ≤ ${n(s.unbalance_limit_pct, 0)}%`, s.max_unbalance_pct > s.unbalance_limit_pct ? '#e74c3c' : '#2ecc71')}
+      </div>
+      ${weeks ? `<div style="font-size:11px; color:#cbd5e1; margin-bottom:6px">PN-EN 50160 — asymetria ≤ 2% w 95% średnich 10-min w tygodniu: ${weeks}</div>` : ''}
+      ${days ? `<div style="overflow-x:auto; max-height:220px"><table style="width:100%; font-size:11px"><thead><tr style="color:#64748b"><th style="text-align:left">Dzień</th><th style="text-align:right">Śr. różnica</th><th style="text-align:right">Maks. różnica</th><th style="text-align:right">Godz. ≥ ${n(s.spread_limit_v, 0)} V</th><th style="text-align:right">Maks. asymetria</th><th style="text-align:left">Najwyższa faza</th></tr></thead><tbody>${days}</tbody></table></div>` : ''}
+      <div style="font-size:10px; color:#64748b; margin-top:4px; line-height:1.5">Falownik oddaje moc równo na trzy fazy, więc stała różnica napięć — zwłaszcza gdy dom nic nie oddaje — wynika z obciążenia sieci (jednofazowe instalacje i odbiory u sąsiadów, przewód neutralny), a nie z tej instalacji.
+        Asymetria liczona z wartości napięć (bez kątów fazowych) — przybliżenie współczynnika z PN-EN 50160.</div>`;
   }
 
   _voltageCsv() {
@@ -4425,6 +4456,11 @@ class SmartingHomePanel extends HTMLElement {
     for (const w of r.worst_10min || []) lines.push([w.start, w.phase, w.mean_v, w.grid_w].join(';'));
     lines.push('', 'godzina;faza;srednia_V;moc_sieci_W (bez eksportu)');
     for (const h of r.high_without_export || []) lines.push([h.hour, h.phase, h.mean_v, h.grid_w].join(';'));
+    const pb = r.phases || {};
+    lines.push('', 'dzien;srednia_roznica_faz_V;maks_roznica_V;godziny_roznicy_ponad_5V;maks_asymetria_pct;najwyzsza_faza');
+    for (const d of pb.days || []) lines.push([d.date, d.avg_spread, d.max_spread, d.hours_spread_over, d.max_unbalance_pct, d.mostly_high].join(';'));
+    lines.push('', 'godzina;roznica_V;L1_V;L2_V;L3_V;najwyzsza;najnizsza;moc_sieci_W');
+    for (const h of pb.top_hours || []) lines.push([h.hour, h.spread_v, h.L1, h.L2, h.L3, h.high, h.low, h.grid_w ?? ''].join(';'));
     const blob = new Blob(['﻿' + lines.join('\n').replace(/\./g, ',')], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -4436,6 +4472,19 @@ class SmartingHomePanel extends HTMLElement {
   _voltageComplaint() {
     const r = this._vrep || {}, s = r.summary || {}, lim = r.limit_v || 253;
     const worst = (r.days || []).filter(d => d.hours_max_over || d.ten_min_over).sort((a, b) => b.max_v - a.max_v).slice(0, 10);
+    const ps = (r.phases || {}).summary || {};
+    const fmt = (x, d = 1) => x == null ? '—' : Number(x).toFixed(d).replace('.', ',');
+    const share = Object.entries(ps.highest_share || {}).sort((a, b) => b[1] - a[1]);
+    const badWeeks = ((r.phases || {}).weeks || []).filter(w => !w.ok);
+    const phaseText = ps.hours ? `
+Asymetria napięć między fazami (${ps.hours} godzin pomiarów):
+- średnia różnica między najwyższą a najniższą fazą: ${fmt(ps.avg_spread)} V (maksymalnie ${fmt(ps.max_spread)} V),
+- gdy instalacja nie oddaje energii do sieci: ${fmt(ps.avg_spread_no_export)} V, przy oddawaniu: ${fmt(ps.avg_spread_export)} V,
+- najwyższe napięcie najczęściej na fazie ${share[0] ? share[0][0] : '—'} (${share[0] ? fmt(share[0][1]) : '—'}% godzin),
+- godzin z różnicą faz co najmniej ${fmt(ps.spread_limit_v, 0)} V: ${ps.hours_spread_over ?? 0},
+- największa asymetria napięć: ${fmt(ps.max_unbalance_pct, 2)}% (dopuszczalne wg PN-EN 50160: 2%)${badWeeks.length ? `; tygodnie poza normą: ${badWeeks.map(w => w.week).join(', ')}` : ''}.
+Falownik oddaje moc symetrycznie na trzy fazy, więc trwała różnica napięć — także bez oddawania energii — wskazuje na nierównomierne obciążenie sieci lub stan przewodu neutralnego.
+` : '';
     const text = `Reklamacja parametrów jakościowych energii elektrycznej — za wysokie napięcie w sieci
 
 Zgłaszam, że w moim punkcie poboru napięcie w sieci przekracza wartość dopuszczalną 230 V + 10% (${lim} V).
@@ -4450,13 +4499,13 @@ Okres: ${s.first_day || '—'} – ${new Date().toISOString().slice(0, 10)}
 
 Dni z najwyższym napięciem:
 ${worst.map(d => `- ${d.date}: maks. ${d.max_v.toFixed(1)} V, godzin powyżej ${lim} V: ${d.hours_max_over}`).join('\n') || '- brak'}
-
+${phaseText}
 Przy średniej 10-minutowej powyżej ${lim} V falownik zgodnie z normą PN-EN 50549-1 odłącza się od sieci, przez co tracę produkcję energii.
 Napięcie jest wysokie również w godzinach, w których instalacja nie oddaje energii, co wskazuje na ustawienia sieci (np. zaczepy transformatora SN/nN).
 
 Proszę o:
 1. wykonanie pomiarów jakości napięcia w moim punkcie poboru zgodnie z PN-EN 50160,
-2. doprowadzenie napięcia do wartości dopuszczalnych,
+2. doprowadzenie napięcia do wartości dopuszczalnych${ps.hours ? ', sprawdzenie rozkładu obciążenia na fazy i ciągłości przewodu neutralnego' : ''},
 3. udzielenie bonifikaty za niedotrzymanie parametrów jakościowych energii, jeśli przysługuje.
 
 W załączniku: zestawienie pomiarów (CSV).`;
@@ -14582,7 +14631,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.69.6</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.69.7</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
