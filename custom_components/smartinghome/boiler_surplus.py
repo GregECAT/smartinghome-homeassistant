@@ -49,6 +49,7 @@ class BoilerInput:
     battery_w: float         # + = discharge
     max_voltage: float
     state: str               # "on" / "off" / "unavailable"
+    export_cap_w: float | None = None  # export limit set by the voltage guard (None = none)
 
 
 @dataclass
@@ -58,6 +59,17 @@ class BoilerSurplus:
     _since: dict[str, float] = field(default_factory=dict)
     _last_switch: float = float("-inf")
     reason: str = ""
+    mode: str = ""                 # "surplus" (battery full) / "voltage" (taking what the grid won't)
+
+    def can_switch_on(self, now: float | None = None) -> bool:
+        now = time.time() if now is None else now
+        return self.enabled and now - self._last_switch >= MIN_OFF_S
+
+    def force_on(self, reason: str, now: float | None = None) -> None:
+        """The voltage guard switches the boiler on instead of curtailing PV."""
+        self._last_switch = time.time() if now is None else now
+        self.owned, self.mode, self.reason = True, "voltage", reason
+        self._since.clear()
 
     def configure(self, cfg: dict[str, Any] | None) -> None:
         merged = dict(DEFAULTS)
@@ -93,10 +105,19 @@ class BoilerSurplus:
             surplus = in_window and inp.soc >= min_soc and inp.export_w >= min_export
             # high voltage counts only when the export is PV — not the battery being sold
             high_v = inp.max_voltage >= VOLTAGE_ON and inp.export_w >= 1000 and inp.battery_w <= 300
-            if (self._held("on", surplus or high_v, ON_HOLD_S, now)
+            # The export is held at the guard's limit while the battery takes little: the PV
+            # is being curtailed — the real surplus is bigger than the export shows
+            capped = (inp.export_cap_w is not None and inp.export_w >= inp.export_cap_w - 300
+                      and inp.battery_w >= -800)
+            if (self._held("on", surplus or high_v or capped, ON_HOLD_S if surplus else 60, now)
                     and now - self._last_switch >= MIN_OFF_S):
                 self._last_switch, self.owned = now, True
+                self.mode = "surplus" if surplus else "voltage"
                 self._since.clear()
+                if capped and not surplus:
+                    self.reason = (f"oddawanie ograniczone do {inp.export_cap_w:.0f} W, PV przycinane — "
+                                   f"grzeję wodę zamiast tracić produkcję")
+                    return "turn_on", self.reason
                 self.reason = (
                     f"bateria {inp.soc:.0f}%, do sieci {inp.export_w:.0f} W — grzeję wodę z nadwyżki PV"
                     if surplus else
@@ -108,16 +129,26 @@ class BoilerSurplus:
         # state == "on": only switch off what we switched on (manual use is left alone)
         if not self.owned:
             return None
-        gone = (
-            not in_window and inp.max_voltage < VOLTAGE_ON
-        ) or inp.import_w > 300 or inp.battery_w > 800 or inp.soc < min_soc - 6
+        if self.mode == "voltage":
+            # on for the voltage / a curtailed PV: stays on while PV feeds it; off once the
+            # limit is gone and the voltage is down while the battery still wants the energy
+            quiet = (inp.export_cap_w is None and inp.max_voltage < VOLTAGE_ON - 2
+                     and inp.soc < min_soc - 6)
+            gone = quiet or inp.import_w > 300 or inp.battery_w > 800
+        else:
+            gone = (
+                not in_window and inp.max_voltage < VOLTAGE_ON
+            ) or inp.import_w > 300 or inp.battery_w > 800 or inp.soc < min_soc - 6
         if self._held("off", gone, OFF_HOLD_S, now) and now - self._last_switch >= MIN_ON_S:
             self._last_switch, self.owned = now, False
             self._since.clear()
+            mode, self.mode = self.mode, ""
             if inp.import_w > 300:
                 why = f"dom bierze {inp.import_w:.0f} W z sieci"
             elif inp.battery_w > 800:
                 why = f"bateria oddaje {inp.battery_w:.0f} W — nadwyżka PV się skończyła"
+            elif mode == "voltage":
+                why = "napięcie spadło, bateria znów potrzebuje energii"
             elif inp.soc < min_soc - 6:
                 why = f"bateria spadła do {inp.soc:.0f}%"
             else:
@@ -127,4 +158,4 @@ class BoilerSurplus:
         return None
 
     def status(self) -> dict[str, Any]:
-        return {**self.cfg, "owned": self.owned, "reason": self.reason}
+        return {**self.cfg, "owned": self.owned, "mode": self.mode, "reason": self.reason}

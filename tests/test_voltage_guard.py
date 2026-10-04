@@ -94,3 +94,58 @@ def test_report_counts_and_no_export_hours():
     assert d["hours_high_no_export"] == 1
     assert d["ten_min_over"] == 2
     assert r["summary"]["days_over"] == 1
+
+
+def test_boiler_switched_on_before_the_export_limit():
+    # 2026-10-04: the limit went down to 100 W while the boiler stayed off
+    g = vg.VoltageGuard()
+    actions = []
+    for k in range(0, 600, 30):
+        inp = vg.VoltageInput(v=(252.5, 251.5, 250.5), export_w=3000, pv_w=6000, soc=99.0,
+                              battery_w=0.0, sink_ready=not any(a == "sink" for _, a, _ in actions))
+        actions += [(k, a, val) for a, val, _ in g.decide(inp, now=k)]
+    kinds = [a for _, a, _ in actions]
+    assert kinds[0] == "sink"
+    caps = [t for t, a, _ in actions if a == "cap"]
+    sink_t = actions[0][0]
+    assert not caps or caps[0] - sink_t >= vg.CHANGE_EVERY_S   # the boiler gets a chance first
+
+
+bs = importlib.import_module("smartinghome_pure.boiler_surplus")
+
+
+def _boiler():
+    b = bs.BoilerSurplus()
+    b.configure({"enabled": True, "entity": "switch.bojler", "window": [10, 16], "min_soc": 98,
+                 "min_export_w": 2000})
+    return b
+
+
+def _binp(**kw):
+    base = dict(hour=13, soc=99.0, export_w=600.0, import_w=0.0, battery_w=-200.0,
+                max_voltage=249.0, state="off", export_cap_w=600.0)
+    base.update(kw)
+    return bs.BoilerInput(**base)
+
+
+def test_boiler_takes_curtailed_pv_at_the_export_limit():
+    b = _boiler()
+    out = [b.decide(_binp(), now=t) for t in range(0, 120, 30)]
+    assert ("turn_on" in [o[0] for o in out if o]) and b.mode == "voltage"
+    # without a limit the same 600 W export is no reason to heat
+    b2 = _boiler()
+    out2 = [b2.decide(_binp(export_cap_w=None), now=t) for t in range(0, 600, 30)]
+    assert not any(out2)
+
+
+def test_voltage_boiler_not_switched_off_for_battery_soc():
+    # 12:07 → 12:12 on 2026-10-04: on for the voltage, then off because SOC 68 % < 92 %
+    b = _boiler()
+    b.force_on("test", now=0)
+    out = [b.decide(_binp(state="on", soc=70.0, export_w=300, export_cap_w=600.0), now=t)
+           for t in range(30, 1200, 30)]
+    assert not any(out)
+    # the limit gone and the voltage down while the battery wants energy → off
+    out = [b.decide(_binp(state="on", soc=70.0, export_cap_w=None, max_voltage=247.0), now=t)
+           for t in range(1200, 1600, 30)]
+    assert any(o and o[0] == "turn_off" for o in out)

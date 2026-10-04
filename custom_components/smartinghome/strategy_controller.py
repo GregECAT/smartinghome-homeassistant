@@ -972,7 +972,8 @@ class StrategyController:
         actions_taken.extend(await self._execute_w4_voltage(data, soc, grid, pv, v_l1, v_l2, v_l3))
 
         # W4: PV Surplus cascade
-        surplus_actions = await self._execute_w4_pv_surplus_cascade(surplus, soc)
+        surplus_actions = await self._execute_w4_pv_surplus_cascade(
+            surplus, soc, grid, _safe_float(data.get(SENSOR_BATTERY_POWER)))
         actions_taken.extend(surplus_actions)
 
         # W4b: Boiler on PV surplus (battery full + export in the midday window)
@@ -1162,7 +1163,8 @@ class StrategyController:
         actions_taken.extend(await self._execute_w4_voltage(data, soc, grid, pv, v_l1, v_l2, v_l3))
 
         # W4: PV Surplus cascade
-        surplus_actions = await self._execute_w4_pv_surplus_cascade(surplus, soc)
+        surplus_actions = await self._execute_w4_pv_surplus_cascade(
+            surplus, soc, grid, _safe_float(data.get(SENSOR_BATTERY_POWER)))
         actions_taken.extend(surplus_actions)
 
         # W4b: Boiler on PV surplus (battery full + export in the midday window)
@@ -1429,6 +1431,7 @@ class StrategyController:
             battery_w=_safe_float(data.get(SENSOR_BATTERY_POWER)),
             max_voltage=max_voltage,
             state=st.state if st else "unavailable",
+            export_cap_w=self._em.export_cap_w,
         ))
         msgs: list[str] = []
         if decision:
@@ -1637,12 +1640,22 @@ class StrategyController:
             soc=soc,
             battery_w=_safe_float(data.get(SENSOR_BATTERY_POWER)),
             export_limit_w=self._em.current_export_limit(),
+            sink_ready=self._boiler_sink_ready(),
         )
         for action, value, reason in guard.decide(inp):
             try:
                 if action == "charge":
                     await self._em._enable_charging()
                     msg = f"W4: ⚡🔋 {reason}"
+                elif action == "sink":
+                    await self.hass.services.async_call(
+                        "homeassistant", "turn_on", {"entity_id": self._boiler.entity}
+                    )
+                    self._boiler.force_on(reason)
+                    from .settings_io import write_async
+
+                    await write_async(self.hass, {"boiler_surplus_owned": True})
+                    msg = f"W4: ⚡🔥 {reason}"
                 else:
                     await self._em.set_export_cap(value)
                     msg = f"W4: ⚡ {reason}"
@@ -1656,6 +1669,14 @@ class StrategyController:
         if done:
             await self._record_voltage_event(done)
         return msgs
+
+    def _boiler_sink_ready(self) -> bool:
+        """The W4b boiler is off and may be switched on (min off-time passed)."""
+        boiler = self._boiler
+        if not boiler.can_switch_on():
+            return False
+        st = self.hass.states.get(boiler.entity)
+        return bool(st and st.state == "off")
 
     async def _voltage_events(self) -> list[dict[str, Any]]:
         if self._vguard_events is None:
@@ -1721,10 +1742,26 @@ class StrategyController:
     # ------------------------------------------------------------------
 
     async def _execute_w4_pv_surplus_cascade(
-        self, surplus: float, soc: float,
+        self, surplus: float, soc: float, grid: float = 0.0, battery_w: float = 0.0,
     ) -> list[str]:
-        """W4: PV surplus load management cascade."""
+        """W4: PV surplus load management cascade.
+
+        pv − load drops as soon as the cascade's own loads run, so a low "surplus" alone
+        no longer switches them off (2026-10-04 12:55–13:30: AC and the heater socket
+        cycled every few minutes). Off = the house takes from the grid or the battery
+        for 2 min, never sooner than 10 min after a load went on.
+        """
         actions: list[str] = []
+        now = time.time()
+        drawing = grid < -200 or battery_w > 300
+        if self._surplus_cascade_active and drawing:
+            self._cascade_low_since = getattr(self, "_cascade_low_since", None) or now
+        else:
+            self._cascade_low_since = None
+        may_switch_off = (
+            self._cascade_low_since is not None and now - self._cascade_low_since >= 120
+            and now - getattr(self, "_cascade_on_ts", 0.0) >= 600
+        )
 
         if soc < 50 and self._surplus_cascade_active:
             if await self._throttled_action("surplus_emergency_off"):
@@ -1738,6 +1775,8 @@ class StrategyController:
         if surplus > PV_SURPLUS_TIER3 and soc >= PV_SURPLUS_MIN_SOC_TIER3:
             if await self._throttled_action("surplus_t3"):
                 await self._em.check_pv_surplus(surplus, soc)
+                if not self._surplus_cascade_active:
+                    self._cascade_on_ts = now
                 self._surplus_cascade_active = True
                 msg = f"W4: ☀️ Nadwyżka {surplus:.0f}W — T3: {self._cascade_loads('AC+gniazdko')}"
                 actions.append(msg)
@@ -1746,6 +1785,8 @@ class StrategyController:
         elif surplus > PV_SURPLUS_TIER2 and soc >= PV_SURPLUS_MIN_SOC_TIER2:
             if await self._throttled_action("surplus_t2"):
                 await self._em.check_pv_surplus(surplus, soc)
+                if not self._surplus_cascade_active:
+                    self._cascade_on_ts = now
                 self._surplus_cascade_active = True
                 msg = f"W4: ☀️ Nadwyżka {surplus:.0f}W — T2: {self._cascade_loads('AC')}"
                 actions.append(msg)
@@ -1754,16 +1795,20 @@ class StrategyController:
         elif surplus > PV_SURPLUS_TIER1 and soc >= PV_SURPLUS_MIN_SOC_TIER1:
             if await self._throttled_action("surplus_t1"):
                 await self._em.check_pv_surplus(surplus, soc)
+                if not self._surplus_cascade_active:
+                    self._cascade_on_ts = now
                 self._surplus_cascade_active = True
                 msg = f"W4: ☀️ Nadwyżka {surplus:.0f}W — T1: {self._cascade_loads('')}"
                 actions.append(msg)
                 self._log_cascade("surplus", "surplus_t1", msg)
 
-        elif surplus < PV_SURPLUS_OFF and self._surplus_cascade_active:
+        elif may_switch_off:
             if await self._throttled_action("surplus_off"):
-                await self._em.check_pv_surplus(surplus, soc)
+                await self._em.check_pv_surplus(0.0, soc)  # below PV_SURPLUS_OFF → all off
                 self._surplus_cascade_active = False
-                msg = f"W4: Nadwyżka spadła do {surplus:.0f}W — wyłączanie odbiorników"
+                self._cascade_low_since = None
+                src = f"{-grid:.0f} W z sieci" if grid < -200 else f"bateria oddaje {battery_w:.0f} W"
+                msg = f"W4: Nadwyżka PV się skończyła ({src}) — wyłączanie odbiorników"
                 actions.append(msg)
                 self._log_cascade("surplus", "surplus_off", msg)
 
