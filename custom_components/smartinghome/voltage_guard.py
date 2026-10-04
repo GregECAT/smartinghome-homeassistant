@@ -56,6 +56,7 @@ class VoltageInput:
     soc: float
     battery_w: float         # + = discharge, − = charge
     export_limit_w: float | None = None  # current inverter export limit (for the first step)
+    sink_ready: bool = False  # a controllable load (the boiler) is off and may be switched on
 
 
 @dataclass
@@ -67,6 +68,7 @@ class VoltageGuard:
     _low_since: float | None = None
     _last_change: float = float("-inf")
     _last_charge: float = float("-inf")
+    _last_sink: float = float("-inf")
     _event: dict[str, Any] | None = None
     _event_below_since: float | None = None
     reason: str = ""
@@ -148,7 +150,14 @@ class VoltageGuard:
                 self.reason = f"{v_txt} przy eksporcie {inp.export_w:.0f} W — ładuję baterię zamiast oddawać"
                 out.append(("charge", None, self.reason))
                 return out
-            # 2. Export limit, step by step
+            # 2. A load takes the surplus (the boiler) before PV gets curtailed — 2026-10-04
+            #    the limit went down to 100 W with the boiler off and PV cut 6 → 2 kW
+            if inp.sink_ready and now - self._last_sink >= CHANGE_EVERY_S:
+                self._last_sink = self._last_change = now
+                self.reason = f"{v_txt} przy eksporcie {inp.export_w:.0f} W — włączam bojler zamiast ograniczać oddawanie"
+                out.append(("sink", None, self.reason))
+                return out
+            # 3. Export limit, step by step
             if now - self._last_change >= CHANGE_EVERY_S:
                 base = self.cap_w if self.cap_w is not None else int(inp.export_w)
                 if inp.export_limit_w is not None and self.cap_w is None:
