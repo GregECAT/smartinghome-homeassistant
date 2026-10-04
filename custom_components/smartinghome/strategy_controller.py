@@ -1882,7 +1882,7 @@ class StrategyController:
         if first is None:
             return actions
 
-        action, power_w = self._commit_hour_action(now, first.action, first.power_w, soc)
+        action, power_w = self._commit_hour_action(now, first.action, first.power_w, soc, peak=first.no_import)
         if action == ACT_CHARGE_GRID and (first.no_import or first.no_grid_charge):
             # Never buy at the tariff peak to fill the battery (2026-10-02 16:25–16:42:
             # a 99 → 100 % top-up ran EMS charge_battery at full power from the grid),
@@ -1965,7 +1965,7 @@ class StrategyController:
         return actions
 
     def _commit_hour_action(
-        self, now: datetime, action: str, power_w: int, soc: float
+        self, now: datetime, action: str, power_w: int, soc: float, peak: bool = False,
     ) -> tuple[str, int]:
         """Keep one action per 30-min block (no flapping on every re-plan).
 
@@ -1981,10 +1981,17 @@ class StrategyController:
         # home → PV charge → sell 700 W → PV charge on near-equal re-plans)
         opposite = {
             ACT_CHARGE_GRID: {ACT_DISCHARGE},
-            ACT_PV_CHARGE: {ACT_DISCHARGE, ACT_PV_EXPORT},
+            ACT_PV_CHARGE: {ACT_DISCHARGE, ACT_PV_EXPORT, ACT_HOLD},
             ACT_PV_EXPORT: {ACT_PV_CHARGE, ACT_CHARGE_GRID},
             ACT_DISCHARGE: {ACT_CHARGE_GRID, ACT_PV_CHARGE},
+            ACT_HOLD: {ACT_PV_CHARGE},
         }
+        if not peak:
+            # Sell vs hold on near-equal prices (2026-10-04 18:22–18:35: "sell 3.3 kW" /
+            # "hold" every 30–60 s at RCE 1.17 vs 1.31 at 19:00). In a tariff peak the sale
+            # follows the house and the rest of the peak, so it may change any time.
+            opposite[ACT_DISCHARGE] = opposite[ACT_DISCHARGE] | {ACT_HOLD}
+            opposite[ACT_HOLD] = opposite[ACT_HOLD] | {ACT_DISCHARGE}
         if commit and commit[0] == hour_key and action in opposite.get(commit[1], ()):
             held = commit[1]
             infeasible = (
