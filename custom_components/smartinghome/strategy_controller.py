@@ -2019,7 +2019,12 @@ class StrategyController:
             self._arb_drift_since = 0.0
             return False  # watchdog handles unavailability
         expected = self._EXPECTED_EMS.get(action, "auto")
-        if actual == expected:
+        ok = actual == expected
+        if ok and action == ACT_PV_EXPORT:
+            # general mode alone doesn't tell: the charging block must hold too
+            bat = self.hass.states.get(SENSOR_BATTERY_POWER)
+            ok = _safe_float(bat.state if bat else None) > -500  # − = charging
+        if ok:
             self._arb_drift_since = 0.0
             return False
         now = time.time()
