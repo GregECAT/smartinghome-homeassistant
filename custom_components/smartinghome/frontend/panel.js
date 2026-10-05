@@ -185,6 +185,7 @@ class SmartingHomePanel extends HTMLElement {
     if (tab === 'hems') { this._updateHEMSArbitrage(); this._loadForecastStatus(); }
     if (tab === 'tariff') { this._loadDeposit(); }
     if (tab === 'battery') { this._loadFullLog(); }
+    if (tab === 'settings') { this._loadAutoUpdate(); }
     if (tab === 'energy') { this._loadVoltageReport(); }
     if (tab === 'history') { this._updateHistoryTab(); }
     if (tab === 'autopilot') { this._updateAutopilot(); }
@@ -775,6 +776,87 @@ class SmartingHomePanel extends HTMLElement {
       return this._hass.connection.sendMessagePromise({ type: 'smartinghome/settings/update', settings: updates })
         .catch(e => console.error('[SH] settings save failed:', e.message || e.code || e));
     }
+  }
+
+  /* ── Automatic updates (Ustawienia) ───────────────── */
+  async _loadAutoUpdate() {
+    const el = this.shadowRoot.getElementById('aupd-content');
+    if (!el || !this._hass?.connection) return;
+    try {
+      this._aupd = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/auto_update/status' });
+    } catch (e) {
+      this._aupd = { error: e.message || e.code || String(e) };
+    }
+    this._renderAutoUpdate();
+  }
+
+  _renderAutoUpdate() {
+    const el = this.shadowRoot.getElementById('aupd-content');
+    if (!el) return;
+    const r = this._aupd || {};
+    if (r.error) { el.innerHTML = `<span style="color:#e74c3c">${this._esc(r.error)}</span>`; return; }
+    const c = r.config || {}, g = c.groups || {}, L = r.labels || {};
+    const admin = this._hass?.user?.is_admin !== false;
+    const dis = admin ? '' : 'disabled';
+    const groupRows = Object.keys(L).map(k => `
+      <div style="display:flex; align-items:center; gap:8px; padding:4px 0; border-bottom:1px solid #1e293b">
+        <label style="flex:1; display:flex; align-items:center; gap:6px; color:#e2e8f0"><input type="checkbox" id="aupd-g-${k}" ${g[k]?.enabled ? 'checked' : ''} ${dis}> ${L[k]}</label>
+        <span style="color:#64748b">min. wiek</span>
+        <input type="number" id="aupd-a-${k}" value="${g[k]?.min_age_h ?? 0}" min="0" max="720" step="12" style="width:64px" ${dis}> <span style="color:#64748b">h</span>
+        ${k === 'core' ? `<label style="display:flex; align-items:center; gap:4px; color:#94a3b8" title="Wersje x.y.0 często psują integracje — czekaj na pierwszą poprawkę"><input type="checkbox" id="aupd-patch" ${g.core?.patch_only ? 'checked' : ''} ${dis}> tylko .1+</label>` : ''}
+      </div>`).join('');
+    const ups = (r.updates || []).map(u => `<tr>
+      <td>${this._esc(u.title)}</td><td style="color:#64748b">${L[u.group] || u.group}</td>
+      <td>${this._esc(u.installed || '—')} → <b>${this._esc(u.latest || '—')}</b></td>
+      <td style="color:${u.eligible ? '#2ecc71' : '#94a3b8'}">${u.eligible ? '✅ zainstaluje się w nocy' : this._esc(u.reason)}</td></tr>`).join('');
+    const hist = (r.history || []).map(h => `<div style="padding:3px 0; border-bottom:1px solid #1e293b">
+      <span style="color:#64748b">${this._esc(h.ts)}</span> · <b style="color:#cbd5e1">${this._esc(h.result || '')}</b> —
+      ${(h.items || []).map(i => `${i.ok === false ? '❌' : i.ok === null ? '⏳' : '✅'} ${this._esc(i.title)} ${this._esc(i.from || '')}→${this._esc(i.to || '')}`).join(', ')}</div>`).join('');
+    el.innerHTML = `
+      <div style="display:flex; flex-wrap:wrap; gap:14px; align-items:center; margin-bottom:8px">
+        <label style="display:flex; align-items:center; gap:6px; color:#e2e8f0; font-weight:700"><input type="checkbox" id="aupd-on" ${c.enabled ? 'checked' : ''} ${dis}> Włączone</label>
+        <span>okno: <input type="number" id="aupd-w0" value="${(c.window || [2, 5])[0]}" min="0" max="23" style="width:48px" ${dis}>:00 –
+          <input type="number" id="aupd-w1" value="${(c.window || [2, 5])[1]}" min="0" max="24" style="width:48px" ${dis}>:00</span>
+        <label style="display:flex; align-items:center; gap:6px"><input type="checkbox" id="aupd-bk" ${c.backup ? 'checked' : ''} ${dis}> kopia zapasowa przed aktualizacją</label>
+        ${admin ? `<button class="test-btn" onclick="this.getRootNode().host._saveAutoUpdate(this)">💾 Zapisz</button>
+        <button class="test-btn" onclick="this.getRootNode().host._runAutoUpdate(this)">⬇️ Aktualizuj teraz</button>` : ''}
+      </div>
+      ${groupRows}
+      <div style="margin-top:10px; color:#cbd5e1; font-weight:600">Dostępne aktualizacje</div>
+      ${ups ? `<div style="overflow-x:auto"><table style="width:100%; font-size:11px">${ups}</table></div>` : `<div style="color:#2ecc71">✅ Wszystko aktualne (${r.tracked ?? 0} śledzonych)</div>`}
+      ${hist ? `<div style="margin-top:10px; color:#cbd5e1; font-weight:600">Historia</div><div style="font-size:11px">${hist}</div>` : ''}
+      <div style="font-size:10px; color:#64748b; margin-top:8px; line-height:1.5">Raz na noc w wybranym oknie: kopia zapasowa → instalacja → sprawdzenie konfiguracji → restart Home Assistant (tylko gdy zmieniła się integracja). Core i OS instaluje Supervisor i sam restartuje system — najwyżej jedno z nich na noc. Po restarcie wersje są sprawdzane, wynik trafia do powiadomień. „Min. wiek” liczy się od chwili, gdy wersja pojawiła się w tym Home Assistant.</div>`;
+  }
+
+  async _saveAutoUpdate(btn) {
+    const $ = id => this.shadowRoot.getElementById(id);
+    const L = (this._aupd || {}).labels || {};
+    const groups = {};
+    for (const k of Object.keys(L)) {
+      groups[k] = { enabled: !!$(`aupd-g-${k}`)?.checked, min_age_h: Math.max(0, parseFloat($(`aupd-a-${k}`)?.value) || 0) };
+    }
+    if (groups.core) groups.core.patch_only = !!$('aupd-patch')?.checked;
+    const cfg = {
+      ...((this._aupd || {}).config || {}),
+      enabled: !!$('aupd-on')?.checked,
+      window: [parseInt($('aupd-w0')?.value) || 0, parseInt($('aupd-w1')?.value) || 0],
+      backup: !!$('aupd-bk')?.checked,
+      groups,
+    };
+    await this._savePanelSettings({ auto_update: cfg });
+    if (btn) { const o = btn.innerHTML; btn.innerHTML = '✓ Zapisano'; setTimeout(() => { btn.innerHTML = o; }, 1500); }
+    this._loadAutoUpdate();
+  }
+
+  async _runAutoUpdate(btn) {
+    if (!confirm('Zainstalować teraz dostępne aktualizacje spełniające warunki? Home Assistant może się zrestartować.')) return;
+    try {
+      const r = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/auto_update/run' });
+      if (btn) btn.innerHTML = r.started ? '⏳ Instaluję…' : `ℹ️ ${r.reason || 'nic do zrobienia'}`;
+    } catch (e) {
+      if (btn) btn.innerHTML = '❌ ' + (e.message || e.code || e);
+    }
+    setTimeout(() => this._loadAutoUpdate(), 5000);
   }
 
   /* ── Custom Modal System ───────────────── */
@@ -14630,10 +14712,16 @@ W załączniku: zestawienie pomiarów (CSV).`;
               </style>
             </div>
 
+            <!-- 🔄 Auto update -->
+            <div class="card" style="grid-column: 1 / -1">
+              <div class="card-title">🔄 Automatyczne aktualizacje</div>
+              <div id="aupd-content" style="font-size:12px; color:#94a3b8">Ładowanie…</div>
+            </div>
+
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.69.10</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.70.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
