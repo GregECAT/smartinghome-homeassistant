@@ -267,6 +267,17 @@ async def async_setup_entry(
 
     hass.async_create_task(_bootstrap_wind())
 
+    # Automatic updates (one updater per Home Assistant, settings "auto_update")
+    if "_auto_updater" not in hass.data[DOMAIN]:
+        from .auto_update import AutoUpdater
+
+        updater = AutoUpdater(hass)
+        hass.data[DOMAIN]["_auto_updater"] = updater
+        try:
+            await updater.async_start()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Auto updater not started: %s", err)
+
     # Register custom panels in sidebar (no PV/battery panel without an inverter)
     try:
         await _async_register_panel(hass, main=not grid_only)
@@ -415,6 +426,10 @@ async def async_unload_entry(
             await cron.async_stop()
         await async_unload_services(hass)
         hass.data[DOMAIN].pop(entry.entry_id)
+        if not any(k for k in hass.data[DOMAIN] if not str(k).startswith("_")):
+            updater = hass.data[DOMAIN].pop("_auto_updater", None)
+            if updater:
+                updater.stop()
         for url_path in (DOMAIN, METER_PANEL_URL, SITE_PANEL_URL):
             # Remove sidebar panel
             try:

@@ -42,6 +42,8 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_voltage_report)
     websocket_api.async_register_command(hass, ws_ledger_rebuild)
     websocket_api.async_register_command(hass, ws_battery_full_log)
+    websocket_api.async_register_command(hass, ws_auto_update_status)
+    websocket_api.async_register_command(hass, ws_auto_update_run)
 
     from .meter_ws import async_register as _register_meter_ws
     _register_meter_ws(hass)
@@ -639,3 +641,30 @@ async def ws_energy_monthly(hass: HomeAssistant, connection, msg: dict[str, Any]
         "sources": {"load": load_id, "pv": pv_id, "import": imp_id, "export": exp_id,
                     "import_raw": raw_imp_id, "export_raw": raw_exp_id},
     })
+
+
+@websocket_api.websocket_command({vol.Required("type"): "smartinghome/auto_update/status"})
+@websocket_api.async_response
+async def ws_auto_update_status(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Automatic updates: settings, available updates with eligibility, plan, history."""
+    from .auto_update import get_updater
+
+    updater = get_updater(hass)
+    if updater is None:
+        connection.send_error(msg["id"], "not_ready", "Auto updater not running")
+        return
+    connection.send_result(msg["id"], await updater.async_status())
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "smartinghome/auto_update/run"})
+@websocket_api.async_response
+async def ws_auto_update_run(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Install the eligible updates now (window and once-a-night limit ignored)."""
+    from .auto_update import get_updater
+
+    updater = get_updater(hass)
+    if updater is None:
+        connection.send_error(msg["id"], "not_ready", "Auto updater not running")
+        return
+    connection.send_result(msg["id"], await updater.async_run_now())
