@@ -6628,8 +6628,9 @@ W załączniku: zestawienie pomiarów (CSV).`;
       if (this._roiSub) { try { this._roiSub(); } catch(e) {} this._roiSub = null; }
     }
     this._lastConnection = conn;
-    // Subscribe to AI cron updates
-    if (!this._cronSub) {
+    // Subscribe to AI cron updates — HA allows custom events only to admins; a non-admin
+    // user (2026-10-05: 9375 "Refusing to allow … to subscribe" log errors) skips it
+    if (!this._cronSub && this._hass?.user?.is_admin !== false && !this._cronSubDenied) {
       try {
         this._cronSub = conn.subscribeEvents((ev) => {
           const d = ev.data;
@@ -6643,12 +6644,13 @@ W załączniku: zestawienie pomiarów (CSV).`;
           this._cronSub.then(unsub => { this._cronSub = unsub; }).catch(err => {
             console.warn('[SH] Failed to subscribe to cron updates:', err);
             this._cronSub = null;
+            if (err && (err.code === 'unauthorized' || /unauthor/i.test(err.message || ''))) this._cronSubDenied = true;
           });
         }
       } catch(e) { console.warn('[SH] subscribeEvents cron error:', e); this._cronSub = null; }
     }
     // Subscribe to action state updates
-    if (!this._actionStateSub) {
+    if (!this._actionStateSub && this._hass?.user?.is_admin !== false) {
       try {
         this._actionStateSub = conn.subscribeEvents((ev) => {
           this._actionStates = ev.data || {};
@@ -6663,7 +6665,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
       } catch(e) { console.warn('[SH] subscribeEvents action error:', e); this._actionStateSub = null; }
     }
     // Subscribe to ROI AI analysis results
-    if (!this._roiSub) {
+    if (!this._roiSub && this._hass?.user?.is_admin !== false) {
       try {
         this._roiSub = conn.subscribeEvents((ev) => {
           this._displayRoiAiResult(ev.data);
@@ -14631,7 +14633,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.69.9</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.69.10</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

@@ -337,8 +337,7 @@ class EnergyManager:
             await self._sofar_set_passive(grid_power=0, max_battery=0, min_battery=-6000)
         else:
             _LOGGER.info("battery_to_home — general mode, charging blocked (battery → house)")
-            await self.set_general_mode()
-            await self._block_charging()
+            await self.set_general_mode(charging=False)
         self._current_mode = HEMSMode.PEAK_SAVE
         self.intent = "home"
 
@@ -369,8 +368,10 @@ class EnergyManager:
         self._current_mode = HEMSMode.MANUAL
         self.intent = "hold"
 
-    async def set_general_mode(self) -> None:
-        """Switch to General/Self Use mode — battery self-consumption."""
+    async def set_general_mode(self, charging: bool = True) -> None:
+        """Switch to General/Self Use mode — battery self-consumption.
+
+        charging=False: the same, with battery charging blocked (no enable first)."""
         if self._inverter_brand == INVERTER_BRAND_SOFAR:
             _LOGGER.info("[Sofar] SET Self Use MODE — battery self-consumption (safe idle)")
             await self._sofar_restore_self_use()
@@ -379,7 +380,10 @@ class EnergyManager:
             await self._set_eco_mode_power(0)
             await self._set_eco_mode_soc(100)
             await self._set_work_mode("general")
-            await self._enable_charging()
+            if charging:
+                await self._enable_charging()
+            else:
+                await self._block_charging()
             await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
             await self._set_dod(DEFAULT_DOD_ON_GRID)
         self._current_mode = HEMSMode.AUTO
@@ -731,21 +735,27 @@ class EnergyManager:
         """Return True if configured for Sofar Solar."""
         return self._inverter_brand == INVERTER_BRAND_SOFAR
 
+    async def _goodwe_set_parameter(self, parameter: str, value: Any) -> None:
+        """Write one inverter setting and wait for it — writes must land in order
+        (2026-10-05 09:43: pv_export = enable charging then block it, both fire-and-
+        forget; the enable landed last and the battery charged 2.5 kW instead of the
+        planned PV export)."""
+        try:
+            await self.hass.services.async_call(
+                "goodwe", "set_parameter",
+                {"device_id": self._goodwe_device_id(), "parameter": parameter, "value": value},
+                blocking=True,
+            )
+        except Exception as err:  # noqa: BLE001 — logged; the drift check re-asserts the plan
+            _LOGGER.warning("GoodWe set_parameter %s=%s failed: %s", parameter, value, err)
+
     async def _enable_charging(self) -> None:
         """Enable battery charging."""
         if self._is_sofar:
             # In Passive mode: set battery max to allow charge
             await self._sofar_set_passive(grid_power=0, max_battery=6000, min_battery=0)
         else:
-            await self.hass.services.async_call(
-                "goodwe",
-                "set_parameter",
-                {
-                    "device_id": self._goodwe_device_id(),
-                    "parameter": "battery_charge_current",
-                    "value": DEFAULT_BATTERY_CHARGE_CURRENT_MAX,
-                },
-            )
+            await self._goodwe_set_parameter("battery_charge_current", DEFAULT_BATTERY_CHARGE_CURRENT_MAX)
 
     async def _block_charging(self) -> None:
         """Block battery charging."""
@@ -753,15 +763,7 @@ class EnergyManager:
             # In Passive mode: set battery max to 0 (no charge)
             await self._sofar_set_passive(grid_power=0, max_battery=0, min_battery=0)
         else:
-            await self.hass.services.async_call(
-                "goodwe",
-                "set_parameter",
-                {
-                    "device_id": self._goodwe_device_id(),
-                    "parameter": "battery_charge_current",
-                    "value": DEFAULT_BATTERY_CHARGE_CURRENT_BLOCK,
-                },
-            )
+            await self._goodwe_set_parameter("battery_charge_current", DEFAULT_BATTERY_CHARGE_CURRENT_BLOCK)
 
     async def _set_charge_current(self, value: int | str) -> None:
         """Set battery charge current."""
@@ -779,15 +781,7 @@ class EnergyManager:
             except (ValueError, TypeError):
                 _LOGGER.debug("Cannot parse charge current for Sofar: %s", value)
         else:
-            await self.hass.services.async_call(
-                "goodwe",
-                "set_parameter",
-                {
-                    "device_id": self._goodwe_device_id(),
-                    "parameter": "battery_charge_current",
-                    "value": value,
-                },
-            )
+            await self._goodwe_set_parameter("battery_charge_current", value)
 
     def current_export_limit(self) -> int | None:
         """The inverter's export limit as reported by its number entity."""
