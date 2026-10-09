@@ -119,6 +119,8 @@ def select(items: list[dict[str, Any]], cfg: dict[str, Any], seen: dict[str, Any
             reason = "aktualne"
         elif it.get("in_progress"):
             reason = "instalacja w toku"
+        elif it.get("self_update"):
+            reason = "aktualizuje Supervisor (auto)"
         elif it["entity_id"] in (cfg.get("exclude") or []):
             reason = "wykluczone"
         elif not gcfg.get("enabled"):
@@ -200,6 +202,7 @@ class AutoUpdater:
                 "available": st.state == "on",
                 "features": int(a.get("supported_features") or 0),
                 "in_progress": bool(a.get("in_progress")),
+                "self_update": bool(a.get("auto_update")),  # Supervisor updates it itself
             })
         return out
 

@@ -1876,6 +1876,7 @@ class StrategyController:
         actions: list[str] = []
         now = dt_util.now()  # tz-aware: plan hours stay correct across DST changes
         self._update_load_profile(now.hour, load)
+        self._sample_live(pv, load)
         await self._refresh_arbitrage_plan(soc, data, now)
         plan = self._arb_plan
         first = plan.first if plan else None
@@ -1883,6 +1884,33 @@ class StrategyController:
             return actions
 
         action, power_w = self._commit_hour_action(now, first.action, first.power_w, soc, peak=first.no_import)
+        if action == ACT_HOLD:
+            # "hold" keeps the battery for later — with a PV surplus going out at the
+            # current RCE it must take that PV instead (2026-10-09 14:30: hold + 2–6 kW
+            # exported at 0.03 zł while the plan charged at 0.21 later). Hysteresis:
+            # surplus > 500 W for 60 s on, deficit > 300 W for 120 s back to hold.
+            surplus_w = pv - load
+            since = getattr(self, "_hold_surplus_since", None)
+            if surplus_w > 500 and soc < self._arb_params.max_soc - 1:
+                since = since or time.time()
+                self._hold_surplus_since = since
+                self._hold_deficit_since = None
+            elif surplus_w < -300:
+                self._hold_surplus_since = None
+                self._hold_deficit_since = getattr(self, "_hold_deficit_since", None) or time.time()
+            pv_mode = getattr(self, "_hold_pv_mode", False)
+            if not pv_mode and since and time.time() - since >= 60:
+                pv_mode = True
+            elif pv_mode and getattr(self, "_hold_deficit_since", None) and time.time() - self._hold_deficit_since >= 120:
+                pv_mode = False
+            if soc >= self._arb_params.max_soc - 1:
+                pv_mode = False
+            self._hold_pv_mode = pv_mode
+            if pv_mode:
+                action, power_w = ACT_PV_CHARGE, 0
+        else:
+            self._hold_pv_mode = False
+            self._hold_surplus_since = self._hold_deficit_since = None
         if action == ACT_CHARGE_GRID and (first.no_import or first.no_grid_charge):
             # Never buy at the tariff peak to fill the battery (2026-10-02 16:25–16:42:
             # a 99 → 100 % top-up ran EMS charge_battery at full power from the grid),
@@ -1964,6 +1992,20 @@ class StrategyController:
                 self._log_decision("arbitrage", msg)
         return actions
 
+    def _sample_live(self, pv_w: float, load_w: float) -> None:
+        hist = self.__dict__.setdefault("_live_hist", [])
+        now = time.monotonic()
+        hist.append((now, max(pv_w, 0.0), max(load_w, 0.0)))
+        while hist and now - hist[0][0] > 600:
+            hist.pop(0)
+
+    def _live_mean(self) -> tuple[float, float] | None:
+        hist = getattr(self, "_live_hist", None)
+        if not hist:
+            return None
+        n = len(hist)
+        return sum(h[1] for h in hist) / n, sum(h[2] for h in hist) / n
+
     def _commit_hour_action(
         self, now: datetime, action: str, power_w: int, soc: float, peak: bool = False,
     ) -> tuple[str, int]:
@@ -1981,7 +2023,9 @@ class StrategyController:
         # home → PV charge → sell 700 W → PV charge on near-equal re-plans)
         opposite = {
             ACT_CHARGE_GRID: {ACT_DISCHARGE},
-            ACT_PV_CHARGE: {ACT_DISCHARGE, ACT_PV_EXPORT, ACT_HOLD},
+            # a cloud must not turn PV charging into buying (2026-10-09 13:59–14:13:
+            # "grid 800–1700 W" / "PV" every 1–2 min); grid → PV stays free
+            ACT_PV_CHARGE: {ACT_DISCHARGE, ACT_PV_EXPORT, ACT_HOLD, ACT_CHARGE_GRID},
             ACT_PV_EXPORT: {ACT_PV_CHARGE, ACT_CHARGE_GRID},
             ACT_DISCHARGE: {ACT_CHARGE_GRID, ACT_PV_CHARGE},
             ACT_HOLD: {ACT_PV_CHARGE},
@@ -2310,9 +2354,12 @@ class StrategyController:
                 slot.sell *= deposit_factor
         self._arb_deposit_factor = deposit_factor
         if inputs:
-            # Current slot: what PV and the house do right now beats the forecast
-            pv_kw = _safe_float(data.get(SENSOR_PV_POWER)) / 1000
-            load_kw = _safe_float(data.get(SENSOR_LOAD_TOTAL)) / 1000
+            # Current slot: what PV and the house do now beats the forecast — as a
+            # 10-min mean: passing clouds swing PV 1.4 ↔ 7.2 kW within minutes and the
+            # plan flipped hold / PV charge / grid charge with every tick (2026-10-09)
+            live = self._live_mean()
+            pv_kw = (live[0] if live else _safe_float(data.get(SENSOR_PV_POWER))) / 1000
+            load_kw = (live[1] if live else _safe_float(data.get(SENSOR_LOAD_TOTAL))) / 1000
             inputs[0].pv_kwh = max(pv_kw, 0.0) * inputs[0].duration
             if load_kw > 0:
                 inputs[0].load_kwh = load_kw * inputs[0].duration
