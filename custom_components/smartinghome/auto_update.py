@@ -50,6 +50,10 @@ DEFAULTS: dict[str, Any] = {
     },
 }
 FEATURE_BACKUP = 8
+# HACS looks at custom repositories (Smarting HOME is one) only every 48 h, so a
+# release could wait two nights before its update entity turns on — refresh ours.
+HACS_REFRESH_S = 6 * 3600
+HACS_REFRESH_IN_WINDOW_S = 3600
 _PRERELEASE = re.compile(r"(b|beta|rc|dev|alpha)\d*", re.IGNORECASE)
 
 
@@ -225,11 +229,14 @@ class AutoUpdater:
         if self._busy:
             return
         now = dt_util.now()
+        cfg = await self._cfg()
+        window = in_window(now.hour, cfg["window"])
+        if cfg["enabled"] and self.allowed():
+            await self._refresh_hacs(cfg, HACS_REFRESH_IN_WINDOW_S if window else HACS_REFRESH_S)
         items = self._items()
         self._remember(items, time.time())
         await self._store.async_save(self._data)
-        cfg = await self._cfg()
-        if not cfg["enabled"] or not in_window(now.hour, cfg["window"]):
+        if not cfg["enabled"] or not window:
             return
         if not self.allowed():
             return
@@ -241,11 +248,50 @@ class AutoUpdater:
         self._data["last_night"] = now.date().isoformat()
         await self.async_run(p, cfg)
 
+    async def _refresh_hacs(self, cfg: dict[str, Any], max_age_s: float) -> None:
+        """Ask HACS to re-read the repositories behind the update entities we install
+        (what its "Refresh" button does) — at most every `max_age_s`."""
+        from homeassistant.helpers import entity_registry as er
+
+        now_ts = time.time()
+        if now_ts - float(self._data.get("hacs_refreshed") or 0) < max_age_s:
+            return
+        self._data["hacs_refreshed"] = now_ts
+        hacs = self.hass.data.get("hacs")
+        repos = getattr(hacs, "repositories", None)
+        if repos is None:
+            return
+        reg = er.async_get(self.hass)
+        categories = set()
+        for st in self.hass.states.async_all("update"):
+            ent = reg.async_get(st.entity_id)
+            group = classify(ent.platform if ent else None, ent.unique_id if ent else None)
+            if group not in ("smartinghome", "hacs") or not cfg["groups"][group]["enabled"]:
+                continue
+            try:
+                repo = repos.get_by_id(str(ent.unique_id))
+                if repo is None:
+                    continue
+                await repo.update_repository(ignore_issues=True, force=True)
+                categories.add(repo.data.category)
+            except Exception as err:  # noqa: BLE001 — HACS internals, GitHub limits
+                _LOGGER.debug("Auto-update: HACS refresh of %s failed: %s", st.entity_id, err)
+        if not categories:
+            return
+        try:
+            await hacs.data.async_write()
+            for category in categories:
+                if coordinator := getattr(hacs, "coordinators", {}).get(category):
+                    coordinator.async_update_listeners()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Auto-update: HACS state write failed: %s", err)
+
     async def async_run_now(self) -> dict[str, Any]:
         """Panel button: install what is eligible now (window and night limit ignored)."""
         if not self.allowed():
             return {"started": False, "reason": "automatyczne aktualizacje — funkcja PRO"}
         cfg = await self._cfg()
+        await self._refresh_hacs(cfg, 0)
         items = self._items()
         self._remember(items, time.time())
         p = plan(select(items, cfg, self._data["seen"], time.time()))
