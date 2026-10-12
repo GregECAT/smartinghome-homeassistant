@@ -16,5 +16,5 @@
   "integration_type": "hub",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/GregECAT/smartinghome-homeassistant/issues",
-  "version": "1.71.0"
+  "version": "1.71.1"
 }
