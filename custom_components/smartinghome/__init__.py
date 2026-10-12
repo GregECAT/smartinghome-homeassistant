@@ -186,7 +186,7 @@ async def async_setup_entry(
     # Users who configured before v1.54.0 have wrong entity prefix.
     inverter_brand = entry.data.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE)
     if inverter_brand in ("sofar", "sofarsolar"):
-        from .const import CONF_SENSOR_MAP, INVERTER_BRAND_SOFAR
+        from .const import CONF_SENSOR_MAP
         sensor_map = dict(entry.data.get(CONF_SENSOR_MAP, {}))
         migrated = False
         for key, entity_id in sensor_map.items():

@@ -19,6 +19,9 @@ jobs:
         uses: hacs/action@main
         with:
           category: integration
+          # LICENSE is a commercial license (LicenseRef-SmartingHOME-Commercial),
+          # which GitHub cannot map to an SPDX id, so HACS reports NOASSERTION.
+          ignore: license
 
   validate-hassfest:
     name: Hassfest Validation

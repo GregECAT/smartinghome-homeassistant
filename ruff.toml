@@ -1,0 +1,5 @@
+# Ruff 0.17 widened its default rule set (BLE, SIM, I, RUF, ...). Pin the classic
+# defaults so CI checks real errors (pyflakes + core pycodestyle) and does not
+# change with every ruff release.
+[lint]
+select = ["E4", "E7", "E9", "F"]

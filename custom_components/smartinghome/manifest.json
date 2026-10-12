@@ -9,15 +9,12 @@
     "@GregECAT"
   ],
   "config_flow": true,
+  "dependencies": [
+    "websocket_api"
+  ],
   "documentation": "https://smartinghome.pl/docs",
   "integration_type": "hub",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/GregECAT/smartinghome-homeassistant/issues",
-  "requirements": [
-    "aiohttp>=3.9.0"
-  ],
-  "version": "1.71.0",
-  "dependencies": [
-    "websocket_api"
-  ]
+  "version": "1.71.0"
 }
