@@ -27,6 +27,7 @@ from .const import (
     CONF_LICENSE_KEY,
     CONF_LICENSE_MODE,
     CONF_UPDATE_INTERVAL,
+    CONF_FREE_LEGACY,
     DEFAULT_UPDATE_INTERVAL,
     LICENSE_MODE_FREE,
 )
@@ -83,6 +84,29 @@ class SmartingHomeDashboardProxy:
         }
 
 
+async def async_migrate_entry(
+    hass: HomeAssistant, entry: SmartingHomeConfigEntry
+) -> bool:
+    """Migrate a config entry.
+
+    1.1 → 1.2 (v1.71 FREE/PRO split): entries that existed before keep the
+    features FREE installs had until then (data "free_legacy").
+    """
+    from .features import migrate_entry_data
+
+    if entry.version > 1:
+        # A newer major version (downgrade) — cannot migrate back
+        return False
+    data, minor = migrate_entry_data(dict(entry.data), entry.version, entry.minor_version)
+    if minor != entry.minor_version:
+        hass.config_entries.async_update_entry(entry, data=data, minor_version=minor)
+        _LOGGER.info(
+            "Config entry migrated to %s.%s — pre-v1.71 FREE features kept (free_legacy)",
+            entry.version, minor,
+        )
+    return True
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: SmartingHomeConfigEntry
 ) -> bool:
@@ -126,7 +150,10 @@ async def async_setup_entry(
     )
 
     # Initialize license manager
-    license_mgr = LicenseManager(hass, api, license_mode=license_mode)
+    license_mgr = LicenseManager(
+        hass, api, license_mode=license_mode,
+        free_legacy=bool(entry.data.get(CONF_FREE_LEGACY, False)),
+    )
 
     # Validate license on startup
     try:
@@ -203,6 +230,9 @@ async def async_setup_entry(
     inverter_brand = entry.data.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE)
     energy_mgr = EnergyManager(hass, device_id_for_ems, inverter_brand=inverter_brand)
     strategy_ctrl = StrategyController(hass, energy_mgr)
+    # PRO-only strategies (weather_adaptive, ai_full_autonomy) fall back on FREE —
+    # also when restored from settings or set by the schedule
+    strategy_ctrl.set_feature_check(license_mgr.has_feature)
     strategy_ctrl.set_inverter_brand(inverter_brand)
     strategy_ctrl.set_forecasters(coordinator.pv_forecaster, coordinator.load_forecaster)
     grid_only = is_grid_only(entry.data)
@@ -252,6 +282,7 @@ async def async_setup_entry(
 
     # Initialize Wind Calendar for daily wind energy tracking
     wind_calendar = WindCalendar(hass)
+    wind_calendar.set_feature_check(license_mgr.has_feature)  # several turbines: PRO
     await wind_calendar.async_load()
     coordinator.set_wind_calendar(wind_calendar)
     hass.data[DOMAIN][entry.entry_id]["wind_calendar"] = wind_calendar

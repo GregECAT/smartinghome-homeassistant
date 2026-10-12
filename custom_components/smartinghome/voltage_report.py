@@ -227,3 +227,119 @@ def phase_balance(
 
 def window_start(now: datetime, days: int) -> datetime:
     return (now - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+# ── Export for a complaint (PRO: const.FEATURE_VOLTAGE_REPORT_EXPORT) ─────────
+# Detail lists only the export uses — the panel's basic view never needs them.
+EXPORT_ONLY_KEYS = ("worst_10min", "high_without_export")
+EXPORT_ONLY_PHASE_KEYS = ("top_hours",)
+
+
+def basic_view(report: dict[str, Any]) -> dict[str, Any]:
+    """The report without the detail lists that only the CSV export uses (FREE)."""
+    out = {k: v for k, v in report.items() if k not in EXPORT_ONLY_KEYS}
+    if isinstance(report.get("phases"), dict):
+        out["phases"] = {k: v for k, v in report["phases"].items() if k not in EXPORT_ONLY_PHASE_KEYS}
+    return out
+
+
+def _cell(v: Any) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    return str(v)
+
+
+def export_csv(report: dict[str, Any]) -> str:
+    """Measurements for the complaint attachment (semicolon CSV, decimal comma)."""
+    lines = ["dzien;max_V;max_srednia_godz_V;godziny_powyzej;srednie_10min_powyzej;wysokie_bez_eksportu"]
+
+    def row(*vals: Any) -> None:
+        lines.append(";".join(_cell(v) for v in vals))
+
+    for d in report.get("days") or []:
+        row(d.get("date"), d.get("max_v"), d.get("max_hour_mean"), d.get("hours_max_over"),
+            d.get("ten_min_over"), d.get("hours_high_no_export"))
+    lines += ["", "poczatek_10min;faza;srednia_V;moc_sieci_W"]
+    for w in report.get("worst_10min") or []:
+        row(w.get("start"), w.get("phase"), w.get("mean_v"), w.get("grid_w"))
+    lines += ["", "godzina;faza;srednia_V;moc_sieci_W (bez eksportu)"]
+    for h in report.get("high_without_export") or []:
+        row(h.get("hour"), h.get("phase"), h.get("mean_v"), h.get("grid_w"))
+    pb = report.get("phases") or {}
+    lines += ["", "dzien;srednia_roznica_faz_V;maks_roznica_V;godziny_roznicy_ponad_5V;maks_asymetria_pct;najwyzsza_faza"]
+    for d in pb.get("days") or []:
+        row(d.get("date"), d.get("avg_spread"), d.get("max_spread"), d.get("hours_spread_over"),
+            d.get("max_unbalance_pct"), d.get("mostly_high"))
+    lines += ["", "godzina;roznica_V;L1_V;L2_V;L3_V;najwyzsza;najnizsza;moc_sieci_W"]
+    for h in pb.get("top_hours") or []:
+        row(h.get("hour"), h.get("spread_v"), h.get("L1"), h.get("L2"), h.get("L3"),
+            h.get("high"), h.get("low"), h.get("grid_w"))
+    return "\n".join(lines).replace(".", ",")
+
+
+def _fmt(x: Any, digits: int = 1) -> str:
+    return "—" if x is None else f"{float(x):.{digits}f}".replace(".", ",")
+
+
+def complaint_text(report: dict[str, Any], today: str) -> str:
+    """Complaint to the distribution operator (Polish), EN 50160 figures from the report."""
+    s = report.get("summary") or {}
+    lim = report.get("limit_v") or HIGH
+    lim_s = _cell(lim)
+    worst = sorted((d for d in report.get("days") or [] if d.get("hours_max_over") or d.get("ten_min_over")),
+                   key=lambda d: -(d.get("max_v") or 0))[:10]
+    pb = report.get("phases") or {}
+    ps = pb.get("summary") or {}
+    share = sorted((ps.get("highest_share") or {}).items(), key=lambda kv: -kv[1])
+    bad_weeks = [w["week"] for w in pb.get("weeks") or [] if not w.get("ok")]
+    phase_text = ""
+    if ps.get("hours"):
+        phase_text = (
+            f"\nAsymetria napięć między fazami ({ps['hours']} godzin pomiarów):\n"
+            f"- średnia różnica między najwyższą a najniższą fazą: {_fmt(ps.get('avg_spread'))} V "
+            f"(maksymalnie {_fmt(ps.get('max_spread'))} V),\n"
+            f"- gdy instalacja nie oddaje energii do sieci: {_fmt(ps.get('avg_spread_no_export'))} V, "
+            f"przy oddawaniu: {_fmt(ps.get('avg_spread_export'))} V,\n"
+            f"- najwyższe napięcie najczęściej na fazie {share[0][0] if share else '—'} "
+            f"({_fmt(share[0][1]) if share else '—'}% godzin),\n"
+            f"- godzin z różnicą faz co najmniej {_fmt(ps.get('spread_limit_v'), 0)} V: {ps.get('hours_spread_over') or 0},\n"
+            f"- największa asymetria napięć: {_fmt(ps.get('max_unbalance_pct'), 2)}% "
+            f"(dopuszczalne wg PN-EN 50160: 2%)"
+            + (f"; tygodnie poza normą: {', '.join(bad_weeks)}" if bad_weeks else "") + ".\n"
+            "Falownik oddaje moc symetrycznie na trzy fazy, więc trwała różnica napięć — także bez "
+            "oddawania energii — wskazuje na nierównomierne obciążenie sieci lub stan przewodu neutralnego.\n"
+        )
+    worst_lines = "\n".join(
+        f"- {d['date']}: maks. {_fmt(d.get('max_v'))} V, godzin powyżej {lim_s} V: {d.get('hours_max_over') or 0}"
+        for d in worst
+    ) or "- brak"
+    max_v = s.get("max_v")
+    return (
+        "Reklamacja parametrów jakościowych energii elektrycznej — za wysokie napięcie w sieci\n\n"
+        f"Zgłaszam, że w moim punkcie poboru napięcie w sieci przekracza wartość dopuszczalną 230 V + 10% ({lim_s} V).\n"
+        "Pomiary pochodzą z falownika instalacji fotowoltaicznej (pomiar ciągły, wszystkie trzy fazy).\n\n"
+        f"Okres: {s.get('first_day') or '—'} – {today}\n"
+        f"- najwyższe zmierzone napięcie: {_fmt(max_v) if max_v is not None else '—'} V,\n"
+        f"- dni z napięciem powyżej {lim_s} V: {s.get('days_over') or 0},\n"
+        f"- godziny z napięciem powyżej {lim_s} V: {s.get('hours_max_over') or 0} "
+        f"(w tym ze średnią godzinową powyżej {lim_s} V: {s.get('hours_mean_over') or 0}),\n"
+        f"- średnie 10-minutowe powyżej {lim_s} V w ostatnich 10 dniach: {s.get('ten_min_over') or 0},\n"
+        f"- godziny z napięciem co najmniej {_cell(lim - 3)} V, gdy instalacja nie oddawała energii do sieci: "
+        f"{s.get('hours_high_no_export') or 0}.\n\n"
+        "Dni z najwyższym napięciem:\n"
+        f"{worst_lines}\n"
+        f"{phase_text}\n"
+        f"Przy średniej 10-minutowej powyżej {lim_s} V falownik zgodnie z normą PN-EN 50549-1 odłącza się od sieci, "
+        "przez co tracę produkcję energii.\n"
+        "Napięcie jest wysokie również w godzinach, w których instalacja nie oddaje energii, co wskazuje na "
+        "ustawienia sieci (np. zaczepy transformatora SN/nN).\n\n"
+        "Proszę o:\n"
+        "1. wykonanie pomiarów jakości napięcia w moim punkcie poboru zgodnie z PN-EN 50160,\n"
+        "2. doprowadzenie napięcia do wartości dopuszczalnych"
+        + (", sprawdzenie rozkładu obciążenia na fazy i ciągłości przewodu neutralnego" if ps.get("hours") else "")
+        + ",\n"
+        "3. udzielenie bonifikaty za niedotrzymanie parametrów jakościowych energii, jeśli przysługuje.\n\n"
+        "W załączniku: zestawienie pomiarów (CSV)."
+    )

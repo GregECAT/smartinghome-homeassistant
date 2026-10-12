@@ -177,6 +177,13 @@ class AutoUpdater:
             self._unsub()
             self._unsub = None
 
+    def allowed(self) -> bool:
+        """PRO feature (kept by installs from before v1.71 — const.LEGACY_FREE_FEATURES)."""
+        from .const import FEATURE_AUTO_UPDATE
+        from .license import any_entry_has_feature
+
+        return any_entry_has_feature(self.hass, FEATURE_AUTO_UPDATE)
+
     async def _cfg(self) -> dict[str, Any]:
         from .settings_io import read_async
 
@@ -224,6 +231,8 @@ class AutoUpdater:
         cfg = await self._cfg()
         if not cfg["enabled"] or not in_window(now.hour, cfg["window"]):
             return
+        if not self.allowed():
+            return
         if self._data.get("last_night") == now.date().isoformat() or self._data.get("pending"):
             return
         p = plan(select(items, cfg, self._data["seen"], time.time()))
@@ -234,6 +243,8 @@ class AutoUpdater:
 
     async def async_run_now(self) -> dict[str, Any]:
         """Panel button: install what is eligible now (window and night limit ignored)."""
+        if not self.allowed():
+            return {"started": False, "reason": "automatyczne aktualizacje — funkcja PRO"}
         cfg = await self._cfg()
         items = self._items()
         self._remember(items, time.time())
@@ -388,6 +399,7 @@ class AutoUpdater:
         self._remember(items, time.time())
         cands = select(items, cfg, self._data.get("seen", {}), time.time())
         return {
+            "allowed": self.allowed(),
             "config": cfg,
             "labels": GROUP_LABELS,
             "updates": [c for c in cands if c["available"]],

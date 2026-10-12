@@ -37,6 +37,8 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     DOMAIN,
+    FEATURE_ADVANCED_ALERTS,
+    FEATURE_DAILY_REPORT,
     SENSOR_BATTERY_POWER,
     SENSOR_BATTERY_SOC,
     SENSOR_BATTERY_TEMPERATURE,
@@ -137,9 +139,13 @@ def _in_quiet(cfg: dict[str, Any], now: datetime) -> bool:
 class AlertEngine:
     """Evaluates checks, tracks incidents, sends notifications, keeps history."""
 
-    def __init__(self, hass: HomeAssistant, entry_id: str, settings_reader: Callable) -> None:
+    def __init__(self, hass: HomeAssistant, entry_id: str, settings_reader: Callable,
+                 feature_check: Callable[[str], bool] | None = None) -> None:
         self.hass = hass
         self._read_settings = settings_reader
+        # LicenseManager.has_feature — FREE: persistent + one push device, no
+        # SMS / e-mail, no daily report (None = everything, e.g. tests)
+        self._feature_check = feature_check
         self._store: Store = Store(hass, 1, f"{DOMAIN}.{entry_id}.alerts")
         self._loaded = False
         self._tracks: dict[str, _Track] = {}
@@ -153,6 +159,9 @@ class AlertEngine:
         self._dirty = False
         self._last_save = 0.0
         self.active: list[Alert] = []
+
+    def _allowed(self, feature: str) -> bool:
+        return self._feature_check is None or self._feature_check(feature)
 
     # ── persistence ──────────────────────────────────────────────
 
@@ -313,6 +322,7 @@ class AlertEngine:
         sent = await async_deliver(
             self.hass, cfg, key=alert.id, level=level, title=title, message=message,
             source=alert.source, email=(alert.level == "critical" and not resolved),
+            advanced=self._allowed(FEATURE_ADVANCED_ALERTS),
         )
         if sent:
             self._sent.append({
@@ -333,6 +343,8 @@ class AlertEngine:
     async def _maybe_daily_report(self, cfg: dict[str, Any], now: datetime, context: dict[str, Any]) -> None:
         if not cfg.get("enabled") or cfg.get("daily_report", True) is False:
             return
+        if not self._allowed(FEATURE_DAILY_REPORT):
+            return  # PRO (or a pre-v1.71 install)
         today = now.date().isoformat()
         if self._report_sent_for == today:
             return
@@ -348,6 +360,7 @@ class AlertEngine:
         sent = await async_deliver(
             self.hass, cfg, key=f"report_{today}", level="report", title=title, message=message,
             source="Raport dnia", email=bool(cfg.get("daily_report_email", False)),
+            advanced=self._allowed(FEATURE_ADVANCED_ALERTS),
         )
         if sent:
             self._sent.append({"ts": now.isoformat(timespec="seconds"), "alert_id": "DAILY_REPORT",

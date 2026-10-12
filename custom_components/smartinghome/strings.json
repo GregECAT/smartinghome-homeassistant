@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Smarting HOME — Choose License",
-        "description": "Welcome to Smarting HOME Energy Management!\n\nChoose your license mode:\n• **FREE** — All sensors, G13 tariff, RCE prices (basic monitoring)\n• **PRO** — Full HEMS engine, AI Advisor, all blueprints & dashboards\n\nPurchase PRO at {website}",
+        "description": "Welcome to Smarting HOME Energy Management!\n\nChoose your license mode:\n• **FREE** — All sensors, autopilot with the Max Zysk arbitrage planner, schedules, voltage guard, basic alerts\n• **PRO** — AI (advisor, reports, AI autonomy), weather strategy, calibrated PV forecast, SMS/e-mail alerts, complaint & invoice reports, automatic updates\n\nPurchase PRO at {website}",
         "data": {
           "license_mode": "License Mode"
         }

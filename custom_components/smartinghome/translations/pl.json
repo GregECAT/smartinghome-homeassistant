@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Smarting HOME — Wybierz licencję",
-        "description": "Witaj w Smarting HOME Energy Management!\n\nWybierz tryb licencji:\n• **FREE** — Wszystkie sensory, taryfa G13, ceny RCE (podstawowy monitoring)\n• **PRO** — Pełny silnik HEMS, Doradca AI, wszystkie blueprinty i dashboardy\n\nKup PRO na {website}",
+        "description": "Witaj w Smarting HOME Energy Management!\n\nWybierz tryb licencji:\n• **FREE** — Wszystkie sensory, Autopilot z planerem arbitrażu Max Zysk, harmonogram, strażnik napięcia, podstawowe alerty\n• **PRO** — AI (doradca, raporty, autonomia AI), strategia pogodowa, kalibrowana prognoza PV, alerty SMS/e-mail, raporty do reklamacji i faktury, automatyczne aktualizacje\n\nKup PRO na {website}",
         "data": {
           "license_mode": "Tryb licencji"
         }

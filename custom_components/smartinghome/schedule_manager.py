@@ -376,6 +376,9 @@ class ScheduleManager:
                     "Unknown strategy '%s' in schedule, defaulting to max_self_consumption",
                     strategy_str,
                 )
+            # A PRO-only strategy in the schedule runs as the FREE fallback
+            # (compared after mapping, so it is not re-activated every tick)
+            strategy = self._sc.permitted_strategy(strategy)
 
             self._current_mode_type = "autopilot"
             self._current_manual_mode = None

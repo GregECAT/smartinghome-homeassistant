@@ -16,7 +16,12 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
 from .ai_providers import AI_TASKS, PROVIDERS
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    FEATURE_INVOICE_COMPARE,
+    FEATURE_VOLTAGE_REPORT_EXPORT,
+)
+from .license import any_entry_has_feature
 
 
 @callback
@@ -40,6 +45,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_wind_calendar)
     websocket_api.async_register_command(hass, ws_deposit_status)
     websocket_api.async_register_command(hass, ws_voltage_report)
+    websocket_api.async_register_command(hass, ws_voltage_export)
     websocket_api.async_register_command(hass, ws_ledger_rebuild)
     websocket_api.async_register_command(hass, ws_battery_full_log)
     websocket_api.async_register_command(hass, ws_auto_update_status)
@@ -55,6 +61,12 @@ def _advisor(hass: HomeAssistant):
 
 def _not_ready(connection, msg) -> None:
     connection.send_error(msg["id"], "not_ready", "Smarting HOME AI nie jest jeszcze gotowe")
+
+
+def _pro_required(connection, msg, what: str) -> None:
+    connection.send_error(
+        msg["id"], "pro_required", f"{what} — funkcja PRO (smartinghome.pl/buy)",
+    )
 
 
 @websocket_api.websocket_command({vol.Required("type"): "smartinghome/ai/config"})
@@ -317,9 +329,14 @@ async def ws_deposit_status(hass: HomeAssistant, connection, msg: dict[str, Any]
     from .deposit_service import get_tracker
 
     try:
-        connection.send_result(msg["id"], await get_tracker(hass).async_status(force=msg["force"]))
+        status = await get_tracker(hass).async_status(force=msg["force"])
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "deposit_failed", f"{type(err).__name__}: {err}")
+        return
+    if isinstance(status, dict) and not any_entry_has_feature(hass, FEATURE_INVOICE_COMPARE):
+        # "Faktura vs Home Assistant" is PRO — the deposit itself stays FREE
+        status = {**status, "bills": [], "bills_locked": True}
+    connection.send_result(msg["id"], status)
 
 
 @websocket_api.websocket_command({
@@ -329,6 +346,40 @@ async def ws_deposit_status(hass: HomeAssistant, connection, msg: dict[str, Any]
 @websocket_api.async_response
 async def ws_voltage_report(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
     """Grid voltage report (recorder statistics) + the guard's state and exceedance log."""
+    from .voltage_report import basic_view
+
+    report = await _async_voltage_report(hass, msg["days"])
+    allowed = any_entry_has_feature(hass, FEATURE_VOLTAGE_REPORT_EXPORT)
+    if not allowed:
+        report = basic_view(report)  # basic statistics stay FREE
+    connection.send_result(msg["id"], {**report, "export_allowed": allowed})
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smartinghome/voltage/export",
+    vol.Optional("days", default=30): vol.All(int, vol.Range(min=1, max=400)),
+})
+@websocket_api.async_response
+async def ws_voltage_export(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """PRO: CSV of the measurements + EN 50160 complaint text for the grid operator."""
+    from homeassistant.util import dt as dt_util
+
+    from .voltage_report import complaint_text, export_csv
+
+    if not any_entry_has_feature(hass, FEATURE_VOLTAGE_REPORT_EXPORT):
+        _pro_required(connection, msg, "Eksport raportu napięcia i treść reklamacji")
+        return
+    report = await _async_voltage_report(hass, msg["days"])
+    today = dt_util.now().date().isoformat()
+    connection.send_result(msg["id"], {
+        "csv": export_csv(report),
+        "complaint": complaint_text(report, today),
+        "filename": f"napiecie_sieci_{today}.csv",
+    })
+
+
+async def _async_voltage_report(hass: HomeAssistant, days: int) -> dict[str, Any]:
+    """Full voltage report incl. the detail lists the complaint export uses."""
     from datetime import timedelta as _td
 
     from homeassistant.components.recorder import get_instance
@@ -342,7 +393,7 @@ async def ws_voltage_report(hass: HomeAssistant, connection, msg: dict[str, Any]
 
     phases = {"L1": SENSOR_GRID_VOLTAGE_L1, "L2": SENSOR_GRID_VOLTAGE_L2, "L3": SENSOR_GRID_VOLTAGE_L3}
     now = dt_util.now()
-    start = window_start(now, msg["days"])
+    start = window_start(now, days)
     inst = get_instance(hass)
 
     def local(ts):
@@ -398,13 +449,13 @@ async def ws_voltage_report(hass: HomeAssistant, connection, msg: dict[str, Any]
     if ctrl is not None:
         cutoff = start.timestamp()
         events = [e for e in await ctrl._voltage_events() if e.get("start", 0) >= cutoff]
-    connection.send_result(msg["id"], {
+    return {
         **report,
-        "days_requested": msg["days"],
+        "days_requested": days,
         "guard": guard.status() if guard else None,
         "events": events[-200:],
         "generated": now.isoformat(timespec="minutes"),
-    })
+    }
 
 
 @websocket_api.websocket_command({

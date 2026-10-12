@@ -575,6 +575,13 @@ class SmartingHomeSensor(
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Structured details (score factors, today's ledger, alert list)."""
+        if self.entity_description.key == "license_tier" and self.coordinator.data is not None:
+            # Gated features of this install — the panel locks the rest (cosmetic;
+            # the backend enforces them)
+            return {
+                "features": self.coordinator.data.get("license_features") or [],
+                "free_legacy": bool(self.coordinator.data.get("license_free_legacy")),
+            }
         source = _DETAIL_ATTRS.get(self.entity_description.key)
         if not source or self.coordinator.data is None:
             return None

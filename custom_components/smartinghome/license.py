@@ -22,6 +22,7 @@ from .api import (
     ConnectionError as APIConnectionError,
 )
 from .const import (
+    DOMAIN,
     LICENSE_CHECK_INTERVAL,
     LICENSE_GRACE_PERIOD,
     LICENSE_MODE_FREE,
@@ -31,6 +32,7 @@ from .const import (
     ATTR_LICENSE_EXPIRES,
     ATTR_LICENSE_LAST_CHECK,
 )
+from .features import features_for
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,11 +45,17 @@ class LicenseManager:
         hass: HomeAssistant,
         api: SmartingHomeAPI,
         license_mode: str = LICENSE_MODE_FREE,
+        free_legacy: bool = False,
     ) -> None:
-        """Initialize the license manager."""
+        """Initialize the license manager.
+
+        free_legacy — the config entry predates the v1.71 FREE/PRO split; FREE and
+        DEMO keep the features such installs had without a license.
+        """
         self.hass = hass
         self._api = api
         self._license_mode = license_mode
+        self._free_legacy = bool(free_legacy)
         self._license_info: LicenseInfo | None = None
         self._last_successful_check: float = 0.0
         self._last_check_attempt: float = 0.0
@@ -103,6 +111,20 @@ class LicenseManager:
         return self.tier in (LicenseTier.PRO, LicenseTier.ENTERPRISE)
 
     @property
+    def free_legacy(self) -> bool:
+        """True for installs set up before v1.71 (grandfathered FREE features)."""
+        return self._free_legacy
+
+    @property
+    def features(self) -> frozenset[str]:
+        """Gated features enabled for the current tier."""
+        return features_for(self.tier.value, self._free_legacy)
+
+    def has_feature(self, feature: str) -> bool:
+        """True when a gated feature (const.FEATURE_*) is available."""
+        return feature in self.features
+
+    @property
     def is_enterprise(self) -> bool:
         """Return True if license is ENTERPRISE."""
         return self.tier == LicenseTier.ENTERPRISE
@@ -146,6 +168,8 @@ class LicenseManager:
             ),
             ATTR_LICENSE_LAST_CHECK: self._last_successful_check,
             "license_mode": self._license_mode,
+            "features": sorted(self.features),
+            "free_legacy": self._free_legacy,
             "grace_period_remaining_hours": round(
                 self.grace_period_remaining / 3600, 1
             ) if not self.is_free_mode else None,
@@ -363,3 +387,15 @@ class LicenseManager:
 
         except Exception as err:
             _LOGGER.debug("Install webhook failed (non-critical): %s", err)
+
+
+def any_entry_has_feature(hass: HomeAssistant, feature: str) -> bool:
+    """True when any loaded Smarting HOME entry's license allows a feature.
+
+    For per-Home-Assistant services (automatic updates, panel WebSocket commands).
+    """
+    for entry_data in (hass.data.get(DOMAIN) or {}).values():
+        mgr = entry_data.get("license_manager") if isinstance(entry_data, dict) else None
+        if mgr is not None and mgr.has_feature(feature):
+            return True
+    return False

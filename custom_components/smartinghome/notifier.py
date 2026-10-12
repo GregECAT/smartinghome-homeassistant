@@ -18,7 +18,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .const import ALERT_WEBHOOK_URL
+from .const import ALERT_WEBHOOK_URL, FREE_MAX_PUSH_TARGETS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,6 +46,7 @@ async def async_deliver(
     message: str,
     source: str = "System",
     email: bool = False,
+    advanced: bool = True,
 ) -> list[str]:
     """Send one message to the configured channels. Returns channels that succeeded.
 
@@ -53,6 +54,9 @@ async def async_deliver(
             (an alert's "resolved" message replaces the alert itself)
     level — critical / warning / info / resolved / report
     email — also send via the email/SMS webhook (reserved for critical + reports)
+    advanced — PRO alert channels (const.FEATURE_ADVANCED_ALERTS): the email/SMS
+            webhook and more than one push device. FREE gets persistent
+            notifications and the first push device only.
     """
     channels = cfg.get("channels") or {}
     icon = LEVEL_ICON.get(level, "ℹ️")
@@ -76,7 +80,10 @@ async def async_deliver(
             },
         }
         ok = False
-        for entity in push_targets(cfg):
+        targets = push_targets(cfg)
+        if not advanced:
+            targets = targets[:FREE_MAX_PUSH_TARGETS]
+        for entity in targets:
             try:
                 await hass.services.async_call("notify", entity.replace("notify.", ""), payload)
                 ok = True
@@ -100,7 +107,7 @@ async def async_deliver(
         except Exception as err:  # noqa: BLE001
             _LOGGER.error("Persistent notification failed: %s", err)
 
-    if email:
+    if email and advanced:
         for channel, field_name in (("email", "email"), ("sms", "phone")):
             target = (cfg.get(field_name) or "").strip()
             if not channels.get(channel) or not target:
