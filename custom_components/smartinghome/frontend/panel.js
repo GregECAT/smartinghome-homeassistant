@@ -678,6 +678,52 @@ class SmartingHomePanel extends HTMLElement {
     return "FREE";
   }
 
+  /* ── License features (v1.71 FREE/PRO split) ──────────────
+     The backend enforces every gate; the panel only mirrors them. The list comes
+     from the license_tier sensor's "features" attribute (gated features this
+     install has — PRO, or grandfathered for installs from before v1.71). */
+  static PRO_FEATURES = ['ai', 'weather_strategy', 'pv_calibration', 'advanced_alerts', 'daily_report',
+    'voltage_report_export', 'invoice_compare', 'auto_update', 'multi_turbine', 'pv_strings_10'];
+  static BUY_URL = 'https://smartinghome.pl/buy';
+
+  _features() {
+    const tier = this._tier();
+    const st = this._lastTierEntity ? this._hass?.states?.[this._lastTierEntity] : null;
+    const list = st?.attributes?.features;
+    if (Array.isArray(list)) return list;
+    // Older backend without the attribute: PRO/ENTERPRISE had everything
+    return (tier === 'PRO' || tier === 'ENTERPRISE') ? SmartingHomePanel.PRO_FEATURES : [];
+  }
+
+  _hasFeature(name) { return this._features().includes(name); }
+
+  _proLock(title) {
+    const t = this._esc(title || 'Funkcja PRO — kup licencję');
+    return `<a href="${SmartingHomePanel.BUY_URL}" target="_blank" rel="noopener" title="${t}" onclick="event.stopPropagation()"
+      style="display:inline-flex; align-items:center; gap:2px; font-size:9px; font-weight:800; padding:1px 6px; border-radius:6px;
+      background:rgba(247,183,49,0.15); border:1px solid rgba(247,183,49,0.45); color:#f7b731; text-decoration:none; white-space:nowrap; vertical-align:middle">🔒 PRO</a>`;
+  }
+
+  /* Static markup: <span data-pro-lock="feature"> gets the badge, elements with
+     data-requires="feature" are disabled while the feature is missing. */
+  _applyFeatureLocks(force) {
+    const root = this.shadowRoot;
+    if (!root) return;
+    const key = this._features().join(',');
+    if (!force && key === this._featureLocksKey) return;
+    this._featureLocksKey = key;
+    root.querySelectorAll('[data-pro-lock]').forEach(el => {
+      el.innerHTML = this._hasFeature(el.dataset.proLock) ? '' : this._proLock(el.dataset.proTitle);
+    });
+    root.querySelectorAll('[data-requires]').forEach(el => {
+      const ok = this._hasFeature(el.dataset.requires);
+      el.disabled = !ok;
+      if (!ok && el.type === 'checkbox') el.checked = false;
+      el.style.opacity = ok ? '' : '0.45';
+      el.style.cursor = ok ? '' : 'not-allowed';
+    });
+  }
+
   /* Settings live in private HA storage (v1.58.0+) — authenticated WebSocket only.
      `keys` limits the response to the listed top-level keys (polling). */
   _getSettings(keys) {
@@ -797,7 +843,8 @@ class SmartingHomePanel extends HTMLElement {
     if (r.error) { el.innerHTML = `<span style="color:#e74c3c">${this._esc(r.error)}</span>`; return; }
     const c = r.config || {}, g = c.groups || {}, L = r.labels || {};
     const admin = this._hass?.user?.is_admin !== false;
-    const dis = admin ? '' : 'disabled';
+    const locked = r.allowed === false;  // PRO (kept by installs from before v1.71)
+    const dis = admin && !locked ? '' : 'disabled';
     const groupRows = Object.keys(L).map(k => `
       <div style="display:flex; align-items:center; gap:8px; padding:4px 0; border-bottom:1px solid #1e293b">
         <label style="flex:1; display:flex; align-items:center; gap:6px; color:#e2e8f0"><input type="checkbox" id="aupd-g-${k}" ${g[k]?.enabled ? 'checked' : ''} ${dis}> ${L[k]}</label>
@@ -808,17 +855,18 @@ class SmartingHomePanel extends HTMLElement {
     const ups = (r.updates || []).map(u => `<tr>
       <td>${this._esc(u.title)}</td><td style="color:#64748b">${L[u.group] || u.group}</td>
       <td>${this._esc(u.installed || '—')} → <b>${this._esc(u.latest || '—')}</b></td>
-      <td style="color:${u.eligible ? '#2ecc71' : '#94a3b8'}">${u.eligible ? '✅ zainstaluje się w nocy' : this._esc(u.reason)}</td></tr>`).join('');
+      <td style="color:${u.eligible && !locked ? '#2ecc71' : '#94a3b8'}">${u.eligible ? (locked ? '— (funkcja PRO)' : '✅ zainstaluje się w nocy') : this._esc(u.reason)}</td></tr>`).join('');
     const hist = (r.history || []).map(h => `<div style="padding:3px 0; border-bottom:1px solid #1e293b">
       <span style="color:#64748b">${this._esc(h.ts)}</span> · <b style="color:#cbd5e1">${this._esc(h.result || '')}</b> —
       ${(h.items || []).map(i => `${i.ok === false ? '❌' : i.ok === null ? '⏳' : '✅'} ${this._esc(i.title)} ${this._esc(i.from || '')}→${this._esc(i.to || '')}`).join(', ')}</div>`).join('');
     el.innerHTML = `
+      ${locked ? `<div style="display:flex; align-items:center; gap:8px; padding:8px 10px; margin-bottom:8px; border-radius:8px; background:rgba(247,183,49,0.08); border:1px solid rgba(247,183,49,0.25); color:#f7b731">🔒 Automatyczne aktualizacje z kopią zapasową to funkcja PRO — poniżej podgląd dostępnych aktualizacji. ${this._proLock()}</div>` : ''}
       <div style="display:flex; flex-wrap:wrap; gap:14px; align-items:center; margin-bottom:8px">
-        <label style="display:flex; align-items:center; gap:6px; color:#e2e8f0; font-weight:700"><input type="checkbox" id="aupd-on" ${c.enabled ? 'checked' : ''} ${dis}> Włączone</label>
+        <label style="display:flex; align-items:center; gap:6px; color:#e2e8f0; font-weight:700"><input type="checkbox" id="aupd-on" ${c.enabled && !locked ? 'checked' : ''} ${dis}> Włączone</label>
         <span>okno: <input type="number" id="aupd-w0" value="${(c.window || [2, 5])[0]}" min="0" max="23" style="width:48px" ${dis}>:00 –
           <input type="number" id="aupd-w1" value="${(c.window || [2, 5])[1]}" min="0" max="24" style="width:48px" ${dis}>:00</span>
         <label style="display:flex; align-items:center; gap:6px"><input type="checkbox" id="aupd-bk" ${c.backup ? 'checked' : ''} ${dis}> kopia zapasowa przed aktualizacją</label>
-        ${admin ? `<button class="test-btn" onclick="this.getRootNode().host._saveAutoUpdate(this)">💾 Zapisz</button>
+        ${admin && !locked ? `<button class="test-btn" onclick="this.getRootNode().host._saveAutoUpdate(this)">💾 Zapisz</button>
         <button class="test-btn" onclick="this.getRootNode().host._runAutoUpdate(this)">⬇️ Aktualizuj teraz</button>` : ''}
       </div>
       ${groupRows}
@@ -914,8 +962,7 @@ class SmartingHomePanel extends HTMLElement {
 
   /* ── PV String Configuration ────────────── */
   _getMaxStrings() {
-    const tier = this._tier();
-    return tier === "PRO" || tier === "ENTERPRISE" ? 10 : 4;
+    return this._hasFeature('pv_strings_10') ? 10 : 4;
   }
 
   _getTotalStringCount() {
@@ -1205,7 +1252,7 @@ class SmartingHomePanel extends HTMLElement {
     if (currentTotal >= maxStrings) {
       // Show limit warning within modal
       const prev = this.shadowRoot.getElementById('sh-config-preview');
-      if (prev) prev.innerHTML = `<div style="color:#e74c3c; font-size:11px; padding:8px; text-align:center">⚠️ Limit stringów (${maxStrings}) osiągnięty. Ulepsz do PRO aby dodać więcej.</div>`;
+      if (prev) prev.innerHTML = `<div style="color:#e74c3c; font-size:11px; padding:8px; text-align:center">⚠️ Limit stringów (${maxStrings}) osiągnięty. Do 10 stringów w wersji PRO ${this._proLock()}</div>`;
       return;
     }
     this._tempStringConfig.substrings.push({ direction: 'S', panel_count: 4, panel_power: 405, tilt: 35 });
@@ -2310,6 +2357,7 @@ class SmartingHomePanel extends HTMLElement {
           <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px">
             <span style="font-size:20px">🧠</span>
             <span style="font-size:12px; font-weight:700; color:#00d4ff">AI Interpreter — Wyjaśnienie wyników ROI</span>
+            ${this._hasFeature('ai') ? '' : this._proLock('Analiza AI — funkcja PRO')}
           </div>
           <div style="font-size:9px; color:#64748b; margin-bottom:10px; line-height:1.5">
             AI przeanalizuje wyniki symulacji i wyjaśni je prostym językiem — co oznaczają te liczby dla Twojego portfela i którą taryfę wybrać.
@@ -3468,7 +3516,7 @@ class SmartingHomePanel extends HTMLElement {
       const v = parseFloat(this.shadowRoot.getElementById(id)?.value);
       t[key] = key === 'price_kwh' ? (v > 0 ? v : 0) : (v > 0 ? v : d[key]);
     });
-    t.count = Math.max(1, Math.min(20, Math.round(t.count)));
+    t.count = Math.max(1, Math.min(this._hasFeature('multi_turbine') ? 20 : 1, Math.round(t.count)));  // FREE: 1 turbine
     t.rated_speed = Math.max(t.rated_speed, t.cut_in + 0.5);
     t.cut_out = 25;
     return t;
@@ -4480,8 +4528,9 @@ class SmartingHomePanel extends HTMLElement {
     el.innerHTML = `
       <div style="display:flex; gap:6px; margin-bottom:10px; flex-wrap:wrap">${[7, 30, 90, 365].map(btn).join('')}
         <span style="flex:1"></span>
+        ${r.export_allowed === false ? `<span style="display:inline-flex; align-items:center; gap:6px; font-size:11px; color:#94a3b8">⬇️ CSV · 📄 Treść reklamacji ${this._proLock('Eksport do reklamacji — funkcja PRO')}</span>` : `
         <button onclick="this.getRootNode().host._voltageCsv()" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px">⬇️ CSV</button>
-        <button onclick="this.getRootNode().host._voltageComplaint()" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px">📄 Treść reklamacji</button>
+        <button onclick="this.getRootNode().host._voltageComplaint()" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px">📄 Treść reklamacji</button>`}
       </div>
       <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:8px; margin-bottom:10px">
         ${tile('Maks. napięcie', s.max_v != null ? `${s.max_v.toFixed(1)} V` : '—', `od ${s.first_day || '—'}`, s.max_v > lim ? '#e74c3c' : null)}
@@ -4530,69 +4579,35 @@ class SmartingHomePanel extends HTMLElement {
         Asymetria liczona z wartości napięć (bez kątów fazowych) — przybliżenie współczynnika z PN-EN 50160.</div>`;
   }
 
-  _voltageCsv() {
-    const r = this._vrep || {};
-    const lines = ['dzien;max_V;max_srednia_godz_V;godziny_powyzej;srednie_10min_powyzej;wysokie_bez_eksportu'];
-    for (const d of r.days || []) lines.push([d.date, d.max_v, d.max_hour_mean, d.hours_max_over, d.ten_min_over ?? '', d.hours_high_no_export].join(';'));
-    lines.push('', 'poczatek_10min;faza;srednia_V;moc_sieci_W');
-    for (const w of r.worst_10min || []) lines.push([w.start, w.phase, w.mean_v, w.grid_w].join(';'));
-    lines.push('', 'godzina;faza;srednia_V;moc_sieci_W (bez eksportu)');
-    for (const h of r.high_without_export || []) lines.push([h.hour, h.phase, h.mean_v, h.grid_w].join(';'));
-    const pb = r.phases || {};
-    lines.push('', 'dzien;srednia_roznica_faz_V;maks_roznica_V;godziny_roznicy_ponad_5V;maks_asymetria_pct;najwyzsza_faza');
-    for (const d of pb.days || []) lines.push([d.date, d.avg_spread, d.max_spread, d.hours_spread_over, d.max_unbalance_pct, d.mostly_high].join(';'));
-    lines.push('', 'godzina;roznica_V;L1_V;L2_V;L3_V;najwyzsza;najnizsza;moc_sieci_W');
-    for (const h of pb.top_hours || []) lines.push([h.hour, h.spread_v, h.L1, h.L2, h.L3, h.high, h.low, h.grid_w ?? ''].join(';'));
-    const blob = new Blob(['﻿' + lines.join('\n').replace(/\./g, ',')], { type: 'text/csv;charset=utf-8' });
+  /* CSV + complaint text are built by the backend (PRO: smartinghome/voltage/export) */
+  async _voltageExport() {
+    try {
+      return await this._hass.connection.sendMessagePromise({ type: 'smartinghome/voltage/export', days: this._vrepDays || 30 });
+    } catch (e) {
+      const pro = e && e.code === 'pro_required';
+      this._showModal(`<div style="font-size:13px; font-weight:700; margin-bottom:8px">${pro ? '🔒 Funkcja PRO' : '❌ Błąd'}</div>
+        <div style="font-size:12px; color:#cbd5e1">${this._esc(e.message || e.code || e)} ${pro ? this._proLock() : ''}</div>
+        <div style="display:flex; justify-content:flex-end; margin-top:10px"><button onclick="this.getRootNode().host._closeModal()" style="background:#1e293b;color:#cbd5e1;border:none;border-radius:6px;padding:6px 14px;cursor:pointer">Zamknij</button></div>`);
+      return null;
+    }
+  }
+
+  async _voltageCsv() {
+    const x = await this._voltageExport();
+    if (!x) return;
+    const blob = new Blob(['\ufeff' + x.csv], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `napiecie_sieci_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = x.filename || `napiecie_sieci_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
-  _voltageComplaint() {
-    const r = this._vrep || {}, s = r.summary || {}, lim = r.limit_v || 253;
-    const worst = (r.days || []).filter(d => d.hours_max_over || d.ten_min_over).sort((a, b) => b.max_v - a.max_v).slice(0, 10);
-    const ps = (r.phases || {}).summary || {};
-    const fmt = (x, d = 1) => x == null ? '—' : Number(x).toFixed(d).replace('.', ',');
-    const share = Object.entries(ps.highest_share || {}).sort((a, b) => b[1] - a[1]);
-    const badWeeks = ((r.phases || {}).weeks || []).filter(w => !w.ok);
-    const phaseText = ps.hours ? `
-Asymetria napięć między fazami (${ps.hours} godzin pomiarów):
-- średnia różnica między najwyższą a najniższą fazą: ${fmt(ps.avg_spread)} V (maksymalnie ${fmt(ps.max_spread)} V),
-- gdy instalacja nie oddaje energii do sieci: ${fmt(ps.avg_spread_no_export)} V, przy oddawaniu: ${fmt(ps.avg_spread_export)} V,
-- najwyższe napięcie najczęściej na fazie ${share[0] ? share[0][0] : '—'} (${share[0] ? fmt(share[0][1]) : '—'}% godzin),
-- godzin z różnicą faz co najmniej ${fmt(ps.spread_limit_v, 0)} V: ${ps.hours_spread_over ?? 0},
-- największa asymetria napięć: ${fmt(ps.max_unbalance_pct, 2)}% (dopuszczalne wg PN-EN 50160: 2%)${badWeeks.length ? `; tygodnie poza normą: ${badWeeks.map(w => w.week).join(', ')}` : ''}.
-Falownik oddaje moc symetrycznie na trzy fazy, więc trwała różnica napięć — także bez oddawania energii — wskazuje na nierównomierne obciążenie sieci lub stan przewodu neutralnego.
-` : '';
-    const text = `Reklamacja parametrów jakościowych energii elektrycznej — za wysokie napięcie w sieci
-
-Zgłaszam, że w moim punkcie poboru napięcie w sieci przekracza wartość dopuszczalną 230 V + 10% (${lim} V).
-Pomiary pochodzą z falownika instalacji fotowoltaicznej (pomiar ciągły, wszystkie trzy fazy).
-
-Okres: ${s.first_day || '—'} – ${new Date().toISOString().slice(0, 10)}
-- najwyższe zmierzone napięcie: ${s.max_v != null ? s.max_v.toFixed(1) : '—'} V,
-- dni z napięciem powyżej ${lim} V: ${s.days_over ?? 0},
-- godziny z napięciem powyżej ${lim} V: ${s.hours_max_over ?? 0} (w tym ze średnią godzinową powyżej ${lim} V: ${s.hours_mean_over ?? 0}),
-- średnie 10-minutowe powyżej ${lim} V w ostatnich 10 dniach: ${s.ten_min_over ?? 0},
-- godziny z napięciem co najmniej ${lim - 3} V, gdy instalacja nie oddawała energii do sieci: ${s.hours_high_no_export ?? 0}.
-
-Dni z najwyższym napięciem:
-${worst.map(d => `- ${d.date}: maks. ${d.max_v.toFixed(1)} V, godzin powyżej ${lim} V: ${d.hours_max_over}`).join('\n') || '- brak'}
-${phaseText}
-Przy średniej 10-minutowej powyżej ${lim} V falownik zgodnie z normą PN-EN 50549-1 odłącza się od sieci, przez co tracę produkcję energii.
-Napięcie jest wysokie również w godzinach, w których instalacja nie oddaje energii, co wskazuje na ustawienia sieci (np. zaczepy transformatora SN/nN).
-
-Proszę o:
-1. wykonanie pomiarów jakości napięcia w moim punkcie poboru zgodnie z PN-EN 50160,
-2. doprowadzenie napięcia do wartości dopuszczalnych${ps.hours ? ', sprawdzenie rozkładu obciążenia na fazy i ciągłości przewodu neutralnego' : ''},
-3. udzielenie bonifikaty za niedotrzymanie parametrów jakościowych energii, jeśli przysługuje.
-
-W załączniku: zestawienie pomiarów (CSV).`;
+  async _voltageComplaint() {
+    const x = await this._voltageExport();
+    if (!x) return;
     this._showModal(`<div style="font-size:13px; font-weight:700; margin-bottom:8px">📄 Treść reklamacji do operatora sieci</div>
-      <textarea id="vrep-text" style="width:100%; height:360px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:8px; padding:8px; font-size:12px" readonly>${this._esc(text)}</textarea>
+      <textarea id="vrep-text" style="width:100%; height:360px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:8px; padding:8px; font-size:12px" readonly>${this._esc(x.complaint)}</textarea>
       <div style="font-size:11px; color:#64748b; margin-top:6px">Uzupełnij dane klienta i numer PPE. Wyślij do Tauron Dystrybucja (formularz reklamacji na tauron-dystrybucja.pl) z plikiem CSV w załączniku.</div>
       <div style="display:flex; gap:8px; margin-top:10px; justify-content:flex-end">
         <button onclick="navigator.clipboard.writeText(this.getRootNode().getElementById('vrep-text').value); this.textContent='✓ Skopiowano'" style="background:#00d4ff;color:#0f172a;border:none;border-radius:6px;padding:6px 14px;font-weight:700;cursor:pointer">Kopiuj</button>
@@ -4652,6 +4667,10 @@ W załączniku: zestawienie pomiarów (CSV).`;
     const el = this.shadowRoot.getElementById('invoice-content');
     if (!el) return;
     const d = this._deposit || {};
+    if (d.bills_locked) {
+      el.innerHTML = `<div style="display:flex; align-items:center; gap:8px; color:#94a3b8">🔒 Porównanie faktury z danymi Home Assistant (miesiąc po miesiącu, z różnicami) to funkcja PRO. ${this._proLock()}</div>`;
+      return;
+    }
     const bills = (d.bills || []).slice().reverse();
     if (!bills.length) { el.innerHTML = `<div style="color:#64748b">${d.error ? 'Brak danych z licznika.' : 'Ładowanie…'}</div>`; return; }
     const F = SmartingHomePanel.INVOICE_FIELDS;
@@ -4801,7 +4820,8 @@ W załączniku: zestawienie pomiarów (CSV).`;
             const u = used[today];
             const sky = { sunny: 'słonecznie', mixed: 'zmiennie', cloudy: 'pochmurno' }[u.sky];
             const cal = plan.pv_calibration || {};
-            const src = sky ? `${sky}, z historii ${cal.samples || 0} dni` : 'ustawiona — za mało historii (min. 7 dni)';
+            const src = !this._hasFeature('pv_calibration') ? `ustawiona — kalibracja na historii instalacji w wersji PRO ${this._proLock()}`
+              : sky ? `${sky}, z historii ${cal.samples || 0} dni` : 'ustawiona — za mało historii (min. 7 dni)';
             return `<div style="color:#94a3b8">Pewność prognozy PV dziś: ${Math.round(u.confidence * 100)}% (${src})</div>`;
           })()}
           <div style="color:#94a3b8">🌦️ Stacja Ecowitt: ${stn.radiation != null ? `${n(stn.radiation, 0)} W/m², ${n(stn.temp, 1)} °C` : 'brak danych'}${stn.nowcast != null
@@ -6772,9 +6792,8 @@ W załączniku: zestawienie pomiarów (CSV).`;
 
   _updateAlertsTab() {
     if (!this._hass) return;
-    // Tier gate — alerts only for PRO/ENTERPRISE
-    const tier = this._tier();
-    if (tier !== 'PRO' && tier !== 'ENTERPRISE') return;
+    // Awarie is FREE (incidents + resolved via persistent / one push device);
+    // SMS / e-mail, more devices and the daily report are PRO (locked in the form)
     if (!this._alertState) this._alertState = { alerts: [], history: [], sent: [] };
 
     // Alerts come from the backend engine (alert_engine.py) — the same list that
@@ -7164,8 +7183,8 @@ W załączniku: zestawienie pomiarów (CSV).`;
     const container = this.shadowRoot.getElementById('notif-push-devices-list');
     if (!container) return;
     const currentCount = container.querySelectorAll('.push-device-row').length;
-    if (currentCount >= 5) {
-      // Max 5 devices
+    if (currentCount >= (this._hasFeature('advanced_alerts') ? 5 : 1)) {
+      // Max 5 devices (FREE: 1 — the backend notifies only the first one)
       return;
     }
     this._renderPushDeviceRow(container, '', currentCount);
@@ -7271,6 +7290,9 @@ W załączniku: zestawienie pomiarów (CSV).`;
     if (el('notif-daily-report')) el('notif-daily-report').checked = cfg.daily_report !== false;
     if (el('notif-quiet-start')) el('notif-quiet-start').value = cfg.quiet_start || '22:00';
     if (el('notif-quiet-end')) el('notif-quiet-end').value = cfg.quiet_end || '07:00';
+
+    // PRO channels (SMS / e-mail, more devices, daily report) locked on FREE
+    this._applyFeatureLocks(true);
 
     // Trigger visibility update
     this._onNotifToggle();
@@ -7740,7 +7762,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateAlertsVisibility(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); this._updateAlertsTab(); this._updateSystemHealth(); this._renderConfigGuide(); this._updateForecastCharts().catch(e => console.error('[SH] charts err:', e)); this._refreshAutopilotLive(); this._loadTariffs(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateAlertsVisibility(); this._applyFeatureLocks(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); this._updateAlertsTab(); this._updateSystemHealth(); this._renderConfigGuide(); this._updateForecastCharts().catch(e => console.error('[SH] charts err:', e)); this._refreshAutopilotLive(); this._loadTariffs(); }
 
 
   /* ── Overview Autopilot banner (runs every 5s via _updateAll) ── */
@@ -8551,6 +8573,11 @@ W załączniku: zestawienie pomiarów (CSV).`;
     const isPro = (tier === "PRO" || tier === "ENTERPRISE");
     if (upgradeBox) upgradeBox.style.display = isPro ? "none" : "block";
     if (proBox) proBox.style.display = isPro ? "block" : "none";
+    const legacyNote = this.shadowRoot.getElementById("settings-legacy-note");
+    if (legacyNote) {
+      const st = this._lastTierEntity ? this._hass?.states?.[this._lastTierEntity] : null;
+      legacyNote.style.display = st?.attributes?.free_legacy ? "block" : "none";
+    }
     // Settings: update PRO tier label
     const tierLabel = this.shadowRoot.getElementById("settings-license-tier");
     if (tierLabel) tierLabel.textContent = tier;
@@ -9035,15 +9062,13 @@ W załączniku: zestawienie pomiarów (CSV).`;
       }
     }
 
-    // ── Premium/Free tier detection for arbitrage ──
-    const arbCta = this.shadowRoot.getElementById("arb-premium-cta");
+    // ── Arbitrage status — FREE and PRO alike since v1.71 (Max Zysk is FREE) ──
     const arbActive = this.shadowRoot.getElementById("arb-premium-active");
-    if (arbCta && arbActive) {
-      if (tier === "PRO" || tier === "ENTERPRISE") {
-        arbCta.style.display = "none";
+    if (arbActive) {
+      {
         arbActive.style.display = "block";
 
-        // ── Populate PRO section with real data ──
+        // ── Populate the status with real data ──
         // Auto-status
         const arbAutoStatus = this.shadowRoot.getElementById("v-arb-auto-status");
         if (arbAutoStatus) {
@@ -9075,9 +9100,6 @@ W załączniku: zestawienie pomiarów (CSV).`;
           arbProfitEl.textContent = `${arbProfitToday.toFixed(2)} zł`;
           arbProfitEl.style.color = arbProfitToday > 0 ? "#2ecc71" : "#94a3b8";
         }
-      } else {
-        arbCta.style.display = "block";
-        arbActive.style.display = "none";
       }
     }
 
@@ -11995,7 +12017,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
           </div>
 
           <div class="card" style="margin-bottom:14px">
-            <div class="card-title">🧾 Faktura vs Home Assistant</div>
+            <div class="card-title">🧾 Faktura vs Home Assistant <span data-pro-lock="invoice_compare"></span></div>
             <div id="invoice-content" style="font-size:12px; color:#cbd5e1">Ładowanie…</div>
           </div>
 
@@ -12324,27 +12346,20 @@ W załączniku: zestawienie pomiarów (CSV).`;
               </div>
             </div>
 
-            <!-- Automatyczny arbitraż — Premium feature -->
+            <!-- Automatyczny arbitraż — FREE (Max Zysk) since v1.71 -->
             <div style="background:linear-gradient(135deg, rgba(247,183,49,0.08), rgba(231,76,60,0.05)); border:1px solid rgba(247,183,49,0.2); border-radius:12px; padding:16px" id="arb-premium-box">
               <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px">
                 <div style="font-size:18px">🚀</div>
-                <div style="font-size:13px; font-weight:800; color:#f7b731">Automatyczny Arbitraż AI</div>
-                <div style="font-size:9px; background:#f7b731; color:#000; padding:2px 6px; border-radius:4px; font-weight:700; margin-left:auto" id="arb-premium-badge">PREMIUM</div>
+                <div style="font-size:13px; font-weight:800; color:#f7b731">Automatyczny arbitraż</div>
+                <div style="font-size:9px; background:#2ecc71; color:#000; padding:2px 6px; border-radius:4px; font-weight:700; margin-left:auto" id="arb-premium-badge">W CENIE</div>
               </div>
               <div style="font-size:11px; color:#cbd5e1; line-height:1.7; margin-bottom:10px" id="arb-premium-desc">
-                <div style="margin-bottom:6px">Automatyczny system arbitrażu oparty na AI analizuje:</div>
-                <div>✅ Prognozę cen RCE na 24h do przodu</div>
-                <div>✅ Prognozę produkcji PV (Forecast.Solar)</div>
-                <div>✅ Wzorce zużycia domu (ML)</div>
-                <div>✅ Optymalizację cykli DOD dla żywotności baterii</div>
-                <div>✅ Automatyczne przełączanie trybów falownika</div>
-                <div>✅ Raport oszczędności i rekomendacje</div>
-              </div>
-              <div id="arb-premium-cta" style="display:none; text-align:center; margin-top:8px">
-                <button style="background:linear-gradient(135deg,#f7b731,#e74c3c); color:#fff; border:none; border-radius:8px; padding:10px 24px; font-size:12px; font-weight:700; cursor:pointer; letter-spacing:0.5px">
-                  ⭐ Przejdź na PREMIUM — odblokuj pełny arbitraż
-                </button>
-                <div style="font-size:9px; color:#64748b; margin-top:4px">Aktywacja przez klucz licencyjny w Ustawieniach</div>
+                <div style="margin-bottom:6px">Strategia 💰 Max Zysk w Autopilocie planuje ładowanie i sprzedaż na podstawie:</div>
+                <div>✅ Cen RCE na dziś i jutro</div>
+                <div>✅ Prognozy produkcji PV dla każdej połaci</div>
+                <div>✅ Prognozy zużycia domu z historii</div>
+                <div>✅ Ochrony baterii (minimalny SOC, cykle)</div>
+                <div>✅ Automatycznego przełączania trybów falownika</div>
               </div>
               <div id="arb-premium-active" style="display:none">
                 <div class="dr"><span class="lb">Status automatyzacji</span><span class="vl" style="color:#2ecc71" id="v-arb-auto-status">Aktywny ✅</span></div>
@@ -13335,8 +13350,8 @@ W załączniku: zestawienie pomiarów (CSV).`;
                   onchange="this.getRootNode().host._onWindFieldManualChange()" />
               </div>
               <div class="settings-field">
-                <label style="font-size:10px; color:#64748b; text-transform:uppercase">Liczba turbin (koszt = cena × liczba)</label>
-                <input type="number" id="wind-turbine-count" step="1" min="1" max="20" placeholder="1"
+                <label style="font-size:10px; color:#64748b; text-transform:uppercase">Liczba turbin (koszt = cena × liczba) <span data-pro-lock="multi_turbine" data-pro-title="Kilka turbin — funkcja PRO"></span></label>
+                <input type="number" id="wind-turbine-count" step="1" min="1" max="20" placeholder="1" data-requires="multi_turbine"
                   style="width:100%; padding:8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px"
                   onchange="this.getRootNode().host._onWindFieldManualChange()" />
               </div>
@@ -13824,7 +13839,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
                 </select>
               </div>
               <button class="action-btn" onclick="this.getRootNode().host._runAutopilotEstimation()" style="padding:8px 18px; font-size:12px; height:38px; background:linear-gradient(135deg, #7c3aed, #00d4ff); border:none; font-weight:700">
-                🚀 Uruchom estymację
+                🚀 Uruchom estymację <span data-pro-lock="ai" data-pro-title="Szacowanie AI — funkcja PRO"></span>
               </button>
             </div>
           </div>
@@ -14318,8 +14333,8 @@ W załączniku: zestawienie pomiarów (CSV).`;
                 </div>
                 <div id="notif-push-entity-wrap" style="display:none">
                   <div id="notif-push-devices-list"></div>
-                  <button onclick="this.getRootNode().host._addPushDevice()" style="width:100%; padding:6px 10px; background:rgba(0,212,255,0.08); border:1px dashed rgba(0,212,255,0.3); border-radius:6px; color:#00d4ff; font-size:11px; cursor:pointer; margin-top:6px; transition:background 0.2s" onmouseover="this.style.background='rgba(0,212,255,0.15)'" onmouseout="this.style.background='rgba(0,212,255,0.08)'">+ Dodaj urządzenie</button>
-                  <div style="font-size:9px; color:#64748b; margin-top:3px">Wybierz urządzenia z aplikacji HA Companion</div>
+                  <button data-requires="advanced_alerts" onclick="this.getRootNode().host._addPushDevice()" style="width:100%; padding:6px 10px; background:rgba(0,212,255,0.08); border:1px dashed rgba(0,212,255,0.3); border-radius:6px; color:#00d4ff; font-size:11px; cursor:pointer; margin-top:6px; transition:background 0.2s" onmouseover="this.style.background='rgba(0,212,255,0.15)'" onmouseout="this.style.background='rgba(0,212,255,0.08)'">+ Dodaj urządzenie</button>
+                  <div style="font-size:9px; color:#64748b; margin-top:3px">Wybierz urządzenia z aplikacji HA Companion <span data-pro-lock="advanced_alerts" data-pro-title="Więcej niż jeden telefon — funkcja PRO"></span></div>
                 </div>
               </div>
 
@@ -14335,8 +14350,8 @@ W załączniku: zestawienie pomiarów (CSV).`;
               <!-- SMS -->
               <div style="padding:10px 14px; background:rgba(255,255,255,0.02); border-radius:8px; margin-bottom:8px; border-left:3px solid #f59e0b">
                 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px">
-                  <div style="font-size:12px; font-weight:600; color:#e2e8f0">📱 SMS</div>
-                  <label class="toggle-switch sm"><input type="checkbox" id="notif-ch-sms" onchange="this.getRootNode().host._onNotifToggle()"><span class="toggle-slider"></span></label>
+                  <div style="font-size:12px; font-weight:600; color:#e2e8f0">📱 SMS <span data-pro-lock="advanced_alerts" data-pro-title="Alerty SMS — funkcja PRO"></span></div>
+                  <label class="toggle-switch sm"><input type="checkbox" id="notif-ch-sms" data-requires="advanced_alerts" onchange="this.getRootNode().host._onNotifToggle()"><span class="toggle-slider"></span></label>
                 </div>
                 <div id="notif-sms-wrap" style="display:none">
                   <input type="tel" id="notif-phone" placeholder="+48 600 123 456" style="width:100%; padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#e2e8f0; font-size:11px; outline:none">
@@ -14347,8 +14362,8 @@ W załączniku: zestawienie pomiarów (CSV).`;
               <!-- Email -->
               <div style="padding:10px 14px; background:rgba(255,255,255,0.02); border-radius:8px; margin-bottom:8px; border-left:3px solid #a855f7">
                 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px">
-                  <div style="font-size:12px; font-weight:600; color:#e2e8f0">📧 Email</div>
-                  <label class="toggle-switch sm"><input type="checkbox" id="notif-ch-email" onchange="this.getRootNode().host._onNotifToggle()"><span class="toggle-slider"></span></label>
+                  <div style="font-size:12px; font-weight:600; color:#e2e8f0">📧 Email <span data-pro-lock="advanced_alerts" data-pro-title="Alerty e-mail — funkcja PRO"></span></div>
+                  <label class="toggle-switch sm"><input type="checkbox" id="notif-ch-email" data-requires="advanced_alerts" onchange="this.getRootNode().host._onNotifToggle()"><span class="toggle-slider"></span></label>
                 </div>
                 <div id="notif-email-wrap" style="display:none">
                   <input type="email" id="notif-email" placeholder="user@example.com" style="width:100%; padding:6px 10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#e2e8f0; font-size:11px; outline:none">
@@ -14372,9 +14387,9 @@ W załączniku: zestawienie pomiarów (CSV).`;
 
               <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:14px">
                 <div>
-                  <div style="font-size:9px; color:#64748b; margin-bottom:3px">Raport dnia</div>
+                  <div style="font-size:9px; color:#64748b; margin-bottom:3px">Raport dnia <span data-pro-lock="daily_report" data-pro-title="Raport dnia — funkcja PRO"></span></div>
                   <label style="display:flex; align-items:center; gap:5px; font-size:11px; color:#e2e8f0; cursor:pointer; padding:6px 0">
-                    <input type="checkbox" id="notif-daily-report" checked> 📊 po szczycie
+                    <input type="checkbox" id="notif-daily-report" data-requires="daily_report" checked> 📊 po szczycie
                   </label>
                 </div>
                 <div>
@@ -14437,7 +14452,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
 
             <!-- 🤖 AI Cron Settings -->
             <div class="card" style="grid-column: 1 / -1">
-              <div class="card-title">🤖 AI Cron — Automatyczne porady</div>
+              <div class="card-title">🤖 AI Cron — Automatyczne porady <span data-pro-lock="ai" data-pro-title="AI — funkcja PRO"></span></div>
               <div style="font-size:11px; color:#94a3b8; margin-bottom:12px">Ustaw harmonogram automatycznych analiz AI. Wymagane skonfigurowane klucze API powyżej.</div>
               <div style="display:flex; flex-direction:column; gap:10px">
                 <!-- HEMS Optimization -->
@@ -14652,13 +14667,19 @@ W załączniku: zestawienie pomiarów (CSV).`;
               <!-- FREE: Upgrade Prompt -->
               <div id="settings-upgrade-box">
                 <div class="upgrade-box">
-                  <div style="font-size:15px; font-weight:700; color:#f7b731">⭐ Odblokuj pełną moc Smarting HOME</div>
-                  <div style="font-size:12px; color:#a0aec0; margin-top:6px; line-height:1.5">
-                    Wersja <strong style="color:#00d4ff">PRO</strong> oferuje:<br>
-                    🧠 Pełny silnik HEMS z 3-warstwową optymalizacją<br>
-                    📈 Arbitraż nocny (zysk ~177 PLN/mies.)<br>
-                    🛡️ Kaskada napięciowa i ochrona SOC<br>
-                    📊 7 gotowych blueprintów automatyzacji
+                  <div style="font-size:15px; font-weight:700; color:#f7b731">⭐ Smarting HOME PRO — zarabia więcej, pilnuje i oszczędza czas</div>
+                  <div style="font-size:12px; color:#a0aec0; margin-top:6px; line-height:1.6">
+                    W wersji <strong style="color:#2ecc71">FREE</strong> masz Autopilota ze strategią 💰 Max Zysk (arbitraż), harmonogram, ręczne ładowanie/rozładowanie, podstawowe alerty, strażnika napięcia, depozyt prosumencki i wszystkie sensory.<br>
+                    Wersja <strong style="color:#00d4ff">PRO</strong> dodaje:<br>
+                    🧠 AI: doradca, dzienny raport AI, analiza opłacalności, szacowanie autopilota i strategia „AI Pełna Autonomia”<br>
+                    🌧️ Strategia pogodowa i prognoza PV kalibrowana na historii Twojej instalacji<br>
+                    🔔 Alerty SMS i e-mail, wiele telefonów, raport dnia<br>
+                    📄 Raport napięcia do reklamacji (CSV + treść wg PN-EN 50160) i porównanie „Faktura vs Home Assistant”<br>
+                    🔄 Automatyczne aktualizacje z kopią zapasową<br>
+                    ☀️ Do 10 stringów PV i kilka turbin wiatrowych
+                  </div>
+                  <div id="settings-legacy-note" style="display:none; font-size:11px; color:#2ecc71; margin-top:8px; line-height:1.5">
+                    ✅ Ta instalacja działa od wersji sprzed 1.71 — bez licencji zachowuje alerty SMS/e-mail i wiele telefonów, raport dnia, eksport raportu napięcia, porównanie faktury, automatyczne aktualizacje, kalibrację prognozy PV i kilka turbin.
                   </div>
                   <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px">
                     <a href="https://smartinghome.pl/buy" target="_blank" style="display:inline-block; padding:8px 20px; border-radius:8px; background:linear-gradient(135deg,#f7b731,#e67e22); color:#0a1628; font-weight:700; font-size:12px; text-decoration:none; transition:all 0.2s">🛒 Kup licencję PRO</a>
@@ -14682,7 +14703,7 @@ W załączniku: zestawienie pomiarów (CSV).`;
                   </div>
                   <div style="padding:8px 12px; background:rgba(0,212,255,0.06); border:1px solid rgba(0,212,255,0.15); border-radius:8px">
                     <div style="font-size:9px; color:#64748b; text-transform:uppercase">Funkcje</div>
-                    <div style="font-size:11px; color:#00d4ff; font-weight:600">HEMS + AI + Blueprinty</div>
+                    <div style="font-size:11px; color:#00d4ff; font-weight:600">AI + alerty + raporty + aktualizacje</div>
                   </div>
                 </div>
                 <div style="padding:10px; border-radius:8px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06)">
@@ -14714,14 +14735,14 @@ W załączniku: zestawienie pomiarów (CSV).`;
 
             <!-- 🔄 Auto update -->
             <div class="card" style="grid-column: 1 / -1">
-              <div class="card-title">🔄 Automatyczne aktualizacje</div>
+              <div class="card-title">🔄 Automatyczne aktualizacje <span data-pro-lock="auto_update"></span></div>
               <div id="aupd-content" style="font-size:12px; color:#94a3b8">Ładowanie…</div>
             </div>
 
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.70.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.71.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
@@ -14765,15 +14786,9 @@ W załączniku: zestawienie pomiarów (CSV).`;
      ═══════════════════════════════════════════════════ */
 
   _updateAlertsVisibility() {
+    // Visible on every tier since v1.71 (basic alerts are FREE)
     const btn = this.shadowRoot.getElementById('tab-btn-alerts');
-    if (!btn) return;
-    const tier = this._tier();
-    const show = (tier === 'PRO' || tier === 'ENTERPRISE');
-    btn.style.display = show ? 'inline-block' : 'none';
-    if (show && !this._alertsTabLogged) {
-      console.log('[SH] Alerts tab visible (tier=' + tier + ')');
-      this._alertsTabLogged = true;
-    }
+    if (btn) btn.style.display = 'inline-block';
   }
 
   /* ═══════════════════════════════════════════════════
@@ -14781,15 +14796,12 @@ W załączniku: zestawienie pomiarów (CSV).`;
      ═══════════════════════════════════════════════════ */
 
   _updateAutopilotVisibility() {
+    // Visible on every tier since v1.71 — Max Zysk & co. are FREE, the PRO-only
+    // strategies are locked on their buttons
     const btn = this.shadowRoot.getElementById('tab-btn-autopilot');
     if (!btn) return;
+    btn.style.display = 'inline-block';
     const tier = this._tier();
-    const show = (tier === 'PRO' || tier === 'ENTERPRISE');
-    btn.style.display = show ? 'inline-block' : 'none';
-    if (show && !this._autopilotTabLogged) {
-      console.log('[SH] Autopilot tab visible (tier=' + tier + ')');
-      this._autopilotTabLogged = true;
-    }
     // Update tier badge
     const tierBadge = this.shadowRoot.getElementById('ap-tier-badge');
     if (tierBadge) tierBadge.textContent = tier || 'FREE';
@@ -14892,13 +14904,20 @@ W załączniku: zestawienie pomiarów (CSV).`;
 
     container.innerHTML = strategies.map(s => {
       const isActive = s.id === active;
+      const locked = !this._strategyAllowed(s.id);
       const bg = isActive ? 'rgba(46,204,113,0.15)' : 'rgba(255,255,255,0.04)';
       const border = isActive ? '1px solid rgba(46,204,113,0.4)' : '1px solid rgba(255,255,255,0.08)';
       const badge = isActive ? '<span style="font-size:7px; background:#2ecc71; color:#0a1628; padding:1px 5px; border-radius:8px; font-weight:800; margin-left:4px; animation:pulse 2s infinite">ACTIVE</span>' : '';
-      return `<button style="padding:6px 12px; border-radius:8px; background:${bg}; border:${border}; color:#f8fafc; font-size:11px; font-weight:600; cursor:pointer; transition:all 0.2s; display:flex; align-items:center; gap:4px; white-space:nowrap"
+      return `<button style="padding:6px 12px; border-radius:8px; background:${bg}; border:${border}; color:#f8fafc; font-size:11px; font-weight:600; cursor:pointer; transition:all 0.2s; display:flex; align-items:center; gap:4px; white-space:nowrap${locked ? '; opacity:0.6' : ''}"
         onclick="this.getRootNode().host._switchAutopilotStrategy('${s.id}')"
-        title="${s.name}">${s.icon} ${s.name}${badge}</button>`;
+        title="${locked ? s.name + ' — strategia PRO' : s.name}">${s.icon} ${s.name}${badge}${locked ? ' ' + this._proLock(s.name + ' — strategia PRO') : ''}</button>`;
     }).join('');
+  }
+
+  /* PRO-only strategies (backend: const.STRATEGY_FEATURES) */
+  _strategyAllowed(id) {
+    const need = { weather_adaptive: 'weather_strategy', ai_full_autonomy: 'ai' }[id];
+    return !need || this._hasFeature(need);
   }
 
   /* ── Show strategy help modal ── */
@@ -15223,6 +15242,11 @@ W załączniku: zestawienie pomiarów (CSV).`;
     if (this._autopilotActiveStrategy === strategyId) {
       return this._deactivateAutopilot();
     }
+    if (!this._strategyAllowed(strategyId)) {
+      const timeline = this.shadowRoot.getElementById('ap-timeline');
+      if (timeline) timeline.innerHTML = `<div style="width:100%; display:flex; align-items:center; justify-content:center; gap:6px; color:#f7b731; font-size:11px">🔒 Ta strategia jest dostępna w wersji PRO. W wersji FREE działają: Max Autokonsumpcja, Max Zysk (arbitraż), Ochrona Baterii i Zero Export. ${this._proLock()}</div>`;
+      return;
+    }
     this._autopilotActiveStrategy = strategyId;
     this._lastRenderedActionsKey = null;  // force re-render
     this._renderStrategyPresets();
@@ -15489,6 +15513,11 @@ W załączniku: zestawienie pomiarów (CSV).`;
   }
 
   async _runAutopilotEstimation() {
+    if (!this._hasFeature('ai')) {
+      const timeline = this.shadowRoot.getElementById('ap-timeline');
+      if (timeline) timeline.innerHTML = `<div style="width:100%; display:flex; align-items:center; justify-content:center; gap:6px; color:#f7b731; font-size:11px">🔒 Szacowanie AI to funkcja PRO — strategie działają bez niego. ${this._proLock()}</div>`;
+      return;
+    }
     const strategy = this._autopilotActiveStrategy || 'max_self_consumption';
     // Provider/model come from the "autopilot" AI task (saved on change)
     const provider = 'auto';

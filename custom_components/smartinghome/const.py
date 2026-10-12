@@ -665,6 +665,66 @@ DEMO_MAX_SENSORS: Final = 10
 DEMO_AI_ENABLED: Final = False
 DEMO_BLUEPRINTS_ENABLED: Final = False
 
+# ── FREE / PRO split (v1.71) ────────────────────────────────────────────────
+# FREE earns money (autopilot incl. the Max Zysk arbitrage planner, schedules,
+# basic alerts, voltage guard, deposit, all sensors); PRO earns more, watches over
+# the system and saves time. Only the features below are gated — everything else
+# is available on every tier. The checks live in the backend (LicenseManager.
+# has_feature); the panel only mirrors them (sensor license_tier → "features").
+FEATURE_AI: Final = "ai"  # advisor, AI reports/cron, ROI analysis, estimation, ai_full_autonomy
+FEATURE_WEATHER_STRATEGY: Final = "weather_strategy"  # weather_adaptive strategy
+FEATURE_PV_CALIBRATION: Final = "pv_calibration"  # learned per-installation PV confidence
+FEATURE_ADVANCED_ALERTS: Final = "advanced_alerts"  # SMS / e-mail webhook, several push devices
+FEATURE_DAILY_REPORT: Final = "daily_report"  # evening report notification (alert engine)
+FEATURE_VOLTAGE_REPORT_EXPORT: Final = "voltage_report_export"  # CSV + EN 50160 complaint text
+FEATURE_INVOICE_COMPARE: Final = "invoice_compare"  # "Faktura vs Home Assistant"
+FEATURE_AUTO_UPDATE: Final = "auto_update"  # nightly updates with backup
+FEATURE_MULTI_TURBINE: Final = "multi_turbine"  # wind: more than one turbine
+FEATURE_PV_STRINGS_10: Final = "pv_strings_10"  # up to 10 PV strings (FREE: 4)
+
+PRO_FEATURES: Final = frozenset({
+    FEATURE_AI,
+    FEATURE_WEATHER_STRATEGY,
+    FEATURE_PV_CALIBRATION,
+    FEATURE_ADVANCED_ALERTS,
+    FEATURE_DAILY_REPORT,
+    FEATURE_VOLTAGE_REPORT_EXPORT,
+    FEATURE_INVOICE_COMPARE,
+    FEATURE_AUTO_UPDATE,
+    FEATURE_MULTI_TURBINE,
+    FEATURE_PV_STRINGS_10,
+})
+FREE_FEATURES: Final = frozenset()  # gated features enabled without a license: none
+
+# Tier → gated features. DEMO (expired / unreachable PRO) gets the FREE set.
+TIER_FEATURES: Final = {
+    LicenseTier.FREE.value: FREE_FEATURES,
+    LicenseTier.DEMO.value: FREE_FEATURES,
+    LicenseTier.PRO.value: PRO_FEATURES,
+    LicenseTier.ENTERPRISE.value: PRO_FEATURES,
+}
+
+# Installations set up before v1.71 had these without a license — they keep them
+# (config entry data "free_legacy", set by the entry migration to minor version 2).
+LEGACY_FREE_FEATURES: Final = frozenset({
+    FEATURE_PV_CALIBRATION,
+    FEATURE_ADVANCED_ALERTS,
+    FEATURE_DAILY_REPORT,
+    FEATURE_VOLTAGE_REPORT_EXPORT,
+    FEATURE_INVOICE_COMPARE,
+    FEATURE_AUTO_UPDATE,
+    FEATURE_MULTI_TURBINE,
+})
+CONF_FREE_LEGACY: Final = "free_legacy"
+CONFIG_ENTRY_MINOR_VERSION: Final = 2  # 2 = v1.71 FREE/PRO split (free_legacy)
+
+FREE_MAX_PV_STRINGS: Final = 4
+PRO_MAX_PV_STRINGS: Final = 10
+FREE_MAX_PUSH_TARGETS: Final = 1
+FREE_MAX_TURBINES: Final = 1
+PRO_MAX_TURBINES: Final = 20
+LICENSE_BUY_URL: Final = "https://smartinghome.pl/buy"
+
 # =============================================================================
 # Platforms
 # =============================================================================
@@ -945,6 +1005,14 @@ AUTOPILOT_STRATEGY_DESCRIPTIONS: Final = {
     AutopilotStrategy.WEATHER_ADAPTIVE: "AI analizuje prognozę pogody i dynamicznie zmienia strategię godzina po godzinie.",
     AutopilotStrategy.AI_FULL_AUTONOMY: "AI sam decyduje o strategii na każdą godzinę dnia. Pełna autonomia.",
 }
+
+# Strategies that need a gated feature (all others are FREE). Not grandfathered:
+# they were never selectable in the FREE panel.
+STRATEGY_FEATURES: Final = {
+    AutopilotStrategy.WEATHER_ADAPTIVE.value: FEATURE_WEATHER_STRATEGY,
+    AutopilotStrategy.AI_FULL_AUTONOMY.value: FEATURE_AI,
+}
+STRATEGY_FALLBACK: Final = AutopilotStrategy.MAX_SELF_CONSUMPTION.value
 
 # Autopilot default interval (minutes)
 AUTOPILOT_DEFAULT_INTERVAL: Final = 60

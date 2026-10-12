@@ -17,6 +17,7 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
@@ -46,6 +47,8 @@ from .const import (
     INVERTER_BRAND_GOODWE,
     AUTOPILOT_PLAN_KEY,
     AUTOPILOT_SETTINGS_KEY,
+    FEATURE_ADVANCED_ALERTS,
+    FEATURE_AI,
 )
 from .coordinator import SmartingHomeCoordinator
 from .energy_manager import EnergyManager
@@ -378,7 +381,7 @@ async def async_setup_services(
 
     async def handle_ask_ai(call: ServiceCall) -> None:
         """Handle ask_ai_advisor service."""
-        if not license_mgr.is_pro:
+        if not license_mgr.has_feature(FEATURE_AI):
             _LOGGER.warning("AI advisor requires PRO license")
             return
 
@@ -430,7 +433,7 @@ async def async_setup_services(
 
     async def handle_generate_report(call: ServiceCall) -> None:
         """Handle generate_report service."""
-        if not license_mgr.is_pro:
+        if not license_mgr.has_feature(FEATURE_AI):
             _LOGGER.warning("Report generation requires PRO license")
             return
 
@@ -546,11 +549,12 @@ async def async_setup_services(
 
     async def handle_run_autopilot(call: ServiceCall) -> None:
         """Handle run_autopilot service — AI-powered strategy estimation."""
-        if not license_mgr.is_pro:
-            _LOGGER.warning("Autopilot requires PRO or ENTERPRISE license")
+        if not license_mgr.has_feature(FEATURE_AI):
+            # The strategies themselves run on FREE — only the AI estimation is PRO
+            _LOGGER.warning("Autopilot AI estimation requires PRO or ENTERPRISE license")
             hass.bus.async_fire(
                 f"{DOMAIN}_autopilot_result",
-                {"error": "Autopilot wymaga licencji PRO lub ENTERPRISE."},
+                {"error": "Szacowanie AI autopilota wymaga licencji PRO lub ENTERPRISE."},
             )
             return
 
@@ -743,6 +747,12 @@ async def async_setup_services(
         except ValueError:
             _LOGGER.error("Unknown strategy: %s", strategy_str)
             return
+        if not strategy_controller.is_strategy_allowed(strategy):
+            # Refuse explicitly (the panel shows the error) instead of silently
+            # switching to another strategy than the one the user asked for
+            raise HomeAssistantError(
+                f"Strategia '{strategy.value}' wymaga licencji PRO (smartinghome.pl/buy)."
+            )
 
         await strategy_controller.activate_strategy(strategy)
 
@@ -1002,7 +1012,7 @@ async def async_setup_services(
 
     async def handle_analyze_roi(call: ServiceCall) -> None:
         """Handle analyze_roi — AI explains ROI simulation results in plain language."""
-        if not license_mgr.is_pro:
+        if not license_mgr.has_feature(FEATURE_AI):
             _LOGGER.warning("ROI AI Analysis requires PRO license")
             hass.bus.async_fire(
                 f"{DOMAIN}_roi_analysis",
@@ -1200,6 +1210,7 @@ Długość: 400-600 słów."""
             hass, notif_cfg, key=alert_id, level=level, title=title,
             message=message + (f"\n→ {diag_action}" if diag_action else ""),
             source=source, email=(is_test or level == "critical"),
+            advanced=license_mgr.has_feature(FEATURE_ADVANCED_ALERTS),
         )
 
         if sent_channels:
@@ -1343,6 +1354,7 @@ Długość: 400-600 słów."""
         ai_advisor,
         get_coordinator_data=lambda: coordinator.data or {},
         strategy_controller=strategy_controller,
+        ai_allowed=lambda: license_mgr.has_feature(FEATURE_AI),
     )
     await cron.async_start()
     return cron

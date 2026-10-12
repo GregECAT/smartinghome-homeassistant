@@ -12,7 +12,7 @@
   <a href="https://hacs.xyz"><img src="https://img.shields.io/badge/HACS-Custom-41BDF5?style=for-the-badge&logo=homeassistantcommunitystore&logoColor=white" alt="HACS" /></a>
   <a href="https://www.home-assistant.io"><img src="https://img.shields.io/badge/Home%20Assistant-2025.1+-18BCF2?style=for-the-badge&logo=homeassistant&logoColor=white" alt="Home Assistant" /></a>
   <a href="https://smartinghome.pl"><img src="https://img.shields.io/badge/License-Commercial-E74C3C?style=for-the-badge&logo=keycdn&logoColor=white" alt="License" /></a>
-  <img src="https://img.shields.io/badge/Version-1.70.1-2ECC71?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/Version-1.71.0-2ECC71?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
 </p>
 
@@ -66,7 +66,7 @@
       <ul>
         <li>G13 tariff zones: off-peak <code>0.63</code>, morning <code>0.91</code>, afternoon <code>1.50</code> PLN/kWh</li>
         <li>RCE PSE dynamic sell prices with trend analysis</li>
-        <li>Night arbitrage: charge at 0.63, sell at 1.50 PLN = <strong>~177 PLN/month</strong></li>
+        <li>Battery arbitrage planner (<strong>💰 Max Zysk</strong>, FREE): charges when energy is cheap, covers the house / sells when it is expensive</li>
         <li>G13 vs RCE spread calculation & sell evaluation</li>
       </ul>
     </td>
@@ -146,20 +146,28 @@ The setup wizard guides you through:
 
 ### Step 1 — Choose License Mode 🔑
 
-Choose between **FREE** (no license needed) or **PRO** (license key required):
+Choose between **FREE** (no license needed) or **PRO** (license key required).
+**FREE earns money; PRO earns more, watches over the system and saves you time.**
 
 | Feature | 🆓 FREE | ⭐ PRO | 🏢 ENTERPRISE |
 |---------|---------|--------|---------------|
-| **Sensors** (33) | ✅ All | ✅ All | ✅ All |
-| **G13 Tariff + RCE** | ✅ | ✅ | ✅ |
-| **HEMS Auto Mode** | ✅ | ✅ | ✅ |
-| **Night Arbitrage** | ❌ | ✅ | ✅ |
-| **Voltage/PV Cascades** | ❌ | ✅ | ✅ |
-| **AI Advisor** | ❌ | ✅ | ✅ |
-| **Export Limit Control** | ❌ | ✅ | ✅ |
-| **Blueprints** | 2 basic | 7 full | 7 full |
-| **Dashboards** | 1 basic | 3 full | 3 full |
-| **Multi-site** | ❌ | ❌ | ✅ |
+| **All sensors**, G13 / RCE prices, prosumer deposit, *Energia i koszty*, *Dom / Biuro* | ✅ | ✅ | ✅ |
+| **Autopilot** — Max Autokonsumpcja, **💰 Max Zysk (arbitrage planner)**, Ochrona Baterii, Zero Export | ✅ | ✅ | ✅ |
+| **Schedule manager**, manual force charge / discharge / STOP | ✅ | ✅ | ✅ |
+| **Voltage guard (W4)** and basic voltage statistics | ✅ | ✅ | ✅ |
+| **Alerts** — incident + „resolved” via HA notification and **one** HA Companion phone | ✅ | ✅ | ✅ |
+| **AI** — advisor, daily AI report, ROI analysis, autopilot estimation, *AI Pełna Autonomia* strategy | ❌ | ✅ | ✅ |
+| **🌧️ Weather-adaptive strategy** and PV forecast calibrated on your installation's history | ❌ | ✅ | ✅ |
+| **Alerts PRO** — SMS / e-mail, several phones, daily report | ❌ | ✅ | ✅ |
+| **Paperwork** — voltage report CSV + EN 50160 complaint text for the DSO, *Faktura vs Home Assistant* | ❌ | ✅ | ✅ |
+| **Automatic updates** with a backup first | ❌ | ✅ | ✅ |
+| **PV strings / wind turbines** | 4 / 1 | 10 / 20 | 10 / 20 |
+| **Installations** | 1 | 1 | 5 |
+
+> 🧡 **Installed before v1.71?** Your installation keeps — without a license — everything it already had for free:
+> SMS / e-mail alerts and several phones, the daily report, the voltage report export, *Faktura vs Home Assistant*,
+> automatic updates, the calibrated PV forecast and several wind turbines (config entry migration, `free_legacy`).
+> AI and the weather-adaptive strategy were never part of FREE and stay PRO.
 
 > 💡 **FREE mode works immediately** — no license server, no registration needed.
 
@@ -362,10 +370,11 @@ service: smartinghome.generate_report
 
 ## 🔧 Services
 
-- ⚙️ **`smartinghome.set_mode`**<br/>Zmień tryb HEMS: auto, sell, charge, peak_save, night_arbitrage, emergency, manual *(DEMO+)*
-- 🔋 **`smartinghome.force_charge`**<br/>Force battery charging at max current (18.5A) *(DEMO+)*
-- ⚡ **`smartinghome.force_discharge`**<br/>Force battery discharge (block charging) *(DEMO+)*
-- 🔌 **`smartinghome.set_export_limit`**<br/>Set grid export power limit (0–16000W) *(PRO+)*
+- ⚙️ **`smartinghome.set_mode`**<br/>Zmień tryb HEMS: auto, sell, charge, peak_save, night_arbitrage, emergency, manual *(FREE)*
+- 🔋 **`smartinghome.force_charge`**<br/>Force battery charging at max current (18.5A) *(FREE)*
+- ⚡ **`smartinghome.force_discharge`**<br/>Force battery discharge (block charging) *(FREE)*
+- 🔌 **`smartinghome.set_export_limit`**<br/>Set grid export power limit (0–16000W) *(FREE)*
+- 🧠 **`smartinghome.set_autopilot_strategy`**<br/>Activate an autopilot strategy — `weather_adaptive` and `ai_full_autonomy` need PRO *(FREE / PRO)*
 - 🤖 **`smartinghome.ask_ai_advisor`**<br/>Query AI energy advisor with a question *(PRO+)*
 - 📊 **`smartinghome.generate_report`**<br/>Generate AI-powered daily energy report *(PRO+)*
 
@@ -495,7 +504,7 @@ smartinghome-homeassistant/
 
 This software is proprietary and protected under the **Smarting HOME Commercial License**.
 
-A valid license key is required for PRO and ENTERPRISE features. DEMO mode is available for evaluation with limited functionality.
+FREE needs no license key. A valid license key is required for PRO and ENTERPRISE features; an expired or unverifiable PRO license falls back to DEMO, which has the FREE feature set.
 
 See the full [LICENSE](./LICENSE) file for details.
 

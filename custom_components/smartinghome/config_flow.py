@@ -99,7 +99,8 @@ class SmartingHomeConfigFlow(
     """Handle a config flow for Smarting HOME."""
 
     VERSION = 1
-    MINOR_VERSION = 1
+    # 2 = v1.71 FREE/PRO split: entries from 1.1 get "free_legacy" (async_migrate_entry)
+    MINOR_VERSION = 2
 
     def __init__(self) -> None:
         """Initialize the config flow."""

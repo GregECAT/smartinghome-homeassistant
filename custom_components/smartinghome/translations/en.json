@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Smarting HOME — Wybierz licencję",
-        "description": "Witaj w Smarting HOME Energy Management!\n\nWybierz tryb licencji:\n• **FREE** — Wszystkie sensory, taryfa G13, ceny RCE (podstawowy monitoring)\n• **PRO** — Pełny silnik HEMS, Doradca AI, wszystkie blueprinty i dashboardy\n\nKup PRO na {website}",
+        "description": "Witaj w Smarting HOME Energy Management!\n\nWybierz tryb licencji:\n• **FREE** — All sensors, autopilot with the Max Zysk arbitrage planner, schedules, voltage guard, basic alerts\n• **PRO** — AI (advisor, reports, AI autonomy), weather strategy, calibrated PV forecast, SMS/e-mail alerts, complaint & invoice reports, automatic updates\n\nKup PRO na {website}",
         "data": {
           "license_mode": "Tryb licencji"
         }
@@ -141,7 +141,7 @@
       },
       "downgrade": {
         "title": "🔓 Usuń licencję PRO",
-        "description": "Uwaga! Po potwierdzeniu:\n• Licencja PRO zostanie usunięta\n• Integracja przejdzie na plan FREE\n• Funkcje PRO (pełny HEMS, AI) zostaną wyłączone\n\nAby ponownie aktywować PRO, wpisz klucz w opcjach.",
+        "description": "Uwaga! Po potwierdzeniu:\n• Licencja PRO zostanie usunięta\n• Integracja przejdzie na plan FREE\n• Funkcje PRO (AI, strategia pogodowa, alerty SMS/e-mail, raporty) zostaną wyłączone — funkcje, które instalacja miała w FREE przed wersją 1.71, zostają\n\nAby ponownie aktywować PRO, wpisz klucz w opcjach.",
         "data": {
           "confirm_downgrade": "✅ Tak, chcę przejść na plan FREE"
         }

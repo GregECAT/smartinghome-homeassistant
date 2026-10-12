@@ -50,6 +50,8 @@ if TYPE_CHECKING:
     from .ai_advisor import AIAdvisor
 
 from .const import (
+    FEATURE_PV_CALIBRATION,
+    STRATEGY_FALLBACK,
     DOMAIN,
     AutopilotStrategy,
     AUTOPILOT_STRATEGY_LABELS,
@@ -99,6 +101,7 @@ from .const import (
     SWITCH_SOCKET2,
 )
 from .energy_manager import EnergyManager
+from .features import permitted_strategy as _permitted_strategy
 from .inverter_agent import InverterAgent
 from .autopilot_actions import (
     AutopilotAction,
@@ -110,6 +113,9 @@ from .autopilot_actions import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# settings.json: PRO strategy the license fallback replaced (restored when allowed)
+AUTOPILOT_LICENSE_FALLBACK_KEY = "autopilot_license_fallback_from"
 
 # Throttle: minimum seconds between identical actions
 ACTION_COOLDOWN = 60
@@ -272,6 +278,12 @@ class StrategyController:
         self._em = energy_manager
         self._active_strategy = AutopilotStrategy.MAX_SELF_CONSUMPTION
         self._enabled = False
+        # License: LicenseManager.has_feature (None = no gating, e.g. tests)
+        self._feature_check = None
+        self._strategy_denied_logged: set[str] = set()
+        # PRO strategy replaced by the FREE fallback because the license did not
+        # allow it (e.g. license server unreachable at boot) — restored when it does
+        self._license_fallback_from: AutopilotStrategy | None = None
 
         # Throttle tracking: action_name → last_execution_timestamp
         self._last_action: dict[str, float] = {}
@@ -527,8 +539,53 @@ class StrategyController:
         """Return recent decision log entries."""
         return list(self._decision_log)
 
+    def set_feature_check(self, check) -> None:
+        """License gate for PRO-only strategies (LicenseManager.has_feature)."""
+        self._feature_check = check
+
+    def is_strategy_allowed(self, strategy: AutopilotStrategy) -> bool:
+        value = AutopilotStrategy(strategy).value
+        return _permitted_strategy(value, self._feature_check) == value
+
+    def permitted_strategy(self, strategy: AutopilotStrategy) -> AutopilotStrategy:
+        """The strategy the license allows — PRO-only ones fall back to max_self_consumption."""
+        requested = AutopilotStrategy(strategy)
+        allowed = AutopilotStrategy(_permitted_strategy(requested.value, self._feature_check))
+        if allowed != requested:
+            if requested.value not in self._strategy_denied_logged:
+                self._strategy_denied_logged.add(requested.value)
+                _LOGGER.warning(
+                    "Strategy '%s' needs a PRO license — using '%s' instead",
+                    requested.value, allowed.value,
+                )
+        else:
+            self._strategy_denied_logged.discard(requested.value)
+        return allowed
+
+    async def enforce_license(self) -> None:
+        """Follow the license at runtime.
+
+        A PRO-only strategy is left when the license no longer allows it (expired
+        PRO, grace period over); the strategy comes back by itself once the license
+        allows it again, unless the user has picked another one in the meantime.
+        """
+        if not self._enabled:
+            return
+        if not self.is_strategy_allowed(self._active_strategy):
+            await self.activate_strategy(self._active_strategy)
+        elif (
+            self._license_fallback_from is not None
+            and self._active_strategy.value == STRATEGY_FALLBACK
+            and self.is_strategy_allowed(self._license_fallback_from)
+        ):
+            _LOGGER.info("License allows '%s' again — restoring it", self._license_fallback_from.value)
+            await self.activate_strategy(self._license_fallback_from)
+
     async def activate_strategy(self, strategy: AutopilotStrategy) -> None:
-        """Switch to a new strategy."""
+        """Switch to a new strategy (PRO-only ones fall back on FREE / DEMO)."""
+        requested = AutopilotStrategy(strategy)
+        strategy = self.permitted_strategy(requested)
+        self._license_fallback_from = requested if strategy != requested else None
         old = self._active_strategy
         self._active_strategy = strategy
         self._enabled = True
@@ -2262,6 +2319,8 @@ class StrategyController:
 
         local_today = now.replace(tzinfo=None).date()
         cal = getattr(self, "pv_calibration", None)
+        if self._feature_check is not None and not self._feature_check(FEATURE_PV_CALIBRATION):
+            cal = None  # FREE: configured confidence, no learned calibration
         day_conf = {
             local_today: pv_conf_for(cal, _safe_float(data.get("pv_forecast_today_total")), params.pv_confidence),
             local_today + timedelta(days=1): pv_conf_for(
@@ -3170,6 +3229,9 @@ class StrategyController:
             "autopilot_active_action_ids": list(self._active_action_ids),
             "autopilot_disabled_action_ids": disabled_ids,
             PEAK_SELL_SETTINGS_KEY: self._peak_sell_soc_percent,
+            AUTOPILOT_LICENSE_FALLBACK_KEY: (
+                self._license_fallback_from.value if self._license_fallback_from else ""
+            ),
         }
 
         def _do_write() -> None:
@@ -3218,6 +3280,26 @@ class StrategyController:
         except ValueError:
             _LOGGER.warning("Invalid saved strategy: %s", saved_strategy)
             return
+
+        # A PRO strategy replaced by the fallback earlier comes back when allowed now
+        try:
+            before = AutopilotStrategy(settings.get(AUTOPILOT_LICENSE_FALLBACK_KEY) or "")
+        except ValueError:
+            before = None
+        if before is not None and strategy.value == STRATEGY_FALLBACK:
+            if self.is_strategy_allowed(before):
+                strategy, saved_active_ids = before, []
+            else:
+                self._license_fallback_from = before
+
+        # A PRO-only strategy is not run without the license (FREE, DEMO, or a PRO
+        # whose license server is unreachable right now). Settings keep it, so it
+        # returns after a restart / once the license is validated (enforce_license).
+        allowed = self.permitted_strategy(strategy)
+        if allowed != strategy:
+            self._license_fallback_from = strategy
+            strategy = allowed
+            saved_active_ids = []  # the fallback strategy's own action set
 
         # Restore strategy and enabled flag (without re-triggering automation scan)
         self._active_strategy = strategy

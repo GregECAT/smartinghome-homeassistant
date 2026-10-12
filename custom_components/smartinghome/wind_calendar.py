@@ -64,8 +64,11 @@ DEFAULT_WIND_ENTITY = "sensor.ecowitt_wind_speed_9747"
 
 # ── Physics ─────────────────────────────────────────────────────────────────
 
-def sanitize_turbine(raw: dict[str, Any] | None) -> dict[str, float]:
-    """Turbine parameters with defaults for missing / non-positive values."""
+def sanitize_turbine(raw: dict[str, Any] | None, max_count: int = 20) -> dict[str, float]:
+    """Turbine parameters with defaults for missing / non-positive values.
+
+    max_count — turbines the license allows (FREE: 1, PRO: 20).
+    """
     out = dict(DEFAULT_TURBINE)
     for key, default in DEFAULT_TURBINE.items():
         try:
@@ -75,7 +78,7 @@ def sanitize_turbine(raw: dict[str, Any] | None) -> dict[str, float]:
         if key == "price_kwh":
             out[key] = max(val, 0.0)
         elif key == "count":
-            out[key] = float(max(1, min(int(val), 20))) if val > 0 else 1.0
+            out[key] = float(max(1, min(int(val), max_count))) if val > 0 else 1.0
         elif val > 0:
             out[key] = val
     out["rated_speed"] = max(out["rated_speed"], out["cut_in"] + 0.5)
@@ -190,6 +193,8 @@ class WindCalendar:
         self._entity = DEFAULT_WIND_ENTITY
         self._gust_entity = ""
         self._price_fn: Callable[[datetime], float] | None = None
+        # License: LicenseManager.has_feature — several turbines are PRO
+        self._feature_check: Callable[[str], bool] | None = None
         # Today: completed hours from the recorder + live samples of this hour
         self._today_hours: dict[int, float] = {}
         self._today_gust = 0.0
@@ -206,6 +211,17 @@ class WindCalendar:
             self._entity = wind_entity
         if gust_entity:
             self._gust_entity = gust_entity
+
+    def set_feature_check(self, check: Callable[[str], bool] | None) -> None:
+        self._feature_check = check
+        self._turbine_loaded_at = None  # re-read the parameters with the new limit
+
+    def _max_turbines(self) -> int:
+        from .const import FEATURE_MULTI_TURBINE, FREE_MAX_TURBINES, PRO_MAX_TURBINES
+
+        if self._feature_check is None or self._feature_check(FEATURE_MULTI_TURBINE):
+            return PRO_MAX_TURBINES
+        return FREE_MAX_TURBINES
 
     def set_price_fn(self, fn: Callable[[datetime], float]) -> None:
         """Tariff buy price (zł/kWh) at a moment — values the turbine's energy."""
@@ -230,7 +246,7 @@ class WindCalendar:
         self._calendar = stored.get("days", {})
         self._meta = stored.get("meta", {})
         settings = await read_async(self.hass)
-        self._turbine = sanitize_turbine(settings.get("wind_turbine"))
+        self._turbine = sanitize_turbine(settings.get("wind_turbine"), self._max_turbines())
         self._turbine_loaded_at = time.monotonic()
         if settings.get(WIND_CALENDAR_KEY):
             # v1/v2 kept the whole calendar in settings.json (sent to the panel on
@@ -278,7 +294,7 @@ class WindCalendar:
                 settings = await read_async(self.hass)
             except Exception:  # noqa: BLE001
                 settings = {}
-            self._turbine = sanitize_turbine(settings.get("wind_turbine"))
+            self._turbine = sanitize_turbine(settings.get("wind_turbine"), self._max_turbines())
             self._turbine_loaded_at = time.monotonic()
         return self._turbine
 

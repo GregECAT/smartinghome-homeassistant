@@ -59,12 +59,19 @@ class AICronScheduler:
         ai_advisor: AIAdvisor,
         get_coordinator_data: Any,
         strategy_controller: Any = None,
+        ai_allowed: Any = None,
     ) -> None:
-        """Initialize the scheduler."""
+        """Initialize the scheduler.
+
+        ai_allowed — callable, True when the license includes AI (PRO); the AI jobs
+        (HEMS advice, daily AI report, anomaly detection) are skipped otherwise.
+        The autopilot log job needs no AI and always runs.
+        """
         self.hass = hass
         self._ai = ai_advisor
         self._get_data = get_coordinator_data
         self._strategy_controller = strategy_controller
+        self._ai_allowed = ai_allowed
         self._tasks: list[asyncio.Task] = []
         self._running = False
 
@@ -328,6 +335,11 @@ class AICronScheduler:
 
         while self._running:
             try:
+                if job_type != "autopilot" and self._ai_allowed is not None and not self._ai_allowed():
+                    _LOGGER.debug("AI Cron '%s' skipped — AI needs a PRO license", job_type)
+                    await asyncio.sleep(interval_min * 60)
+                    continue
+
                 # Refresh AI model/task settings (keys live in private storage)
                 settings = await self._read_settings_async()
                 self._ai.apply_settings(settings)

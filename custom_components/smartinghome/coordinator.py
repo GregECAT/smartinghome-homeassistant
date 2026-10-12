@@ -27,6 +27,7 @@ from .pl_holidays import is_day_off
 from .const import (
     is_grid_only,
     DOMAIN,
+    FEATURE_PV_CALIBRATION,
     SENSOR_PV_POWER,
     SENSOR_PV1_POWER,
     SENSOR_PV2_POWER,
@@ -355,7 +356,11 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._reconcile_base: dict[str, float] = {}
 
         # ── Alerts & notifications (backend — one push per incident) ──
-        self.alerts = AlertEngine(hass, entry.entry_id, settings_read_async)
+        self.alerts = AlertEngine(
+            hass, entry.entry_id, settings_read_async,
+            feature_check=license_manager.has_feature,
+        )
+        self.pv_calibration = None
 
     def set_strategy_controller(self, controller) -> None:
         """Set the strategy controller for autonomous HEMS control."""
@@ -485,6 +490,9 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             # Periodic license check
             await self.license_manager.periodic_check()
+            if self._strategy_controller is not None:
+                # An expired PRO leaves a PRO-only strategy for the FREE fallback
+                await self._strategy_controller.enforce_license()
 
             # Re-resolve sensor map each cycle — inverter entities may load after us
             self._sensor_map = build_sensor_map(self.hass, self.entry.data)
@@ -975,7 +983,14 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ),
             ), cap)
         self._note_plan_full_time(now, data)
-        if time.monotonic() - getattr(self, "_pv_cal_ts", -1e9) > 6 * 3600:
+        if not self.license_manager.has_feature(FEATURE_PV_CALIBRATION):
+            # FREE: the planner uses the uncalibrated per-plane forecast
+            self._pv_cal_ts = -1e9  # learn right away once the license allows it
+            if self.pv_calibration is not None:
+                self.pv_calibration = None
+                if self._strategy_controller is not None:
+                    self._strategy_controller.pv_calibration = None
+        elif time.monotonic() - getattr(self, "_pv_cal_ts", -1e9) > 6 * 3600:
             self._pv_cal_ts = time.monotonic()
             self.hass.async_create_task(self._async_refresh_pv_calibration(now))
         if pv is not None and time.monotonic() - self._reconcile_ts > 600:
@@ -1522,6 +1537,9 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # —— License info ——
         data["license_valid"] = self.license_manager.is_valid
         data["license_tier"] = self.license_manager.tier.value
+        # Gated features enabled for this install (panel: sensor license_tier → features)
+        data["license_features"] = sorted(self.license_manager.features)
+        data["license_free_legacy"] = self.license_manager.free_legacy
 
         return data
 
