@@ -932,7 +932,7 @@ class SmartingHomePanel extends HTMLElement {
       ${g.external_limit_w !== null && g.external_limit_w !== undefined ? `<div style="padding:8px 10px; margin-bottom:8px; border-radius:8px; background:rgba(231,76,60,0.08); border:1px solid rgba(231,76,60,0.3); color:#e74c3c">Falownik ma limit ${kw(g.external_limit_w)} ustawiony poza Smarting HOME (operator, integrator OSD albo aplikacja producenta) — respektujemy go.
         ${r.is_admin ? `<button class="test-btn" onclick="this.getRootNode().host._clearExternalLimit(this)">Zapomnij wykryty limit</button>` : ''}</div>` : ''}
       <div style="display:flex; flex-wrap:wrap; gap:14px; align-items:center; margin-bottom:8px">
-        <span>Limit z warunków przyłączenia: <input type="number" id="grid-cap" value="${g.export_cap_w ?? ''}" min="0" max="100000" step="100" placeholder="W" style="width:90px" ${dis}> W</span>
+        <span>Limit z warunków przyłączenia: <input type="number" id="grid-cap" value="${g.export_cap_w ?? ''}" min="0" max="100000" step="100" placeholder="np. 11000" style="width:90px" ${dis}> W <span style="color:#64748b">(${g.export_cap_w ? kw(g.export_cap_w) : 'kW = W ÷ 1000'})</span></span>
         <label style="display:flex; align-items:center; gap:6px" title="Gdy limit lub moc falownika steruje operator sieci albo integrator OSD — Smarting HOME nie zapisuje limitu eksportu"><input type="checkbox" id="grid-osd" ${g.osd_priority ? 'checked' : ''} ${dis}> Sterowanie OSD / integratora ma pierwszeństwo</label>
         <label style="display:flex; align-items:center; gap:6px"><input type="checkbox" id="grid-tel" ${t.enabled !== false ? 'checked' : ''} ${dis}> Informacja o instalacji dla Smarting HOME</label>
         ${r.is_admin ? `<button class="test-btn" onclick="this.getRootNode().host._saveGrid(this)">💾 Zapisz</button>` : '<span style="color:#64748b">zmienia administrator</span>'}
@@ -945,8 +945,11 @@ class SmartingHomePanel extends HTMLElement {
   async _saveGrid(btn) {
     const $ = id => this.shadowRoot.getElementById(id);
     const cur = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/settings/get', keys: ['grid', 'telemetry'] }).catch(() => ({}));
-    const capRaw = ($('grid-cap')?.value || '').trim();
-    const grid = { ...(cur.grid || {}), export_cap_w: capRaw === '' ? null : Math.max(0, parseInt(capRaw) || 0), osd_priority: !!$('grid-osd')?.checked };
+    const capRaw = ($('grid-cap')?.value || '').replace(/\s/g, '').trim();
+    const cap = capRaw === '' ? null : Math.max(0, parseInt(capRaw) || 0);
+    if (cap !== null && cap > 0 && (cap < 2000 || cap > 60000)
+        && !confirm(`Limit oddawania do sieci: ${(cap / 1000).toLocaleString('pl-PL')} kW (${cap} W). Wartość wygląda nietypowo — sprawdź liczbę zer. Zapisać?`)) return;
+    const grid = { ...(cur.grid || {}), export_cap_w: cap, osd_priority: !!$('grid-osd')?.checked };
     const telemetry = { ...(cur.telemetry || {}), enabled: !!$('grid-tel')?.checked };
     try {
       await this._hass.connection.sendMessagePromise({ type: 'smartinghome/settings/update', settings: { grid, telemetry } });
@@ -14812,9 +14815,9 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.72.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.73.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
-              <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
+              <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/hems/" target="_blank" style="color:#00d4ff">smartinghome.pl/hems</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
             </div>
 
