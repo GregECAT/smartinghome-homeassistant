@@ -278,7 +278,7 @@ class LicenseManager:
             else:
                 self._cached_valid = False
                 _LOGGER.warning(
-                    "License check: subscription no longer active: %s",
+                    "License check: license no longer active: %s",
                     info.message,
                 )
 
