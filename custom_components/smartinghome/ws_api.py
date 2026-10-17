@@ -366,13 +366,14 @@ async def ws_deposit_status(hass: HomeAssistant, connection, msg: dict[str, Any]
 @websocket_api.websocket_command({
     vol.Required("type"): "smartinghome/voltage/report",
     vol.Optional("days", default=30): vol.All(int, vol.Range(min=1, max=400)),
+    vol.Optional("source"): vol.In(["auto", "inverter", "meter"]),
 })
 @websocket_api.async_response
 async def ws_voltage_report(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
     """Grid voltage report (recorder statistics) + the guard's state and exceedance log."""
     from .voltage_report import basic_view
 
-    report = await _async_voltage_report(hass, msg["days"])
+    report = await _async_voltage_report(hass, msg["days"], msg.get("source"))
     allowed = any_entry_has_feature(hass, FEATURE_VOLTAGE_REPORT_EXPORT)
     if not allowed:
         report = basic_view(report)  # basic statistics stay FREE
@@ -382,6 +383,7 @@ async def ws_voltage_report(hass: HomeAssistant, connection, msg: dict[str, Any]
 @websocket_api.websocket_command({
     vol.Required("type"): "smartinghome/voltage/export",
     vol.Optional("days", default=30): vol.All(int, vol.Range(min=1, max=400)),
+    vol.Optional("source"): vol.In(["auto", "inverter", "meter"]),
 })
 @websocket_api.async_response
 async def ws_voltage_export(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
@@ -393,7 +395,7 @@ async def ws_voltage_export(hass: HomeAssistant, connection, msg: dict[str, Any]
     if not any_entry_has_feature(hass, FEATURE_VOLTAGE_REPORT_EXPORT):
         _pro_required(connection, msg, "Eksport raportu napięcia i treść reklamacji")
         return
-    report = await _async_voltage_report(hass, msg["days"])
+    report = await _async_voltage_report(hass, msg["days"], msg.get("source"))
     today = dt_util.now().date().isoformat()
     connection.send_result(msg["id"], {
         "csv": export_csv(report),
@@ -402,8 +404,12 @@ async def ws_voltage_export(hass: HomeAssistant, connection, msg: dict[str, Any]
     })
 
 
-async def _async_voltage_report(hass: HomeAssistant, days: int) -> dict[str, Any]:
-    """Full voltage report incl. the detail lists the complaint export uses."""
+async def _async_voltage_report(hass: HomeAssistant, days: int, source: str | None = None) -> dict[str, Any]:
+    """Full voltage report incl. the detail lists the complaint export uses.
+
+    Voltages: the inverter by default, the independent meter (settings "meter") when
+    there is no inverter or when chosen (source / meter.voltage_source).
+    """
     from datetime import timedelta as _td
 
     from homeassistant.components.recorder import get_instance
@@ -412,10 +418,14 @@ async def _async_voltage_report(hass: HomeAssistant, days: int) -> dict[str, Any
 
     from .const import (
         SENSOR_GRID_POWER_TOTAL, SENSOR_GRID_VOLTAGE_L1, SENSOR_GRID_VOLTAGE_L2, SENSOR_GRID_VOLTAGE_L3,
+        is_grid_only,
     )
+    from .meter_device import grid_power_canonical, meter_voltage_ids, to_base, voltage_source
+    from .meter_ws import meter_settings
+    from .settings_io import read_async
     from .voltage_report import build_report, window_start
 
-    phases = {"L1": SENSOR_GRID_VOLTAGE_L1, "L2": SENSOR_GRID_VOLTAGE_L2, "L3": SENSOR_GRID_VOLTAGE_L3}
+    inverter_phases = {"L1": SENSOR_GRID_VOLTAGE_L1, "L2": SENSOR_GRID_VOLTAGE_L2, "L3": SENSOR_GRID_VOLTAGE_L3}
     now = dt_util.now()
     start = window_start(now, days)
     inst = get_instance(hass)
@@ -424,23 +434,31 @@ async def _async_voltage_report(hass: HomeAssistant, days: int) -> dict[str, Any
         t = dt_util.utc_from_timestamp(ts) if isinstance(ts, (int, float)) else ts
         return dt_util.as_local(t).replace(tzinfo=None)
 
+    # Independent meter (meter_device): the only voltage source without an inverter,
+    # an alternative next to one
+    mcfg = meter_settings(await read_async(hass))
+    meter_phases = meter_voltage_ids(mcfg)
+    meter_power = mcfg.get("power_entity") or ""
+    entries = hass.config_entries.async_entries(DOMAIN)
+    grid_only = bool(entries) and all(is_grid_only(e.data) for e in entries)
+
     # Older history may sit under another integration (GoodWe SEMS cloud: grid_N_ac_voltage)
     import re as _re
 
     from homeassistant.components.recorder.statistics import list_statistic_ids
 
     known = await inst.async_add_executor_job(list_statistic_ids, hass, None, "mean")
+    stat_units = {i["statistic_id"]: i.get("statistics_unit_of_measurement") or "" for i in known}
     extra: dict[str, list[str]] = {}
     for item in known:
         m = _re.match(r"^sensor\..*_grid_([123])_ac_voltage$", item["statistic_id"])
         if m:
             extra.setdefault(f"L{m.group(1)}", []).append(item["statistic_id"])
-    ids = set(phases.values()) | {SENSOR_GRID_POWER_TOTAL} | {i for v in extra.values() for i in v}
+    ids = (set(inverter_phases.values()) | {SENSOR_GRID_POWER_TOTAL} | {i for v in extra.values() for i in v}
+           | set(meter_phases.values()) | ({meter_power} if meter_power else set()))
     hourly_raw = await inst.async_add_executor_job(
         statistics_during_period, hass, dt_util.as_utc(start), None, ids, "hour", None, {"mean", "max", "min"})
-    five_raw = await inst.async_add_executor_job(
-        statistics_during_period, hass, dt_util.as_utc(max(start, now - _td(days=10))), None,
-        set(phases.values()), "5minute", None, {"mean"})
+
     def valid(x):
         return x if x is not None and 150 < x < 300 else None  # 0 V = inverter offline
 
@@ -448,6 +466,21 @@ async def _async_voltage_report(hass: HomeAssistant, days: int) -> dict[str, Any
         # A real voltage moves within an hour; a flat line is a stuck (cloud) sensor
         mx, mn = valid(r.get("max")), valid(r.get("min"))
         return mx is not None and mn is not None and mx - mn >= 0.1
+
+    def has_data(sids) -> bool:
+        return any(live(r) for sid in sids for r in hourly_raw.get(sid, []))
+
+    inverter_ok = has_data(list(inverter_phases.values()) + [i for v in extra.values() for i in v])
+    meter_ok = has_data(meter_phases.values())
+    pref = source or mcfg.get("voltage_source") or "auto"
+    src = voltage_source(pref, grid_only, inverter_ok, meter_ok)
+    if src == "meter":
+        phases, extra = meter_phases, {}
+    else:
+        phases = inverter_phases
+    five_raw = await inst.async_add_executor_job(
+        statistics_during_period, hass, dt_util.as_utc(max(start, now - _td(days=10))), None,
+        set(phases.values()), "5minute", None, {"mean"})
 
     hourly = {}
     for p, sid in phases.items():
@@ -462,8 +495,17 @@ async def _async_voltage_report(hass: HomeAssistant, days: int) -> dict[str, Any
         hourly[p] = [(t, mean, mx) for t, (mean, mx) in sorted(rows.items())]
     five = {p: [(local(r["start"]), r["mean"]) for r in five_raw.get(sid, []) if valid(r.get("mean")) is not None]
             for p, sid in phases.items()}
-    grid = {local(r["start"]): r["mean"] for r in hourly_raw.get(SENSOR_GRID_POWER_TOTAL, [])
-            if r.get("mean") is not None and (r.get("max") or 0) - (r.get("min") or 0) > 1}
+
+    def moving(r, unit=None) -> bool:
+        lo, hi = to_base(r.get("min") or 0, unit, "power"), to_base(r.get("max") or 0, unit, "power")
+        return r.get("mean") is not None and hi - lo > 1
+
+    grid = {local(r["start"]): r["mean"] for r in hourly_raw.get(SENSOR_GRID_POWER_TOTAL, []) if moving(r)}
+    if src == "meter" and meter_power and (grid_only or not grid):
+        # Meter power in the project convention (+ export), in W
+        unit = stat_units.get(meter_power)
+        grid = {local(r["start"]): grid_power_canonical(to_base(r["mean"], unit, "power"), mcfg.get("power_sign"))
+                for r in hourly_raw.get(meter_power, []) if moving(r, unit)}
 
     ctrl = getattr(_coordinator(hass), "_strategy_controller", None)
     guard = getattr(ctrl, "_vguard", None)
@@ -475,6 +517,10 @@ async def _async_voltage_report(hass: HomeAssistant, days: int) -> dict[str, Any
         events = [e for e in await ctrl._voltage_events() if e.get("start", 0) >= cutoff]
     return {
         **report,
+        "source": src,
+        "source_pref": pref,
+        "sources_available": {"inverter": inverter_ok and not grid_only, "meter": meter_ok},
+        "grid_only": grid_only,
         "days_requested": days,
         "guard": guard.status() if guard else None,
         "events": events[-200:],

@@ -284,8 +284,14 @@ def _fmt(x: Any, digits: int = 1) -> str:
 
 
 def complaint_text(report: dict[str, Any], today: str) -> str:
-    """Complaint to the distribution operator (Polish), EN 50160 figures from the report."""
+    """Complaint to the distribution operator (Polish), EN 50160 figures from the report.
+
+    report["source"]: "inverter" (default) or "meter" (independent meter, meter_device);
+    report["grid_only"]: the site has no inverter / PV — no export, no inverter trips.
+    """
     s = report.get("summary") or {}
+    from_meter = report.get("source") == "meter"
+    has_pv = not report.get("grid_only")
     lim = report.get("limit_v") or HIGH
     lim_s = _cell(lim)
     worst = sorted((d for d in report.get("days") or [] if d.get("hours_max_over") or d.get("ten_min_over")),
@@ -308,8 +314,11 @@ def complaint_text(report: dict[str, Any], today: str) -> str:
             f"- największa asymetria napięć: {_fmt(ps.get('max_unbalance_pct'), 2)}% "
             f"(dopuszczalne wg PN-EN 50160: 2%)"
             + (f"; tygodnie poza normą: {', '.join(bad_weeks)}" if bad_weeks else "") + ".\n"
-            "Falownik oddaje moc symetrycznie na trzy fazy, więc trwała różnica napięć — także bez "
-            "oddawania energii — wskazuje na nierównomierne obciążenie sieci lub stan przewodu neutralnego.\n"
+            + ("Falownik oddaje moc symetrycznie na trzy fazy, więc trwała różnica napięć — także bez "
+               "oddawania energii — wskazuje na nierównomierne obciążenie sieci lub stan przewodu neutralnego.\n"
+               if has_pv else
+               "Instalacja nie oddaje energii do sieci, więc trwała różnica napięć między fazami wskazuje "
+               "na nierównomierne obciążenie sieci lub stan przewodu neutralnego.\n")
         )
     worst_lines = "\n".join(
         f"- {d['date']}: maks. {_fmt(d.get('max_v'))} V, godzin powyżej {lim_s} V: {d.get('hours_max_over') or 0}"
@@ -319,22 +328,31 @@ def complaint_text(report: dict[str, Any], today: str) -> str:
     return (
         "Reklamacja parametrów jakościowych energii elektrycznej — za wysokie napięcie w sieci\n\n"
         f"Zgłaszam, że w moim punkcie poboru napięcie w sieci przekracza wartość dopuszczalną 230 V + 10% ({lim_s} V).\n"
-        "Pomiary pochodzą z falownika instalacji fotowoltaicznej (pomiar ciągły, wszystkie trzy fazy).\n\n"
+        + ("Pomiary pochodzą z licznika energii zainstalowanego w rozdzielnicy obiektu (pomiar ciągły).\n\n"
+           if from_meter else
+           "Pomiary pochodzą z falownika instalacji fotowoltaicznej (pomiar ciągły, wszystkie trzy fazy).\n\n")
+        +
         f"Okres: {s.get('first_day') or '—'} – {today}\n"
         f"- najwyższe zmierzone napięcie: {_fmt(max_v) if max_v is not None else '—'} V,\n"
         f"- dni z napięciem powyżej {lim_s} V: {s.get('days_over') or 0},\n"
         f"- godziny z napięciem powyżej {lim_s} V: {s.get('hours_max_over') or 0} "
         f"(w tym ze średnią godzinową powyżej {lim_s} V: {s.get('hours_mean_over') or 0}),\n"
-        f"- średnie 10-minutowe powyżej {lim_s} V w ostatnich 10 dniach: {s.get('ten_min_over') or 0},\n"
-        f"- godziny z napięciem co najmniej {_cell(lim - 3)} V, gdy instalacja nie oddawała energii do sieci: "
-        f"{s.get('hours_high_no_export') or 0}.\n\n"
+        f"- średnie 10-minutowe powyżej {lim_s} V w ostatnich 10 dniach: {s.get('ten_min_over') or 0}"
+        + (f",\n- godziny z napięciem co najmniej {_cell(lim - 3)} V, gdy instalacja nie oddawała energii do sieci: "
+           f"{s.get('hours_high_no_export') or 0}.\n\n" if has_pv else ".\n\n")
+        +
         "Dni z najwyższym napięciem:\n"
         f"{worst_lines}\n"
         f"{phase_text}\n"
-        f"Przy średniej 10-minutowej powyżej {lim_s} V falownik zgodnie z normą PN-EN 50549-1 odłącza się od sieci, "
-        "przez co tracę produkcję energii.\n"
-        "Napięcie jest wysokie również w godzinach, w których instalacja nie oddaje energii, co wskazuje na "
-        "ustawienia sieci (np. zaczepy transformatora SN/nN).\n\n"
+        + (f"Przy średniej 10-minutowej powyżej {lim_s} V falownik zgodnie z normą PN-EN 50549-1 odłącza się od sieci, "
+           "przez co tracę produkcję energii.\n"
+           "Napięcie jest wysokie również w godzinach, w których instalacja nie oddaje energii, co wskazuje na "
+           "ustawienia sieci (np. zaczepy transformatora SN/nN).\n\n"
+           if has_pv else
+           "Obiekt nie ma źródła wytwórczego i nie oddaje energii do sieci, więc za wysokie napięcie wynika "
+           "z ustawień sieci (np. zaczepy transformatora SN/nN). Zbyt wysokie napięcie skraca żywotność "
+           "i grozi uszkodzeniem odbiorników.\n\n")
+        +
         "Proszę o:\n"
         "1. wykonanie pomiarów jakości napięcia w moim punkcie poboru zgodnie z PN-EN 50160,\n"
         "2. doprowadzenie napięcia do wartości dopuszczalnych"

@@ -218,6 +218,7 @@ class AlertEngine:
         cfg = await self._cfg()
         now_m = time.monotonic()
         now = dt_util.now()
+        data = self._with_meter_values(data, context)
 
         found: dict[str, Alert] = {}
         checks = (
@@ -400,6 +401,32 @@ class AlertEngine:
             resolved_text="Sterowanie falownikiem przywrócone",
         )
 
+    def _with_meter_values(self, data: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+        """Grid voltages from the independent meter (settings "meter") when it is the source.
+
+        Without an inverter the meter is the only source; next to one the inverter stays
+        the default. Only this cycle's alert input changes — the coordinator data (and so
+        the inverter control) never sees the meter values.
+        """
+        meter = self._settings.get("meter") if isinstance(self._settings, dict) else None
+        if not isinstance(meter, dict) or not any(meter.get(f"voltage_l{i}") for i in (1, 2, 3)):
+            return data
+        from .meter_device import alert_overlay
+
+        def read(entity_id: str) -> tuple[float | None, str]:
+            st = self.hass.states.get(entity_id)
+            if st is None:
+                return None, ""
+            return _num({"v": st.state}, "v"), st.attributes.get("unit_of_measurement") or ""
+
+        out, src = alert_overlay(
+            data, meter, read, bool(ctx.get("grid_only")),
+            (SENSOR_GRID_VOLTAGE_L1, SENSOR_GRID_VOLTAGE_L2, SENSOR_GRID_VOLTAGE_L3),
+            SENSOR_GRID_POWER_TOTAL, SENSOR_GRID_FREQUENCY_L1,
+        )
+        ctx["voltage_source"] = src
+        return out
+
     def _check_voltage(self, d, ctx, now_m) -> Alert | None:
         worst_phase, worst_avg, worst_now = "", 0.0, 0.0
         for phase, key in (("L1", SENSOR_GRID_VOLTAGE_L1), ("L2", SENSOR_GRID_VOLTAGE_L2),
@@ -421,8 +448,12 @@ class AlertEngine:
         grid = _num(d, SENSOR_GRID_POWER_TOTAL) or 0.0
         exporting = grid > 300
         critical = worst_avg >= VOLT_TRIP
+        if ctx.get("grid_only"):
+            limit_text = f"Norma: najwyżej {VOLT_TRIP:.0f} V (230 V + 10%)."
+        else:
+            limit_text = f"Próg wyłączenia falownika: {VOLT_TRIP:.0f} V."
         msg = (f"{worst_phase}: {_pl(worst_avg)} V (średnia 10 min, teraz {worst_now:.0f} V). "
-               f"Próg wyłączenia falownika: {VOLT_TRIP:.0f} V.")
+               f"{limit_text}" + (" Pomiar: licznik energii." if ctx.get("voltage_source") == "meter" else ""))
         if exporting:
             msg += f" Eksport {_fmt_w(grid)}."
         return Alert(
