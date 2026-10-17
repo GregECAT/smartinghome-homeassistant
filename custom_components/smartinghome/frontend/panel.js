@@ -104,6 +104,13 @@ class SmartingHomePanel extends HTMLElement {
   connectedCallback() {
     this._render();
     this._loadSettings();
+    // Back on the license card after the reload that follows a key change
+    try {
+      if (sessionStorage.getItem('sh-open-tab') === 'settings') {
+        sessionStorage.removeItem('sh-open-tab');
+        setTimeout(() => this._switchTab('settings'), 0);
+      }
+    } catch (e) { /* storage blocked */ }
     const wrap = this.shadowRoot.querySelector('.flow-wrapper');
     if (wrap && window.ResizeObserver) {
       this._ro = new ResizeObserver(() => this._updateSvgPaths());
@@ -185,7 +192,7 @@ class SmartingHomePanel extends HTMLElement {
     if (tab === 'hems') { this._updateHEMSArbitrage(); this._loadForecastStatus(); }
     if (tab === 'tariff') { this._loadDeposit(); }
     if (tab === 'battery') { this._loadFullLog(); }
-    if (tab === 'settings') { this._loadAutoUpdate(); this._loadGrid(); this._loadShowcase(); }
+    if (tab === 'settings') { this._loadAutoUpdate(); this._loadGrid(); this._loadShowcase(); this._loadLicense(); }
     if (tab === 'energy') { this._loadVoltageReport(); }
     if (tab === 'history') { this._updateHistoryTab(); }
     if (tab === 'autopilot') { this._updateAutopilot(); }
@@ -684,7 +691,8 @@ class SmartingHomePanel extends HTMLElement {
      install has — PRO, or grandfathered for installs from before v1.71). */
   static PRO_FEATURES = ['ai', 'weather_strategy', 'pv_calibration', 'advanced_alerts', 'daily_report',
     'voltage_report_export', 'invoice_compare', 'auto_update', 'multi_turbine', 'pv_strings_10'];
-  static BUY_URL = 'https://smartinghome.pl/buy';
+  static BUY_URL = 'https://smartinghome.pl/buy/?utm_source=ha_panel&utm_medium=integration#licencja';
+  static KIT_URL = 'https://smartinghome.pl/buy/?utm_source=ha_panel&utm_medium=integration#zestaw';
 
   _features() {
     const tier = this._tier();
@@ -966,6 +974,166 @@ class SmartingHomePanel extends HTMLElement {
     await this._hass.connection.sendMessagePromise({ type: 'smartinghome/settings/update', settings: { grid } }).catch(() => {});
     if (btn) btn.innerHTML = '✓ Za chwilę';
     setTimeout(() => this._loadGrid(), 2000);
+  }
+
+  /* ── License card (Ustawienia): buy → key by e-mail → paste → Aktywuj ───────
+     smartinghome/license/status|activate|deactivate (activate/deactivate: admin).
+     The backend validates the key with the license server, stores it in the config
+     entry and reloads the integration; the page is reloaded when that is done. */
+  async _loadLicense() {
+    if (!this._hass?.connection) return;
+    try {
+      this._lic = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/license/status' });
+    } catch (e) {
+      this._lic = { error: e.message || e.code || String(e) };
+    }
+    this._renderLicense();
+  }
+
+  _licNote(text, color) {
+    this._licNotice = text ? { text, color: color || '#94a3b8' } : null;
+    const el = this.shadowRoot.getElementById('lic-msg');
+    if (el) {
+      el.textContent = text || '';
+      el.style.color = color || '#94a3b8';
+    }
+  }
+
+  _fmtLicTime(ts) {
+    if (!ts) return '—';
+    const d = new Date(ts * 1000);
+    return isNaN(d) ? '—' : d.toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  _renderLicense() {
+    const $ = id => this.shadowRoot.getElementById(id);
+    const r = this._lic || {};
+    const admin = this._hass?.user?.is_admin !== false;
+    const busy = !!this._licBusy;
+    const act = $('license-activate');
+    if (act) {
+      const typed = $('lic-key')?.value || '';
+      let html = '';
+      if (r.error) html += `<div style="font-size:11px; color:#e74c3c; margin-bottom:6px">Nie udało się odczytać stanu licencji: ${this._esc(r.error)}</div>`;
+      if (r.mode === 'pro' && r.has_key && !r.valid) {
+        html += `<div style="font-size:11px; color:#f39c12; line-height:1.5; padding:8px 10px; margin-bottom:8px; border-radius:8px; background:rgba(243,156,18,0.08); border:1px solid rgba(243,156,18,0.25)">
+          ⚠️ Zapisany klucz ${r.key_masked ? `<code>${this._esc(r.key_masked)}</code> ` : ''}nie jest teraz aktywny${r.message ? ` (serwer licencji: ${this._esc(r.message)})` : ''}.
+          ${admin ? 'Wklej poprawny klucz albo usuń zapisany, żeby wrócić do FREE.' : 'Licencją zarządza administrator Home Assistant.'}</div>`;
+      }
+      if (!admin) {
+        html += `<div style="font-size:11px; color:#64748b">Klucz licencji aktywuje administrator Home Assistant (zaloguj się na konto administratora).</div>`;
+      } else {
+        html += `
+          <label for="lic-key" style="display:block; font-size:12px; color:#e2e8f0; font-weight:700">Klucz licencji PRO</label>
+          <div class="key-row" style="margin-top:6px; flex-wrap:wrap">
+            <input id="lic-key" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="SH-PRO-…" ${busy ? 'disabled' : ''}
+              style="flex:1; min-width:220px; box-sizing:border-box; padding:9px 11px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.15); border-radius:8px; color:#fff; font-size:13px; font-family:ui-monospace,Menlo,Consolas,monospace"
+              onkeydown="if(event.key==='Enter'){event.preventDefault(); this.getRootNode().host._activateLicense()}">
+            <button class="save-btn" id="lic-activate-btn" ${busy ? 'disabled' : ''} onclick="this.getRootNode().host._activateLicense()">${busy ? '⏳ Chwileczkę…' : '✅ Aktywuj'}</button>
+          </div>
+          <div id="lic-msg" class="key-status" style="line-height:1.5"></div>
+          ${r.has_key ? `<button class="test-btn" ${busy ? 'disabled' : ''} onclick="this.getRootNode().host._deactivateLicense(this)">🗑️ Usuń zapisany klucz (wróć do FREE)</button>` : ''}`;
+      }
+      act.innerHTML = html;
+      const inp = $('lic-key');
+      if (inp && typed) inp.value = typed;
+    }
+    const pro = $('license-pro-details');
+    if (pro) {
+      const tierLabel = (r.tier || 'pro').toUpperCase();
+      const stale = r.last_check && (Date.now() / 1000 - r.last_check) > 26 * 3600;
+      const tile = (label, value, color) => `<div style="padding:8px 12px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:8px">
+          <div style="font-size:9px; color:#64748b; text-transform:uppercase">${label}</div>
+          <div style="font-size:12px; font-weight:700; color:${color || '#e2e8f0'}; overflow-wrap:anywhere">${value}</div></div>`;
+      pro.innerHTML = `
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:8px; margin-bottom:12px">
+          ${tile('Status', stale ? '⏳ Aktywna (bez kontaktu z serwerem)' : '✅ Aktywna', stale ? '#f39c12' : '#2ecc71')}
+          ${tile('Plan', this._esc(tierLabel), '#00d4ff')}
+          ${tile('Rodzaj', r.lifetime ? '♾️ Licencja dożywotnia' : (r.expires ? `ważna do ${this._esc(String(r.expires).slice(0, 10))}` : '—'), r.lifetime ? '#f7b731' : '#e2e8f0')}
+          ${admin && r.key_masked ? tile('Klucz', `<code>${this._esc(r.key_masked)}</code>`) : ''}
+          ${tile('Ostatnie sprawdzenie', this._esc(this._fmtLicTime(r.last_check)))}
+        </div>
+        <div style="font-size:10px; color:#94a3b8; line-height:1.6; margin-bottom:10px">
+          Licencja obejmuje tę jedną instalację Home Assistant. Integracja sprawdza ją na serwerze licencji mniej więcej raz na dobę; bez internetu funkcje PRO działają jeszcze do 72 godzin${stale && r.grace_hours != null ? ` (zostało ok. ${this._esc(r.grace_hours)} h)` : ''}.
+        </div>
+        ${admin
+          ? `<button class="test-btn" ${busy ? 'disabled' : ''} onclick="this.getRootNode().host._deactivateLicense(this)">🗑️ Usuń klucz</button>
+             <span style="font-size:10px; color:#64748b; margin-left:6px">np. przed przeniesieniem licencji na inną instalację</span>
+             <div id="lic-msg-pro" style="font-size:11px; margin-top:6px"></div>`
+          : `<div style="font-size:10px; color:#64748b">Licencją zarządza administrator Home Assistant.</div>`}`;
+    }
+    if (this._licNotice) this._licNote(this._licNotice.text, this._licNotice.color);
+  }
+
+  async _activateLicense() {
+    const $ = id => this.shadowRoot.getElementById(id);
+    if (this._licBusy) return;
+    const key = ($('lic-key')?.value || '').trim();
+    if (!key) { this._licNote('Wklej klucz z e-maila z zamówieniem (zaczyna się od SH-PRO-).', '#f39c12'); return; }
+    this._licBusy = true;
+    this._licNotice = { text: '⏳ Sprawdzam klucz na serwerze licencji…', color: '#94a3b8' };
+    this._renderLicense();
+    let res;
+    try {
+      res = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/license/activate', key });
+    } catch (e) {
+      res = { ok: false, message: e?.code === 'unauthorized'
+        ? 'Klucz może aktywować tylko administrator Home Assistant.'
+        : `Nie udało się wysłać klucza: ${e?.message || e?.code || e}` };
+    }
+    if (!res?.ok) {
+      this._licBusy = false;
+      this._licNotice = { text: `❌ ${res?.message || 'Klucz nie został przyjęty.'}`, color: '#e74c3c' };
+      this._renderLicense();
+      return;
+    }
+    const inp = $('lic-key');
+    if (inp) inp.value = '';
+    this._licNotice = { text: `✅ ${res.message}`, color: '#2ecc71' };
+    this._renderLicense();
+    this._waitForLicenseReload(true);
+  }
+
+  async _deactivateLicense(btn) {
+    if (this._licBusy) return;
+    const ok = window.confirm('Usunąć klucz licencji z tej instalacji?\n\nIntegracja wróci do planu FREE — funkcje PRO (AI, strategia pogodowa, alerty SMS/e-mail, raporty, automatyczne aktualizacje) zostaną wyłączone. Klucz możesz później wkleić ponownie.');
+    if (!ok) return;
+    this._licBusy = true;
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Usuwam…'; }
+    let res;
+    try {
+      res = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/license/deactivate' });
+    } catch (e) {
+      res = { ok: false, message: e?.code === 'unauthorized' ? 'Klucz może usunąć tylko administrator Home Assistant.' : (e?.message || e?.code || String(e)) };
+    }
+    const out = this.shadowRoot.getElementById('lic-msg-pro');
+    if (!res?.ok) {
+      this._licBusy = false;
+      if (out) { out.style.color = '#e74c3c'; out.textContent = `❌ ${res?.message || 'Nie udało się usunąć klucza.'}`; }
+      this._renderLicense();
+      return;
+    }
+    if (out) { out.style.color = '#2ecc71'; out.textContent = `✅ ${res.message}`; }
+    this._licNotice = { text: `✅ ${res.message}`, color: '#2ecc71' };
+    this._waitForLicenseReload(false);
+  }
+
+  /* After a key change the integration reloads (sidebar panels are re-registered
+     with the new build), so the page is reloaded once the entry is loaded again. */
+  async _waitForLicenseReload(wantPro) {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const t0 = Date.now();
+    await sleep(3000);
+    while (Date.now() - t0 < 90000) {
+      try {
+        const st = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/license/status' });
+        const isPro = st.tier === 'pro' || st.tier === 'enterprise';
+        if (st.entry_state === 'loaded' && (wantPro ? isPro : st.tier === 'free')) break;
+      } catch (e) { /* reloading */ }
+      await sleep(2000);
+    }
+    try { sessionStorage.setItem('sh-open-tab', 'settings'); } catch (e) { /* private mode */ }
+    window.location.reload();
   }
 
   /* ── Installation showcase (Ustawienia, admin only) ───────────────── */
@@ -8747,6 +8915,7 @@ class SmartingHomePanel extends HTMLElement {
     const isPro = (tier === "PRO" || tier === "ENTERPRISE");
     if (upgradeBox) upgradeBox.style.display = isPro ? "none" : "block";
     if (proBox) proBox.style.display = isPro ? "block" : "none";
+    if (this._licTierSeen !== tier && !this._licBusy) { this._licTierSeen = tier; this._loadLicense(); }
     const legacyNote = this.shadowRoot.getElementById("settings-legacy-note");
     if (legacyNote) {
       const st = this._lastTierEntity ? this._hass?.states?.[this._lastTierEntity] : null;
@@ -14838,27 +15007,35 @@ class SmartingHomePanel extends HTMLElement {
 
             <!-- 🔑 License Status -->
             <div class="card" style="grid-column: 1 / -1" id="settings-license-box">
+              <div class="card-title">🔑 Licencja Smarting HOME</div>
               <!-- FREE: Upgrade Prompt -->
               <div id="settings-upgrade-box">
                 <div class="upgrade-box">
                   <div style="font-size:15px; font-weight:700; color:#f7b731">⭐ Smarting HOME PRO — zarabia więcej, pilnuje i oszczędza czas</div>
                   <div style="font-size:12px; color:#a0aec0; margin-top:6px; line-height:1.6">
-                    W wersji <strong style="color:#2ecc71">FREE</strong> masz Autopilota ze strategią 💰 Max Zysk (arbitraż), harmonogram, ręczne ładowanie/rozładowanie, podstawowe alerty, strażnika napięcia, depozyt prosumencki i wszystkie sensory.<br>
+                    W wersji <strong style="color:#2ecc71">FREE</strong> masz Autopilota ze wszystkimi strategiami poza pogodową i AI (w tym 💰 Max Zysk — arbitraż), harmonogram, ręczne ładowanie/rozładowanie, podstawowe alerty (powiadomienia na 1 telefon), strażnika napięcia, depozyt prosumencki, wszystkie sensory, do 4 stringów PV i 1 turbinę.<br>
                     Wersja <strong style="color:#00d4ff">PRO</strong> dodaje:<br>
-                    🧠 AI: doradca, dzienny raport AI, analiza opłacalności, szacowanie autopilota i strategia „AI Pełna Autonomia”<br>
+                    🧠 AI (z Twoim kluczem API): doradca, dzienny raport AI, analiza opłacalności, szacowanie autopilota i strategia „AI Pełna Autonomia”<br>
                     🌧️ Strategia pogodowa i prognoza PV kalibrowana na historii Twojej instalacji<br>
                     🔔 Alerty SMS i e-mail, wiele telefonów, raport dnia<br>
                     📄 Raport napięcia do reklamacji (CSV + treść wg PN-EN 50160) i porównanie „Faktura vs Home Assistant”<br>
                     🔄 Automatyczne aktualizacje z kopią zapasową<br>
                     ☀️ Do 10 stringów PV i kilka turbin wiatrowych
                   </div>
+                  <div style="font-size:11px; color:#94a3b8; margin-top:8px; line-height:1.5">
+                    Jednorazowa płatność, licencja dożywotnia na jedną instalację Home Assistant, aktualizacje przez co najmniej 5 lat.
+                  </div>
                   <div id="settings-legacy-note" style="display:none; font-size:11px; color:#2ecc71; margin-top:8px; line-height:1.5">
                     ✅ Ta instalacja działa od wersji sprzed 1.71 — bez licencji zachowuje alerty SMS/e-mail i wiele telefonów, raport dnia, eksport raportu napięcia, porównanie faktury, automatyczne aktualizacje, kalibrację prognozy PV i kilka turbin.
                   </div>
-                  <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px">
-                    <a href="https://smartinghome.pl/buy" target="_blank" style="display:inline-block; padding:8px 20px; border-radius:8px; background:linear-gradient(135deg,#f7b731,#e67e22); color:#0a1628; font-weight:700; font-size:12px; text-decoration:none; transition:all 0.2s">🛒 Kup licencję PRO</a>
-                    <div style="font-size:10px; color:#64748b; align-self:center">Masz już klucz? Wejdź w: Ustawienia → Urządzenia → Smarting HOME → Konfiguruj → ⚙️ Settings & Upgrade</div>
+                  <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px">
+                    <a id="lic-buy-license" href="https://smartinghome.pl/buy/?utm_source=ha_panel&utm_medium=integration#licencja" target="_blank" rel="noopener" style="display:inline-block; padding:9px 18px; border-radius:8px; background:linear-gradient(135deg,#f7b731,#e67e22); color:#0a1628; font-weight:700; font-size:12px; text-decoration:none; transition:all 0.2s">🛒 Kup licencję PRO (klucz do tej instalacji)</a>
+                    <a id="lic-buy-kit" href="https://smartinghome.pl/buy/?utm_source=ha_panel&utm_medium=integration#zestaw" target="_blank" rel="noopener" style="display:inline-block; padding:9px 18px; border-radius:8px; border:1px solid rgba(247,183,49,0.45); background:rgba(247,183,49,0.06); color:#f7b731; font-weight:700; font-size:12px; text-decoration:none; transition:all 0.2s">📦 Zestaw z urządzeniem</a>
                   </div>
+                  <div style="font-size:11px; color:#94a3b8; margin-top:8px; line-height:1.5">
+                    Płatność na smartinghome.pl (sklep prowadzi GAPLI eCommerce P.S.A.). Klucz przyjdzie e-mailem do 24 godzin — wklej go poniżej.
+                  </div>
+                  <div id="license-activate" style="margin-top:12px"></div>
                 </div>
               </div>
               <!-- PRO: License Active -->
@@ -14870,22 +15047,7 @@ class SmartingHomePanel extends HTMLElement {
                     <div style="font-size:11px; color:#94a3b8">Tier: <span id="settings-license-tier" style="color:#00d4ff; font-weight:700">PRO</span></div>
                   </div>
                 </div>
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px">
-                  <div style="padding:8px 12px; background:rgba(46,204,113,0.06); border:1px solid rgba(46,204,113,0.15); border-radius:8px">
-                    <div style="font-size:9px; color:#64748b; text-transform:uppercase">Status</div>
-                    <div style="font-size:13px; font-weight:700; color:#2ecc71">✅ Aktywna</div>
-                  </div>
-                  <div style="padding:8px 12px; background:rgba(0,212,255,0.06); border:1px solid rgba(0,212,255,0.15); border-radius:8px">
-                    <div style="font-size:9px; color:#64748b; text-transform:uppercase">Funkcje</div>
-                    <div style="font-size:11px; color:#00d4ff; font-weight:600">AI + alerty + raporty + aktualizacje</div>
-                  </div>
-                </div>
-                <div style="padding:10px; border-radius:8px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06)">
-                  <div style="font-size:10px; color:#94a3b8; line-height:1.6">
-                    Aby zarządzać licencją (zmiana ustawień, usunięcie klucza), przejdź do:<br>
-                    <strong style="color:#fff">Ustawienia → Urządzenia → Smarting HOME → Konfiguruj</strong>
-                  </div>
-                </div>
+                <div id="license-pro-details"></div>
               </div>
             </div>
 

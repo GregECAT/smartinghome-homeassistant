@@ -8,6 +8,7 @@
 """API client for Smarting HOME license server."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -21,6 +22,7 @@ from .const import (
     LICENSE_REGISTER_FREE_ENDPOINT,
     LicenseTier,
 )
+from .license_key import is_lifetime, mask_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,6 +40,7 @@ class LicenseInfo:
     max_installations: int
     features: list[str]
     message: str | None = None
+    lifetime: bool = False  # perpetual license (server: lifetime=true / expires="lifetime")
 
 
 class SmartingHomeAPIError(Exception):
@@ -92,8 +95,8 @@ class SmartingHomeAPI:
         }
 
         _LOGGER.info(
-            "Validating license: key=%s..., device_id=%s, version=%s",
-            self._license_key[:12] if self._license_key else "(none)",
+            "Validating license: key=%s, device_id=%s, version=%s",
+            mask_key(self._license_key) or "(none)",
             self._device_id or "(none)",
             self._integration_version,
         )
@@ -113,6 +116,7 @@ class SmartingHomeAPI:
                         max_installations=data.get("max_installations", 1),
                         features=data.get("features", []),
                         message=data.get("message"),
+                        lifetime=is_lifetime(data.get("expires"), data.get("lifetime")),
                     )
 
                 if response.status == 401:
@@ -148,10 +152,12 @@ class SmartingHomeAPI:
                     message=f"Unexpected response: {response.status}",
                 )
 
-        except aiohttp.ClientError as err:
-            _LOGGER.error("Cannot connect to Smarting HOME API: %s", err)
+        except (AuthenticationError, ConnectionError):
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            _LOGGER.error("Cannot connect to Smarting HOME API: %s", str(err) or "timeout")
             raise ConnectionError(
-                f"Cannot connect to license server: {err}"
+                f"Cannot connect to license server: {str(err) or 'timeout'}"
             ) from err
         except Exception as err:
             _LOGGER.error("License validation error: %s", err)
@@ -185,6 +191,7 @@ class SmartingHomeAPI:
                         max_installations=data.get("max_installations", 1),
                         features=data.get("features", []),
                         message=data.get("message"),
+                        lifetime=is_lifetime(data.get("expires"), data.get("lifetime")),
                     )
 
                 return LicenseInfo(
@@ -197,13 +204,13 @@ class SmartingHomeAPI:
                     message=f"Status check failed: {response.status}",
                 )
 
-        except aiohttp.ClientError as err:
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             _LOGGER.warning(
                 "License status check network error (grace period applies): %s",
-                err,
+                str(err) or "timeout",
             )
             raise ConnectionError(
-                f"Cannot reach license server: {err}"
+                f"Cannot reach license server: {str(err) or 'timeout'}"
             ) from err
 
     async def register_free_device(self) -> bool:

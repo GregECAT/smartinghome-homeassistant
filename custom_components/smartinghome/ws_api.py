@@ -55,6 +55,9 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_showcase_preview)
     websocket_api.async_register_command(hass, ws_showcase_save)
     websocket_api.async_register_command(hass, ws_showcase_send)
+    websocket_api.async_register_command(hass, ws_license_status)
+    websocket_api.async_register_command(hass, ws_license_activate)
+    websocket_api.async_register_command(hass, ws_license_deactivate)
 
     from .meter_ws import async_register as _register_meter_ws
     _register_meter_ws(hass)
@@ -899,3 +902,120 @@ async def ws_showcase_send(hass: HomeAssistant, connection, msg: dict[str, Any])
     if pub is None:
         return
     connection.send_result(msg["id"], await pub.async_send())
+
+
+# ── License (panel card: buy → paste the key from the e-mail → activate) ──────
+
+def _license_entry(hass: HomeAssistant, entry_id: str | None = None):
+    """The Smarting HOME config entry the license belongs to (loaded one first)."""
+    entries = hass.config_entries.async_entries(DOMAIN)
+    if entry_id:
+        return next((e for e in entries if e.entry_id == entry_id), None)
+    from homeassistant.config_entries import ConfigEntryState
+
+    return next((e for e in entries if e.state is ConfigEntryState.LOADED), None) or (
+        entries[0] if entries else None
+    )
+
+
+def _store_license(hass: HomeAssistant, entry, new_data: dict[str, Any]) -> None:
+    """Save the entry data and make sure the entry is set up again with it."""
+    from homeassistant.config_entries import ConfigEntryState
+    from .license_key import needs_explicit_reload
+
+    loaded = entry.state is ConfigEntryState.LOADED
+    changed = hass.config_entries.async_update_entry(entry, data=new_data)
+    if needs_explicit_reload(bool(changed), loaded):
+        schedule = getattr(hass.config_entries, "async_schedule_reload", None)
+        if schedule is not None:
+            schedule(entry.entry_id)
+        else:  # older Home Assistant
+            hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smartinghome/license/status",
+    vol.Optional("entry_id"): str,
+})
+@callback
+def ws_license_status(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    from .const import CONF_LICENSE_KEY, CONF_LICENSE_MODE, LICENSE_MODE_FREE
+    from .license_key import status_payload
+
+    entry = _license_entry(hass, msg.get("entry_id"))
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Brak konfiguracji Smarting HOME")
+        return
+    mgr = (hass.data.get(DOMAIN, {}).get(entry.entry_id) or {}).get("license_manager")
+    mode = entry.data.get(CONF_LICENSE_MODE, LICENSE_MODE_FREE)
+    info = mgr.license_info if mgr is not None else None
+    payload = status_payload(
+        mode=mode,
+        tier=mgr.tier.value if mgr is not None else mode,
+        valid=mgr.is_valid if mgr is not None else False,
+        key=entry.data.get(CONF_LICENSE_KEY, "") or "",
+        lifetime=mgr.lifetime if mgr is not None else False,
+        expires=info.expires if info is not None else None,
+        last_check=mgr.last_successful_check if mgr is not None else None,
+        grace_hours=(
+            round(mgr.grace_period_remaining / 3600, 1)
+            if mgr is not None and not mgr.is_free_mode else None
+        ),
+        message=info.message if info is not None and mode != LICENSE_MODE_FREE else None,
+        entry_state=str(getattr(entry.state, "value", entry.state)),
+        is_admin=bool(connection.user and connection.user.is_admin),
+    )
+    payload["entry_id"] = entry.entry_id
+    connection.send_result(msg["id"], payload)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smartinghome/license/activate",
+    vol.Required("key"): vol.All(str, vol.Length(max=512)),
+    vol.Optional("entry_id"): str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_license_activate(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Validate a key with the license server; when accepted, store it and reload.
+
+    Result {ok, tier, message} — on failure also "code" (invalid_format, invalid_key,
+    cannot_connect, install_limit, expired, suspended, server_error, rejected, unknown).
+    """
+    from .license import async_check_license_key
+    from .license_key import entry_data_with_key
+
+    entry = _license_entry(hass, msg.get("entry_id"))
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Brak konfiguracji Smarting HOME")
+        return
+    key, result = await async_check_license_key(hass, msg["key"])
+    if result["ok"]:
+        _store_license(hass, entry, entry_data_with_key(dict(entry.data), key))
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smartinghome/license/deactivate",
+    vol.Optional("entry_id"): str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_license_deactivate(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Remove the key from this installation (back to FREE) and reload."""
+    import logging
+    from .const import CONF_LICENSE_KEY
+    from .license_key import entry_data_without_key, mask_key
+
+    entry = _license_entry(hass, msg.get("entry_id"))
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Brak konfiguracji Smarting HOME")
+        return
+    old = entry.data.get(CONF_LICENSE_KEY, "") or ""
+    _store_license(hass, entry, entry_data_without_key(dict(entry.data)))
+    logging.getLogger(__name__).info("License key %s removed from the panel — FREE mode", mask_key(old) or "(none)")
+    connection.send_result(msg["id"], {
+        "ok": True,
+        "tier": "free",
+        "message": "Klucz usunięty — integracja wraca do planu FREE. Przeładowuję…",
+    })

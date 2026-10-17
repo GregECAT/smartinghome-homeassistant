@@ -3,14 +3,14 @@
     "step": {
       "user": {
         "title": "Smarting HOME — Wybierz licencję",
-        "description": "Witaj w Smarting HOME Energy Management!\n\nWybierz tryb licencji:\n• **FREE** — Wszystkie sensory, Autopilot z planerem arbitrażu Max Zysk, harmonogram, strażnik napięcia, podstawowe alerty\n• **PRO** — AI (doradca, raporty, autonomia AI), strategia pogodowa, kalibrowana prognoza PV, alerty SMS/e-mail, raporty do reklamacji i faktury, automatyczne aktualizacje\n\nKup PRO na {website}",
+        "description": "Witaj w Smarting HOME Energy Management!\n\nWybierz tryb licencji:\n• **FREE** — Wszystkie sensory, Autopilot z planerem arbitrażu Max Zysk, harmonogram, strażnik napięcia, podstawowe alerty\n• **PRO** — AI (doradca, raporty, autonomia AI), strategia pogodowa, kalibrowana prognoza PV, alerty SMS/e-mail, raporty do reklamacji i faktury, automatyczne aktualizacje\n\nKup PRO na {website} — po płatności klucz licencji przyjdzie e-mailem w ciągu 24 godzin. Możesz zacząć od FREE i aktywować klucz później w panelu Smarting HOME (⚙️ Ustawienia → Licencja).",
         "data": {
           "license_mode": "Tryb licencji"
         }
       },
       "license": {
         "title": "Smarting HOME — Aktywacja licencji",
-        "description": "Wprowadź klucz licencyjny Smarting HOME PRO.\nKup licencję na {website}",
+        "description": "Wklej klucz licencji Smarting HOME PRO z e-maila z zamówieniem (przychodzi w ciągu 24 godzin od płatności).\nNie masz jeszcze klucza? Kup na {website} — albo wybierz teraz FREE i aktywuj klucz później w panelu Smarting HOME (⚙️ Ustawienia → Licencja).",
         "data": {
           "license_key": "Klucz licencyjny"
         }
@@ -94,9 +94,11 @@
       }
     },
     "error": {
-      "invalid_license": "Nieprawidłowy klucz licencyjny. Sprawdź klucz lub kup na smartinghome.pl",
-      "cannot_connect": "Nie można połączyć z serwerem licencji Smarting HOME. Sprawdź połączenie internetowe.",
-      "unknown": "Wystąpił nieoczekiwany błąd. Spróbuj ponownie."
+      "invalid_license": "Nieprawidłowy klucz licencyjny. Skopiuj cały klucz z e-maila z zamówieniem (zaczyna się od SH-PRO-) albo kup licencję na smartinghome.pl/buy",
+      "cannot_connect": "Brak połączenia z serwerem licencji Smarting HOME. Sprawdź dostęp Home Assistant do internetu i spróbuj ponownie.",
+      "unknown": "Wystąpił nieoczekiwany błąd. Spróbuj ponownie.",
+      "install_limit": "Ten klucz jest już aktywny w innej instalacji Home Assistant (licencja obejmuje jedną instalację). Aby przenieść licencję, napisz na kontakt@smartinghome.pl",
+      "license_inactive": "Ta licencja nie jest aktywna (wygasła lub jest zawieszona). Napisz na kontakt@smartinghome.pl"
     },
     "abort": {
       "already_configured": "Ten falownik jest już skonfigurowany."
@@ -113,12 +115,13 @@
           "inverter_brand": "🔌 Marka falownika",
           "sensors": "🔌 Mapowanie sensorów",
           "ecowitt": "🌦️ Stacja pogodowa Ecowitt",
-          "api_keys": "🔑 Klucze API (AI Advisor)"
+          "api_keys": "🔑 Klucze API (AI Advisor)",
+          "downgrade": "🔓 Usuń licencję PRO (przejdź na FREE)"
         }
       },
       "upgrade": {
         "title": "Smarting HOME — Ustawienia & Upgrade",
-        "description": "Masz plan FREE. Wpisz klucz PRO, aby odblokować wszystkie funkcje.\nKup na: {website}",
+        "description": "Masz plan FREE. Wklej klucz PRO z e-maila z zamówieniem, aby odblokować wszystkie funkcje — możesz go też aktywować w panelu Smarting HOME (⚙️ Ustawienia → Licencja).\nKup na {website} — klucz przyjdzie e-mailem w ciągu 24 godzin od płatności.",
         "data": {
           "license_key": "🔑 Klucz licencji PRO (zostaw puste = FREE)",
           "tariff": "Typ taryfy",
@@ -185,7 +188,21 @@
           "weather_humidity": "💧 Wilgotność (%)",
           "weather_cloud_cover": "☁️ Zachmurzenie (%)"
         }
+      },
+      "downgrade": {
+        "title": "🔓 Usuń licencję PRO",
+        "description": "Uwaga! Po potwierdzeniu:\n• Klucz licencji PRO zostanie usunięty z tej instalacji\n• Integracja przejdzie na plan FREE\n• Funkcje PRO (AI, strategia pogodowa, alerty SMS/e-mail, raporty) zostaną wyłączone — funkcje, które instalacja miała w FREE przed wersją 1.71, zostają\n\nAby ponownie aktywować PRO, wpisz klucz w opcjach albo w panelu Smarting HOME (⚙️ Ustawienia → Licencja).",
+        "data": {
+          "confirm_downgrade": "✅ Tak, chcę przejść na plan FREE"
+        }
       }
+    },
+    "error": {
+      "invalid_license": "Nieprawidłowy klucz licencyjny. Skopiuj cały klucz z e-maila z zamówieniem (zaczyna się od SH-PRO-) albo kup licencję na smartinghome.pl/buy",
+      "cannot_connect": "Brak połączenia z serwerem licencji Smarting HOME. Sprawdź dostęp Home Assistant do internetu i spróbuj ponownie.",
+      "install_limit": "Ten klucz jest już aktywny w innej instalacji Home Assistant (licencja obejmuje jedną instalację). Aby przenieść licencję, napisz na kontakt@smartinghome.pl",
+      "license_inactive": "Ta licencja nie jest aktywna (wygasła lub jest zawieszona). Napisz na kontakt@smartinghome.pl",
+      "unknown": "Wystąpił nieoczekiwany błąd. Spróbuj ponownie."
     }
   }
 }

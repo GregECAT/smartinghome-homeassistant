@@ -2,17 +2,17 @@
   "config": {
     "step": {
       "user": {
-        "title": "Smarting HOME — Wybierz licencję",
-        "description": "Witaj w Smarting HOME Energy Management!\n\nWybierz tryb licencji:\n• **FREE** — All sensors, autopilot with the Max Zysk arbitrage planner, schedules, voltage guard, basic alerts\n• **PRO** — AI (advisor, reports, AI autonomy), weather strategy, calibrated PV forecast, SMS/e-mail alerts, complaint & invoice reports, automatic updates\n\nKup PRO na {website}",
+        "title": "Smarting HOME — Choose License",
+        "description": "Welcome to Smarting HOME Energy Management!\n\nChoose your license mode:\n• **FREE** — All sensors, autopilot with the Max Zysk arbitrage planner, schedules, voltage guard, basic alerts\n• **PRO** — AI (advisor, reports, AI autonomy), weather strategy, calibrated PV forecast, SMS/e-mail alerts, complaint & invoice reports, automatic updates\n\nBuy PRO at {website} — after payment the license key arrives by e-mail within 24 hours. You can start with FREE now and activate the key later in the Smarting HOME panel (⚙️ Settings → License).",
         "data": {
           "license_mode": "Tryb licencji"
         }
       },
       "license": {
-        "title": "Smarting HOME — Aktywacja licencji",
-        "description": "Wprowadź klucz licencyjny Smarting HOME PRO.\nKup licencję na {website}",
+        "title": "Smarting HOME — License Activation",
+        "description": "Paste the Smarting HOME PRO license key from the order e-mail (it arrives within 24 hours of payment).\nNo key yet? Buy one at {website} — or choose FREE now and activate the key later in the Smarting HOME panel (⚙️ Settings → License).",
         "data": {
-          "license_key": "Klucz licencyjny"
+          "license_key": "License Key"
         }
       },
       "brand": {
@@ -70,9 +70,11 @@
       }
     },
     "error": {
-      "invalid_license": "Nieprawidłowy klucz licencyjny. Sprawdź klucz lub kup na smartinghome.pl",
-      "cannot_connect": "Nie można połączyć z serwerem licencji Smarting HOME. Sprawdź połączenie internetowe.",
-      "unknown": "Wystąpił nieoczekiwany błąd. Spróbuj ponownie."
+      "invalid_license": "Invalid license key. Copy the whole key from the order e-mail (it starts with SH-PRO-) or buy one at smartinghome.pl/buy",
+      "cannot_connect": "Cannot connect to the Smarting HOME license server. Check the internet connection of Home Assistant and try again.",
+      "unknown": "An unexpected error occurred. Please try again.",
+      "install_limit": "This key is already active in another Home Assistant installation (one installation per license). To move the license, write to kontakt@smartinghome.pl",
+      "license_inactive": "This license is not active (expired or suspended). Write to kontakt@smartinghome.pl"
     },
     "abort": {
       "already_configured": "Ten falownik jest już skonfigurowany."
@@ -90,14 +92,14 @@
           "sensors": "🔌 Sensor Mapping",
           "ecowitt": "🌦️ Ecowitt Weather Station",
           "api_keys": "🔑 API Keys (AI Advisor)",
-          "downgrade": "🔓 Usuń licencję PRO (przejdź na FREE)"
+          "downgrade": "🔓 Remove PRO license (switch to FREE)"
         }
       },
       "upgrade": {
         "title": "Smarting HOME — Settings & Upgrade",
-        "description": "You are on the FREE plan. Enter a PRO license key to unlock all features.\nBuy at: {website}",
+        "description": "You are on the FREE plan. Paste the PRO license key from the order e-mail to unlock all features — you can also activate it in the Smarting HOME panel (⚙️ Settings → License).\nBuy at {website} — the key arrives by e-mail within 24 hours of payment.",
         "data": {
-          "license_key": "🔑 PRO License Key (leave empty = FREE)",
+          "license_key": "🔑 PRO License Key (leave empty to stay FREE)",
           "tariff": "Tariff Type",
           "rce_enabled": "Enable RCE PSE",
           "update_interval": "Update Interval (seconds)"
@@ -140,12 +142,19 @@
         }
       },
       "downgrade": {
-        "title": "🔓 Usuń licencję PRO",
-        "description": "Uwaga! Po potwierdzeniu:\n• Licencja PRO zostanie usunięta\n• Integracja przejdzie na plan FREE\n• Funkcje PRO (AI, strategia pogodowa, alerty SMS/e-mail, raporty) zostaną wyłączone — funkcje, które instalacja miała w FREE przed wersją 1.71, zostają\n\nAby ponownie aktywować PRO, wpisz klucz w opcjach.",
+        "title": "🔓 Remove PRO license",
+        "description": "After confirming:\n• The PRO license key is removed from this installation\n• The integration switches to the FREE plan\n• PRO features (AI, weather strategy, SMS/e-mail alerts, reports) are disabled — features this installation had in FREE before version 1.71 stay\n\nTo activate PRO again, enter the key in the options or in the Smarting HOME panel (⚙️ Settings → License).",
         "data": {
-          "confirm_downgrade": "✅ Tak, chcę przejść na plan FREE"
+          "confirm_downgrade": "✅ Yes, switch to the FREE plan"
         }
       }
+    },
+    "error": {
+      "invalid_license": "Invalid license key. Copy the whole key from the order e-mail (it starts with SH-PRO-) or buy one at smartinghome.pl/buy",
+      "cannot_connect": "Cannot connect to the Smarting HOME license server. Check the internet connection of Home Assistant and try again.",
+      "install_limit": "This key is already active in another Home Assistant installation (one installation per license). To move the license, write to kontakt@smartinghome.pl",
+      "license_inactive": "This license is not active (expired or suspended). Write to kontakt@smartinghome.pl",
+      "unknown": "An unexpected error occurred. Please try again."
     }
   }
 }

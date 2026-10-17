@@ -33,6 +33,7 @@ from .const import (
     ATTR_LICENSE_LAST_CHECK,
 )
 from .features import features_for
+from .license_key import check_license_key, is_lifetime, mask_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -109,6 +110,24 @@ class LicenseManager:
     def is_pro(self) -> bool:
         """Return True if license is PRO or ENTERPRISE."""
         return self.tier in (LicenseTier.PRO, LicenseTier.ENTERPRISE)
+
+    @property
+    def license_mode(self) -> str:
+        """Configured mode: "free" or "pro" (a key is stored)."""
+        return self._license_mode
+
+    @property
+    def last_successful_check(self) -> float:
+        """Unix time of the last accepted validation (0 = none yet)."""
+        return self._last_successful_check
+
+    @property
+    def lifetime(self) -> bool:
+        """True for a perpetual license (as the license server reported it)."""
+        info = self._license_info
+        if info is None or self.is_free_mode:
+            return False
+        return is_lifetime(info.expires, getattr(info, "lifetime", False))
 
     @property
     def free_legacy(self) -> bool:
@@ -414,3 +433,47 @@ def any_entry_has_feature(hass: HomeAssistant, feature: str) -> bool:
         if mgr is not None and mgr.has_feature(feature):
             return True
     return False
+
+
+async def async_device_id(hass: HomeAssistant) -> str:
+    """The installation id the license server counts (same as at entry setup)."""
+    try:
+        from homeassistant.helpers.instance_id import async_get as async_get_instance_id
+
+        return await async_get_instance_id(hass)
+    except Exception:  # noqa: BLE001
+        return str(hass.data.get("core.uuid", ""))
+
+
+async def async_validate_license_key(hass: HomeAssistant, license_key: str) -> LicenseInfo:
+    """Ask the license server about a key for this installation.
+
+    One code path for the config flow, the options flow and the panel activation.
+    Raises AuthenticationError (unknown key) and APIConnectionError (no server).
+    """
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+    from .const import VERSION
+
+    api = SmartingHomeAPI(
+        async_get_clientsession(hass),
+        license_key,
+        device_id=await async_device_id(hass),
+        ha_version=HA_VERSION,
+        integration_version=VERSION,
+    )
+    return await api.validate_license()
+
+
+async def async_check_license_key(hass: HomeAssistant, raw_key: Any) -> tuple[str, dict[str, Any]]:
+    """Normalise and validate a pasted key → (key, {ok, code, tier, message, …})."""
+    key, result = await check_license_key(
+        raw_key,
+        lambda k: async_validate_license_key(hass, k),
+        auth_errors=(AuthenticationError,),
+        connect_errors=(APIConnectionError,),
+    )
+    if result["ok"]:
+        _LOGGER.info("License key %s accepted: tier=%s", mask_key(key), result["tier"])
+    else:
+        _LOGGER.warning("License key %s not accepted: %s", mask_key(key) or "(empty)", result["code"])
+    return key, result

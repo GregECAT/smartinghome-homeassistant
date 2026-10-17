@@ -36,6 +36,7 @@ from .const import (
 )
 from .coordinator import SmartingHomeCoordinator
 from .license import LicenseManager
+from .license_key import mask_key
 from .services import async_setup_services, async_unload_services
 from .strategy_controller import StrategyController
 from .energy_manager import EnergyManager
@@ -137,9 +138,9 @@ async def async_setup_entry(
     license_mode = entry.data.get(CONF_LICENSE_MODE, LICENSE_MODE_FREE)
 
     _LOGGER.info(
-        "License config: mode=%s, key=%s..., device_id=%s, ha=%s",
+        "License config: mode=%s, key=%s, device_id=%s, ha=%s",
         license_mode,
-        license_key[:12] if license_key else "(none)",
+        mask_key(license_key) or "(none)",
         device_id[:12] if device_id else "(none)",
         ha_version,
     )

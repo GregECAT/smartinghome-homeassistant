@@ -198,15 +198,15 @@ Provide your own API keys for AI energy advisory:
 
 Already installed as FREE? You can upgrade to PRO **without reinstalling**:
 
-1. Go to **Settings → Devices & Services → Smarting HOME**
-2. Click **Configure** (⚙️ gear icon)
-3. Enter your PRO license key in the **🔑 License Key** field
-4. Click **Submit** — license is validated automatically
-5. **Restart Home Assistant** to activate all PRO features
+1. Buy the license at [smartinghome.pl/buy](https://smartinghome.pl/buy/#licencja) (or the kit with a Home Assistant device, [#zestaw](https://smartinghome.pl/buy/#zestaw)) — the license key arrives by e-mail within 24 hours of payment
+2. Open the **Smarting HOME panel → ⚙️ Settings → 🔑 License** card (Home Assistant administrator)
+3. Paste the key into **Klucz licencji PRO** and click **Aktywuj** — the key is checked with the license server, saved, and the integration reloads by itself (no Home Assistant restart)
 
-> 💡 Buy PRO license at [smartinghome.pl/buy](https://smartinghome.pl/buy/)
+Alternatively: **Settings → Devices & Services → Smarting HOME → Configure → ⚙️ Settings & Upgrade**, field **🔑 PRO License Key**.
 
-After upgrade you'll unlock: Night Arbitrage, Voltage/PV Cascades, AI Advisor, Export Limit Control, all 7 Blueprints, 3 full Dashboards.
+The license is perpetual for one Home Assistant installation; it is re-checked about once a day and keeps working for 72 hours without internet. To move it to another installation, remove the key in the same card (**Usuń klucz**) and write to kontakt@smartinghome.pl.
+
+PRO adds: AI (advisor, daily AI report, ROI analysis, AI autonomy — with your own AI API key), the weather strategy and calibrated PV forecast, SMS / e-mail alerts and several phones, the daily report, the voltage complaint report export and "Invoice vs Home Assistant", automatic updates with backup, up to 10 PV strings and several wind turbines.
 
 ---
 

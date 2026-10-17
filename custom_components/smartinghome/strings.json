@@ -3,14 +3,14 @@
     "step": {
       "user": {
         "title": "Smarting HOME — Choose License",
-        "description": "Welcome to Smarting HOME Energy Management!\n\nChoose your license mode:\n• **FREE** — All sensors, autopilot with the Max Zysk arbitrage planner, schedules, voltage guard, basic alerts\n• **PRO** — AI (advisor, reports, AI autonomy), weather strategy, calibrated PV forecast, SMS/e-mail alerts, complaint & invoice reports, automatic updates\n\nPurchase PRO at {website}",
+        "description": "Welcome to Smarting HOME Energy Management!\n\nChoose your license mode:\n• **FREE** — All sensors, autopilot with the Max Zysk arbitrage planner, schedules, voltage guard, basic alerts\n• **PRO** — AI (advisor, reports, AI autonomy), weather strategy, calibrated PV forecast, SMS/e-mail alerts, complaint & invoice reports, automatic updates\n\nBuy PRO at {website} — after payment the license key arrives by e-mail within 24 hours. You can start with FREE now and activate the key later in the Smarting HOME panel (⚙️ Settings → License).",
         "data": {
           "license_mode": "License Mode"
         }
       },
       "license": {
         "title": "Smarting HOME — License Activation",
-        "description": "Enter your Smarting HOME PRO license key.\nPurchase a license at {website}",
+        "description": "Paste the Smarting HOME PRO license key from the order e-mail (it arrives within 24 hours of payment).\nNo key yet? Buy one at {website} — or choose FREE now and activate the key later in the Smarting HOME panel (⚙️ Settings → License).",
         "data": {
           "license_key": "License Key"
         }
@@ -110,9 +110,11 @@
       }
     },
     "error": {
-      "invalid_license": "Invalid license key. Please check your key or purchase at smartinghome.pl",
-      "cannot_connect": "Cannot connect to Smarting HOME license server. Check your internet connection.",
-      "unknown": "An unexpected error occurred. Please try again."
+      "invalid_license": "Invalid license key. Copy the whole key from the order e-mail (it starts with SH-PRO-) or buy one at smartinghome.pl/buy",
+      "cannot_connect": "Cannot connect to the Smarting HOME license server. Check the internet connection of Home Assistant and try again.",
+      "unknown": "An unexpected error occurred. Please try again.",
+      "install_limit": "This key is already active in another Home Assistant installation (one installation per license). To move the license, write to kontakt@smartinghome.pl",
+      "license_inactive": "This license is not active (expired or suspended). Write to kontakt@smartinghome.pl"
     },
     "abort": {
       "already_configured": "This inverter is already configured."
@@ -129,12 +131,13 @@
           "inverter_brand": "🔌 Inverter Brand",
           "sensors": "🔌 Sensor Mapping",
           "ecowitt": "🌦️ Ecowitt Weather Station",
-          "api_keys": "🔑 API Keys (AI Advisor)"
+          "api_keys": "🔑 API Keys (AI Advisor)",
+          "downgrade": "🔓 Remove PRO license (switch to FREE)"
         }
       },
       "upgrade": {
         "title": "Smarting HOME — Settings & Upgrade",
-        "description": "You are on the FREE plan. Enter a PRO license key to unlock all features.\nBuy at: {website}",
+        "description": "You are on the FREE plan. Paste the PRO license key from the order e-mail to unlock all features — you can also activate it in the Smarting HOME panel (⚙️ Settings → License).\nBuy at {website} — the key arrives by e-mail within 24 hours of payment.",
         "data": {
           "license_key": "🔑 PRO License Key (leave empty to stay FREE)",
           "tariff": "Tariff Type",
@@ -231,7 +234,21 @@
         "data": {
           "inverter_brand": "Inverter Brand"
         }
+      },
+      "downgrade": {
+        "title": "🔓 Remove PRO license",
+        "description": "After confirming:\n• The PRO license key is removed from this installation\n• The integration switches to the FREE plan\n• PRO features (AI, weather strategy, SMS/e-mail alerts, reports) are disabled — features this installation had in FREE before version 1.71 stay\n\nTo activate PRO again, enter the key in the options or in the Smarting HOME panel (⚙️ Settings → License).",
+        "data": {
+          "confirm_downgrade": "✅ Yes, switch to the FREE plan"
+        }
       }
+    },
+    "error": {
+      "invalid_license": "Invalid license key. Copy the whole key from the order e-mail (it starts with SH-PRO-) or buy one at smartinghome.pl/buy",
+      "cannot_connect": "Cannot connect to the Smarting HOME license server. Check the internet connection of Home Assistant and try again.",
+      "install_limit": "This key is already active in another Home Assistant installation (one installation per license). To move the license, write to kontakt@smartinghome.pl",
+      "license_inactive": "This license is not active (expired or suspended). Write to kontakt@smartinghome.pl",
+      "unknown": "An unexpected error occurred. Please try again."
     }
   },
   "entity": {

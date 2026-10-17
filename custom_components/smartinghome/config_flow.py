@@ -14,13 +14,12 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import SmartingHomeAPI, AuthenticationError, ConnectionError as APIConnectionError
 from homeassistant.helpers import selector
+
+from .license_key import FLOW_ERRORS, mask_key
 
 from .const import (
     DOMAIN,
@@ -71,6 +70,9 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Shop page, licence card (the key arrives by e-mail after payment)
+BUY_URL = "https://smartinghome.pl/buy/?utm_source=ha_config_flow&utm_medium=integration#licencja"
 
 BRAND_OPTIONS: dict[str, str] = {
     INVERTER_BRAND_GOODWE: "GoodWe",
@@ -141,7 +143,7 @@ class SmartingHomeConfigFlow(
                 }
             ),
             description_placeholders={
-                "website": "https://smartinghome.pl",
+                "website": BUY_URL,
             },
         )
 
@@ -152,33 +154,18 @@ class SmartingHomeConfigFlow(
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            self._license_key = user_input[CONF_LICENSE_KEY]
+            # Same check as the panel's "Aktywuj" (normalised key, this installation's id)
+            from .license import async_check_license_key
 
-            # Validate license key
-            session = async_get_clientsession(self.hass)
-            device_id = str(self.hass.data.get("core.uuid", ""))
-            ha_version = HA_VERSION
-            api = SmartingHomeAPI(
-                session, self._license_key,
-                device_id=device_id,
-                ha_version=ha_version,
-                integration_version="1.14.0",
+            key, result = await async_check_license_key(
+                self.hass, user_input.get(CONF_LICENSE_KEY, "")
             )
-
-            try:
-                info = await api.validate_license()
-                if info.valid:
-                    self._license_tier = info.tier
-                    self._data[CONF_LICENSE_KEY] = self._license_key
-                    return await self.async_step_brand()
-                errors["base"] = "invalid_license"
-            except AuthenticationError:
-                errors["base"] = "invalid_license"
-            except APIConnectionError:
-                errors["base"] = "cannot_connect"
-            except Exception:
-                _LOGGER.exception("Unexpected error during license validation")
-                errors["base"] = "unknown"
+            if result["ok"]:
+                self._license_key = key
+                self._license_tier = result["tier"]
+                self._data[CONF_LICENSE_KEY] = key
+                return await self.async_step_brand()
+            errors["base"] = FLOW_ERRORS.get(result["code"], "unknown")
 
         return self.async_show_form(
             step_id="license",
@@ -189,7 +176,7 @@ class SmartingHomeConfigFlow(
             ),
             errors=errors,
             description_placeholders={
-                "website": "https://smartinghome.pl",
+                "website": BUY_URL,
             },
         )
 
@@ -527,7 +514,7 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
         current = self._config_entry.data
 
         if user_input is not None:
-            license_key = user_input.get(CONF_LICENSE_KEY, "").strip()
+            license_key = (user_input.get(CONF_LICENSE_KEY) or "").strip()
 
             # Always persist provider/tariff/RCE/interval to entry.data
             new_data = {**current}
@@ -547,40 +534,22 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
             )
 
             if license_key:
-                # Validate the license key
-                session = async_get_clientsession(self.hass)
-                device_id = str(self.hass.data.get("core.uuid", ""))
-                ha_version = HA_VERSION
-                api = SmartingHomeAPI(
-                    session, license_key,
-                    device_id=device_id,
-                    ha_version=ha_version,
-                    integration_version="1.14.0",
-                )
+                # Same check as the panel's "Aktywuj" (normalised key, this installation's id)
+                from .license import async_check_license_key
 
-                try:
-                    info = await api.validate_license()
-                    if info.valid:
-                        # Upgrade: update entry data to PRO
-                        new_data[CONF_LICENSE_MODE] = LICENSE_MODE_PRO
-                        new_data[CONF_LICENSE_KEY] = license_key
-                        self.hass.config_entries.async_update_entry(
-                            self._config_entry, data=new_data
-                        )
-                        _LOGGER.info(
-                            "License upgraded to %s (key: %s...)",
-                            info.tier.value,
-                            license_key[:12],
-                        )
-                        return self.async_create_entry(title="", data={})
-                    errors["base"] = "invalid_license"
-                except AuthenticationError:
-                    errors["base"] = "invalid_license"
-                except APIConnectionError:
-                    errors["base"] = "cannot_connect"
-                except Exception:
-                    _LOGGER.exception("Error during license upgrade")
-                    errors["base"] = "unknown"
+                key, result = await async_check_license_key(self.hass, license_key)
+                if result["ok"]:
+                    # Upgrade: update entry data to PRO (the update listener reloads)
+                    new_data[CONF_LICENSE_MODE] = LICENSE_MODE_PRO
+                    new_data[CONF_LICENSE_KEY] = key
+                    self.hass.config_entries.async_update_entry(
+                        self._config_entry, data=new_data
+                    )
+                    _LOGGER.info(
+                        "License upgraded to %s (key: %s)", result["tier"], mask_key(key)
+                    )
+                    return self.async_create_entry(title="", data={})
+                errors["base"] = FLOW_ERRORS.get(result["code"], "unknown")
             else:
                 # No key entered — just save settings
                 self.hass.config_entries.async_update_entry(
@@ -627,7 +596,7 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
             ),
             errors=errors,
             description_placeholders={
-                "website": "https://smartinghome.pl/buy",
+                "website": BUY_URL,
             },
         )
 
