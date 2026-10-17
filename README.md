@@ -18,7 +18,7 @@
 
 <p align="center">
   <a href="https://smartinghome.pl">🌐 Website</a> •
-  <a href="https://smartinghome.pl/docs">📖 Documentation</a> •
+  <a href="https://github.com/GregECAT/smartinghome-homeassistant/blob/main/docs/Instrukcja.md">📖 Documentation</a> • <a href="https://smartinghome.pl/hems/">🌐 Website</a> •
   <a href="https://github.com/GregECAT/smartinghome-homeassistant/issues">🐛 Issues</a> •
   <a href="https://smartinghome.pl/buy">🛒 Buy License</a>
 </p>
@@ -204,7 +204,7 @@ Already installed as FREE? You can upgrade to PRO **without reinstalling**:
 4. Click **Submit** — license is validated automatically
 5. **Restart Home Assistant** to activate all PRO features
 
-> 💡 Buy PRO license at [smartinghome.pl/buy](https://smartinghome.pl/buy)
+> 💡 Buy PRO license at [smartinghome.pl/buy](https://smartinghome.pl/buy/)
 
 After upgrade you'll unlock: Night Arbitrage, Voltage/PV Cascades, AI Advisor, Export Limit Control, all 7 Blueprints, 3 full Dashboards.
 
@@ -472,8 +472,8 @@ smartinghome-homeassistant/
 | Channel | Link |
 |---------|------|
 | 🌐 Website | [smartinghome.pl](https://smartinghome.pl) |
-| 🛒 Buy License | [smartinghome.pl/buy](https://smartinghome.pl/buy) |
-| 📖 Documentation | [smartinghome.pl/docs](https://smartinghome.pl/docs) |
+| 🛒 Buy License | [smartinghome.pl/buy](https://smartinghome.pl/buy/) |
+| 📖 Documentation | [docs/Instrukcja.md](docs/Instrukcja.md) · [smartinghome.pl/hems](https://smartinghome.pl/hems/) |
 | 🐛 Bug Reports | [GitHub Issues](https://github.com/GregECAT/smartinghome-homeassistant/issues) |
 | 📧 Email | [kontakt@smartinghome.pl](mailto:kontakt@smartinghome.pl) |
 | 💬 Community | [Home Assistant Community](https://community.home-assistant.io/) |
