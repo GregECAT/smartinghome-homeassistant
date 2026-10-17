@@ -185,7 +185,7 @@ class SmartingHomePanel extends HTMLElement {
     if (tab === 'hems') { this._updateHEMSArbitrage(); this._loadForecastStatus(); }
     if (tab === 'tariff') { this._loadDeposit(); }
     if (tab === 'battery') { this._loadFullLog(); }
-    if (tab === 'settings') { this._loadAutoUpdate(); this._loadGrid(); }
+    if (tab === 'settings') { this._loadAutoUpdate(); this._loadGrid(); this._loadShowcase(); }
     if (tab === 'energy') { this._loadVoltageReport(); }
     if (tab === 'history') { this._updateHistoryTab(); }
     if (tab === 'autopilot') { this._updateAutopilot(); }
@@ -966,6 +966,113 @@ class SmartingHomePanel extends HTMLElement {
     await this._hass.connection.sendMessagePromise({ type: 'smartinghome/settings/update', settings: { grid } }).catch(() => {});
     if (btn) btn.innerHTML = '✓ Za chwilę';
     setTimeout(() => this._loadGrid(), 2000);
+  }
+
+  /* ── Installation showcase (Ustawienia, admin only) ───────────────── */
+  async _loadShowcase() {
+    const el = this.shadowRoot.getElementById('showcase-content');
+    if (!el || !this._hass?.connection) return;
+    if (this._hass?.user?.is_admin === false) {
+      el.innerHTML = '<span style="color:#64748b">Wizytówkę instalacji konfiguruje administrator Home Assistant.</span>';
+      return;
+    }
+    try {
+      this._showcase = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/showcase/status' });
+    } catch (e) {
+      this._showcase = { error: e.message || e.code || String(e) };
+    }
+    this._renderShowcase();
+  }
+
+  _renderShowcase() {
+    const el = this.shadowRoot.getElementById('showcase-content');
+    if (!el) return;
+    const r = this._showcase || {};
+    if (r.error) { el.innerHTML = `<span style="color:#e74c3c">${this._esc(r.error)}</span>`; return; }
+    const c = r.config || {}, st = r.status || {};
+    const inp = 'style="width:100%; box-sizing:border-box; padding:6px 8px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:6px"';
+    const stLine = st.last_attempt
+      ? `${st.ok ? '✅' : '❌'} ostatnia próba ${this._esc(st.last_attempt)}${st.http_status ? ` · HTTP ${st.http_status}` : ''}${st.bytes ? ` · ${st.bytes} B` : ''}${st.last_ok && !st.ok ? ` · ostatnio udana ${this._esc(st.last_ok)}` : ''}${st.daily_sent ? ` · dane 30 dni: ${this._esc(st.daily_sent)}` : ''}${st.error ? `<br><span style="color:#e74c3c">${this._esc(st.error)}</span>` : ''}`
+      : (c.enabled ? '⏳ pierwsza wysyłka w ciągu minuty' : 'Wyłączone — nic nie jest wysyłane.');
+    el.innerHTML = `
+      <div style="display:flex; flex-wrap:wrap; gap:14px; align-items:center; margin-bottom:8px">
+        <label style="display:flex; align-items:center; gap:6px; color:#e2e8f0; font-weight:700"><input type="checkbox" id="sc-on" ${c.enabled ? 'checked' : ''}> Udostępniaj dane instalacji (wizytówka)</label>
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:10px; margin-bottom:8px">
+        <label>Adres odbiorcy<input id="sc-url" type="url" value="${this._esc(c.url || r.default_url || '')}" ${inp}></label>
+        <label>Sekret HMAC ${r.has_secret ? '<span style="color:#2ecc71">(ustawiony)</span>' : '<span style="color:#f7b731">(brak)</span>'}<input id="sc-secret" type="password" autocomplete="new-password" placeholder="${r.has_secret ? 'zostaw puste, aby nie zmieniać' : 'min. 32 znaki'}" ${inp}></label>
+        <label>Nazwa (opcjonalnie)<input id="sc-title" type="text" maxlength="80" value="${this._esc(c.title || '')}" placeholder="np. Dom autora" ${inp}></label>
+        <label>Lokalizacja (tekst)<input id="sc-loc" type="text" maxlength="80" value="${this._esc(c.location || '')}" placeholder="np. pod Oświęcimiem" ${inp}></label>
+      </div>
+      <label style="display:block; margin-bottom:8px">Opis instalacji<textarea id="sc-desc" maxlength="300" rows="2" placeholder="np. GoodWe GW8K-ET, magazyn 10,24 kWh, PV ok. 11 kWp, G13 Tauron" ${inp}>${this._esc(c.description || '')}</textarea></label>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px">
+        <button class="test-btn" onclick="this.getRootNode().host._saveShowcase(this)">💾 Zapisz</button>
+        <button class="test-btn" onclick="this.getRootNode().host._previewShowcase(this)">👁️ Podgląd JSON</button>
+        <button class="test-btn" onclick="this.getRootNode().host._sendShowcase(this)">📤 Wyślij teraz</button>
+        ${r.has_secret ? `<button class="test-btn" onclick="this.getRootNode().host._clearShowcaseSecret(this)">🗑️ Usuń sekret</button>` : ''}
+      </div>
+      <div style="font-size:11px; color:#cbd5e1; margin-bottom:6px">${stLine}</div>
+      <pre id="sc-preview" style="display:none; max-height:320px; overflow:auto; font-size:10px; background:#0f172a; border:1px solid #1e293b; border-radius:6px; padding:8px; color:#cbd5e1; white-space:pre-wrap"></pre>
+      <div style="font-size:10px; color:#64748b; margin-top:8px; line-height:1.5">Gdy włączone, co 5 minut integracja wysyła na podany adres podpisany (HMAC-SHA256) pakiet liczb: moc PV, zużycia, sieci i baterii, SOC, energię dziś, cenę RCE, taryfę i strefę, bieżącą akcję Autopilota z krótkim uzasadnieniem i planem na 6 godzin, depozyt prosumencki bieżącego miesiąca, średnie napięcia faz (10 min), wersję integracji i powyższy opis; raz na godzinę także sumy dzienne z 30 dni. Bez identyfikatorów, nazw encji, numerów seryjnych, adresu, współrzędnych, IP i numeru PPE — lokalizacja tylko jako wpisany tekst. „Podgląd JSON” pokazuje dokładnie to, co wyjdzie z domu. Sekret nie jest pokazywany w panelu.</div>`;
+  }
+
+  _showcaseForm() {
+    const $ = id => this.shadowRoot.getElementById(id);
+    return {
+      enabled: !!$('sc-on')?.checked,
+      url: ($('sc-url')?.value || '').trim(),
+      title: ($('sc-title')?.value || '').trim(),
+      location: ($('sc-loc')?.value || '').trim(),
+      description: ($('sc-desc')?.value || '').trim(),
+      secret: ($('sc-secret')?.value || '').trim(),
+    };
+  }
+
+  async _saveShowcase(btn) {
+    const f = this._showcaseForm();
+    if (f.enabled && !f.secret && !(this._showcase || {}).has_secret) { alert('Wpisz sekret HMAC (min. 32 znaki) — ten sam, który jest zapisany na stronie odbiorcy.'); return; }
+    const msg = { type: 'smartinghome/showcase/save', enabled: f.enabled, url: f.url, title: f.title, location: f.location, description: f.description };
+    if (f.secret) msg.secret = f.secret;
+    try {
+      await this._hass.connection.sendMessagePromise(msg);
+      if (btn) { const o = btn.innerHTML; btn.innerHTML = '✓ Zapisano'; setTimeout(() => { btn.innerHTML = o; }, 2000); }
+    } catch (e) {
+      if (btn) btn.innerHTML = '❌ ' + (e.message || e.code || e);
+      return;
+    }
+    this._loadShowcase();
+  }
+
+  async _clearShowcaseSecret(btn) {
+    if (!confirm('Usunąć sekret? Wysyłka przestanie działać do czasu wpisania nowego.')) return;
+    await this._hass.connection.sendMessagePromise({ type: 'smartinghome/showcase/save', clear_secret: true }).catch(() => {});
+    this._loadShowcase();
+  }
+
+  async _previewShowcase(btn) {
+    const pre = this.shadowRoot.getElementById('sc-preview');
+    if (!pre) return;
+    if (btn) btn.innerHTML = '⏳ Buduję…';
+    try {
+      const r = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/showcase/preview' });
+      pre.textContent = `// ${r.bytes} B — tak wygląda pakiet z zapisanymi ustawieniami\n` + r.json;
+      pre.style.display = 'block';
+    } catch (e) {
+      pre.textContent = '❌ ' + (e.message || e.code || e);
+      pre.style.display = 'block';
+    }
+    if (btn) btn.innerHTML = '👁️ Podgląd JSON';
+  }
+
+  async _sendShowcase(btn) {
+    if (btn) btn.innerHTML = '⏳ Wysyłam…';
+    try {
+      const st = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/showcase/send' });
+      if (btn) btn.innerHTML = st.ok ? '✅ Wysłano' : '❌ Błąd';
+    } catch (e) {
+      if (btn) btn.innerHTML = '❌ ' + (e.message || e.code || e);
+    }
+    setTimeout(() => { if (btn) btn.innerHTML = '📤 Wyślij teraz'; this._loadShowcase(); }, 1500);
   }
 
   /* ── Custom Modal System ───────────────── */
@@ -14810,6 +14917,12 @@ class SmartingHomePanel extends HTMLElement {
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">🔌 Sieć i OSD · prywatność</div>
               <div id="grid-content" style="font-size:12px; color:#94a3b8">Ładowanie…</div>
+            </div>
+
+            <!-- 🪧 Installation showcase (opt-in) -->
+            <div class="card" style="grid-column: 1 / -1">
+              <div class="card-title">🪧 Wizytówka instalacji</div>
+              <div id="showcase-content" style="font-size:12px; color:#94a3b8">Ładowanie…</div>
             </div>
 
             <!-- ℹ️ Info -->

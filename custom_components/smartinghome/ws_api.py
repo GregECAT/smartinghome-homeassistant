@@ -51,6 +51,10 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_auto_update_status)
     websocket_api.async_register_command(hass, ws_grid_status)
     websocket_api.async_register_command(hass, ws_auto_update_run)
+    websocket_api.async_register_command(hass, ws_showcase_status)
+    websocket_api.async_register_command(hass, ws_showcase_preview)
+    websocket_api.async_register_command(hass, ws_showcase_save)
+    websocket_api.async_register_command(hass, ws_showcase_send)
 
     from .meter_ws import async_register as _register_meter_ws
     _register_meter_ws(hass)
@@ -188,7 +192,7 @@ ADMIN_SETTINGS = frozenset({
     "arbitrage_params", "auto_update", "boiler_surplus", "energy_provider", "grid",
     "notification_config", "open_meteo_api_key", "peak_load_control",
     "peak_sell_soc_percent", "pv_string_config", "sensor_map_overrides",
-    "tariff_plan", "telemetry", "voltage_guard",
+    "showcase", "tariff_plan", "telemetry", "voltage_guard",
 })
 # Same access level as the panel itself (require_admin=False) and the
 # save_panel_settings service: any authenticated HA user.
@@ -810,3 +814,88 @@ async def ws_auto_update_run(hass: HomeAssistant, connection, msg: dict[str, Any
         connection.send_error(msg["id"], "not_ready", "Auto updater not running")
         return
     connection.send_result(msg["id"], await updater.async_run_now())
+
+
+# ── Installation showcase (Ustawienia → Wizytówka instalacji) — admin only ──
+
+
+def _showcase(hass: HomeAssistant, connection, msg) -> Any:
+    from .showcase_service import get_publisher
+
+    pub = get_publisher(hass)
+    if pub is None:
+        connection.send_error(msg["id"], "not_ready", "Wizytówka instalacji nie jest jeszcze gotowa")
+    return pub
+
+
+@websocket_api.websocket_command({vol.Required("type"): "smartinghome/showcase/status"})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_showcase_status(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Settings (without the secret — only whether one is set) and the last send."""
+    from .showcase import DEFAULT_URL
+
+    pub = _showcase(hass, connection, msg)
+    if pub is None:
+        return
+    cfg, secret = await pub.async_config()
+    connection.send_result(msg["id"], {
+        "config": cfg, "has_secret": bool(secret), "status": pub.status, "default_url": DEFAULT_URL,
+    })
+
+
+@websocket_api.websocket_command({vol.Required("type"): "smartinghome/showcase/preview"})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_showcase_preview(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """The exact JSON that would be sent now (with the 30-day aggregates)."""
+    from .showcase import encode, preview
+
+    pub = _showcase(hass, connection, msg)
+    if pub is None:
+        return
+    cfg, _ = await pub.async_config()
+    payload = await pub.async_payload(cfg, with_daily=True)
+    connection.send_result(msg["id"], {"json": preview(payload), "bytes": len(encode(payload))})
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smartinghome/showcase/save",
+    vol.Optional("enabled"): bool,
+    vol.Optional("url"): str,
+    vol.Optional("title"): str,
+    vol.Optional("description"): str,
+    vol.Optional("location"): str,
+    vol.Optional("secret"): str,
+    vol.Optional("clear_secret", default=False): bool,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_showcase_save(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    from .showcase_service import MIN_SECRET_LEN, valid_url
+
+    pub = _showcase(hass, connection, msg)
+    if pub is None:
+        return
+    secret = (msg.get("secret") or "").strip()
+    if secret and len(secret) < MIN_SECRET_LEN:
+        connection.send_error(msg["id"], "invalid_format", f"Sekret musi mieć co najmniej {MIN_SECRET_LEN} znaki")
+        return
+    if "url" in msg and msg["url"].strip() and not valid_url(msg["url"]):
+        connection.send_error(msg["id"], "invalid_format", "Adres musi zaczynać się od https://")
+        return
+    updates = {k: msg[k] for k in ("enabled", "url", "title", "description", "location") if k in msg}
+    cfg = await pub.async_save(updates, secret or None, msg["clear_secret"])
+    _, stored = await pub.async_config()
+    connection.send_result(msg["id"], {"config": cfg, "has_secret": bool(stored)})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "smartinghome/showcase/send"})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_showcase_send(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Send now (also when switched off — a one-off test of address and secret)."""
+    pub = _showcase(hass, connection, msg)
+    if pub is None:
+        return
+    connection.send_result(msg["id"], await pub.async_send())

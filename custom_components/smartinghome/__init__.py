@@ -324,6 +324,17 @@ async def async_setup_entry(
         except Exception as err:  # noqa: BLE001
             _LOGGER.warning("Auto updater not started: %s", err)
 
+    # Installation showcase (opt-in, off by default — settings "showcase")
+    if "_showcase" not in hass.data[DOMAIN]:
+        from .showcase_service import ShowcasePublisher
+
+        publisher = ShowcasePublisher(hass)
+        hass.data[DOMAIN]["_showcase"] = publisher
+        try:
+            await publisher.async_start()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Showcase publisher not started: %s", err)
+
     # Register custom panels in sidebar (no PV/battery panel without an inverter)
     try:
         await _async_register_panel(hass, main=not grid_only)
@@ -490,6 +501,9 @@ async def async_unload_entry(
             updater = hass.data[DOMAIN].pop("_auto_updater", None)
             if updater:
                 updater.stop()
+            publisher = hass.data[DOMAIN].pop("_showcase", None)
+            if publisher:
+                publisher.stop()
         for url_path in (DOMAIN, METER_PANEL_URL, SITE_PANEL_URL):
             # Remove sidebar panel
             try:

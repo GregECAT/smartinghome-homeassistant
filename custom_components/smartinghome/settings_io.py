@@ -34,8 +34,9 @@ _lock = threading.RLock()
 SETTINGS_FILE = "smartinghome.settings.json"
 LEGACY_SETTINGS_FILE = "settings.json"
 
-# Never returned to / accepted from the panel (keys live in AISecrets)
-SECRET_KEYS = ("gemini_api_key", "anthropic_api_key", "openrouter_api_key")
+# Never returned to / accepted from the panel (AI keys live in AISecrets; the
+# showcase HMAC secret is set only through smartinghome/showcase/save)
+SECRET_KEYS = ("gemini_api_key", "anthropic_api_key", "openrouter_api_key", "showcase_secret")
 
 _migrated = False
 
