@@ -117,7 +117,7 @@ def test_every_code_has_a_polish_message_and_a_flow_error():
         assert lk.FLOW_ERRORS[code] in {
             "invalid_license", "cannot_connect", "install_limit", "license_inactive", "unknown",
         }
-    assert "limit" in lk.ERROR_MESSAGES[lk.ERR_LIMIT].lower()
+    assert "Usuń klucz" in lk.ERROR_MESSAGES[lk.ERR_LIMIT] and lk.CONTACT in lk.ERROR_MESSAGES[lk.ERR_LIMIT]
     assert "połączenia" in lk.ERROR_MESSAGES[lk.ERR_CONNECT]
     assert "nieprawidłowy" in lk.ERROR_MESSAGES[lk.ERR_INVALID].lower()
 
@@ -225,3 +225,22 @@ def test_status_payload_shows_the_masked_key_to_admins_only():
     assert user["key_masked"] is None and user["has_key"] is True
     assert admin["lifetime"] is True and admin["expires"] is None
     assert KEY not in repr(admin) and KEY not in repr(user)
+
+
+def test_release_glue_never_blocks_removal():
+    async def ok(key):
+        return True
+
+    async def down(key):
+        raise _Conn("timeout")
+
+    async def unknown(key):
+        raise _Auth("401")
+
+    run = lambda fn: asyncio.run(lk.release_license_key(KEY, fn, auth_errors=(_Auth,)))
+    assert run(ok) is True
+    assert run(unknown) is True      # the server holds no slot for an unknown key
+    assert run(down) is False        # key still removed; the user is told about 30 days
+    assert asyncio.run(lk.release_license_key("", down)) is True
+    assert "zwolnione" in lk.deactivation_result(True)["message"]
+    assert "30 dni" in lk.deactivation_result(False)["message"]

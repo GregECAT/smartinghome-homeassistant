@@ -67,8 +67,8 @@ ERROR_MESSAGES: dict[str, str] = {
         "do internetu, i spróbuj ponownie za chwilę."
     ),
     ERR_LIMIT: (
-        "Limit instalacji: ten klucz jest już aktywny w innej instalacji Home Assistant "
-        f"(licencja obejmuje jedną instalację). Aby przenieść licencję, napisz na {CONTACT}."
+        "Ten klucz jest aktywny na innej instalacji Home Assistant. Usuń go tam w panelu "
+        f"(Ustawienia → Licencja → Usuń klucz) albo napisz na {CONTACT}"
     ),
     ERR_EXPIRED: f"Ta licencja wygasła. Napisz na {CONTACT}.",
     ERR_SUSPENDED: f"Ta licencja jest zawieszona. Napisz na {CONTACT}.",
@@ -205,6 +205,46 @@ async def check_license_key(
         getattr(info, "message", None),
         is_lifetime(getattr(info, "expires", None), getattr(info, "lifetime", False)),
     )
+
+
+async def release_license_key(
+    key: str,
+    release: Callable[[str], Awaitable[Any]],
+    *,
+    auth_errors: tuple[type[BaseException], ...] = (),
+) -> bool:
+    """Free this installation's slot before the key is removed → True when it is free.
+
+    An unknown key (auth_errors) holds no slot, so that counts as freed. Any other
+    failure (no connection, server error) returns False: the key is still removed
+    locally, but the slot may stay occupied until the server forgets the device.
+    """
+    if not key:
+        return True
+    try:
+        await release(key)
+    except auth_errors:
+        return True
+    except Exception as err:  # noqa: BLE001 — reported to the user, not raised
+        _LOGGER.warning("License %s: slot not released: %s", mask_key(key), type(err).__name__)
+        return False
+    return True
+
+
+def deactivation_result(slot_freed: bool) -> dict[str, Any]:
+    """WebSocket result after the key was removed (back to FREE)."""
+    if slot_freed:
+        text = (
+            "Klucz usunięty — integracja wraca do planu FREE, a miejsce na licencji jest "
+            "zwolnione (klucz możesz wkleić w innej instalacji). Przeładowuję…"
+        )
+    else:
+        text = (
+            "Klucz usunięty z tej instalacji — integracja wraca do planu FREE. Nie udało się "
+            "połączyć z serwerem licencji, więc miejsce na licencji może pozostać zajęte do "
+            f"30 dni. Jeśli chcesz przenieść licencję wcześniej, napisz na {CONTACT}."
+        )
+    return {"ok": True, "tier": "free", "slot_released": bool(slot_freed), "message": text}
 
 
 def needs_explicit_reload(data_changed: bool, entry_loaded: bool) -> bool:

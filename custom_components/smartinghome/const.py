@@ -638,6 +638,7 @@ LICENSE_API_URL: Final = "https://mslvyiimjevhvujojfax.supabase.co/functions/v1/
 LICENSE_VALIDATE_ENDPOINT: Final = "/validate"
 LICENSE_STATUS_ENDPOINT: Final = "/status"
 LICENSE_REGISTER_FREE_ENDPOINT: Final = "/register-free"
+LICENSE_RELEASE_ENDPOINT: Final = "/release"  # free this installation's slot (API v4)
 LICENSE_CHECK_INTERVAL: Final = 86400  # 24 hours in seconds
 LICENSE_GRACE_PERIOD: Final = 259200  # 72 hours in seconds
 

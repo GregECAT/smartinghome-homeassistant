@@ -204,7 +204,7 @@ Already installed as FREE? You can upgrade to PRO **without reinstalling**:
 
 Alternatively: **Settings → Devices & Services → Smarting HOME → Configure → ⚙️ Settings & Upgrade**, field **🔑 PRO License Key**.
 
-The license is perpetual for one Home Assistant installation; it is re-checked about once a day and keeps working for 72 hours without internet. To move it to another installation, remove the key in the same card (**Usuń klucz**) and write to kontakt@smartinghome.pl.
+The license is perpetual for one Home Assistant installation; it is re-checked about once a day and keeps working for 72 hours without internet. To move it to another installation, remove the key in the same card (**Usuń klucz**) — this frees the installation slot on the license server — and paste it in the new one. If the old installation is gone, write to kontakt@smartinghome.pl.
 
 PRO adds: AI (advisor, daily AI report, ROI analysis, AI autonomy — with your own AI API key), the weather strategy and calibrated PV forecast, SMS / e-mail alerts and several phones, the daily report, the voltage complaint report export and "Invoice vs Home Assistant", automatic updates with backup, up to 10 PV strings and several wind turbines.
 

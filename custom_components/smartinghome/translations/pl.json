@@ -97,7 +97,7 @@
       "invalid_license": "Nieprawidłowy klucz licencyjny. Skopiuj cały klucz z e-maila z zamówieniem (zaczyna się od SH-PRO-) albo kup licencję na smartinghome.pl/buy",
       "cannot_connect": "Brak połączenia z serwerem licencji Smarting HOME. Sprawdź dostęp Home Assistant do internetu i spróbuj ponownie.",
       "unknown": "Wystąpił nieoczekiwany błąd. Spróbuj ponownie.",
-      "install_limit": "Ten klucz jest już aktywny w innej instalacji Home Assistant (licencja obejmuje jedną instalację). Aby przenieść licencję, napisz na kontakt@smartinghome.pl",
+      "install_limit": "Ten klucz jest aktywny na innej instalacji Home Assistant. Usuń go tam w panelu (Ustawienia → Licencja → Usuń klucz) albo napisz na kontakt@smartinghome.pl",
       "license_inactive": "Ta licencja nie jest aktywna (wygasła lub jest zawieszona). Napisz na kontakt@smartinghome.pl"
     },
     "abort": {
@@ -191,7 +191,7 @@
       },
       "downgrade": {
         "title": "🔓 Usuń licencję PRO",
-        "description": "Uwaga! Po potwierdzeniu:\n• Klucz licencji PRO zostanie usunięty z tej instalacji\n• Integracja przejdzie na plan FREE\n• Funkcje PRO (AI, strategia pogodowa, alerty SMS/e-mail, raporty) zostaną wyłączone — funkcje, które instalacja miała w FREE przed wersją 1.71, zostają\n\nAby ponownie aktywować PRO, wpisz klucz w opcjach albo w panelu Smarting HOME (⚙️ Ustawienia → Licencja).",
+        "description": "Uwaga! Po potwierdzeniu:\n• Miejsce na licencji zostanie zwolnione, a klucz usunięty z tej instalacji (możesz go wkleić w innej)\n• Integracja przejdzie na plan FREE\n• Funkcje PRO (AI, strategia pogodowa, alerty SMS/e-mail, raporty) zostaną wyłączone — funkcje, które instalacja miała w FREE przed wersją 1.71, zostają\n\nAby ponownie aktywować PRO, wpisz klucz w opcjach albo w panelu Smarting HOME (⚙️ Ustawienia → Licencja).",
         "data": {
           "confirm_downgrade": "✅ Tak, chcę przejść na plan FREE"
         }
@@ -200,7 +200,7 @@
     "error": {
       "invalid_license": "Nieprawidłowy klucz licencyjny. Skopiuj cały klucz z e-maila z zamówieniem (zaczyna się od SH-PRO-) albo kup licencję na smartinghome.pl/buy",
       "cannot_connect": "Brak połączenia z serwerem licencji Smarting HOME. Sprawdź dostęp Home Assistant do internetu i spróbuj ponownie.",
-      "install_limit": "Ten klucz jest już aktywny w innej instalacji Home Assistant (licencja obejmuje jedną instalację). Aby przenieść licencję, napisz na kontakt@smartinghome.pl",
+      "install_limit": "Ten klucz jest aktywny na innej instalacji Home Assistant. Usuń go tam w panelu (Ustawienia → Licencja → Usuń klucz) albo napisz na kontakt@smartinghome.pl",
       "license_inactive": "Ta licencja nie jest aktywna (wygasła lub jest zawieszona). Napisz na kontakt@smartinghome.pl",
       "unknown": "Wystąpił nieoczekiwany błąd. Spróbuj ponownie."
     }

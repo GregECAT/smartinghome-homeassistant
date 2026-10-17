@@ -1096,7 +1096,7 @@ class SmartingHomePanel extends HTMLElement {
 
   async _deactivateLicense(btn) {
     if (this._licBusy) return;
-    const ok = window.confirm('Usunąć klucz licencji z tej instalacji?\n\nIntegracja wróci do planu FREE — funkcje PRO (AI, strategia pogodowa, alerty SMS/e-mail, raporty, automatyczne aktualizacje) zostaną wyłączone. Klucz możesz później wkleić ponownie.');
+    const ok = window.confirm('Usunąć klucz licencji z tej instalacji?\n\nMiejsce na licencji zostanie zwolnione — klucz możesz potem wkleić tu albo w innej instalacji Home Assistant. Integracja wróci do planu FREE, a funkcje PRO (AI, strategia pogodowa, alerty SMS/e-mail, raporty, automatyczne aktualizacje) zostaną wyłączone.');
     if (!ok) return;
     this._licBusy = true;
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Usuwam…'; }
@@ -1113,8 +1113,11 @@ class SmartingHomePanel extends HTMLElement {
       this._renderLicense();
       return;
     }
-    if (out) { out.style.color = '#2ecc71'; out.textContent = `✅ ${res.message}`; }
-    this._licNotice = { text: `✅ ${res.message}`, color: '#2ecc71' };
+    const warn = res.slot_released === false;
+    if (out) { out.style.color = warn ? '#f39c12' : '#2ecc71'; out.textContent = `${warn ? '⚠️' : '✅'} ${res.message}`; }
+    this._licNotice = { text: `${warn ? '⚠️' : '✅'} ${res.message}`, color: warn ? '#f39c12' : '#2ecc71' };
+    // The page reloads in a few seconds — make sure the warning is read first
+    if (warn) window.alert(res.message);
     this._waitForLicenseReload(false);
   }
 

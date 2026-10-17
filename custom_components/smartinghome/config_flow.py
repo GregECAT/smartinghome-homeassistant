@@ -799,6 +799,12 @@ class SmartingHomeOptionsFlow(config_entries.OptionsFlow):
             confirm = user_input.get("confirm_downgrade", False)
             if confirm:
                 current = self._config_entry.data
+                old_key = current.get(CONF_LICENSE_KEY, "") or ""
+                if old_key:
+                    # Free this installation's slot first (as the panel's "Usuń klucz")
+                    from .license import async_release_license_key
+
+                    await async_release_license_key(self.hass, old_key)
                 new_data = {**current}
                 new_data[CONF_LICENSE_MODE] = LICENSE_MODE_FREE
                 new_data[CONF_LICENSE_KEY] = ""

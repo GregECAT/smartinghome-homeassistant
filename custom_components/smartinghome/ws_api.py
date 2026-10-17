@@ -1002,20 +1002,25 @@ async def ws_license_activate(hass: HomeAssistant, connection, msg: dict[str, An
 @websocket_api.require_admin
 @websocket_api.async_response
 async def ws_license_deactivate(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
-    """Remove the key from this installation (back to FREE) and reload."""
+    """Free this installation's slot on the license server, remove the key, reload.
+
+    The key is removed even when the server cannot be reached (result
+    slot_released=false, message explains the slot may stay taken up to 30 days).
+    """
     import logging
     from .const import CONF_LICENSE_KEY
-    from .license_key import entry_data_without_key, mask_key
+    from .license import async_release_license_key
+    from .license_key import deactivation_result, entry_data_without_key, mask_key
 
     entry = _license_entry(hass, msg.get("entry_id"))
     if entry is None:
         connection.send_error(msg["id"], "not_found", "Brak konfiguracji Smarting HOME")
         return
     old = entry.data.get(CONF_LICENSE_KEY, "") or ""
+    freed = await async_release_license_key(hass, old) if old else True
     _store_license(hass, entry, entry_data_without_key(dict(entry.data)))
-    logging.getLogger(__name__).info("License key %s removed from the panel — FREE mode", mask_key(old) or "(none)")
-    connection.send_result(msg["id"], {
-        "ok": True,
-        "tier": "free",
-        "message": "Klucz usunięty — integracja wraca do planu FREE. Przeładowuję…",
-    })
+    logging.getLogger(__name__).info(
+        "License key %s removed from the panel — FREE mode (slot %s)",
+        mask_key(old) or "(none)", "released" if freed else "NOT released",
+    )
+    connection.send_result(msg["id"], deactivation_result(freed))

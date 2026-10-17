@@ -20,6 +20,7 @@ from .const import (
     LICENSE_VALIDATE_ENDPOINT,
     LICENSE_STATUS_ENDPOINT,
     LICENSE_REGISTER_FREE_ENDPOINT,
+    LICENSE_RELEASE_ENDPOINT,
     LicenseTier,
 )
 from .license_key import is_lifetime, mask_key
@@ -209,6 +210,48 @@ class SmartingHomeAPI:
                 "License status check network error (grace period applies): %s",
                 str(err) or "timeout",
             )
+            raise ConnectionError(
+                f"Cannot reach license server: {str(err) or 'timeout'}"
+            ) from err
+
+    async def release_device(self) -> bool:
+        """Free this installation's slot on the license (before the key is removed).
+
+        Returns the server's "released" flag (False: this device held no slot).
+        Raises AuthenticationError for an unknown key, ConnectionError when the
+        server cannot be reached and SmartingHomeAPIError for any other answer.
+        """
+        if not self._license_key or not self._device_id:
+            raise SmartingHomeAPIError("No license key or device id to release")
+        url = f"{self._base_url}{LICENSE_RELEASE_ENDPOINT}"
+        headers = {
+            "Content-Type": "application/json",
+            "X-License-Key": self._license_key,
+            "User-Agent": f"SmartingHOME-HA/{self._integration_version}",
+        }
+        payload = {"license_key": self._license_key, "device_id": self._device_id}
+        try:
+            async with self._session.post(
+                url, json=payload, headers=headers, timeout=TIMEOUT
+            ) as response:
+                try:
+                    data: dict[str, Any] = await response.json()
+                except Exception:  # noqa: BLE001 — non-JSON error page
+                    data = {}
+                if response.status == 200 and data.get("ok"):
+                    released = bool(data.get("released"))
+                    _LOGGER.info(
+                        "License %s: installation slot %s",
+                        mask_key(self._license_key),
+                        "released" if released else "was not held by this device",
+                    )
+                    return released
+                if response.status == 401:
+                    raise AuthenticationError("Invalid license key")
+                raise SmartingHomeAPIError(f"Release failed: HTTP {response.status}")
+        except SmartingHomeAPIError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             raise ConnectionError(
                 f"Cannot reach license server: {str(err) or 'timeout'}"
             ) from err

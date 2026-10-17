@@ -113,7 +113,7 @@
       "invalid_license": "Invalid license key. Copy the whole key from the order e-mail (it starts with SH-PRO-) or buy one at smartinghome.pl/buy",
       "cannot_connect": "Cannot connect to the Smarting HOME license server. Check the internet connection of Home Assistant and try again.",
       "unknown": "An unexpected error occurred. Please try again.",
-      "install_limit": "This key is already active in another Home Assistant installation (one installation per license). To move the license, write to kontakt@smartinghome.pl",
+      "install_limit": "This key is active on another Home Assistant installation. Remove it there in the Smarting HOME panel (Settings → License → Usuń klucz) or write to kontakt@smartinghome.pl",
       "license_inactive": "This license is not active (expired or suspended). Write to kontakt@smartinghome.pl"
     },
     "abort": {
@@ -237,7 +237,7 @@
       },
       "downgrade": {
         "title": "🔓 Remove PRO license",
-        "description": "After confirming:\n• The PRO license key is removed from this installation\n• The integration switches to the FREE plan\n• PRO features (AI, weather strategy, SMS/e-mail alerts, reports) are disabled — features this installation had in FREE before version 1.71 stay\n\nTo activate PRO again, enter the key in the options or in the Smarting HOME panel (⚙️ Settings → License).",
+        "description": "After confirming:\n• The installation slot on the license is released and the key removed from this installation (you can use it on another one)\n• The integration switches to the FREE plan\n• PRO features (AI, weather strategy, SMS/e-mail alerts, reports) are disabled — features this installation had in FREE before version 1.71 stay\n\nTo activate PRO again, enter the key in the options or in the Smarting HOME panel (⚙️ Settings → License).",
         "data": {
           "confirm_downgrade": "✅ Yes, switch to the FREE plan"
         }
@@ -246,7 +246,7 @@
     "error": {
       "invalid_license": "Invalid license key. Copy the whole key from the order e-mail (it starts with SH-PRO-) or buy one at smartinghome.pl/buy",
       "cannot_connect": "Cannot connect to the Smarting HOME license server. Check the internet connection of Home Assistant and try again.",
-      "install_limit": "This key is already active in another Home Assistant installation (one installation per license). To move the license, write to kontakt@smartinghome.pl",
+      "install_limit": "This key is active on another Home Assistant installation. Remove it there in the Smarting HOME panel (Settings → License → Usuń klucz) or write to kontakt@smartinghome.pl",
       "license_inactive": "This license is not active (expired or suspended). Write to kontakt@smartinghome.pl",
       "unknown": "An unexpected error occurred. Please try again."
     }

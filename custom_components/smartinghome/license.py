@@ -33,7 +33,7 @@ from .const import (
     ATTR_LICENSE_LAST_CHECK,
 )
 from .features import features_for
-from .license_key import check_license_key, is_lifetime, mask_key
+from .license_key import check_license_key, is_lifetime, mask_key, release_license_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -477,3 +477,25 @@ async def async_check_license_key(hass: HomeAssistant, raw_key: Any) -> tuple[st
     else:
         _LOGGER.warning("License key %s not accepted: %s", mask_key(key) or "(empty)", result["code"])
     return key, result
+
+
+async def async_release_license_key(hass: HomeAssistant, license_key: str) -> bool:
+    """Free this installation's slot on a key (same device id as the validation).
+
+    True when the slot is free (released, not held, or the key is unknown); False when
+    the license server could not be asked — the caller removes the key anyway.
+    """
+    async def _release(key: str) -> bool:
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+        from .const import VERSION
+
+        api = SmartingHomeAPI(
+            async_get_clientsession(hass),
+            key,
+            device_id=await async_device_id(hass),
+            ha_version=HA_VERSION,
+            integration_version=VERSION,
+        )
+        return await api.release_device()
+
+    return await release_license_key(license_key, _release, auth_errors=(AuthenticationError,))
