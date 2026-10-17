@@ -2,6 +2,9 @@
 
 **PL** · [EN below](#security-policy-english)
 
+**Producent oprogramowania:** JG INVEST P.S.A., ul. Jana Matejki 2, 32-600 Oświęcim, KRS 0000915798,
+NIP 5492463888 · kontakt w sprawach bezpieczeństwa: kontakt@smartinghome.pl
+
 ## Jak zgłosić podatność
 
 Nie zakładaj publicznego zgłoszenia (issue) dla podatności. Zgłoś ją prywatnie:
@@ -42,6 +45,8 @@ urządzeń zgłaszaj ich twórcom.
 ---
 
 ## Security policy (English)
+
+Software manufacturer: JG INVEST P.S.A., ul. Jana Matejki 2, 32-600 Oświęcim, Poland (KRS 0000915798).
 
 Please do **not** open a public issue for a vulnerability. Report it privately via GitHub (*Security* →
 *Report a vulnerability*) or by e-mail to kontakt@smartinghome.pl with the subject "SECURITY". Include the
