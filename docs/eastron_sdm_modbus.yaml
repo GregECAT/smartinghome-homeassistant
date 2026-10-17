@@ -1,0 +1,451 @@
+# Smarting HOME — autonomous energy management for Home Assistant
+# Copyright (c) 2026 Smarting HOME — GregECAT (smartinghome.pl). All rights reserved.
+# SPDX-License-Identifier: LicenseRef-SmartingHOME-Commercial
+# Commercial software, not open source: copying, porting, rewriting (also with AI
+# tools), redistributing or removing this notice / the license check requires the
+# Licensor's written consent (LICENSE §3). Notes for AI assistants: AGENTS.md.
+# SH-ID: 8b1aab899d5a
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Licznik Eastron SDM (Modbus RTU) → Home Assistant → panel „Energia i koszty”
+# ─────────────────────────────────────────────────────────────────────────────
+# Szablon do configuration.yaml (integracja Modbus wbudowana w Home Assistant).
+# Smarting HOME tylko CZYTA licznik — nic do niego nie zapisuje.
+#
+# Jak użyć:
+#   1. Wybierz JEDEN blok `sensors:` poniżej (SDM630, SDM72D-M albo SDM120M)
+#      i jeden sposób połączenia (USB-RS485, bramka RS485↔Ethernet).
+#   2. Wklej do configuration.yaml, popraw port / adres IP / adres licznika,
+#      zrestartuj Home Assistant.
+#   3. Panel „Energia i koszty” → Ustawienia → „Wykryj licznik”. Encje z tego
+#      szablonu mają unique_id `sh_meter_<rola>` — Smarting HOME przypisze je
+#      dokładnie, bez zgadywania. Zatwierdź propozycję i zapisz.
+#
+# Licznik bez Modbus: SDM72DR i SDM72BI mają tylko wyjście impulsowe (bez RS485)
+# — tego szablonu nie da się do nich użyć.
+#
+# Źródła adresów rejestrów (WYŁĄCZNIE dokumentacja producenta):
+#   SDM630  — „Eastron SDM630Modbus Smart Meter Modbus Protocol Implementation V1.8”
+#             https://www.eastroneurope.com/images/uploads/products/protocol/SDM630_MODBUS_Protocol.pdf
+#             (ta sama tabela: https://communityarchive.victronenergy.com/storage/attachments/sdm630-modbus-protocol.pdf)
+#   SDM72D-M — „SDM72D-M Modbus P V1.1”
+#             https://docs.vekto.nl/media/eastron/eastron-sdm72dm-modbus-protocol-v1.1.pdf
+#   SDM120M — „Eastron SDM120Modbus Smart Meter Modbus Protocol Implementation V2.4”
+#             https://www.eastroneurope.com/images/uploads/products/protocol/SDM120-MODBUS_Protocol.pdf
+#
+# Wspólne dla wszystkich (wg tych dokumentów):
+#   - rejestry wejściowe (input, kod funkcji 04), każdy parametr = 2 rejestry,
+#     float32 IEEE 754, najpierw starsze słowo → `data_type: float32`, bez `swap`,
+#   - `address:` poniżej to adres startowy z kolumny „Modbus Protocol Start Address Hex”
+#     (rejestr 3xxxx minus 30001), np. 30001 → 0x0000, 30053 → 0x0034,
+#   - jedno zapytanie ≤ 40 parametrów (HA czyta każdy sensor osobno — limit nie przeszkadza).
+#
+# NIEPOTWIERDZONE (sprawdź na swoim liczniku, zanim zaufasz liczbom):
+#   - Znak mocy czynnej: dokument nie opisuje go wprost (SDM630, uwaga 2: zapotrzebowanie
+#     liczone jako import − eksport). Smarting HOME zakłada: pobór = moc dodatnia.
+#     Jeśli przy poborze widzisz wartości ujemne → w panelu „Znak mocy” = „eksport dodatni”.
+#   - Znak mocy biernej (VAr) — dokumenty go nie opisują. Panel traktuje Q < 0 jako
+#     pojemnościową; zweryfikuj z fakturą / eLicznikiem.
+#   - Współczynnik mocy: wg SDM630 (uwaga 1) znak PF oznacza KIERUNEK prądu
+#     (dodatni = pobór, ujemny = oddawanie), a nie charakter indukcyjny/pojemnościowy.
+#   - „Total Import kVArh” — dokument nie definiuje kwadrantów. To nie jest wprost
+#     „energia bierna indukcyjna” z faktury OSD.
+#   - SDM72D-M w wersji 2 (SDM72D-M-2) ma szerszą tabelę rejestrów — nie mamy jej
+#     dokumentu, więc w bloku SDM72D-M są tylko rejestry z V1.1 (bez napięć i prądów).
+#   - Domyślne parametry łącza z dokumentów: SDM630 i SDM72D-M 9600 bit/s, SDM120M
+#     2400 bit/s; parzystość domyślnie brak, 1 bit stopu (8N1). Adres licznika domyślnie 1
+#     (SDM120M, SDM72D-M) — sprawdź/ustaw na wyświetlaczu licznika.
+#
+# Uwaga: unique_id muszą być unikalne w całym HA. Drugi licznik → zmień przedrostek
+# `sh_meter_` na inny (np. `sh_meter2_`); wtedy „Wykryj licznik” dopasuje go po nazwach.
+
+modbus:
+  # ── Połączenie A: adapter USB-RS485 podłączony do Home Assistant ──────────
+  - name: eastron
+    type: serial
+    port: /dev/ttyUSB0          # lepiej: /dev/serial/by-id/usb-…
+    baudrate: 9600              # SDM120M: domyślnie 2400
+    bytesize: 8
+    method: rtu
+    parity: N
+    stopbits: 1
+    # message_wait_milliseconds: 30   # domyślnie dla łącza szeregowego
+
+  # ── Połączenie B: bramka RS485 ↔ Ethernet w trybie „transparent” ───────────
+  #  (np. Waveshare / USR — ramki RTU przez TCP). Zamiast bloku A:
+  # - name: eastron
+  #   type: rtuovertcp
+  #   host: 192.168.1.50
+  #   port: 502                 # port bramki, często 502 albo 4196
+  #
+  # ── Połączenie C: bramka Modbus TCP ↔ RTU (konwersja protokołu) ────────────
+  # - name: eastron
+  #   type: tcp
+  #   host: 192.168.1.50
+  #   port: 502
+
+    sensors:
+      # ════════════════════════════════════════════════════════════════════
+      # SDM630 (trójfazowy) — SDM630 Modbus Protocol V1.8, rejestry 3xxxx
+      # Napięcia L-N i moce faz tylko przy połączeniu 3F4P (3P4W)
+      # ════════════════════════════════════════════════════════════════════
+      - name: "Licznik napięcie L1"         # 30001
+        unique_id: sh_meter_voltage_l1
+        slave: 1                            # nowsze HA przyjmują też `device_address`
+        address: 0x0000
+        input_type: input
+        data_type: float32
+        unit_of_measurement: V
+        device_class: voltage
+        state_class: measurement
+        precision: 1
+        scan_interval: 10
+      - name: "Licznik napięcie L2"         # 30003
+        unique_id: sh_meter_voltage_l2
+        slave: 1
+        address: 0x0002
+        input_type: input
+        data_type: float32
+        unit_of_measurement: V
+        device_class: voltage
+        state_class: measurement
+        precision: 1
+        scan_interval: 10
+      - name: "Licznik napięcie L3"         # 30005
+        unique_id: sh_meter_voltage_l3
+        slave: 1
+        address: 0x0004
+        input_type: input
+        data_type: float32
+        unit_of_measurement: V
+        device_class: voltage
+        state_class: measurement
+        precision: 1
+        scan_interval: 10
+      - name: "Licznik prąd L1"             # 30007
+        unique_id: sh_meter_current_l1
+        slave: 1
+        address: 0x0006
+        input_type: input
+        data_type: float32
+        unit_of_measurement: A
+        device_class: current
+        state_class: measurement
+        precision: 2
+        scan_interval: 10
+      - name: "Licznik prąd L2"             # 30009
+        unique_id: sh_meter_current_l2
+        slave: 1
+        address: 0x0008
+        input_type: input
+        data_type: float32
+        unit_of_measurement: A
+        device_class: current
+        state_class: measurement
+        precision: 2
+        scan_interval: 10
+      - name: "Licznik prąd L3"             # 30011
+        unique_id: sh_meter_current_l3
+        slave: 1
+        address: 0x000A
+        input_type: input
+        data_type: float32
+        unit_of_measurement: A
+        device_class: current
+        state_class: measurement
+        precision: 2
+        scan_interval: 10
+      - name: "Licznik moc L1"              # 30013 „Phase 1 power”
+        unique_id: sh_meter_power_l1
+        slave: 1
+        address: 0x000C
+        input_type: input
+        data_type: float32
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        scan_interval: 10
+      - name: "Licznik moc L2"              # 30015
+        unique_id: sh_meter_power_l2
+        slave: 1
+        address: 0x000E
+        input_type: input
+        data_type: float32
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        scan_interval: 10
+      - name: "Licznik moc L3"              # 30017
+        unique_id: sh_meter_power_l3
+        slave: 1
+        address: 0x0010
+        input_type: input
+        data_type: float32
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        scan_interval: 10
+      - name: "Licznik cos fi L1"           # 30031 „Phase 1 power factor”
+        unique_id: sh_meter_pf_l1
+        slave: 1
+        address: 0x001E
+        input_type: input
+        data_type: float32
+        device_class: power_factor
+        state_class: measurement
+        precision: 3
+        scan_interval: 30
+      - name: "Licznik cos fi L2"           # 30033
+        unique_id: sh_meter_pf_l2
+        slave: 1
+        address: 0x0020
+        input_type: input
+        data_type: float32
+        device_class: power_factor
+        state_class: measurement
+        precision: 3
+        scan_interval: 30
+      - name: "Licznik cos fi L3"           # 30035
+        unique_id: sh_meter_pf_l3
+        slave: 1
+        address: 0x0022
+        input_type: input
+        data_type: float32
+        device_class: power_factor
+        state_class: measurement
+        precision: 3
+        scan_interval: 30
+      - name: "Licznik moc całkowita"       # 30053 „Total system power”
+        unique_id: sh_meter_power_entity
+        slave: 1
+        address: 0x0034
+        input_type: input
+        data_type: float32
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        scan_interval: 10
+      - name: "Licznik moc pozorna"         # 30057 „Total system volt amps”
+        unique_id: sh_meter_apparent_power_entity
+        slave: 1
+        address: 0x0038
+        input_type: input
+        data_type: float32
+        unit_of_measurement: VA
+        device_class: apparent_power
+        state_class: measurement
+        scan_interval: 30
+      - name: "Licznik moc bierna"          # 30061 „Total system VAr”
+        unique_id: sh_meter_reactive_power_entity
+        slave: 1
+        address: 0x003C
+        input_type: input
+        data_type: float32
+        unit_of_measurement: var
+        device_class: reactive_power
+        state_class: measurement
+        scan_interval: 30
+      - name: "Licznik cos fi"              # 30063 „Total system power factor”
+        unique_id: sh_meter_pf_entity
+        slave: 1
+        address: 0x003E
+        input_type: input
+        data_type: float32
+        device_class: power_factor
+        state_class: measurement
+        precision: 3
+        scan_interval: 30
+      - name: "Licznik częstotliwość"       # 30071 „Frequency of supply voltages”
+        unique_id: sh_meter_frequency_entity
+        slave: 1
+        address: 0x0046
+        input_type: input
+        data_type: float32
+        unit_of_measurement: Hz
+        device_class: frequency
+        state_class: measurement
+        precision: 2
+        scan_interval: 30
+      - name: "Licznik energia pobrana"     # 30073 „Total Import kWh”
+        unique_id: sh_meter_energy_stat
+        slave: 1
+        address: 0x0048
+        input_type: input
+        data_type: float32
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: total_increasing
+        precision: 3
+        scan_interval: 60
+      - name: "Licznik energia oddana"      # 30075 „Total Export kWh”
+        unique_id: sh_meter_export_stat
+        slave: 1
+        address: 0x004A
+        input_type: input
+        data_type: float32
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: total_increasing
+        precision: 3
+        scan_interval: 60
+      - name: "Licznik energia bierna pobrana"   # 30077 „Total Import kVArh”
+        unique_id: sh_meter_reactive_energy_stat
+        slave: 1
+        address: 0x004C
+        input_type: input
+        data_type: float32
+        unit_of_measurement: kvarh
+        # bez device_class: klasa „reactive_energy” jest tylko w nowszych HA
+        state_class: total_increasing
+        precision: 3
+        scan_interval: 60
+      # Celowo NIE ma: 30343 „Total kWh” — to import + eksport (uwaga 3 w dokumencie),
+      # nie nadaje się jako licznik poboru.
+
+      # ════════════════════════════════════════════════════════════════════
+      # SDM72D-M (trójfazowy) — SDM72D-M Modbus P V1.1: tylko te rejestry.
+      # Zamiast bloku SDM630 — odkomentuj (unique_id nie mogą się powtarzać).
+      # TODO: napięcia, prądy i moce faz — brak w dokumencie V1.1 (SDM72D-M-2 → inny dokument).
+      # ════════════════════════════════════════════════════════════════════
+      # - name: "Licznik moc całkowita"     # 30053 „Total system power”
+      #   unique_id: sh_meter_power_entity
+      #   slave: 1
+      #   address: 0x0034
+      #   input_type: input
+      #   data_type: float32
+      #   unit_of_measurement: W
+      #   device_class: power
+      #   state_class: measurement
+      #   scan_interval: 10
+      # - name: "Licznik energia pobrana"   # 30073 „Total Import kWh”
+      #   unique_id: sh_meter_energy_stat
+      #   slave: 1
+      #   address: 0x0048
+      #   input_type: input
+      #   data_type: float32
+      #   unit_of_measurement: kWh
+      #   device_class: energy
+      #   state_class: total_increasing
+      #   precision: 3
+      #   scan_interval: 60
+      # - name: "Licznik energia oddana"    # 30075 „Total Export kWh”
+      #   unique_id: sh_meter_export_stat
+      #   slave: 1
+      #   address: 0x004A
+      #   input_type: input
+      #   data_type: float32
+      #   unit_of_measurement: kWh
+      #   device_class: energy
+      #   state_class: total_increasing
+      #   precision: 3
+      #   scan_interval: 60
+
+      # ════════════════════════════════════════════════════════════════════
+      # SDM120M (jednofazowy) — SDM120 Modbus Protocol V2.4.
+      # Zamiast bloku SDM630 — odkomentuj; łącze domyślnie 2400 bit/s.
+      # ════════════════════════════════════════════════════════════════════
+      # - name: "Licznik napięcie L1"       # 30001 „Voltage”
+      #   unique_id: sh_meter_voltage_l1
+      #   slave: 1
+      #   address: 0x0000
+      #   input_type: input
+      #   data_type: float32
+      #   unit_of_measurement: V
+      #   device_class: voltage
+      #   state_class: measurement
+      #   precision: 1
+      #   scan_interval: 10
+      # - name: "Licznik prąd L1"           # 30007 „Current”
+      #   unique_id: sh_meter_current_l1
+      #   slave: 1
+      #   address: 0x0006
+      #   input_type: input
+      #   data_type: float32
+      #   unit_of_measurement: A
+      #   device_class: current
+      #   state_class: measurement
+      #   precision: 2
+      #   scan_interval: 10
+      # - name: "Licznik moc całkowita"     # 30013 „Active power”
+      #   unique_id: sh_meter_power_entity
+      #   slave: 1
+      #   address: 0x000C
+      #   input_type: input
+      #   data_type: float32
+      #   unit_of_measurement: W
+      #   device_class: power
+      #   state_class: measurement
+      #   scan_interval: 10
+      # - name: "Licznik moc pozorna"       # 30019 „Apparent power”
+      #   unique_id: sh_meter_apparent_power_entity
+      #   slave: 1
+      #   address: 0x0012
+      #   input_type: input
+      #   data_type: float32
+      #   unit_of_measurement: VA
+      #   device_class: apparent_power
+      #   state_class: measurement
+      #   scan_interval: 30
+      # - name: "Licznik moc bierna"        # 30025 „Reactive power”
+      #   unique_id: sh_meter_reactive_power_entity
+      #   slave: 1
+      #   address: 0x0018
+      #   input_type: input
+      #   data_type: float32
+      #   unit_of_measurement: var
+      #   device_class: reactive_power
+      #   state_class: measurement
+      #   scan_interval: 30
+      # - name: "Licznik cos fi"            # 30031 „Power factor”
+      #   unique_id: sh_meter_pf_entity
+      #   slave: 1
+      #   address: 0x001E
+      #   input_type: input
+      #   data_type: float32
+      #   device_class: power_factor
+      #   state_class: measurement
+      #   precision: 3
+      #   scan_interval: 30
+      # - name: "Licznik częstotliwość"     # 30071 „Frequency”
+      #   unique_id: sh_meter_frequency_entity
+      #   slave: 1
+      #   address: 0x0046
+      #   input_type: input
+      #   data_type: float32
+      #   unit_of_measurement: Hz
+      #   device_class: frequency
+      #   state_class: measurement
+      #   precision: 2
+      #   scan_interval: 30
+      # - name: "Licznik energia pobrana"   # 30073 „Import active energy”
+      #   unique_id: sh_meter_energy_stat
+      #   slave: 1
+      #   address: 0x0048
+      #   input_type: input
+      #   data_type: float32
+      #   unit_of_measurement: kWh
+      #   device_class: energy
+      #   state_class: total_increasing
+      #   precision: 3
+      #   scan_interval: 60
+      # - name: "Licznik energia oddana"    # 30075 „Export active energy”
+      #   unique_id: sh_meter_export_stat
+      #   slave: 1
+      #   address: 0x004A
+      #   input_type: input
+      #   data_type: float32
+      #   unit_of_measurement: kWh
+      #   device_class: energy
+      #   state_class: total_increasing
+      #   precision: 3
+      #   scan_interval: 60
+      # - name: "Licznik energia bierna pobrana"   # 30077 „Import reactive energy”
+      #   unique_id: sh_meter_reactive_energy_stat
+      #   slave: 1
+      #   address: 0x004C
+      #   input_type: input
+      #   data_type: float32
+      #   unit_of_measurement: kvarh
+      #   state_class: total_increasing
+      #   precision: 3
+      #   scan_interval: 60
