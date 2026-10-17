@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
 from .pl_holidays import tariff_weekday
@@ -178,6 +178,85 @@ def buy_price(dt: datetime, tariff: str, provider: str) -> tuple[str, float]:
     return "flat", float(flat)
 
 
+# Dynamic tariff: zone of a slot priced from the published day-ahead series, and of a
+# slot past the published prices (priced at the current hour's price)
+ZONE_DYNAMIC = "dynamic"
+ZONE_DYNAMIC_NOW = "dynamic_now"
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if math.isfinite(out) else None
+
+
+def dynamic_prices(
+    wholesale_now: Any,
+    allin_now: Any,
+    attrs: dict[str, Any] | None,
+    unit: str | None = None,
+) -> tuple[dict[datetime, float], float | None]:
+    """Gross purchase prices of the dynamic tariff from the ENTSO-E sensors.
+
+    Returns ({UTC hour start: zł/kWh}, current all-in price zł/kWh or None).
+
+    wholesale_now — state of the current wholesale price sensor (day-ahead price
+    incl. VAT); allin_now — state of the "all-in now" sensor (the price the
+    integration uses as `dynamic_buy_price`); attrs — attributes of the wholesale
+    sensor: `prices_today` / `prices_tomorrow`, hourly {"start": ISO, "value": …}.
+    The ENTSO-E integration composes all-in = wholesale + (margin + excise +
+    distribution) × (1 + VAT) — one per-kWh adder for every hour — so each hour of
+    the series gets the adder seen now (all-in now − wholesale now). Nothing is
+    filled in for hours the series doesn't cover.
+    """
+    unit = str(unit or "")
+    if unit and not unit.upper().startswith("PLN"):
+        return {}, None  # the planner works in zł
+    scale = 0.001 if unit.lower().endswith("/mwh") else 1.0
+    allin = _float_or_none(allin_now)
+    if allin is None:
+        return {}, None
+    current = allin * scale
+    wholesale = _float_or_none(wholesale_now)
+    if wholesale is None:
+        return {}, current
+    adder = (allin - wholesale) * scale
+    if adder < -0.005:
+        return {}, current  # inconsistent sensors — the series can't be composed
+    adder = max(adder, 0.0)
+    series: dict[datetime, float] = {}
+    for key in ("prices_today", "prices_tomorrow"):
+        for entry in (attrs or {}).get(key) or []:
+            try:
+                start = datetime.fromisoformat(str(entry.get("start")))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            value = _float_or_none(entry.get("value"))
+            if value is None or start.tzinfo is None:
+                continue
+            hour = start.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+            series[hour] = value * scale + adder
+    return series, current
+
+
+def dynamic_note(inputs: list["HourInput"]) -> str:
+    """Plan note for the dynamic tariff: where the purchase price is not the market's."""
+    dyn = [h for h in inputs if h.zone in (ZONE_DYNAMIC, ZONE_DYNAMIC_NOW)]
+    if not dyn:
+        return "brak cen dynamicznych (ENTSO-E) — zakup wyceniony stałą ceną jak G11"
+    missing = [h for h in dyn if h.zone == ZONE_DYNAMIC_NOW]
+    if not missing:
+        return ""
+    if len(missing) == len(dyn):
+        return "brak prognozy cen dynamicznych — zakup wyceniony ceną bieżącą"
+    return (
+        f"brak prognozy cen dynamicznych od {missing[0].start.strftime('%d.%m %H:%M')} — "
+        "zakup wyceniony ceną bieżącą"
+    )
+
+
 def rce_hourly(prices: list[dict[str, Any]] | None) -> dict[tuple[date, int], float]:
     """RCE PSE v2 'prices' attribute (15-min) → {(date, hour): PLN/MWh}."""
     buckets: dict[tuple[date, int], list[float]] = {}
@@ -241,6 +320,8 @@ def build_inputs(
     rce_slot: dict[tuple[date, int, int], float] | None = None,
     pv_hourly_kwh: dict[tuple[date, int], float] | None = None,
     load_kw_at: Callable[[datetime], float | None] | None = None,
+    dynamic_buy: dict[datetime, float] | None = None,
+    dynamic_now: float | None = None,
 ) -> list[HourInput]:
     """Plan slots (slot_minutes long, aligned to the clock) from now to now + horizon.
 
@@ -252,8 +333,13 @@ def build_inputs(
     the confidence); hours it doesn't cover fall back to the sine spread of the
     daily totals. load_kw_at — expected house load (kW) for a slot start; None
     falls back to load_profile_kw.
+
+    Dynamic tariff: dynamic_buy — gross purchase price per UTC hour start (see
+    dynamic_prices()); a slot the series doesn't cover is priced at the current
+    hour's price (dynamic_now when the series lacks it too) with zone
+    ZONE_DYNAMIC_NOW. Without a current price the tariff's flat price is used.
+    Dynamic prices have no tariff peaks: the price of each slot drives the plan.
     """
-    from datetime import timezone as _tz
 
     slot_minutes = slot_minutes if slot_minutes in (15, 30, 60) else 60
     tz = now.tzinfo
@@ -267,6 +353,15 @@ def build_inputs(
     for (_, h), v in sorted(rce.items()):
         known_by_hour[h] = v  # latest known day wins as fallback
     rce_slot = rce_slot or {}
+    # Dynamic tariff (needs an aware `now`: the series is keyed by UTC hour). The
+    # current hour's price — from the series, else the live all-in sensor — prices
+    # the slots past the published prices; without it the tariff's flat price is used.
+    dynamic_buy = dynamic_buy or {}
+    dynamic_fallback = None
+    if str(tariff or "").lower() == TariffType.DYNAMIC and tz is not None:
+        hour_now = now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        dynamic_fallback = dynamic_buy.get(hour_now, dynamic_now)
+    dynamic = dynamic_fallback is not None
 
     def local(t_utc: datetime) -> datetime:
         return t_utc.astimezone(tz).replace(tzinfo=None) if tz else t_utc
@@ -274,8 +369,8 @@ def build_inputs(
     # first boundary after now on the slot grid (:00/:30 …)
     minute_floor = (now.minute // slot_minutes) * slot_minutes
     boundary = now.replace(minute=minute_floor, second=0, microsecond=0) + timedelta(minutes=slot_minutes)
-    start_utc = now.astimezone(_tz.utc) if tz else now
-    first_end_utc = boundary.astimezone(_tz.utc) if tz else boundary
+    start_utc = now.astimezone(timezone.utc) if tz else now
+    first_end_utc = boundary.astimezone(timezone.utc) if tz else boundary
     end_utc = start_utc + timedelta(hours=horizon_h)
     step = timedelta(minutes=slot_minutes)
 
@@ -293,7 +388,11 @@ def build_inputs(
             t, slot_end = slot_end, slot_end + step
             continue
         lt = local(t)
-        zone, buy = buy_price(lt, tariff, provider)
+        if dynamic:
+            price = dynamic_buy.get(t.replace(minute=0, second=0, microsecond=0))
+            zone, buy = (ZONE_DYNAMIC, price) if price is not None else (ZONE_DYNAMIC_NOW, dynamic_fallback)
+        else:
+            zone, buy = buy_price(lt, tariff, provider)
         rce_mwh = rce_slot.get(
             (lt.date(), lt.hour, lt.minute // slot_minutes) if slot_minutes < 60 else (None, None, None),
             rce.get((lt.date(), lt.hour), known_by_hour.get(lt.hour, 400.0)),
@@ -311,6 +410,8 @@ def build_inputs(
         out.append(HourInput(lt, duration, buy, sell, load, pv, zone))
         t, slot_end = slot_end, slot_end + step
 
+    if dynamic:
+        return out  # no tariff peaks — every slot carries its own market price
     # Tariff peaks: any slot pricier than the cheapest tariff slot of that day
     cheapest: dict[date, float] = {}
     for h in out:

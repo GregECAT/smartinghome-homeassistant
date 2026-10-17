@@ -40,6 +40,8 @@ from .arbitrage import (
     ArbitragePlan,
     ArbitrageParams,
     build_inputs,
+    dynamic_note,
+    dynamic_prices,
     mark_daylight,
     optimize,
     rce_hourly,
@@ -96,6 +98,9 @@ from .const import (
     SENSOR_LOAD_TOTAL,
     SENSOR_GRID_POWER_TOTAL,
     SENSOR_RCE_PRICE,
+    SENSOR_ENTSOE_ALLIN_NOW,
+    SENSOR_ENTSOE_PRICE_NOW,
+    TariffType,
     SWITCH_BOILER,
     SWITCH_AC,
     SWITCH_SOCKET2,
@@ -2410,9 +2415,23 @@ class StrategyController:
                 return base * (1 + (ratio - 1) * math.exp(-ahead_h / 3))
 
             self._arb_load_ratio = ratio
+        # Dynamic tariff: the hourly day-ahead prices (today, tomorrow from ~13:00) of the
+        # ENTSO-E integration, composed into gross purchase prices like its all-in sensor
+        tariff = str(data.get("tariff_type") or "g13")
+        dyn_series: dict = {}
+        dyn_now = None
+        if tariff.lower() == TariffType.DYNAMIC:
+            wholesale = self.hass.states.get(SENSOR_ENTSOE_PRICE_NOW)
+            allin = self.hass.states.get(SENSOR_ENTSOE_ALLIN_NOW)
+            dyn_series, dyn_now = dynamic_prices(
+                wholesale.state if wholesale else None,
+                allin.state if allin else None,
+                dict(wholesale.attributes) if wholesale else None,
+                (allin.attributes.get("unit_of_measurement") if allin else None),
+            )
         inputs = build_inputs(
             now,
-            tariff=str(data.get("tariff_type") or "g13"),
+            tariff=tariff,
             provider=str(settings.get("energy_provider") or data.get("energy_provider") or "tauron"),
             rce=rce,
             load_profile_kw=profile,
@@ -2426,6 +2445,8 @@ class StrategyController:
             rce_slot=rce_slot,
             pv_hourly_kwh=pv_hourly,
             load_kw_at=load_kw_at,
+            dynamic_buy=dyn_series,
+            dynamic_now=dyn_now,
         )
         # Daylight: the grid charges the battery only for the coming peak's shortfall —
         # never to sell later (2026-10-03 11:02–11:14, a sunny Saturday: the plan bought
@@ -2460,6 +2481,8 @@ class StrategyController:
         t0 = time.monotonic()
         plan = await self.hass.async_add_executor_job(optimize, soc, inputs, params)
         compute_ms = int((time.monotonic() - t0) * 1000)
+        if tariff.lower() == TariffType.DYNAMIC and not plan.note:
+            plan.note = dynamic_note(inputs)
         if compute_ms > 2000:
             _LOGGER.warning("Arbitrage plan took %d ms (%d h, %.1f kWh)", compute_ms, len(inputs), params.capacity_kwh)
         self._arb_plan, self._arb_plan_ts, self._arb_plan_key = plan, time.time(), key
@@ -2470,6 +2493,7 @@ class StrategyController:
             "params": asdict(params),
             "updated": now.strftime("%H:%M"),
             "rce_hours": len(rce),
+            "dynamic_buy_hours": len(dyn_series),
             "compute_ms": compute_ms,
             "pv_factor": round(pv_factor, 2),
             "pv_source": "open_meteo" if pv_hourly is not None else "forecast_solar",
