@@ -1,15 +1,16 @@
 ================================================================================
                     SMARTING HOME COMMERCIAL LICENSE
-                          Version 1.1, 2026
+                          Version 1.2, 2026
 ================================================================================
 
-Copyright (c) 2026 Smarting HOME — GregECAT (smartinghome.pl)
+Copyright (c) 2026 JG INVEST P.S.A. — Smarting HOME (smartinghome.pl)
 All Rights Reserved.
 
 ================================================================================
 
 This Software License Agreement ("Agreement") is a legal agreement between you
-("Licensee") and Smarting HOME, operated by GregECAT ("Licensor"), for the use
+("Licensee") and JG INVEST P.S.A. (prosta spółka akcyjna), ul. Jana Matejki 2,
+32-600 Oświęcim, Poland, KRS 0000915798, the owner of Smarting HOME ("Licensor"), for the use
 of the Smarting HOME — Autonomous Energy Management System software
 ("Software"), including all source code, compiled code, documentation,
 configuration files, automation blueprints, dashboard templates, AI integration
@@ -168,7 +169,7 @@ You may NOT, without prior written consent from the Licensor:
     trademarks, trade names, or service marks, except as required for
     normal use of the Software.
 
-7.3 The "Smarting HOME" name and logo are registered trademarks of GregECAT.
+7.3 The "Smarting HOME" name and logo are trademarks of the Licensor.
 
 ================================================================================
                       8. DATA & PRIVACY
@@ -279,7 +280,9 @@ Software, including but not limited to claims arising from:
 ================================================================================
 
 Licensor:
-  Smarting HOME — GregECAT
+  JG INVEST P.S.A. — owner of Smarting HOME
+  Address:  ul. Jana Matejki 2, 32-600 Oświęcim, Poland
+  KRS:      0000915798 · NIP: 5492463888 · REGON: 389702924
   Website:  https://smartinghome.pl
   Email:    kontakt@smartinghome.pl
   GitHub:   https://github.com/GregECAT
@@ -289,7 +292,7 @@ please contact: kontakt@smartinghome.pl
 
 ================================================================================
 
-Last updated: October 3, 2026
+Last updated: October 17, 2026 (v1.2: Licensor is JG INVEST P.S.A.)
 License version: 1.1
 
 ================================================================================

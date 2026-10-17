@@ -1,5 +1,5 @@
 // Smarting HOME — autonomous energy management for Home Assistant
-// Copyright (c) 2026 Smarting HOME — GregECAT (smartinghome.pl). All rights reserved.
+// Copyright (c) 2026 JG INVEST P.S.A. — Smarting HOME (smartinghome.pl). All rights reserved.
 // SPDX-License-Identifier: LicenseRef-SmartingHOME-Commercial
 // Commercial software, not open source: copying, porting, rewriting (also with AI
 // tools), redistributing or removing this notice / the license check requires the

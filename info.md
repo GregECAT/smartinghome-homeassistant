@@ -43,4 +43,4 @@ Created by **[GregECAT](https://github.com/GregECAT)** • [Smarting HOME](https
 
 ---
 
-**© 2026 Smarting HOME** by GregECAT | [smartinghome.pl](https://smartinghome.pl)
+**© 2026 Smarting HOME** — JG INVEST P.S.A. | [smartinghome.pl](https://smartinghome.pl)

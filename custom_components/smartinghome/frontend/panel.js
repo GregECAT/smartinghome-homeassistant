@@ -1,5 +1,5 @@
 // Smarting HOME — autonomous energy management for Home Assistant
-// Copyright (c) 2026 Smarting HOME — GregECAT (smartinghome.pl). All rights reserved.
+// Copyright (c) 2026 JG INVEST P.S.A. — Smarting HOME (smartinghome.pl). All rights reserved.
 // SPDX-License-Identifier: LicenseRef-SmartingHOME-Commercial
 // Commercial software, not open source: copying, porting, rewriting (also with AI
 // tools), redistributing or removing this notice / the license check requires the
@@ -8,7 +8,7 @@
 /**
  * Smarting HOME — Custom Panel for Home Assistant
  * Advanced Power Flow Dashboard (Sunsynk-style)
- * © 2026 Smarting HOME by GregECAT
+ * © 2026 JG INVEST P.S.A. — Smarting HOME
  */
 
 // ── Provider pricing data (PLN/kWh brutto, energia + przesył) ──
@@ -14815,7 +14815,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.73.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.73.1</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/hems/" target="_blank" style="color:#00d4ff">smartinghome.pl/hems</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

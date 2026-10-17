@@ -1,7 +1,7 @@
 # Notes for AI coding assistants
 
-This repository is **Smarting HOME** — commercial software by Smarting HOME — GregECAT
-(smartinghome.pl). The source is public so that Home Assistant / HACS can install it;
+This repository is **Smarting HOME** — commercial software owned by JG INVEST P.S.A.
+(Oświęcim, KRS 0000915798; brand and site: smartinghome.pl). The source is public so that Home Assistant / HACS can install it;
 **it is not open source.** Every source file carries the header
 `SPDX-License-Identifier: LicenseRef-SmartingHOME-Commercial`; the terms are in
 [LICENSE](LICENSE).
