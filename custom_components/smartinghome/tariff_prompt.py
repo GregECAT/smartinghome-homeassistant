@@ -280,7 +280,7 @@ def _build_g13_context(
     # Schedule text — with EXPLICIT hours for this season
     lines = []
     if weekday >= 5:
-        lines.append("  Weekend — cały dzień off-peak (0.63 PLN/kWh)")
+        lines.append(f"  Weekend i święta — cały dzień off-peak ({G13_PRICES[G13Zone.OFF_PEAK]:.2f} PLN/kWh)")
     else:
         for (start, end), z in schedule.items():
             p = G13_PRICES[z]
@@ -315,6 +315,7 @@ def _build_g13_context(
             "██████████████████████████████████████████████████████████\n"
             "██  SEZON LETNI (kwiecień-wrzesień) — HARMONOGRAM G13  ██\n"
             "██████████████████████████████████████████████████████████\n"
+            "  (DNI ROBOCZE — w weekendy i święta cała doba OFF-PEAK)\n"
             "  07:00-13:00 → SZCZYT PORANNY (0.91 PLN/kWh)\n"
             "  13:00-19:00 → OFF-PEAK TANI (0.63 PLN/kWh) ← okno na ładowanie!\n"
             "  19:00-22:00 → SZCZYT POPOŁUDNIOWY (1.50 PLN/kWh) ← NAJDROŻEJ!\n"
@@ -333,6 +334,7 @@ def _build_g13_context(
             "██████████████████████████████████████████████████████████\n"
             "██  SEZON ZIMOWY (październik-marzec) — HARMONOGRAM G13 ██\n"
             "██████████████████████████████████████████████████████████\n"
+            "  (DNI ROBOCZE — w weekendy i święta cała doba OFF-PEAK)\n"
             "  07:00-13:00 → SZCZYT PORANNY (0.91 PLN/kWh)\n"
             "  13:00-16:00 → OFF-PEAK TANI (0.63 PLN/kWh) ← okno na ładowanie!\n"
             "  16:00-21:00 → SZCZYT POPOŁUDNIOWY (1.50 PLN/kWh) ← NAJDROŻEJ!\n"
@@ -374,9 +376,11 @@ def _build_g13_context(
     if weekday >= 5:
         ctx.precomputed_advisory_facts = (
             "FAKTY DO UŻYCIA W TEKŚCIE (powtórz dosłownie):\n"
-            "- Dziś weekend — cały dzień obowiązuje strefa off-peak (0.63 PLN/kWh).\n"
-            "- Brak drogich stref — nie ma potrzeby optymalizacji taryfowej.\n"
-            "- Priorytet: maksymalna autokonsumpcja PV i ładowanie baterii."
+            f"- Dziś dzień wolny (weekend lub święto) — przez całą dobę jedna cena zakupu "
+            f"{ctx.cheapest_price:.2f} PLN/kWh, bez szczytów.\n"
+            "- Bateria nie musi oszczędzać energii na drogie godziny — dziś ich nie ma.\n"
+            f"- Sprzedaż nadwyżki PV opłaca się, gdy RCE × 1,23 jest wyższe niż {ctx.cheapest_price:.2f} PLN/kWh "
+            "(rozliczenie godzinowe); magazynowanie — gdy wieczorem RCE będzie wyższe niż teraz."
         )
     elif zone == G13Zone.OFF_PEAK and hour >= offpeak_mid_start and hour < afternoon_start:
         hours_left = afternoon_start - hour

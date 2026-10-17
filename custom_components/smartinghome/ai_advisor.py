@@ -109,6 +109,7 @@ class AIAdvisor:
         self._ai_config: dict[str, Any] = {}
         self._default_provider: str = ""
         self._energy_provider: str = ""  # panel choice (settings.json); config entry is the fallback
+        self._tariff_plan: str = ""      # panel tariff (g11/g12/g12w/g12n/g13/dynamic)
         self._call_timestamps: list[float] = []  # advisory calls
         self._controller_timestamps: list[float] = []  # controller/strategist calls
         self.last_completion: Completion | None = None
@@ -160,6 +161,7 @@ class AIAdvisor:
             self._provider_models[PROVIDER_OPENROUTER] = settings["openrouter_model"]
         self._default_provider = settings.get("default_ai_provider", "") or ""
         self._energy_provider = settings.get("energy_provider", "") or ""
+        self._tariff_plan = str(settings.get("tariff_plan", "") or "").lower()
         cfg = settings.get(AI_CONFIG_KEY)
         self._ai_config = cfg if isinstance(cfg, dict) else {}
 
@@ -445,6 +447,9 @@ class AIAdvisor:
                 *price_lines,
             ])
 
+        if not data.get("dynamic_zone"):
+            lines.extend(self._tariff_day_lines(data, provider_key, now))
+
         lines.extend([
             "",
             "## RCE Dynamic Pricing",
@@ -485,9 +490,63 @@ class AIAdvisor:
         return "\n".join(lines)
 
 
+    def _tariff_day_lines(self, data: dict[str, Any], provider_key: str, now: datetime) -> list[str]:
+        """Today's tariff computed by the system: day off (weekend/holiday = one price),
+        zones ahead and ready-made facts — so the model does not assume a weekday peak
+        (2026-10-17, Saturday: the advice counted savings against the 1.50 zł weekday peak)."""
+        from .tariff_prompt import build_tariff_prompt_context, render_next_zones
+
+        tariff = self._tariff_plan or ("g13" if data.get("g13_zone") else str(data.get("tariff_name") or "").lower())
+        if not tariff or tariff == "dynamic":
+            return []
+        try:
+            ctx = build_tariff_prompt_context(tariff, provider_key, now)
+            nxt = render_next_zones(tariff, provider_key, now, hours_ahead=12)
+        except Exception as err:  # noqa: BLE001 — never block the advice on this block
+            _LOGGER.debug("Tariff day context failed: %s", err)
+            return []
+        out = [
+            "",
+            "## Taryfa DZIŚ (obliczone przez system z kalendarza świąt — NIE zgaduj stref z pamięci)",
+            ("- Dziś dzień wolny (weekend lub święto): przez całą dobę jedna cena zakupu "
+             f"{ctx.cheapest_price:.3f} PLN/kWh — NIE MA dziś szczytu ani droższych godzin. "
+             "Nie licz oszczędności względem cen szczytowych z dni roboczych."
+             if ctx.is_weekend else f"- Dziś dzień roboczy, strefa teraz: {ctx.current_zone} ({ctx.current_price:.3f} PLN/kWh)"),
+            ctx.schedule_text,
+        ]
+        if nxt:
+            out.append(nxt)
+        if ctx.precomputed_advisory_facts:
+            out.append(ctx.precomputed_advisory_facts)
+        return out
+
+    @staticmethod
+    def _plan_lines(live: dict[str, Any] | None) -> list[str]:
+        """What the autopilot plans (settings autopilot_live) — the advice must explain it,
+        not call a deliberate PV sale a configuration error."""
+        plan = (live or {}).get("arbitrage_plan") or {}
+        hours = plan.get("hours") or []
+        if not hours:
+            return []
+        names = {
+            "pv_export": "sprzedaż nadwyżki PV (bateria czeka)", "pv_charge": "ładowanie z PV",
+            "charge_grid": "ładowanie z sieci", "discharge": "rozładowanie (dom i sieć)",
+            "hold": "bateria wstrzymana (dom z sieci)", "home": "dom z baterii",
+        }
+        out = ["", "## Plan Autopilota (planer arbitrażu — sloty 30 min; decyzje celowe, policzone na cenach)",
+               f"- Strategia: {(live or {}).get('strategy_label') or (live or {}).get('strategy', '')}"]
+        for h in hours[:12]:
+            out.append(
+                f"- {str(h.get('start', ''))[11:16]}: {names.get(h.get('action'), h.get('action'))}, "
+                f"kupno {h.get('buy')} / sprzedaż {h.get('sell')} PLN/kWh, "
+                f"SOC {h.get('soc_start')}→{h.get('soc_end')}%"
+            )
+        out.append("- Jeśli rekomendujesz inaczej niż plan, podaj liczbowo, dlaczego plan się myli.")
+        return out
+
     # ── Public API (used by services, cron, autopilot) ────────────────
 
-    def _advice_prompt(self, question: str, data: dict[str, Any]) -> str:
+    def _advice_prompt(self, question: str, data: dict[str, Any], live: dict[str, Any] | None = None) -> str:
         return f"""You are an expert energy management advisor for a home solar+battery system in Poland.
 Analyze the following system data and provide recommendations.
 Use Polish energy market knowledge (G13 tariff, RCE pricing, net-billing rules).
@@ -495,6 +554,7 @@ Provide complete, actionable recommendations. Do NOT truncate your response.
 Respond in Polish.
 {_FORMAT_INSTRUCTIONS}
 {self._build_context(data)}
+{chr(10).join(self._plan_lines(live))}
 
 User question: {question}"""
 
@@ -505,7 +565,14 @@ User question: {question}"""
         if not self._check_rate_limit():
             return "Rate limit reached. Please try again later."
         self._call_timestamps.append(time.time())
-        result = await self.complete(task, self._advice_prompt(question, data), provider=provider)
+        live = None
+        try:
+            from .settings_io import read_async
+
+            live = (await read_async(self.hass)).get("autopilot_live")
+        except Exception:  # noqa: BLE001
+            live = None
+        result = await self.complete(task, self._advice_prompt(question, data, live), provider=provider)
         return self._as_text(result)
 
     async def direct_ask(self, prompt: str, task: str = "ask", provider: str | None = None) -> str:

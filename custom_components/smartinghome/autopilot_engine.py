@@ -31,6 +31,7 @@ from .const import (
     TariffType,
     RCE_PROSUMER_COEFFICIENT,
 )
+from .pl_holidays import tariff_weekday
 from .tariff_prompt import (
     build_tariff_prompt_context,
     render_tariff_schedule_section,
@@ -213,7 +214,7 @@ class AutopilotEngine:
             load_w = ha.estimated_load
             surplus = pv_w - load_w  # positive = excess PV
 
-            g13_zone = _get_g13_zone(h, month, weekday)
+            g13_zone = _get_g13_zone(h, month, tariff_weekday(now.date()))
             g13_price = _get_g13_price(g13_zone)
             rce_sell = (rce_price / 1000) * RCE_PROSUMER_COEFFICIENT
 
@@ -702,7 +703,7 @@ def build_autopilot_ai_prompt(
     # Build hourly plan summary
     plan_lines = []
     for h in estimation.get("hourly_plan", []):
-        zone = _get_g13_zone(h['hour'], month, weekday)
+        zone = _get_g13_zone(h['hour'], month, tariff_weekday(now.date()))
         plan_lines.append(
             f"  {h['hour']:02d}:00 — {h['action'].upper():10s} | "
             f"PV:{h['pv']:5.0f}W | Load:{h['load']:5.0f}W | "
@@ -1294,7 +1295,7 @@ def build_ai_strategist_prompt(
     # Hourly plan from mathematical model
     plan_lines = []
     for h in estimation.get("hourly_plan", []):
-        zone = _get_g13_zone(h['hour'], month, weekday)
+        zone = _get_g13_zone(h['hour'], month, tariff_weekday(now.date()))
         plan_lines.append(
             f"  {h['hour']:02d}:00 | PV:{h['pv']:5.0f}W | Load:{h['load']:5.0f}W | "
             f"Bat:{h['battery']:+6.0f}W | Grid:{h['grid']:+6.0f}W | "

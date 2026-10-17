@@ -1265,7 +1265,8 @@ class StrategyController:
         import time as _time
         from datetime import datetime
 
-        weekday = datetime.now().weekday()
+        # Public holidays count as Sunday (G13/G12w: one price all day)
+        weekday = tariff_weekday(datetime.now().date())
         is_weekend = weekday >= 5
 
         # Condition map: action_id → bool (True = conditions met)
@@ -2650,7 +2651,7 @@ class StrategyController:
         # Pre-peak battery fill check (W5 logic)
         # Grid charge ONLY when ≤ 2h before expensive zone AND PV can't cover needs
         hours_to_peak = self._hours_until_expensive_zone(
-            hour, datetime.now().month, datetime.now().weekday(),
+            hour, datetime.now().month, tariff_weekday(datetime.now().date()),
         )
         if (
             0 < hours_to_peak <= 2

@@ -447,10 +447,19 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
         return e_max - stored_until[t]
 
     INF = float("inf")
-    value = [[INF] * len(levels) for _ in range(n + 1)]
-    choice = [[-1] * len(levels) for _ in range(n)]
+    # Hourly net-billing: the meter nets import and export within each clock hour, so
+    # charging from the grid and selling from the battery in the same hour only cycles
+    # the battery (the export is netted at the buy price, not paid at RCE — 2026-10-17
+    # plan: grid charge 19:00–19:30, sell 19:30–20:00). Mode entering a slot: 0 nothing
+    # yet this hour, 1 the grid charged the battery, 2 the battery sold to the grid.
+    hour_key = [(h.start.date(), h.start.hour) for h in inputs]
+    new_hour = [t == 0 or hour_key[t] != hour_key[t - 1] for t in range(n)]
+    MODES = (0, 1, 2)
+    value = [[[INF] * 3 for _ in levels] for _ in range(n + 1)]
+    choice = [[[(-1, 0)] * 3 for _ in levels] for _ in range(n)]
     for i, e in enumerate(levels):
-        value[n][i] = -terminal_value * max(e - e_res, 0.0)
+        for m in MODES:
+            value[n][i][m] = -terminal_value * max(e - e_res, 0.0)
 
     for t in range(n - 1, -1, -1):
         h = inputs[t]
@@ -461,51 +470,64 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
         # time buffer: plan slower than the inverter really charges
         max_up = p.charge_kw * p.charge_margin * h.duration * p.eff_charge
         max_dn = p.discharge_kw * h.duration
+        next_new_hour = t + 1 >= n or new_hour[t + 1]
         for i, e in enumerate(levels):
-            best = INF
-            best_j = i
-            for j, e2 in enumerate(levels):
-                delta = e2 - e
-                if delta > max_up + 1e-9 or -delta > max_dn + 1e-9:
-                    continue
-                if delta < 0 and e2 < floor - 1e-9:
-                    continue  # never discharge below the reserve (5 % in peaks)
-                if (
-                    cap_grid is not None and delta > 1e-9
-                    and delta / p.eff_charge - max(-d, 0.0) > 1e-6 and e2 > cap_grid + 1e-6
-                ):
-                    continue  # peak, or more than the sun's shortfall before the peak: PV only
-                if (
-                    h.no_import and delta < 0
-                    and -delta * p.eff_discharge - max(d, 0.0) > 1e-6
-                    and e2 < e_peak + need_after[t] + p.peak_sell_buffer_kwh * min(1.0, rest_after[t] / endgame) - 1e-9
-                ):
-                    continue  # selling now would leave too little for the rest of the peak
-                imp, exp, dis = _flows(delta, d, p)
-                if (
-                    cap_grid is not None and cap_grid > -INF and exp > 1e-6
-                    and e2 + stored_until[t] < e_max - step / 2 and delta + step <= max_up + 1e-9
-                ):
-                    continue  # before the peak the sun fills the battery first — no PV export
-                    # while it would then come up short (and the grid would top it up)
-                cost = imp * (h.buy + penalty) - exp * h.sell + dis * cycle_cost + value[t + 1][j]
-                if delta > 0:
-                    # tie-break: same price → charge as late as possible (battery not
-                    # sitting full for hours)
-                    cost += 1e-4 * (n - t) * delta
-                if cost < best - 1e-9:
-                    best, best_j = cost, j
-            value[t][i] = best
-            choice[t][i] = best_j
+            for m in (MODES if not new_hour[t] else (0,)):
+                best = INF
+                best_c = (i, 0)
+                for j, e2 in enumerate(levels):
+                    delta = e2 - e
+                    if delta > max_up + 1e-9 or -delta > max_dn + 1e-9:
+                        continue
+                    if delta < 0 and e2 < floor - 1e-9:
+                        continue  # never discharge below the reserve (5 % in peaks)
+                    if (
+                        cap_grid is not None and delta > 1e-9
+                        and delta / p.eff_charge - max(-d, 0.0) > 1e-6 and e2 > cap_grid + 1e-6
+                    ):
+                        continue  # peak, or more than the sun's shortfall before the peak: PV only
+                    if (
+                        h.no_import and delta < 0
+                        and -delta * p.eff_discharge - max(d, 0.0) > 1e-6
+                        and e2 < e_peak + need_after[t] + p.peak_sell_buffer_kwh * min(1.0, rest_after[t] / endgame) - 1e-9
+                    ):
+                        continue  # selling now would leave too little for the rest of the peak
+                    grid_charge = delta > 1e-9 and delta / p.eff_charge - max(-d, 0.0) > 1e-6
+                    battery_sell = delta < -1e-9 and -delta * p.eff_discharge - max(d, 0.0) > 1e-6
+                    if (grid_charge and m == 2) or (battery_sell and m == 1):
+                        continue  # same clock hour: the meter would net it away
+                    imp, exp, dis = _flows(delta, d, p)
+                    if (
+                        cap_grid is not None and cap_grid > -INF and exp > 1e-6
+                        and e2 + stored_until[t] < e_max - step / 2 and delta + step <= max_up + 1e-9
+                    ):
+                        continue  # before the peak the sun fills the battery first — no PV export
+                        # while it would then come up short (and the grid would top it up)
+                    m2 = 1 if grid_charge else 2 if battery_sell else m
+                    m_next = 0 if next_new_hour else m2
+                    cost = imp * (h.buy + penalty) - exp * h.sell + dis * cycle_cost + value[t + 1][j][m_next]
+                    if delta > 0:
+                        # tie-break: same price → charge as late as possible (battery not
+                        # sitting full for hours)
+                        cost += 1e-4 * (n - t) * delta
+                    if cost < best - 1e-9:
+                        best, best_c = cost, (j, m_next)
+                value[t][i][m] = best
+                choice[t][i][m] = best_c
+            if new_hour[t]:
+                for m in (1, 2):
+                    value[t][i][m] = value[t][i][0]
+                    choice[t][i][m] = choice[t][i][0]
 
     # Baseline: battery idle whole horizon
     plan.baseline_cost = sum(max(h.load_kwh - h.pv_kwh, 0) * h.buy - max(h.pv_kwh - h.load_kwh, 0) * h.sell for h in inputs)
 
     pv_only_slot = [grid_cap(t) == -INF for t in range(n)]
     i = start
+    mode = 0
     total = 0.0
     for t, h in enumerate(inputs):
-        j = choice[t][i]
+        j, mode_next = choice[t][i][mode]
         e, e2 = levels[i], levels[j]
         delta = e2 - e
         d = deficits[t]
@@ -534,6 +556,7 @@ def optimize(soc_pct: float, inputs: list[HourInput], p: ArbitrageParams) -> Arb
             export_w=int(round(exp / h.duration * 1000)) if action == ACT_DISCHARGE else 0,
         ))
         i = j
+        mode = mode_next
     plan.total_cost = total
     _summarise(plan, inputs, p)
     return plan

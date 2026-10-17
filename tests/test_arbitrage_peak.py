@@ -190,3 +190,22 @@ def test_weekday_sunny_no_grid_before_the_peak():
     plan = arb.optimize(40, _day(13, 37, _g13, 0.9, pv, load=0.8, peak=range(16, 21)), p)
     for hp in plan.hours[:3]:
         assert hp.battery_kwh <= 0 or hp.grid_import < 0.01, hp
+
+
+def test_no_grid_charge_and_battery_sale_in_the_same_clock_hour():
+    # 2026-10-17 (Saturday, G13 one price all day): the plan charged from the grid 19:00–19:30
+    # and sold from the battery 19:30–20:00 — the meter nets both within the hour.
+    sell = {17: 1.198, 18: 1.283, 19: 1.214, 20: 1.131, 21: 0.993, 22: 0.922, 23: 0.868}
+    inputs = []
+    for k in range(17 * 2, 24 * 2):
+        h, half = divmod(k, 2)
+        inputs.append(arb.HourInput(datetime(2026, 10, 17, h, 30 * half), 0.5, 0.626,  # noqa: DTZ001
+                                    sell[h], 0.4, 0.0, "off_peak"))
+    plan = arb.optimize(51, inputs, arb.ArbitrageParams(slot_minutes=30))
+    by_hour: dict[str, list] = {}
+    for hp in plan.hours:
+        by_hour.setdefault(hp.start[:13], []).append(hp)
+    for hour, slots in by_hour.items():
+        grid_charge = any(s.battery_kwh > 0.01 and s.grid_import > 0.4 / 1 + 1e-6 for s in slots)
+        battery_sale = any(s.battery_kwh < -0.01 and s.grid_export > 1e-6 for s in slots)
+        assert not (grid_charge and battery_sale), (hour, [(s.start, s.action, s.battery_kwh) for s in slots])
