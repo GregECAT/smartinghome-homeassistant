@@ -4554,7 +4554,8 @@ class SmartingHomePanel extends HTMLElement {
     this._vrepDays = days || this._vrepDays || 30;
     el.style.opacity = '0.5';
     try {
-      this._vrep = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/voltage/report', days: this._vrepDays });
+      const src = this._vrepSource ? { source: this._vrepSource } : {};
+      this._vrep = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/voltage/report', days: this._vrepDays, ...src });
     } catch (e) {
       this._vrep = { error: e.message || e.code || String(e) };
     }
@@ -4569,6 +4570,10 @@ class SmartingHomePanel extends HTMLElement {
     if (r.error) { el.innerHTML = `<div style="color:#e74c3c">Nie udało się przygotować raportu: ${this._esc(r.error)}</div>`; return; }
     const s = r.summary || {};
     const lim = r.limit_v || 253;
+    // Independent meter as the alternative voltage source (panel „Energia i koszty” → Ustawienia)
+    const av = r.sources_available || {};
+    const srcBtn = (v, label) => `<button onclick="this.getRootNode().host._vrepSource='${v}'; this.getRootNode().host._loadVoltageReport()" style="background:${r.source === v ? '#00d4ff' : '#1e293b'};color:${r.source === v ? '#0f172a' : '#cbd5e1'};border:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px">${label}</button>`;
+    const srcBtns = av.inverter && av.meter ? `<span style="width:10px"></span>${srcBtn('inverter', 'Falownik')}${srcBtn('meter', 'Licznik')}` : '';
     const btn = (d) => `<button onclick="this.getRootNode().host._loadVoltageReport(${d})" style="background:${this._vrepDays === d ? '#00d4ff' : '#1e293b'};color:${this._vrepDays === d ? '#0f172a' : '#cbd5e1'};border:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px">${d} dni</button>`;
     const tile = (label, val, sub, color) => `
       <div style="background:rgba(15,23,42,0.5); border:1px solid #1e293b; border-radius:10px; padding:10px">
@@ -4584,7 +4589,7 @@ class SmartingHomePanel extends HTMLElement {
       <td style="text-align:right">${e.minutes} min</td><td style="text-align:right; color:#e74c3c">${e.max_mean} V</td>
       <td>${(e.phases || []).join(', ')}</td><td style="text-align:right">${e.max_export_w} W</td><td>${e.capped ? 'limit eksportu' : '—'}</td></tr>`).join('');
     el.innerHTML = `
-      <div style="display:flex; gap:6px; margin-bottom:10px; flex-wrap:wrap">${[7, 30, 90, 365].map(btn).join('')}
+      <div style="display:flex; gap:6px; margin-bottom:10px; flex-wrap:wrap">${[7, 30, 90, 365].map(btn).join('')}${srcBtns}
         <span style="flex:1"></span>
         ${r.export_allowed === false ? `<span style="display:inline-flex; align-items:center; gap:6px; font-size:11px; color:#94a3b8">⬇️ CSV · 📄 Treść reklamacji ${this._proLock('Eksport do reklamacji — funkcja PRO')}</span>` : `
         <button onclick="this.getRootNode().host._voltageCsv()" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px">⬇️ CSV</button>
@@ -4603,7 +4608,7 @@ class SmartingHomePanel extends HTMLElement {
       ${ev ? `<div style="font-size:11px; color:#94a3b8; margin:10px 0 4px">Zarejestrowane przekroczenia (średnia 10-min > ${lim} V)</div>
       <div style="overflow-x:auto"><table style="width:100%; font-size:11px"><thead><tr style="color:#64748b"><th style="text-align:left">Początek</th><th style="text-align:right">Czas</th><th style="text-align:right">Maks. średnia</th><th style="text-align:left">Fazy</th><th style="text-align:right">Eksport</th><th style="text-align:left">Reakcja</th></tr></thead><tbody>${ev}</tbody></table></div>` : ''}
       ${this._renderPhaseBalance(r.phases)}
-      <div style="font-size:10px; color:#64748b; margin-top:8px; line-height:1.5">Źródło: statystyki Home Assistant z falownika (godzinowe średnie i maksima; średnie 5-min z ostatnich 10 dni).
+      <div style="font-size:10px; color:#64748b; margin-top:8px; line-height:1.5">Źródło: statystyki Home Assistant ${r.source === 'meter' ? 'z licznika energii w rozdzielnicy' : 'z falownika'} (godzinowe średnie i maksima; średnie 5-min z ostatnich 10 dni).
         Napięcie wysokie także wtedy, gdy dom nic nie oddaje, pokazuje, że problem leży po stronie sieci, a nie instalacji PV.</div>`;
   }
 
@@ -4640,7 +4645,8 @@ class SmartingHomePanel extends HTMLElement {
   /* CSV + complaint text are built by the backend (PRO: smartinghome/voltage/export) */
   async _voltageExport() {
     try {
-      return await this._hass.connection.sendMessagePromise({ type: 'smartinghome/voltage/export', days: this._vrepDays || 30 });
+      const src = this._vrepSource ? { source: this._vrepSource } : {};
+      return await this._hass.connection.sendMessagePromise({ type: 'smartinghome/voltage/export', days: this._vrepDays || 30, ...src });
     } catch (e) {
       const pro = e && e.code === 'pro_required';
       this._showModal(`<div style="font-size:13px; font-weight:700; margin-bottom:8px">${pro ? '🔒 Funkcja PRO' : '❌ Błąd'}</div>
