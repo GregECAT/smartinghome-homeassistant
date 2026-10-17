@@ -17,6 +17,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 
+from . import grid_limits
 from .const import (
     DEFAULT_GOODWE_DEVICE_ID,
     DEFAULT_BATTERY_CHARGE_CURRENT_MAX,
@@ -122,6 +123,13 @@ class EnergyManager:
         # Every other export limit request is clamped to it and restored when it goes.
         self.export_cap_w: int | None = None
         self._requested_export_limit: int | None = None
+        # Export limit from the connection conditions and limits set by others (grid_limits.py)
+        self.grid_export_cap_w: int | None = None
+        self.export_baseline_w: int | None = None
+        self.osd_priority: bool = False
+        self.external_limit_w: int | None = None
+        self._external_clear: str = ""
+        self._last_export_write_ts: float = 0.0
         self._control_error: str | None = None
         # What the inverter was last told to do: "charge_grid" | "sell" | "hold" |
         # "home" | "general". Safety layers (W0) must not undo deliberate grid
@@ -161,7 +169,7 @@ class EnergyManager:
             await self.set_general_mode()
         elif mode == HEMSMode.SELL:
             await self._block_charging()
-            await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
+            await self._set_export_limit(self.max_export_w)
         elif mode == HEMSMode.CHARGE:
             await self._enable_charging()
         elif mode == HEMSMode.PEAK_SAVE:
@@ -246,7 +254,7 @@ class EnergyManager:
             await self._sofar_set_passive(grid_power=-6000, max_battery=-6000, min_battery=-6000)
         elif self._goodwe_ems_select():
             _LOGGER.info("Forcing battery discharge via GoodWe EMS (discharge_battery)")
-            await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
+            await self._set_export_limit(self.max_export_w)
             await self._set_dod(95)
             await self._set_work_mode("eco_discharge", power_w)  # → EMS discharge_battery
         else:
@@ -265,7 +273,7 @@ class EnergyManager:
                 )
             except Exception as err:  # noqa: BLE001 — hub not configured on this install
                 _LOGGER.debug("Modbus 47509 write skipped: %s", err)
-            await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
+            await self._set_export_limit(self.max_export_w)
             await self._block_charging()
             # DOD=95% means 95% of battery capacity CAN be discharged (SOC → ~5%)
             # DOD=5% would BLOCK discharge (only 5% usable)! This is the critical fix.
@@ -311,7 +319,7 @@ class EnergyManager:
             await self._set_eco_mode_soc(100)
             await self._set_work_mode("general")
             await self._enable_charging()
-            await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
+            await self._set_export_limit(self.max_export_w)
             await self._set_dod(DEFAULT_DOD_ON_GRID)
         # Turn off force flag (if helper exists)
         _eid = "input_boolean.hems_force_battery_discharge"
@@ -384,7 +392,7 @@ class EnergyManager:
                 await self._enable_charging()
             else:
                 await self._block_charging()
-            await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
+            await self._set_export_limit(self.max_export_w)
             await self._set_dod(DEFAULT_DOD_ON_GRID)
         self._current_mode = HEMSMode.AUTO
         self.intent = "general"
@@ -407,7 +415,7 @@ class EnergyManager:
                 _LOGGER.debug("Modbus 47511 reset skipped")
             await self._set_work_mode("general")
             await self._enable_charging()
-            await self._set_export_limit(DEFAULT_EXPORT_LIMIT)
+            await self._set_export_limit(self.max_export_w)
         for entity_id in (
             "input_boolean.hems_force_grid_charge",
             "input_boolean.hems_force_battery_discharge",
@@ -797,18 +805,83 @@ class EnergyManager:
             self._requested_export_limit = self.current_export_limit()
         self.export_cap_w = cap
         await self._set_export_limit(
-            self._requested_export_limit if self._requested_export_limit is not None else DEFAULT_EXPORT_LIMIT
+            self._requested_export_limit if self._requested_export_limit is not None else self.max_export_w
         )
 
+    @property
+    def max_export_w(self) -> int:
+        """Highest export limit we may set: connection conditions, else the installer's."""
+        return grid_limits.max_export(self.grid_export_cap_w, self.export_baseline_w, DEFAULT_EXPORT_LIMIT)
+
+    def configure_grid(self, raw: dict[str, Any] | None) -> None:
+        """Apply settings "grid" (grid_limits.config)."""
+        cfg = grid_limits.config(raw)
+        self.grid_export_cap_w = cfg["export_cap_w"]
+        self.export_baseline_w = cfg["export_baseline_w"]
+        self.osd_priority = cfg["osd_priority"]
+        if cfg["external_clear"] != self._external_clear:
+            if self._external_clear or self.external_limit_w is not None:
+                # The owner says the detected limit no longer applies: forget it and
+                # take the inverter's current value as known (no re-detection)
+                self.external_limit_w = None
+                self._last_export_limit = None
+            self._external_clear = cfg["external_clear"]
+
+    def grid_status(self) -> dict[str, Any]:
+        return {
+            "max_export_w": self.max_export_w,
+            "export_cap_w": self.grid_export_cap_w,
+            "export_baseline_w": self.export_baseline_w,
+            "osd_priority": self.osd_priority,
+            "external_limit_w": self.external_limit_w,
+            "inverter_limit_w": None if self._is_sofar else self.current_export_limit(),
+            "needs_cap": self.grid_export_cap_w is None and self.export_baseline_w is None,
+        }
+
+    def _check_external_limit(self) -> None:
+        """Somebody else changed the inverter's export limit: the lower value wins from now on."""
+        if self._is_sofar:
+            return
+        current = self.current_export_limit()
+        if not grid_limits.external_change(current, self._last_export_limit,
+                                           self._last_export_write_ts, time.monotonic()):
+            return
+        if current == self.external_limit_w:
+            return
+        self.external_limit_w = current
+        self._last_export_limit = current
+        _LOGGER.warning(
+            "Export limit changed outside Smarting HOME to %s W — it is respected from now on "
+            "(clear it in the panel: Settings → Grid and DSO)", current,
+        )
+        self.hass.async_create_task(self.hass.services.async_call(
+            "persistent_notification", "create",
+            {
+                "notification_id": "smartinghome_external_export_limit",
+                "title": "Smarting HOME: limit eksportu zmieniony z zewnątrz",
+                "message": (
+                    f"Falownik ma limit oddawania do sieci {current} W, którego Smarting HOME nie ustawiał "
+                    "(operator sieci, integrator OSD albo aplikacja producenta). Od teraz go respektujemy "
+                    "i nie podnosimy. Jeśli to Ty go zmieniłeś i ma przestać obowiązywać — Panel → "
+                    "Ustawienia → Sieć i OSD → „Zapomnij wykryty limit”."
+                ),
+            },
+        ))
+
     async def _set_export_limit(self, limit: int) -> None:
-        """Set grid export limit (clamped by the voltage guard's cap)."""
+        """Set grid export limit — never above the connection limit, a limit set by
+        someone else or the voltage guard's cap; nothing at all with OSD priority."""
         self._requested_export_limit = limit
-        if self.export_cap_w is not None:
-            limit = min(limit, self.export_cap_w)
+        if self.osd_priority:
+            _LOGGER.debug("OSD priority: export limit %s W not written", limit)
+            return
+        self._check_external_limit()
+        limit = grid_limits.effective_limit(limit, self.max_export_w, self.external_limit_w, self.export_cap_w)
         if self._is_sofar:
             if self._last_export_limit == limit:
                 return
             self._last_export_limit = limit
+            self._last_export_write_ts = time.monotonic()
             await self._sofar_set_export_limit(limit)
             return
 
@@ -823,11 +896,13 @@ class EnergyManager:
                 "number", "set_value", {"entity_id": entity, "value": limit},
             )
             self._last_export_limit = limit
+            self._last_export_write_ts = time.monotonic()
             return
 
         if self._last_export_limit == limit:
             return
         self._last_export_limit = limit
+        self._last_export_write_ts = time.monotonic()
         await self.hass.services.async_call(
             "goodwe",
             "set_parameter",

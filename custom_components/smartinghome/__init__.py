@@ -12,17 +12,20 @@ Licensed under Smarting HOME Commercial License.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import timedelta
 from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import SmartingHomeAPI
 from .const import (
     DOMAIN,
+    VERSION,
     PLATFORMS,
     CONF_LICENSE_KEY,
     CONF_LICENSE_MODE,
@@ -146,7 +149,7 @@ async def async_setup_entry(
         license_key,
         device_id=device_id,
         ha_version=ha_version,
-        integration_version="1.15.0",
+        integration_version=VERSION,
     )
 
     # Initialize license manager
@@ -235,6 +238,8 @@ async def async_setup_entry(
     strategy_ctrl.set_feature_check(license_mgr.has_feature)
     strategy_ctrl.set_inverter_brand(inverter_brand)
     strategy_ctrl.set_forecasters(coordinator.pv_forecaster, coordinator.load_forecaster)
+    # Connection export limit / OSD priority before anything can write to the inverter
+    await strategy_ctrl.refresh_grid_config(force=True)
     grid_only = is_grid_only(entry.data)
     if not grid_only:
         # Without an inverter the controller exists (services reference it)
@@ -278,6 +283,16 @@ async def async_setup_entry(
     # Store references for cleanup
     hass.data[DOMAIN][entry.entry_id]["cron_scheduler"] = cron_scheduler
     hass.data[DOMAIN][entry.entry_id]["strategy_controller"] = strategy_ctrl
+
+    if not grid_only:
+        # Leaving a forced mode (grid charging, selling, holding) set on the inverter
+        # with nobody watching is unsafe: back to plain self-consumption on stop.
+        async def _safe_state_on_stop(_event) -> None:
+            await _async_restore_safe_state(energy_mgr)
+
+        entry.async_on_unload(
+            hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _safe_state_on_stop)
+        )
     hass.data[DOMAIN][entry.entry_id]["schedule_manager"] = schedule_mgr
 
     # Initialize Wind Calendar for daily wind energy tracking
@@ -440,11 +455,25 @@ def _register_sidebar_panel(
         _LOGGER.debug("Could not inject dashboard proxy: %s", err)
 
 
+async def _async_restore_safe_state(energy_mgr) -> None:
+    """Inverter back to general/self-use when Smarting HOME stops steering it."""
+    if getattr(energy_mgr, "intent", "general") == "general":
+        return
+    try:
+        await asyncio.wait_for(energy_mgr.set_general_mode(), timeout=15)
+        _LOGGER.info("Smarting HOME stopped — inverter restored to general mode")
+    except Exception as err:  # noqa: BLE001 — inverter integration may be stopping too
+        _LOGGER.warning("Could not restore the inverter's general mode on stop: %s", err)
+
+
 async def async_unload_entry(
     hass: HomeAssistant, entry: SmartingHomeConfigEntry
 ) -> bool:
     """Unload a Smarting HOME config entry."""
     _LOGGER.info("Unloading Smarting HOME")
+    ctrl = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("strategy_controller")
+    if ctrl is not None and not is_grid_only(entry.data):
+        await _async_restore_safe_state(ctrl.energy_manager)
 
     unload_ok = await hass.config_entries.async_unload_platforms(
         entry, PLATFORMS

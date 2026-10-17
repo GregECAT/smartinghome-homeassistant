@@ -49,6 +49,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_ledger_rebuild)
     websocket_api.async_register_command(hass, ws_battery_full_log)
     websocket_api.async_register_command(hass, ws_auto_update_status)
+    websocket_api.async_register_command(hass, ws_grid_status)
     websocket_api.async_register_command(hass, ws_auto_update_run)
 
     from .meter_ws import async_register as _register_meter_ws
@@ -180,6 +181,15 @@ async def ws_ai_test(hass: HomeAssistant, connection, msg: dict[str, Any]) -> No
 
 
 # ── Panel settings (private store, replaces public /local/…/settings.json) ──
+# Settings that steer the inverter, updates, notifications or what data leaves the
+# house: only HA administrators may change them (non-admin users can still read and
+# change view/analysis settings).
+ADMIN_SETTINGS = frozenset({
+    "arbitrage_params", "auto_update", "boiler_surplus", "energy_provider", "grid",
+    "notification_config", "open_meteo_api_key", "peak_load_control",
+    "peak_sell_soc_percent", "pv_string_config", "sensor_map_overrides",
+    "tariff_plan", "telemetry", "voltage_guard",
+})
 # Same access level as the panel itself (require_admin=False) and the
 # save_panel_settings service: any authenticated HA user.
 
@@ -213,8 +223,22 @@ async def ws_settings_update(hass: HomeAssistant, connection, msg: dict[str, Any
     from .settings_io import SECRET_KEYS, write_async
 
     updates = {k: v for k, v in msg["settings"].items() if k not in SECRET_KEYS}
+    user = getattr(connection, "user", None)
+    if not (user and user.is_admin):
+        denied = sorted(k for k in updates if k in ADMIN_SETTINGS or k.startswith("autopilot_"))
+        if denied:
+            connection.send_error(
+                msg["id"], "unauthorized",
+                "Te ustawienia zmienia tylko administrator Home Assistant: " + ", ".join(denied),
+            )
+            return
     if updates:
         await write_async(hass, updates)
+        if "grid" in updates:
+            for entry_data in hass.data.get(DOMAIN, {}).values():
+                ctrl = entry_data.get("strategy_controller") if isinstance(entry_data, dict) else None
+                if ctrl is not None:
+                    await ctrl.refresh_grid_config(force=True)
         if "arbitrage_params" in updates:
             # Re-plan on the next autopilot tick
             for entry_data in hass.data.get(DOMAIN, {}).values():
@@ -691,6 +715,27 @@ async def ws_energy_monthly(hass: HomeAssistant, connection, msg: dict[str, Any]
         "months": result,
         "sources": {"load": load_id, "pv": pv_id, "import": imp_id, "export": exp_id,
                     "import_raw": raw_imp_id, "export_raw": raw_exp_id},
+    })
+
+
+@websocket_api.websocket_command({vol.Required("type"): "smartinghome/grid/status"})
+@websocket_api.async_response
+async def ws_grid_status(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Grid and DSO: export ceiling, detected external limit, OSD priority, telemetry."""
+    from .settings_io import read_async
+
+    em = None
+    for entry_data in hass.data.get(DOMAIN, {}).values():
+        ctrl = entry_data.get("strategy_controller") if isinstance(entry_data, dict) else None
+        if ctrl is not None:
+            em = ctrl.energy_manager
+            break
+    settings = await read_async(hass)
+    tel = settings.get("telemetry") or {}
+    connection.send_result(msg["id"], {
+        "grid": em.grid_status() if em is not None else None,
+        "telemetry": {"enabled": bool(tel.get("enabled", True)), "sent": tel.get("sent")},
+        "is_admin": bool(getattr(connection, "user", None) and connection.user.is_admin),
     })
 
 

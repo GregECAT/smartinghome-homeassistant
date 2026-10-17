@@ -8,7 +8,9 @@
 """Constants for Smarting HOME Energy Management integration."""
 from __future__ import annotations
 
+import json
 from enum import StrEnum
+from pathlib import Path
 from typing import Final
 
 # =============================================================================
@@ -17,7 +19,16 @@ from typing import Final
 DOMAIN: Final = "smartinghome"
 MANUFACTURER: Final = "Smarting HOME"
 INTEGRATION_NAME: Final = "Smarting HOME — Energy Management"
-VERSION: Final = "1.42.1"
+
+
+def _manifest_version() -> str:
+    try:
+        return str(json.loads((Path(__file__).parent / "manifest.json").read_text())["version"])
+    except (OSError, ValueError, KeyError):
+        return "0.0.0"
+
+
+VERSION: Final = _manifest_version()  # always the installed release (manifest.json)
 
 # =============================================================================
 # Config Entry Keys

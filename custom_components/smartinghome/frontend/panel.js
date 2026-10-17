@@ -185,7 +185,7 @@ class SmartingHomePanel extends HTMLElement {
     if (tab === 'hems') { this._updateHEMSArbitrage(); this._loadForecastStatus(); }
     if (tab === 'tariff') { this._loadDeposit(); }
     if (tab === 'battery') { this._loadFullLog(); }
-    if (tab === 'settings') { this._loadAutoUpdate(); }
+    if (tab === 'settings') { this._loadAutoUpdate(); this._loadGrid(); }
     if (tab === 'energy') { this._loadVoltageReport(); }
     if (tab === 'history') { this._updateHistoryTab(); }
     if (tab === 'autopilot') { this._updateAutopilot(); }
@@ -905,6 +905,64 @@ class SmartingHomePanel extends HTMLElement {
       if (btn) btn.innerHTML = '❌ ' + (e.message || e.code || e);
     }
     setTimeout(() => this._loadAutoUpdate(), 5000);
+  }
+
+  /* ── Grid / DSO + privacy (Ustawienia) ───────────────── */
+  async _loadGrid() {
+    const el = this.shadowRoot.getElementById('grid-content');
+    if (!el || !this._hass?.connection) return;
+    try {
+      this._gridSt = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/grid/status' });
+    } catch (e) {
+      this._gridSt = { error: e.message || e.code || String(e) };
+    }
+    this._renderGrid();
+  }
+
+  _renderGrid() {
+    const el = this.shadowRoot.getElementById('grid-content');
+    if (!el) return;
+    const r = this._gridSt || {};
+    if (r.error) { el.innerHTML = `<span style="color:#e74c3c">${this._esc(r.error)}</span>`; return; }
+    const g = r.grid || {}, t = r.telemetry || {};
+    const dis = r.is_admin ? '' : 'disabled';
+    const kw = w => (w === null || w === undefined) ? '—' : `${(w / 1000).toLocaleString('pl-PL', { maximumFractionDigits: 2 })} kW`;
+    el.innerHTML = `
+      ${g.needs_cap ? `<div style="padding:8px 10px; margin-bottom:8px; border-radius:8px; background:rgba(247,183,49,0.08); border:1px solid rgba(247,183,49,0.25); color:#f7b731">⚠️ Wpisz limit oddawania do sieci z warunków przyłączenia / zgłoszenia mikroinstalacji. Do tego czasu Smarting HOME nie ustawia limitu wyżej niż ${kw(g.max_export_w)}.</div>` : ''}
+      ${g.external_limit_w !== null && g.external_limit_w !== undefined ? `<div style="padding:8px 10px; margin-bottom:8px; border-radius:8px; background:rgba(231,76,60,0.08); border:1px solid rgba(231,76,60,0.3); color:#e74c3c">Falownik ma limit ${kw(g.external_limit_w)} ustawiony poza Smarting HOME (operator, integrator OSD albo aplikacja producenta) — respektujemy go.
+        ${r.is_admin ? `<button class="test-btn" onclick="this.getRootNode().host._clearExternalLimit(this)">Zapomnij wykryty limit</button>` : ''}</div>` : ''}
+      <div style="display:flex; flex-wrap:wrap; gap:14px; align-items:center; margin-bottom:8px">
+        <span>Limit z warunków przyłączenia: <input type="number" id="grid-cap" value="${g.export_cap_w ?? ''}" min="0" max="100000" step="100" placeholder="W" style="width:90px" ${dis}> W</span>
+        <label style="display:flex; align-items:center; gap:6px" title="Gdy limit lub moc falownika steruje operator sieci albo integrator OSD — Smarting HOME nie zapisuje limitu eksportu"><input type="checkbox" id="grid-osd" ${g.osd_priority ? 'checked' : ''} ${dis}> Sterowanie OSD / integratora ma pierwszeństwo</label>
+        <label style="display:flex; align-items:center; gap:6px"><input type="checkbox" id="grid-tel" ${t.enabled !== false ? 'checked' : ''} ${dis}> Informacja o instalacji dla Smarting HOME</label>
+        ${r.is_admin ? `<button class="test-btn" onclick="this.getRootNode().host._saveGrid(this)">💾 Zapisz</button>` : '<span style="color:#64748b">zmienia administrator</span>'}
+      </div>
+      <div style="font-size:11px; color:#cbd5e1">Najwyższy limit, jaki ustawimy: <b>${kw(g.max_export_w)}</b> · w falowniku teraz: ${kw(g.inverter_limit_w)}${g.export_baseline_w ? ` · zapamiętany z instalacji: ${kw(g.export_baseline_w)}` : ''}</div>
+      <div style="font-size:10px; color:#64748b; margin-top:8px; line-height:1.5">Smarting HOME nigdy nie podnosi limitu oddawania do sieci ponad limit z warunków przyłączenia. Jeśli ktoś inny zmieni limit w falowniku (operator sieci, integrator OSD, aplikacja producenta), od tej chwili obowiązuje niższa wartość. Nastaw Q(U), cos φ i zabezpieczeń falownika Smarting HOME nie zmienia. Port RS485 falownika zostaw dla OSD lub integratora — Smarting HOME łączy się przez LAN/Wi-Fi.<br>
+      Informacja o instalacji: raz na wersję integracja wysyła na serwer Smarting HOME identyfikator instalacji Home Assistant, wersje HA i integracji, markę falownika, taryfę i sprzedawcę energii (w wersji FREE). Sterowanie działa lokalnie; licencja PRO jest sprawdzana na serwerze, zapytania AI idą do wybranego dostawcy z Twoim kluczem, a SMS/e-mail przez serwer powiadomień.</div>`;
+  }
+
+  async _saveGrid(btn) {
+    const $ = id => this.shadowRoot.getElementById(id);
+    const cur = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/settings/get', keys: ['grid', 'telemetry'] }).catch(() => ({}));
+    const capRaw = ($('grid-cap')?.value || '').trim();
+    const grid = { ...(cur.grid || {}), export_cap_w: capRaw === '' ? null : Math.max(0, parseInt(capRaw) || 0), osd_priority: !!$('grid-osd')?.checked };
+    const telemetry = { ...(cur.telemetry || {}), enabled: !!$('grid-tel')?.checked };
+    try {
+      await this._hass.connection.sendMessagePromise({ type: 'smartinghome/settings/update', settings: { grid, telemetry } });
+      if (btn) { const o = btn.innerHTML; btn.innerHTML = '✓ Zapisano'; setTimeout(() => { btn.innerHTML = o; }, 2500); }
+    } catch (e) {
+      if (btn) btn.innerHTML = '❌ ' + (e.message || e.code || e);
+    }
+    this._loadGrid();
+  }
+
+  async _clearExternalLimit(btn) {
+    const cur = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/settings/get', keys: ['grid'] }).catch(() => ({}));
+    const grid = { ...(cur.grid || {}), external_clear: new Date().toISOString() };
+    await this._hass.connection.sendMessagePromise({ type: 'smartinghome/settings/update', settings: { grid } }).catch(() => {});
+    if (btn) btn.innerHTML = '✓ Za chwilę';
+    setTimeout(() => this._loadGrid(), 2000);
   }
 
   /* ── Custom Modal System ───────────────── */
@@ -14739,10 +14797,16 @@ class SmartingHomePanel extends HTMLElement {
               <div id="aupd-content" style="font-size:12px; color:#94a3b8">Ładowanie…</div>
             </div>
 
+            <!-- 🔌 Grid / DSO + privacy -->
+            <div class="card" style="grid-column: 1 / -1">
+              <div class="card-title">🔌 Sieć i OSD · prywatność</div>
+              <div id="grid-content" style="font-size:12px; color:#94a3b8">Ładowanie…</div>
+            </div>
+
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.71.1</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.72.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/docs" target="_blank" style="color:#00d4ff">smartinghome.pl/docs</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

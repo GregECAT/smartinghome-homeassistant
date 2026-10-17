@@ -538,6 +538,17 @@ async def async_setup_services(
         # SAFETY: never let panel settings overwrite API keys
         for danger_key in _SETTINGS_SECRET_KEYS:
             incoming.pop(danger_key, None)
+        # Control settings only for HA administrators (same rule as the WS command)
+        from .ws_api import ADMIN_SETTINGS
+
+        user_id = call.context.user_id
+        user = await hass.auth.async_get_user(user_id) if user_id else None
+        if user is not None and not user.is_admin:
+            denied = [k for k in incoming if k in ADMIN_SETTINGS or k.startswith("autopilot_")]
+            if denied:
+                _LOGGER.warning("save_panel_settings: non-admin user may not change %s", denied)
+                for k in denied:
+                    incoming.pop(k, None)
         await _update_settings_file(hass, incoming)
         if "energy_provider" in incoming:
             # Tariff labels/prices in AI prompts follow the panel's provider

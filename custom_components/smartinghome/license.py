@@ -302,11 +302,26 @@ class LicenseManager:
             self._last_check_attempt = time.time()
 
     async def _register_free_ping(self) -> None:
-        """Send anonymous telemetry ping for FREE mode users.
+        """FREE installs: tell the license server and the installations webhook that
+        this installation runs this version (HA instance id, HA and integration
+        version, inverter brand, tariff, energy provider).
 
-        Non-blocking, fire-and-forget. Never crashes the integration.
-        Also notifies the installations webhook about new FREE installs.
+        Once per installed version, not on every start, and never when the owner
+        switched it off (settings "telemetry": {"enabled": false}) — described in the
+        panel (Settings → Privacy) and on smartinghome.pl/hems/. Fire-and-forget.
         """
+        try:
+            from .const import VERSION
+            from .settings_io import read_async, write_async
+
+            tel = (await read_async(self.hass)).get("telemetry") or {}
+            if not tel.get("enabled", True) or tel.get("sent") == VERSION:
+                return
+            await write_async(self.hass, {"telemetry": {**tel, "sent": VERSION}})
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Telemetry settings unreadable — skipping ping: %s", err)
+            return
+
         try:
             import aiohttp
             from .const import LICENSE_API_URL, DOMAIN, VERSION

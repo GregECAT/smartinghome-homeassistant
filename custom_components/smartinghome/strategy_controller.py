@@ -376,6 +376,8 @@ class StrategyController:
         # W4 voltage guard (10-min mean, battery → export limit) + exceedance log
         self._vguard = VoltageGuard()
         self._vguard_cfg_ts = 0.0
+        self._grid_cfg_ts = 0.0
+        self._grid_fresh: bool | None = None  # install without saved autopilot state (set once)
         self._vguard_store: Any = None
         self._vguard_events: list[dict[str, Any]] | None = None
         # W5 peak load guard
@@ -896,6 +898,7 @@ class StrategyController:
         Returns:
             dict with actions taken, strategy info, decision log.
         """
+        await self.refresh_grid_config()
         if not self._enabled:
             return {"enabled": False, "strategy": self._active_strategy.value}
 
@@ -1163,6 +1166,7 @@ class StrategyController:
         Returns:
             dict with safety actions taken.
         """
+        await self.refresh_grid_config()
         now = datetime.now()
         hour = now.hour
         month = now.month
@@ -1674,6 +1678,36 @@ class StrategyController:
     # ------------------------------------------------------------------
     #  W4 — Voltage Cascade
     # ------------------------------------------------------------------
+
+    async def refresh_grid_config(self, force: bool = False) -> None:
+        """Settings "grid" → energy manager (every 5 min). Before our first write the
+        inverter's export limit is the installer's — remember it as the baseline."""
+        if not force and time.time() - self._grid_cfg_ts < 300:
+            return
+        self._grid_cfg_ts = time.time()
+        from . import grid_limits
+        from .const import DEFAULT_EXPORT_LIMIT
+        from .settings_io import read_async, write_async
+
+        try:
+            settings = await read_async(self.hass)
+            raw = settings.get("grid") or {}
+            cfg = grid_limits.config(raw)
+            # Only a fresh install (autopilot state never saved) still has the installer's
+            # value in the inverter; on older installs it may be one we wrote ourselves.
+            if self._grid_fresh is None:
+                self._grid_fresh = "autopilot_enabled" not in settings
+            if self._grid_fresh and cfg["export_baseline_w"] is None and self._em._last_export_limit is None:
+                seen = grid_limits.baseline_from_observation(
+                    self._em.current_export_limit(), DEFAULT_EXPORT_LIMIT
+                )
+                if seen is not None:
+                    raw = {**raw, "export_baseline_w": seen}
+                    await write_async(self.hass, {"grid": raw})
+                    _LOGGER.info("Grid: installer's export limit %s W remembered as the ceiling", seen)
+            self._em.configure_grid(raw)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Grid config refresh failed: %s", err)
 
     async def _execute_w4_voltage(
         self, data: dict[str, Any], soc: float, grid: float, pv: float,
