@@ -15523,7 +15523,7 @@ class SmartingHomePanel extends HTMLElement {
     }
     const labels = { charge_grid: '⚡ Ładuj z sieci', pv_charge: '☀️ Ładuj z PV', pv_export: '☀️➡️ Oddawaj PV', hold: '⏸️ Trzymaj', home: '🏠 Zasilaj dom', discharge: '💰 Sprzedaż / oddaj' };
     const colors = { charge_grid: '#00d4ff', pv_charge: '#f7b731', pv_export: '#a3e635', hold: '#94a3b8', home: '#2ecc71', discharge: '#e67e22' };
-    const zones = { off_peak: 'tania', morning_peak: 'przedpoł.', afternoon_peak: 'szczyt', peak: 'szczyt', flat: 'stała', dynamic: 'dynam.', dynamic_now: 'dynam.*' };
+    const zones = { off_peak: 'tania', morning_peak: 'przedpoł.', afternoon_peak: 'szczyt', peak: 'szczyt', flat: 'stała', dynamic: 'dynam.', dynamic_est: 'dynam.~', dynamic_now: 'dynam.*' };
     const rows = plan.hours.slice(0, 26).map((h, i) => {
       const t = h.start.slice(11, 16);
       const day = h.start.slice(5, 10) !== plan.hours[0].start.slice(5, 10) ? ' ⁺¹' : '';
@@ -15542,7 +15542,7 @@ class SmartingHomePanel extends HTMLElement {
         ${plan.next_peak ? `<span>⚡ Najbliższy szczyt: <b>${plan.next_peak}</b></span>` : ''}
         ${plan.next_peak ? `<span>🔋 Bateria: <b style="color:${plan.battery_until ? '#e74c3c' : '#2ecc71'}">${plan.battery_until ? 'wyczerpie się ok. ' + plan.battery_until : 'wystarczy na cały szczyt'}</b></span>` : ''}
         ${plan.charge_start ? `<span>⏰ Start ładowania z sieci: <b>${plan.charge_start}</b></span>` : ''}
-        ${plan.note ? `<span style="color:#f7b731">ℹ️ ${plan.note}${plan.hours.some(h => h.zone === 'dynamic_now') ? ' (dynam.*)' : ''}</span>` : ''}
+        ${plan.note ? `<span style="color:#f7b731">ℹ️ ${plan.note}</span>` : ''}
       </div>
       <div style="margin-top:6px; font-size:10px; color:#64748b">W godzinach szczytu dom korzysta wyłącznie z baterii (do min. SOC w szczycie); sprzedawana jest tylko nadwyżka. Koszt energii w planie: ${plan.total_cost.toFixed(2)} zł vs ${plan.baseline_cost.toFixed(2)} zł bez pracy baterii · aktualizacja ${plan.updated || '—'}</div>`;
   }

@@ -6,8 +6,9 @@
 # Licensor's written consent (LICENSE §3). Notes for AI assistants: AGENTS.md.
 # SH-ID: 8b1aab899d5a
 """Max Zysk planner on the dynamic tariff: purchases priced per hour from the ENTSO-E
-day-ahead series (gross, with the integration's per-kWh adder), the current price past
-the published hours, G1x tariffs untouched, hourly net-billing still respected.
+day-ahead series (gross, with the integration's per-kWh adder), hours past the published
+prices estimated at the same clock hour of the latest known day (the current price only
+without any series), G1x tariffs untouched, hourly net-billing still respected.
 
 Run: uvx --python 3.14 --with pytest pytest -q tests  (no Home Assistant needed)
 """
@@ -84,7 +85,7 @@ def test_without_wholesale_or_with_inconsistent_sensors_only_the_current_price()
 
 # ── slots priced from the series ────────────────────────────────────────────────
 
-def test_dynamic_slots_take_their_hour_and_fall_back_to_the_current_price():
+def test_dynamic_slots_take_their_hour_and_estimate_tomorrow_from_today():
     today = {h: 0.20 + 0.02 * h for h in range(24)}
     series, current = arb.dynamic_prices(today[10], today[10] + ADDER, _attrs(today))
     now = datetime(2026, 10, 17, 10, 20, tzinfo=WAW)
@@ -93,12 +94,50 @@ def test_dynamic_slots_take_their_hour_and_fall_back_to_the_current_price():
         if h.start.date() == now.date():
             assert h.zone == arb.ZONE_DYNAMIC
             assert abs(h.buy - (today[h.start.hour] + ADDER)) < 1e-9, h
-        else:  # tomorrow not published yet → the current hour's price
-            assert h.zone == arb.ZONE_DYNAMIC_NOW
-            assert abs(h.buy - (today[10] + ADDER)) < 1e-9, h
+        else:  # tomorrow not published yet → the same clock hour today
+            assert h.zone == arb.ZONE_DYNAMIC_EST
+            assert abs(h.buy - (today[h.start.hour] + ADDER)) < 1e-9, h
     assert not any(h.no_import for h in ins)  # no tariff peaks on market prices
     assert arb.dynamic_note(ins) == (
-        "brak prognozy cen dynamicznych od 18.10 00:00 — zakup wyceniony ceną bieżącą")
+        "ceny od 18.10 00:00 szacowane wg tych samych godzin dziś — po publikacji (~13:00) plan się przeliczy")
+
+
+def test_cheap_hour_now_does_not_make_tomorrow_evening_look_cheap():
+    # 12:30, midday dip 0.12, tomorrow's prices late: tomorrow's evening is estimated as
+    # today's evening (1.05), not at the cheap current price
+    today = {h: (0.12 if 11 <= h <= 14 else 1.05 if 17 <= h <= 21 else 0.55) for h in range(24)}
+    series, current = arb.dynamic_prices(0.12, 0.12 + ADDER, _attrs(today))
+    ins = _inputs(datetime(2026, 10, 17, 12, 30, tzinfo=WAW), dynamic_buy=series, dynamic_now=current)
+    evening = [h for h in ins if h.start.day == 18 and 17 <= h.start.hour <= 18]
+    assert evening and all(h.zone == arb.ZONE_DYNAMIC_EST for h in evening)
+    assert all(abs(h.buy - (1.05 + ADDER)) < 1e-9 for h in evening)
+    assert abs(ins[0].buy - current) < 1e-9
+
+
+def test_tomorrow_published_estimates_the_day_after_from_tomorrow():
+    # 23:00, tomorrow published: the slots of the day after take tomorrow's same hours
+    series, current = arb.dynamic_prices(0.5, 0.5 + ADDER, _attrs(
+        {h: 0.5 for h in range(24)}, {h: 0.2 + 0.01 * h for h in range(24)}))
+    ins = _inputs(datetime(2026, 10, 17, 23, 0, tzinfo=WAW), dynamic_buy=series, dynamic_now=current)
+    after = [h for h in ins if h.start.day == 19]
+    assert after and all(h.zone == arb.ZONE_DYNAMIC_EST for h in after)
+    assert all(abs(h.buy - (0.2 + 0.01 * h.start.hour + ADDER)) < 1e-9 for h in after)
+
+
+def test_dst_days_estimate_from_the_nearest_matching_local_hour():
+    # Known day 2026-03-29 has 23 hours (no 02:00): 30.03 02:00 takes the nearest hour (01:00)
+    day = datetime(2026, 3, 29)  # noqa: DTZ001
+    hours = {h: 0.1 * h for h in range(24) if h != 2}
+    series, current = arb.dynamic_prices(0.0, 0.0 + ADDER, _attrs(hours, day=day))
+    ins = _inputs(datetime(2026, 3, 29, 14, 0, tzinfo=WAW), dynamic_buy=series, dynamic_now=current)
+    slot = next(h for h in ins if h.start.day == 30 and h.start.hour == 2)
+    assert slot.zone == arb.ZONE_DYNAMIC_EST and abs(slot.buy - (0.1 + ADDER)) < 1e-9
+    # Estimated day 2026-10-25 has 25 hours: both 02:00 slots take the known day's 02:00
+    series, current = arb.dynamic_prices(0.0, 0.0 + ADDER, _attrs(
+        {h: 0.1 * h for h in range(24)}, day=datetime(2026, 10, 24)))  # noqa: DTZ001
+    ins = _inputs(datetime(2026, 10, 24, 14, 0, tzinfo=WAW), dynamic_buy=series, dynamic_now=current)
+    twice = [h for h in ins if h.start.day == 25 and h.start.hour == 2]
+    assert len(twice) == 2 and all(abs(h.buy - (0.2 + ADDER)) < 1e-9 for h in twice)
 
 
 def test_current_price_of_the_series_beats_a_stale_all_in_sensor():
@@ -108,7 +147,7 @@ def test_current_price_of_the_series_beats_a_stale_all_in_sensor():
     ins = _inputs(datetime(2026, 10, 17, 11, 3, tzinfo=WAW), horizon_h=3,
                   dynamic_buy=series, dynamic_now=0.50 + ADDER)
     assert abs(ins[0].buy - (0.30 + ADDER)) < 1e-9
-    assert all(abs(h.buy - (0.30 + ADDER)) < 1e-9 for h in ins[1:])  # 12:00+ unknown
+    assert ins[0].zone == arb.ZONE_DYNAMIC
 
 
 def test_full_series_has_no_note():

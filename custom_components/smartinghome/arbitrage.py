@@ -178,10 +178,13 @@ def buy_price(dt: datetime, tariff: str, provider: str) -> tuple[str, float]:
     return "flat", float(flat)
 
 
-# Dynamic tariff: zone of a slot priced from the published day-ahead series, and of a
-# slot past the published prices (priced at the current hour's price)
+# Dynamic tariff zones: a slot priced from the published day-ahead series; a slot past
+# the published prices, estimated at the same clock hour of the latest known day; a slot
+# priced at the current price (no series to estimate from)
 ZONE_DYNAMIC = "dynamic"
+ZONE_DYNAMIC_EST = "dynamic_est"
 ZONE_DYNAMIC_NOW = "dynamic_now"
+_DYNAMIC_ZONES = (ZONE_DYNAMIC, ZONE_DYNAMIC_EST, ZONE_DYNAMIC_NOW)
 
 
 def _float_or_none(value: Any) -> float | None:
@@ -243,17 +246,17 @@ def dynamic_prices(
 
 def dynamic_note(inputs: list["HourInput"]) -> str:
     """Plan note for the dynamic tariff: where the purchase price is not the market's."""
-    dyn = [h for h in inputs if h.zone in (ZONE_DYNAMIC, ZONE_DYNAMIC_NOW)]
+    dyn = [h for h in inputs if h.zone in _DYNAMIC_ZONES]
     if not dyn:
         return "brak cen dynamicznych (ENTSO-E) — zakup wyceniony stałą ceną jak G11"
-    missing = [h for h in dyn if h.zone == ZONE_DYNAMIC_NOW]
-    if not missing:
-        return ""
-    if len(missing) == len(dyn):
+    if any(h.zone == ZONE_DYNAMIC_NOW for h in dyn):
         return "brak prognozy cen dynamicznych — zakup wyceniony ceną bieżącą"
+    est = [h for h in dyn if h.zone == ZONE_DYNAMIC_EST]
+    if not est:
+        return ""
     return (
-        f"brak prognozy cen dynamicznych od {missing[0].start.strftime('%d.%m %H:%M')} — "
-        "zakup wyceniony ceną bieżącą"
+        f"ceny od {est[0].start.strftime('%d.%m %H:%M')} szacowane wg tych samych godzin dziś — "
+        "po publikacji (~13:00) plan się przeliczy"
     )
 
 
@@ -335,9 +338,11 @@ def build_inputs(
     falls back to load_profile_kw.
 
     Dynamic tariff: dynamic_buy — gross purchase price per UTC hour start (see
-    dynamic_prices()); a slot the series doesn't cover is priced at the current
-    hour's price (dynamic_now when the series lacks it too) with zone
-    ZONE_DYNAMIC_NOW. Without a current price the tariff's flat price is used.
+    dynamic_prices()); a slot the series doesn't cover is estimated at the same local
+    clock hour of the latest known day (zone ZONE_DYNAMIC_EST; an hour that day lacks —
+    23-hour DST day — takes the nearest hour it has); with no series at all the current
+    price (dynamic_now) prices it (ZONE_DYNAMIC_NOW). Without any price the tariff's
+    flat price is used.
     Dynamic prices have no tariff peaks: the price of each slot drives the plan.
     """
 
@@ -358,10 +363,18 @@ def build_inputs(
     # the slots past the published prices; without it the tariff's flat price is used.
     dynamic_buy = dynamic_buy or {}
     dynamic_fallback = None
+    same_hour: dict[int, float] = {}   # local clock hour → price on the latest known day
     if str(tariff or "").lower() == TariffType.DYNAMIC and tz is not None:
         hour_now = now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
         dynamic_fallback = dynamic_buy.get(hour_now, dynamic_now)
-    dynamic = dynamic_fallback is not None
+        for key in sorted(dynamic_buy):
+            same_hour[key.astimezone(tz).hour] = dynamic_buy[key]  # later day (and DST repeat) wins
+    dynamic = dynamic_fallback is not None or bool(same_hour)
+
+    def dynamic_estimate(hour: int) -> float:
+        if hour in same_hour:
+            return same_hour[hour]
+        return same_hour[min(same_hour, key=lambda h: (min(abs(h - hour), 24 - abs(h - hour)), h))]
 
     def local(t_utc: datetime) -> datetime:
         return t_utc.astimezone(tz).replace(tzinfo=None) if tz else t_utc
@@ -390,7 +403,12 @@ def build_inputs(
         lt = local(t)
         if dynamic:
             price = dynamic_buy.get(t.replace(minute=0, second=0, microsecond=0))
-            zone, buy = (ZONE_DYNAMIC, price) if price is not None else (ZONE_DYNAMIC_NOW, dynamic_fallback)
+            if price is not None:
+                zone, buy = ZONE_DYNAMIC, price
+            elif same_hour:
+                zone, buy = ZONE_DYNAMIC_EST, dynamic_estimate(lt.hour)
+            else:
+                zone, buy = ZONE_DYNAMIC_NOW, dynamic_fallback
         else:
             zone, buy = buy_price(lt, tariff, provider)
         rce_mwh = rce_slot.get(

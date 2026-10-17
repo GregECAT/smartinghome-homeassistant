@@ -59,7 +59,8 @@ ZONE_LABELS = {
     "peak": "szczytowa",
     "flat": "całodobowa",
     "dynamic": "dynamiczna",
-    "dynamic_now": "dynamiczna (cena bieżąca)",  # past the published day-ahead prices
+    "dynamic_est": "dynamiczna (szacunek wg dziś)",  # past the published day-ahead prices
+    "dynamic_now": "dynamiczna (cena bieżąca)",  # no day-ahead series at all
 }
 
 TARIFF_LABELS = {"g11": "G11", "g12": "G12", "g12w": "G12w", "g12n": "G12n", "g13": "G13",
