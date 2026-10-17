@@ -243,6 +243,8 @@ def classify(row: dict[str, Any]) -> tuple[str | None, str, int]:
         m = _SHELLY_BLOCK.search(uid)
         if m:
             return f"_block:{m.group(1)}:{m.group(2)}", "Shelly Gen1", 3
+        # Other Shelly devices (plugs, relays: switch:N, pm1:N) are not grid meters
+        return None, "", 0
     role, reason = classify_by_name(row)
     return role, reason, (1 if role else 0)
 
@@ -318,8 +320,8 @@ def propose_mapping(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             block = _block_roles(channels)
             mapping.update(block)
             reasons.update({r: "Shelly Gen1 (kanał licznika)" for r in block})
-        if not mapping:
-            continue
+        if len(mapping) < 2:
+            continue  # a lone power or voltage sensor is not a meter worth proposing
         by_id = {r["entity_id"]: r for r in dev_rows}
         flat = [e for v in mapping.values() for e in (v if isinstance(v, list) else [v])]
         disabled = sorted(e for e in flat if by_id.get(e, {}).get("disabled"))

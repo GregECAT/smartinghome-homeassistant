@@ -111,6 +111,16 @@ def test_shelly_gen1_em_single_phase_uses_channel_0_only():
     assert m == {"power_entity": "sensor.shellyem_channel_1_power", "energy_stat": "sensor.shellyem_channel_1_energy"}
 
 
+def test_shelly_plug_is_not_a_meter():
+    rows = [_shelly("apower", "switch:0", eid="sensor.plug_power", device="plug"),
+            _shelly("aenergy", "switch:0", unit="kWh", dc="energy", sc="total_increasing",
+                    eid="sensor.plug_energy", device="plug"),
+            _shelly("voltage", "switch:0", unit="V", dc="voltage", eid="sensor.plug_voltage", device="plug")]
+    for r in rows:
+        r["unique_id"] = r["unique_id"].replace(MAC, "112233445566")
+    assert md.propose_mapping(rows) == []
+
+
 def _modbus(name: str, unit: str, dc: str | None, sc: str = "measurement", uid: str | None = None) -> dict:
     slug = name.lower().replace(" ", "_")
     return {"entity_id": f"sensor.{slug}", "platform": "modbus", "device_id": "", "device_name": "",
@@ -158,7 +168,8 @@ def test_modbus_by_name_and_no_guessing():
 def test_two_equal_candidates_are_left_for_the_user():
     rows = [_modbus("Meter A import energy", "kWh", "energy", "total_increasing"),
             _modbus("Meter B import energy", "kWh", "energy", "total_increasing"),
-            _modbus("Meter A power", "W", "power")]
+            _modbus("Meter A power", "W", "power"),
+            _modbus("Meter A L1 voltage", "V", "voltage")]
     p = md.propose_mapping(rows)[0]
     assert "energy_stat" not in p["mapping"]
     assert sorted(p["ambiguous"]["energy_stat"]) == ["sensor.meter_a_import_energy", "sensor.meter_b_import_energy"]

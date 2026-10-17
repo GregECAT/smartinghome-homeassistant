@@ -150,7 +150,7 @@ def _sources_payload(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "energy": _consumption_candidates(energy_all),
         "energy_all": sorted(energy_all, key=lambda x: x["id"]),
-        "reactive": sorted(_sum_statistics(rows, _REACTIVE_ENERGY_UNITS), key=lambda x: x["id"]),
+        "reactive_stats": sorted(_sum_statistics(rows, _REACTIVE_ENERGY_UNITS), key=lambda x: x["id"]),
     }
 
 
@@ -346,7 +346,7 @@ async def ws_meter_summary(hass: HomeAssistant, connection, msg: dict[str, Any])
     meta = await _statistic_ids(hass)
     payload = _sources_payload(meta)
     sources = payload["energy"]
-    lists = {"sources": sources, "energy_all": payload["energy_all"], "reactive": payload["reactive"]}
+    lists = {"sources": sources, "energy_all": payload["energy_all"], "reactive_stats": payload["reactive_stats"]}
     known = {x["id"]: x for x in payload["energy_all"]}
     units = {r["statistic_id"]: _unit(r) for r in meta}
     label = cfg.get("meter_device") or "Licznik"
@@ -363,7 +363,7 @@ async def ws_meter_summary(hass: HomeAssistant, connection, msg: dict[str, Any])
     export_ids = cfg["export_stats"] or ([cfg["export_stat"]] if cfg.get("export_stat") else [])
     export_src = _stat_source(export_ids, known, label)
     react_id = cfg.get("reactive_energy_stat") or ""
-    react_unit = next((x["unit"] for x in payload["reactive"] if x["id"] == react_id), None)
+    react_unit = next((x["unit"] for x in payload["reactive_stats"] if x["id"] == react_id), None)
 
     now = dt_util.now()
     start = (now.replace(day=1, hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)).replace(day=1)
