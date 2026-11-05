@@ -371,6 +371,12 @@ class SmartingHomeMeterPanel extends HTMLElement {
         Nowe konto w eLiczniku pobiera dane 1–3 dni, a eLicznik zwykle pokazuje je z opóźnieniem około doby.
         Panel uzupełni się sam.</div>`);
     }
+    const ep = d.energy_price || {};
+    if (ep.source === "pstryk" && !ep.hours) {
+      banners.push(`<div class="banner warn"><b>Brak cen Pstryk</b> — nie znaleziono godzinowych cen zakupu
+        (integracja Pstryk.pl z HACS, encja ${esc(ep.entity || "sensor.pstryk_energy_prices_buy_price")}).
+        Do czasu ich pojawienia się energia jest wyceniana cenami z taryfy.</div>`);
+    }
     if (d.tariff && d.tariff.needs_input) {
       banners.push(`<div class="banner warn"><b>Uzupełnij ceny z faktury</b> — dla taryfy ${esc(d.tariff.id)} nie ma
         domyślnych stawek. Ustawienia → Ceny z faktury.</div>`);
@@ -427,6 +433,7 @@ class SmartingHomeMeterPanel extends HTMLElement {
       <div class="foot">
         Źródło: ${esc(d.source.name)} (${esc(d.source.id)})${d.export_source ? ` · eksport: ${esc(d.export_source.name)}` : ""} · dane do ${d.data_until ? esc(d.data_until.replace("T", " ")) : "—"}<br>
         ${d.cost_basis === "balanced" ? "Koszty liczone od poboru po bilansowaniu godzinowym (import − eksport w każdej godzinie), jak w net-billingu.<br>" : ""}
+        ${ep.source === "pstryk" ? `Energia wyceniona co godzinę cenami Pstryk (brutto ÷ 1,23)${ep.includes_distribution ? " — cena traktowana jako zawierająca dystrybucję" : ", dystrybucja z taryfy"}.<br>` : ""}
         Kwoty ${this._showGross ? "brutto (z VAT 23%)" : "netto"} · ceny z Ustawień panelu (domyślnie taryfy TAURON 2026) ·
         ${d.fixed_breakdown && d.fixed_breakdown.bierna ? "energia bierna jako średnia z faktury" : "bez energii biernej"} i rozliczeń korygujących. Moc szczytowa to średnia godzinowa — licznik rozlicza maksimum 15-minutowe.
       </div>`;
@@ -445,7 +452,8 @@ class SmartingHomeMeterPanel extends HTMLElement {
     const fixedRows = hidden ? "" : Object.entries(fixed).map(([k, v]) =>
       `<div class="row"><span class="k muted">${esc(this._fixedLabel(k))}</span><span class="v muted">${this._zl(v)}</span></div>`).join("");
     const money = hidden ? "" : `
-      <div class="row" style="margin-top:6px"><span class="k">Energia czynna</span><span class="v">${this._zl(m.energy)}</span></div>
+      <div class="row" style="margin-top:6px"><span class="k">Energia czynna${m.dynamic_hours !== undefined
+        ? ` <span class="muted">(Pstryk ${m.dynamic_hours} h${m.tariff_hours ? `, z taryfy ${m.tariff_hours} h` : ""})</span>` : ""}</span><span class="v">${this._zl(m.energy)}</span></div>
       <div class="row"><span class="k">Dystrybucja zmienna</span><span class="v">${this._zl(m.dist)}</span></div>
       <div class="row"><span class="k">${m.complete === false ? `Opłaty stałe (${m.days_with_data} z ${m.days} dni)` : m.fixed_month && m.fixed_month !== m.fixed ? "Opłaty stałe (do dziś)" : "Opłaty stałe (miesiąc)"}</span><span class="v">${this._zl(m.fixed)}</span></div>
       ${fixedRows}
@@ -863,6 +871,15 @@ class SmartingHomeMeterPanel extends HTMLElement {
               </select></label>
             <label class="f">Taryfa
               <select name="tariff">${catalog.map((x) => `<option value="${x.id}"${x.id === s.tariff ? " selected" : ""}>${esc(x.label)}</option>`).join("")}</select></label>
+            <label class="f">Cena energii <span class="h">Pstryk: integracja Pstryk.pl z HACS</span>
+              <select name="energy_price">
+                <option value="tariff"${s.energy_price !== "pstryk" ? " selected" : ""}>z taryfy (ceny w strefach poniżej)</option>
+                <option value="pstryk"${s.energy_price === "pstryk" ? " selected" : ""}>Pstryk (dynamiczna) — cena co godzinę</option>
+              </select></label>
+            ${s.energy_price === "pstryk" ? `<label class="f" style="grid-column:1/-1"><span><input type="checkbox" name="pstryk_includes_distribution" style="width:auto"${s.pstryk_includes_distribution !== false ? " checked" : ""}>
+              Cena Pstryk zawiera dystrybucję</span>
+              <span class="h">Zaznaczone: koszt godziny = kWh × cena Pstryk (netto), bez dystrybucji z taryfy. Odznacz, jeśli faktura OSD
+              nalicza dystrybucję osobno — wtedy panel doliczy składnik zmienny dystrybucji z cen poniżej. Strefy i opłaty stałe zawsze z taryfy.</span></label>` : ""}
             ${(s.import_stats || []).length ? sumLine("import_stats", "Energia pobrana — suma liczników faz") : `
             <label class="f" style="grid-column:1/-1">Energia pobrana z sieci (statystyka kWh)
               <span class="h">Tauron AMIplus: tauron_amiplus:…_consumption · Shelly: total active energy · Eastron: Total Import kWh</span>
@@ -954,12 +971,13 @@ class SmartingHomeMeterPanel extends HTMLElement {
   _bindSettings() {
     const f = this.shadowRoot.querySelector("#f");
     if (!f) return;
-    const fields = ["site_kind", "tariff", "energy_stat", "export_stat", "reactive_energy_stat",
+    const fields = ["site_kind", "tariff", "energy_price", "energy_stat", "export_stat", "reactive_energy_stat",
       "power_sign", "voltage_source", ...LIVE_ROLES.map((r) => r[0])];
     const read = () => {
       const s = this._draft;
       fields.forEach((n) => { if (f.elements[n]) s[n] = f.elements[n].value; });
       s.balance_hourly = !!(f.elements.balance_hourly && f.elements.balance_hourly.checked);
+      if (f.elements.pstryk_includes_distribution) s.pstryk_includes_distribution = !!f.elements.pstryk_includes_distribution.checked;
       const num = (v) => (v === "" || v === null ? null : Number(v));
       s.contract_kw = num(f.elements.contract_kw.value);
       s.baseload_alert_w = num(f.elements.baseload_alert_w.value);
@@ -978,6 +996,7 @@ class SmartingHomeMeterPanel extends HTMLElement {
       this._renderBody();
     });
     f.elements.site_kind.addEventListener("change", () => { read(); this._renderBody(); });
+    f.elements.energy_price.addEventListener("change", () => { read(); this._renderBody(); });
     f.querySelector("#reset").addEventListener("click", () => { read(); this._draft.prices = {}; this._renderBody(); });
     f.querySelectorAll("[data-clear]").forEach((b) => b.addEventListener("click", () => {
       read();

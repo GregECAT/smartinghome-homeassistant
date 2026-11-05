@@ -110,6 +110,7 @@ class AIAdvisor:
         self._default_provider: str = ""
         self._energy_provider: str = ""  # panel choice (settings.json); config entry is the fallback
         self._tariff_plan: str = ""      # panel tariff (g11/g12/g12w/g12n/g13/dynamic)
+        self._pstryk_incl_dist: bool = True  # meter setting: Pstryk price includes distribution
         self._call_timestamps: list[float] = []  # advisory calls
         self._controller_timestamps: list[float] = []  # controller/strategist calls
         self.last_completion: Completion | None = None
@@ -162,6 +163,9 @@ class AIAdvisor:
         self._default_provider = settings.get("default_ai_provider", "") or ""
         self._energy_provider = settings.get("energy_provider", "") or ""
         self._tariff_plan = str(settings.get("tariff_plan", "") or "").lower()
+        meter = settings.get("meter")
+        self._pstryk_incl_dist = (meter or {}).get("pstryk_includes_distribution", True) is not False \
+            if isinstance(meter, dict) else True
         cfg = settings.get(AI_CONFIG_KEY)
         self._ai_config = cfg if isinstance(cfg, dict) else {}
 
@@ -412,10 +416,14 @@ class AIAdvisor:
 
         prov_label = ENERGY_PROVIDER_LABELS.get(provider_key, str(provider_key).upper())
 
-        if data.get("dynamic_zone"):
+        pstryk_lines = self._pstryk_lines(provider_key, now)
+        if pstryk_lines:
+            lines.extend(pstryk_lines)
+        elif data.get("dynamic_zone"):
             lines.extend([
                 f"## Tariff (Dynamic — {prov_label} Cena Dynamiczna)",
-                "- Type: HOURLY DYNAMIC (price changes every hour based on ENTSO-E market)",
+                "- Type: HOURLY DYNAMIC (price changes every hour; prices from "
+                f"{'Pstryk' if data.get('dynamic_price_source') == 'pstryk' else 'the ENTSO-E market'})",
                 f"- Current all-in price: {data.get('dynamic_buy_price', 0)} PLN/kWh",
                 f"- Next hour price: {data.get('dynamic_next_price', 0)} PLN/kWh",
                 f"- Today's range: {data.get('dynamic_min_today', 0)} – {data.get('dynamic_max_today', 0)} PLN/kWh",
@@ -447,7 +455,7 @@ class AIAdvisor:
                 *price_lines,
             ])
 
-        if not data.get("dynamic_zone"):
+        if not data.get("dynamic_zone") and not pstryk_lines:
             lines.extend(self._tariff_day_lines(data, provider_key, now))
 
         lines.extend([
@@ -489,6 +497,24 @@ class AIAdvisor:
         ])
         return "\n".join(lines)
 
+
+    def _pstryk_lines(self, provider_key: str, now: datetime) -> list[str]:
+        """Provider Pstryk: today's / tomorrow's hourly Pstryk prices instead of G1x zones."""
+        from .pstryk import is_pstryk, prompt_lines
+
+        if not is_pstryk(provider_key):
+            return []
+        try:
+            from homeassistant.util import dt as dt_util
+
+            from .pstryk_ha import read_series
+
+            prices = read_series(self.hass)
+            aware = now if now.tzinfo else now.replace(tzinfo=dt_util.now().tzinfo)
+            return prompt_lines(prices.get("buy") or {}, prices.get("sell") or {}, aware, self._pstryk_incl_dist)
+        except Exception as err:  # noqa: BLE001 — never block the advice on this block
+            _LOGGER.debug("Pstryk prompt context failed: %s", err)
+            return []
 
     def _tariff_day_lines(self, data: dict[str, Any], provider_key: str, now: datetime) -> list[str]:
         """Today's tariff computed by the system: day off (weekend/holiday = one price),

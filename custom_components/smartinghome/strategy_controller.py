@@ -224,6 +224,7 @@ def _build_ai_data(data: dict[str, Any]) -> dict[str, Any]:
         # Tariff config (for dynamic prompt rendering)
         "tariff_type": data.get("tariff_type", "g13"),
         "energy_provider": data.get("energy_provider", "tauron"),
+        "pstryk_buy_hourly": data.get("pstryk_buy_hourly"),
         # Phase 1: Battery health & diagnostics
         "battery_soh": data.get("battery_soh"),
         "battery_health": data.get("battery_health_score"),
@@ -2416,23 +2417,43 @@ class StrategyController:
 
             self._arb_load_ratio = ratio
         # Dynamic tariff: the hourly day-ahead prices (today, tomorrow from ~13:00) of the
-        # ENTSO-E integration, composed into gross purchase prices like its all-in sensor
+        # ENTSO-E integration, composed into gross purchase prices like its all-in sensor —
+        # or Pstryk's (below)
         tariff = str(data.get("tariff_type") or "g13")
+        provider = str(settings.get("energy_provider") or data.get("energy_provider") or "tauron")
         dyn_series: dict = {}
         dyn_now = None
+        dyn_sell: dict = {}
+        dyn_source = ""
+        # Pstryk sells at hourly prices only: its buy series (gross; + OSD distribution
+        # when the meter settings say it's not included) replaces ENTSO-E — only when chosen
+        # (provider Pstryk, or the dynamic tariff with dynamic_price_source "pstryk"; the
+        # sensors alone change nothing); its prosumer price values exports only for a
+        # Pstryk customer.
+        from .pstryk import choose_dynamic, is_pstryk
+        from .pstryk_ha import planner_prices
+
+        if is_pstryk(provider):
+            tariff = TariffType.DYNAMIC
         if tariff.lower() == TariffType.DYNAMIC:
-            wholesale = self.hass.states.get(SENSOR_ENTSOE_PRICE_NOW)
-            allin = self.hass.states.get(SENSOR_ENTSOE_ALLIN_NOW)
-            dyn_series, dyn_now = dynamic_prices(
-                wholesale.state if wholesale else None,
-                allin.state if allin else None,
-                dict(wholesale.attributes) if wholesale else None,
-                (allin.attributes.get("unit_of_measurement") if allin else None),
-            )
+            pst = planner_prices(self.hass, settings, tariff, provider, now)
+            entsoe: tuple = ({}, None)
+            if pst is None:
+                wholesale = self.hass.states.get(SENSOR_ENTSOE_PRICE_NOW)
+                allin = self.hass.states.get(SENSOR_ENTSOE_ALLIN_NOW)
+                entsoe = dynamic_prices(
+                    wholesale.state if wholesale else None,
+                    allin.state if allin else None,
+                    dict(wholesale.attributes) if wholesale else None,
+                    (allin.attributes.get("unit_of_measurement") if allin else None),
+                )
+            dyn_series, dyn_now, dyn_sell, dyn_source = choose_dynamic(pst, entsoe)
+            if not dyn_series and dyn_now is None and is_pstryk(provider):
+                dyn_source = "Pstryk"  # note: "brak cen dynamicznych (Pstryk)"
         inputs = build_inputs(
             now,
             tariff=tariff,
-            provider=str(settings.get("energy_provider") or data.get("energy_provider") or "tauron"),
+            provider=provider,
             rce=rce,
             load_profile_kw=profile,
             # Rely on part of the forecast only — a cloudy peak must not hit the grid
@@ -2447,6 +2468,7 @@ class StrategyController:
             load_kw_at=load_kw_at,
             dynamic_buy=dyn_series,
             dynamic_now=dyn_now,
+            dynamic_sell=dyn_sell,
         )
         # Daylight: the grid charges the battery only for the coming peak's shortfall —
         # never to sell later (2026-10-03 11:02–11:14, a sunny Saturday: the plan bought
@@ -2482,7 +2504,9 @@ class StrategyController:
         plan = await self.hass.async_add_executor_job(optimize, soc, inputs, params)
         compute_ms = int((time.monotonic() - t0) * 1000)
         if tariff.lower() == TariffType.DYNAMIC and not plan.note:
-            plan.note = dynamic_note(inputs)
+            plan.note = dynamic_note(inputs, dyn_source)
+            if dyn_sell and plan.note:
+                plan.note += " (sprzedaż wg cen prosumenckich Pstryk)"
         if compute_ms > 2000:
             _LOGGER.warning("Arbitrage plan took %d ms (%d h, %.1f kWh)", compute_ms, len(inputs), params.capacity_kwh)
         self._arb_plan, self._arb_plan_ts, self._arb_plan_key = plan, time.time(), key
@@ -2494,6 +2518,8 @@ class StrategyController:
             "updated": now.strftime("%H:%M"),
             "rce_hours": len(rce),
             "dynamic_buy_hours": len(dyn_series),
+            "dynamic_source": dyn_source or ("ENTSO-E" if tariff.lower() == TariffType.DYNAMIC else ""),
+            "dynamic_sell_hours": len(dyn_sell),
             "compute_ms": compute_ms,
             "pv_factor": round(pv_factor, 2),
             "pv_source": "open_meteo" if pv_hourly is not None else "forecast_solar",

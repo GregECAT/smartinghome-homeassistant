@@ -189,7 +189,7 @@ async def ws_ai_test(hass: HomeAssistant, connection, msg: dict[str, Any]) -> No
 # house: only HA administrators may change them (non-admin users can still read and
 # change view/analysis settings).
 ADMIN_SETTINGS = frozenset({
-    "arbitrage_params", "auto_update", "boiler_surplus", "energy_provider", "grid",
+    "arbitrage_params", "auto_update", "boiler_surplus", "dynamic_price_source", "energy_provider", "grid",
     "notification_config", "open_meteo_api_key", "peak_load_control",
     "peak_sell_soc_percent", "pv_string_config", "sensor_map_overrides",
     "showcase", "tariff_plan", "telemetry", "voltage_guard",
@@ -250,7 +250,7 @@ async def ws_settings_update(hass: HomeAssistant, connection, msg: dict[str, Any
                 if ctrl is not None:
                     ctrl.invalidate_arbitrage_plan()
         advisor = _advisor(hass)
-        if advisor is not None and "energy_provider" in updates:
+        if advisor is not None and ("energy_provider" in updates or "meter" in updates):
             # Tariff labels/prices in AI prompts follow the panel's provider
             from .settings_io import read_async
 

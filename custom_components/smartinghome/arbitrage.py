@@ -244,20 +244,27 @@ def dynamic_prices(
     return series, current
 
 
-def dynamic_note(inputs: list["HourInput"]) -> str:
-    """Plan note for the dynamic tariff: where the purchase price is not the market's."""
+def dynamic_note(inputs: list["HourInput"], source: str = "") -> str:
+    """Plan note for the dynamic tariff: where the purchase price is not the market's.
+
+    source — "" for the ENTSO-E series (notes only about gaps), else the name of the
+    price source the note starts with (e.g. "Pstryk" → "ceny Pstryk; …").
+    """
     dyn = [h for h in inputs if h.zone in _DYNAMIC_ZONES]
     if not dyn:
-        return "brak cen dynamicznych (ENTSO-E) — zakup wyceniony stałą ceną jak G11"
+        return f"brak cen dynamicznych ({source or 'ENTSO-E'}) — zakup wyceniony stałą ceną jak G11"
     if any(h.zone == ZONE_DYNAMIC_NOW for h in dyn):
-        return "brak prognozy cen dynamicznych — zakup wyceniony ceną bieżącą"
+        return ("brak prognozy cen dynamicznych — zakup wyceniony ceną bieżącą"
+                + (f" ({source})" if source else ""))
     est = [h for h in dyn if h.zone == ZONE_DYNAMIC_EST]
+    head = f"ceny {source}" if source else ""
     if not est:
-        return ""
-    return (
+        return head
+    tail = (
         f"ceny od {est[0].start.strftime('%d.%m %H:%M')} szacowane wg tych samych godzin dziś — "
         "po publikacji (~13:00) plan się przeliczy"
     )
+    return f"{head}; {tail}" if head else tail
 
 
 def rce_hourly(prices: list[dict[str, Any]] | None) -> dict[tuple[date, int], float]:
@@ -325,6 +332,7 @@ def build_inputs(
     load_kw_at: Callable[[datetime], float | None] | None = None,
     dynamic_buy: dict[datetime, float] | None = None,
     dynamic_now: float | None = None,
+    dynamic_sell: dict[datetime, float] | None = None,
 ) -> list[HourInput]:
     """Plan slots (slot_minutes long, aligned to the clock) from now to now + horizon.
 
@@ -344,6 +352,11 @@ def build_inputs(
     price (dynamic_now) prices it (ZONE_DYNAMIC_NOW). Without any price the tariff's
     flat price is used.
     Dynamic prices have no tariff peaks: the price of each slot drives the plan.
+
+    dynamic_sell — gross export price per UTC hour start (a seller's prosumer price,
+    e.g. Pstryk) replacing RCE × the prosumer coefficient in the hours it covers;
+    negative prices count as 0 (exported energy is never charged). Hours it doesn't
+    cover keep the RCE valuation.
     """
 
     slot_minutes = slot_minutes if slot_minutes in (15, 30, 60) else 60
@@ -416,6 +429,10 @@ def build_inputs(
             rce.get((lt.date(), lt.hour), known_by_hour.get(lt.hour, 400.0)),
         )
         sell = max(rce_mwh, 0.0) / 1000 * RCE_PROSUMER_COEFFICIENT
+        if dynamic_sell:
+            seller = dynamic_sell.get(t.replace(minute=0, second=0, microsecond=0)) if tz else None
+            if seller is not None:
+                sell = max(seller, 0.0)
         if pv_hourly_kwh is not None and (lt.date(), lt.hour) in pv_hourly_kwh:
             hourly_pv = pv_hourly_kwh[(lt.date(), lt.hour)]
         else:

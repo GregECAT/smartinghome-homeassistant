@@ -228,29 +228,52 @@ def monthly_fixed(t: dict[str, Any], contract_kw: float | None) -> dict[str, flo
 
 
 def cost_hours(
-    t: dict[str, Any], hours: list[tuple[datetime, float]]
+    t: dict[str, Any], hours: list[tuple[datetime, float]],
+    energy_price: dict[datetime, float] | None = None,
+    price_includes_distribution: bool = False,
 ) -> dict[str, Any]:
-    """Aggregate kWh and netto cost per zone for (local hour start, kWh) pairs."""
+    """Aggregate kWh and netto cost per zone for (local hour start, kWh) pairs.
+
+    energy_price — hourly energy price {local naive hour start: netto zł/kWh} (a
+    dynamic seller such as Pstryk); an hour it covers is priced from it, other hours
+    from the tariff's zone price. price_includes_distribution — that hourly price
+    already holds the variable distribution and per-kWh fees: no distribution is added
+    for those hours. The zone split stays the distribution tariff's.
+    """
     zones: dict[str, dict[str, float]] = {
         z: {"kwh": 0.0, "energy": 0.0, "dist": 0.0} for z in t["zones"]
     }
+    priced = fallback = 0
     for when, kwh in hours:
         z = zone_at(t["id"], when)
         bucket = zones.setdefault(z, {"kwh": 0.0, "energy": 0.0, "dist": 0.0})
         e, d = variable_price(t, z)
+        if energy_price is not None:
+            hourly = energy_price.get(when)
+            if hourly is not None:
+                e = hourly
+                if price_includes_distribution:
+                    d = 0.0
+                priced += 1
+            else:
+                fallback += 1
         bucket["kwh"] += kwh
         bucket["energy"] += kwh * e
         bucket["dist"] += kwh * d
     kwh = sum(b["kwh"] for b in zones.values())
     energy = sum(b["energy"] for b in zones.values())
     dist = sum(b["dist"] for b in zones.values())
-    return {
+    out = {
         "zones": {z: {k: round(v, 3) for k, v in b.items()} for z, b in zones.items()},
         "kwh": round(kwh, 3),
         "energy": round(energy, 2),
         "dist": round(dist, 2),
         "variable": round(energy + dist, 2),
     }
+    if energy_price is not None:
+        out["dynamic_hours"] = priced
+        out["tariff_hours"] = fallback
+    return out
 
 
 def catalog() -> list[dict[str, Any]]:

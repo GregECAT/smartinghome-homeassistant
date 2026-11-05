@@ -756,11 +756,13 @@ class EnergyProvider(StrEnum):
 
     TAURON = "tauron"
     PGE = "pge"
+    PSTRYK = "pstryk"  # dynamic hourly prices from the Pstryk.pl HA integration (pstryk.py)
 
 
 ENERGY_PROVIDER_LABELS: Final = {
     EnergyProvider.TAURON: "Tauron",
     EnergyProvider.PGE: "PGE (Polska Grupa Energetyczna)",
+    EnergyProvider.PSTRYK: "Pstryk (cena dynamiczna)",
 }
 
 DEFAULT_ENERGY_PROVIDER: Final = EnergyProvider.TAURON
@@ -784,6 +786,8 @@ class TariffType(StrEnum):
 PROVIDER_TARIFFS: Final = {
     EnergyProvider.TAURON: [TariffType.G11, TariffType.G12, TariffType.G12W, TariffType.G13, TariffType.DYNAMIC],
     EnergyProvider.PGE: [TariffType.G11, TariffType.G12, TariffType.G12W, TariffType.G12N, TariffType.DYNAMIC],
+    # Pstryk sells energy at hourly prices only — distribution stays with the local OSD
+    EnergyProvider.PSTRYK: [TariffType.DYNAMIC],
 }
 
 # Provider-specific tariff labels
@@ -801,6 +805,9 @@ PROVIDER_TARIFF_LABELS: Final = {
         TariffType.G12W: "G12w — Two-zone + weekends",
         TariffType.G12N: "G12n — Niedzielna (noc 1-5 + niedziele)",
         TariffType.DYNAMIC: "Dynamiczna — cena godzinowa ENTSO-E",
+    },
+    EnergyProvider.PSTRYK: {
+        TariffType.DYNAMIC: "Dynamiczna — cena godzinowa Pstryk",
     },
 }
 

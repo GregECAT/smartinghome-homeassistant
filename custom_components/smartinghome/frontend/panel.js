@@ -46,12 +46,17 @@ const SH_PROVIDER_TARIFFS = {
     { value: 'G11',  label: 'G11 — jednostrefowa (stała 1.10 zł/kWh)' },
     { value: 'Dynamic', label: 'Dynamiczna — cena godzinowa ENTSO-E' },
   ],
+  // Pstryk sells at hourly prices only (integration Pstryk.pl from HACS)
+  pstryk: [
+    { value: 'Dynamic', label: 'Dynamiczna — cena godzinowa Pstryk' },
+  ],
 };
 
 // Provider labels for selectbox
 const SH_PROVIDER_LABELS = {
   tauron: 'Tauron',
   pge: 'PGE (Polska Grupa Energetyczna)',
+  pstryk: 'Pstryk (cena dynamiczna)',
 };
 
 class SmartingHomePanel extends HTMLElement {
@@ -2627,7 +2632,7 @@ class SmartingHomePanel extends HTMLElement {
       const dayType = this.shadowRoot.getElementById("g13-day-type");
       const dayTypeHtml = dayType ? dayType.outerHTML : '';
       if (tariff === "Dynamic") {
-        tlLabel.innerHTML = `Ceny godzinowe ENTSO-E ${dayTypeHtml}`;
+        tlLabel.innerHTML = `Ceny godzinowe ${this._pstrykActive() ? 'Pstryk' : 'ENTSO-E'} ${dayTypeHtml}`;
       } else {
         tlLabel.innerHTML = `Harmonogram ${tariff} ${dayTypeHtml}`;
       }
@@ -2640,7 +2645,7 @@ class SmartingHomePanel extends HTMLElement {
 
       if (tariff === "Dynamic") {
         // Dynamic: try to read prices_today from HA sensor attributes
-        const entsoeEntity = "sensor.entso_e_aktualna_cena_energii";
+        const entsoeEntity = this._dynSeriesEntity();
         let pricesToday = [];
         try {
           const stateObj = this._hass && this._hass.states && this._hass.states[entsoeEntity];
@@ -2681,7 +2686,7 @@ class SmartingHomePanel extends HTMLElement {
           }
         } else {
           // Fallback: show current price as single block
-          const allin = parseFloat(this._haState("sensor.entso_e_koszt_all_in_teraz")) || 0;
+          const allin = parseFloat(this._haState(this._dynNowEntity())) || 0;
           for (let h = 0; h < 24; h++) {
             const seg = document.createElement("div");
             seg.style.cssText = `flex:1; background:#a855f7; position:relative; transition:opacity 0.3s; opacity:0.3`;
@@ -2727,16 +2732,11 @@ class SmartingHomePanel extends HTMLElement {
     const badge = this.shadowRoot.getElementById("v-g13-zone-badge");
     if (badge) {
       if (tariff === "Dynamic") {
-        const allin = parseFloat(this._haState("sensor.entso_e_koszt_all_in_teraz")) || 0;
-        let dynLabel, dynColor;
-        if (allin <= 0.10) { dynLabel = "B. TANIO"; dynColor = "#00e676"; }
-        else if (allin <= 0.30) { dynLabel = "TANIO"; dynColor = "#2ecc71"; }
-        else if (allin <= 0.60) { dynLabel = "NORMALNIE"; dynColor = "#f7b731"; }
-        else if (allin <= 0.90) { dynLabel = "DROGO"; dynColor = "#e67e22"; }
-        else { dynLabel = "B. DROGO"; dynColor = "#e74c3c"; }
+        const allin = parseFloat(this._haState(this._dynNowEntity())) || 0;
+        const [dynZone, dynLabel, dynColor] = this._dynLevel(allin);
         badge.textContent = `${dynLabel} (${allin.toFixed(2)} zł)`;
         badge.style.background = dynColor;
-        badge.style.color = allin > 0.90 ? "#fff" : "#000";
+        badge.style.color = dynZone === "very_expensive" ? "#fff" : "#000";
       } else {
         badge.textContent = labels[currentZone];
         badge.style.background = colors[currentZone];
@@ -2783,6 +2783,7 @@ class SmartingHomePanel extends HTMLElement {
     this._settings.tariff_plan = sel.value;
     this._savePanelSettings({ tariff_plan: sel.value });
     this._updateG13Timeline();
+    this._renderPstrykStatus();
   }
 
   _saveEnergyProvider() {
@@ -2792,6 +2793,8 @@ class SmartingHomePanel extends HTMLElement {
     this._savePanelSettings({ energy_provider: sel.value });
     // Rebuild tariff options for new provider
     this._rebuildTariffOptions();
+    this._pstrykTs = 0;
+    this._loadPstrykStatus();
     // Update pricing table
     this._updatePricingTable();
     this._updateG13Timeline();
@@ -2840,6 +2843,100 @@ class SmartingHomePanel extends HTMLElement {
     return this._settings.energy_provider || 'tauron';
   }
 
+  // ── Pstryk (integration Pstryk.pl from HACS): status for the diagnostic and the price entities ──
+  async _loadPstrykStatus() {
+    if (!this._hass || (this._pstrykTs && Date.now() - this._pstrykTs < 600000)) return;
+    this._pstrykTs = Date.now();
+    try {
+      this._pstryk = await this._hass.callWS({ type: 'smartinghome/pstryk/status' });
+    } catch (e) { this._pstryk = null; }  // older backend
+    this._renderPstrykStatus();
+  }
+
+  _renderPstrykStatus() {
+    const el = this.shadowRoot && this.shadowRoot.getElementById('pstryk-status');
+    if (!el) return;
+    const st = this._pstryk;
+    const chosen = this._getProvider() === 'pstryk';
+    if (!st || (!chosen && !st.installed)) { el.style.display = 'none'; return; }
+    el.style.display = 'block';
+    const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    if (!st.installed) {
+      el.style.background = 'rgba(231,76,60,0.08)'; el.style.border = '1px solid rgba(231,76,60,0.3)';
+      el.innerHTML = `<b style="color:#e74c3c">Pstryk: nie wykryto integracji.</b> Zainstaluj w HACS integrację
+        <b>Pstryk.pl</b> (<a href="${esc(st.hacs_url)}" target="_blank" rel="noopener" style="color:#00d4ff">${esc(st.hacs_url)}</a>)
+        i podaj klucz API z aplikacji Pstryk. Do tego czasu planer wycenia zakup jak przy braku cen dynamicznych.`;
+      return;
+    }
+    const ok = st.today_hours >= 23;
+    el.style.background = ok ? 'rgba(46,204,113,0.06)' : 'rgba(247,183,49,0.08)';
+    el.style.border = `1px solid ${ok ? 'rgba(46,204,113,0.25)' : 'rgba(247,183,49,0.3)'}`;
+    const f2 = (v) => (typeof v === 'number' ? v.toFixed(2) : '—');
+    el.innerHTML = `<b style="color:${ok ? '#2ecc71' : '#f7b731'}">Pstryk: wykryto integrację</b> · ceny dziś <b>${st.today_hours} h</b>,
+      jutro <b>${st.tomorrow_hours} h</b>${st.tomorrow_hours ? '' : ' (publikacja ok. 13:00)'}<br>
+      Teraz ${f2(st.buy_now)} zł/kWh (sprzedaż ${f2(st.sell_now)}) · dziś ${f2(st.min_today)}–${f2(st.max_today)}, średnio ${f2(st.avg_today)} zł/kWh<br>
+      <span style="color:#94a3b8">${st.includes_distribution
+        ? 'Cena Pstryk traktowana jako całkowita (z dystrybucją)'
+        : `Do ceny Pstryk planer dolicza dystrybucję taryfy ${esc(st.dist_tariff)}`} — zmiana w panelu „Energia i koszty” → Ustawienia.
+      Encja: ${esc(st.entities && st.entities.buy)} · historia cen: ${st.stored_hours || 0} h</span>
+      ${chosen ? '' : this._pstrykCompareHtml(st, f2)}`;
+    const src = el.querySelector('#sel-dyn-source');
+    if (src) src.addEventListener('change', () => {
+      this._settings.dynamic_price_source = src.value;
+      this._savePanelSettings({ dynamic_price_source: src.value });
+      this._updateG13Timeline();
+      this._renderPstrykStatus();
+    });
+  }
+
+  // Another provider: Pstryk prices only for comparison; on the dynamic tariff the user may
+  // pick them explicitly as the source instead of ENTSO-E
+  _pstrykCompareHtml(st, f2) {
+    const own = this._getTariffAvgPrice();
+    const dyn = (this._settings.tariff_plan || '') === 'Dynamic';
+    const active = this._pstrykActive();
+    return `<div style="margin-top:6px; color:#cbd5e1">
+      ${active ? '<b>Źródło cen dynamicznych: Pstryk</b> (wybrane poniżej).' : `<b>Porównanie (tylko informacyjnie):</b> Pstryk dziś średnio ${f2(st.avg_today)} zł/kWh
+      vs Twoja taryfa ok. ${f2(own)} zł/kWh. Planer i koszty liczą się według Twojej taryfy — ceny Pstryk mogą dotyczyć innej umowy / licznika.`}
+      ${dyn ? `<div style="margin-top:6px">Źródło cen taryfy dynamicznej:
+        <select id="sel-dyn-source" style="padding:4px 8px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:6px; color:#fff">
+          <option value="entsoe"${active ? '' : ' selected'}>ENTSO-E</option>
+          <option value="pstryk"${active ? ' selected' : ''}>Pstryk</option>
+        </select></div>` : ''}
+    </div>`;
+  }
+
+  // Pstryk prices are the active dynamic prices only when chosen: provider Pstryk, or the
+  // dynamic tariff with source Pstryk — the sensors alone (another meter's contract) are informational
+  _pstrykActive() {
+    return this._getProvider() === 'pstryk'
+      || ((this._settings.tariff_plan || '') === 'Dynamic' && this._settings.dynamic_price_source === 'pstryk');
+  }
+
+  _dynNowEntity() {
+    const e = this._pstrykActive() && this._pstryk && this._pstryk.entities && this._pstryk.entities.buy;
+    return e || "sensor.entso_e_koszt_all_in_teraz";
+  }
+
+  _dynSeriesEntity() {
+    const e = this._pstrykActive() && this._pstryk && this._pstryk.entities && this._pstryk.entities.buy;
+    return e || "sensor.entso_e_aktualna_cena_energii";
+  }
+
+  // Level of a dynamic price: ENTSO-E all-in thresholds; Pstryk relative to today's range
+  // (its business prices of 1.1–2.3 zł would all read "very expensive" on fixed thresholds)
+  _dynLevel(price) {
+    const st = this._pstryk;
+    let r = null;
+    if (this._pstrykActive() && st && typeof st.min_today === 'number' && st.max_today > st.min_today) {
+      r = (price - st.min_today) / (st.max_today - st.min_today);
+    }
+    const lv = (i) => [["very_cheap", "B. TANIO", "#00e676"], ["cheap", "TANIO", "#2ecc71"], ["normal", "NORMALNIE", "#f7b731"],
+      ["expensive", "DROGO", "#e67e22"], ["very_expensive", "B. DROGO", "#e74c3c"]][i];
+    if (r !== null) return lv(r < 0.2 ? 0 : r < 0.4 ? 1 : r < 0.6 ? 2 : r < 0.8 ? 3 : 4);
+    return lv(price <= 0.10 ? 0 : price <= 0.30 ? 1 : price <= 0.60 ? 2 : price <= 0.90 ? 3 : 4);
+  }
+
   /** Shared tariff helper — returns zone info for any supported tariff */
   _getTariffInfo() {
     const tariff = this._settings.tariff_plan || "G13";
@@ -2853,14 +2950,10 @@ class SmartingHomePanel extends HTMLElement {
     let zone, zoneName, zoneColor, price;
 
     if (tariff === "Dynamic") {
-      // Read live ENTSO-E all-in price from HA state
-      const allinNow = parseFloat(this._haState("sensor.entso_e_koszt_all_in_teraz")) || 0;
+      // Live dynamic price: Pstryk sensor (provider Pstryk) or the ENTSO-E all-in sensor
+      const allinNow = parseFloat(this._haState(this._dynNowEntity())) || 0;
       price = allinNow.toFixed(2);
-      if (allinNow <= 0.10) { zone = "very_cheap"; zoneName = "B. TANIO"; zoneColor = "#00e676"; }
-      else if (allinNow <= 0.30) { zone = "cheap"; zoneName = "TANIO"; zoneColor = "#2ecc71"; }
-      else if (allinNow <= 0.60) { zone = "normal"; zoneName = "NORMALNIE"; zoneColor = "#f7b731"; }
-      else if (allinNow <= 0.90) { zone = "expensive"; zoneName = "DROGO"; zoneColor = "#e67e22"; }
-      else { zone = "very_expensive"; zoneName = "B. DROGO"; zoneColor = "#e74c3c"; }
+      [zone, zoneName, zoneColor] = this._dynLevel(allinNow);
     } else if (tariff === "G11") {
       const p = prices.G11 || { flat: 0.87 };
       zone = "flat"; zoneName = "STAŁA"; zoneColor = "#3b82f6"; price = p.flat.toFixed(2);
@@ -2957,7 +3050,10 @@ class SmartingHomePanel extends HTMLElement {
   _getTariffAvgPrice() {
     const t = this._settings.tariff_plan || "G13";
     const provider = this._getProvider();
-    if (t === "Dynamic") return parseFloat(this._haState("sensor.entso_e_srednia_dzisiaj")) || 0.50;
+    if (t === "Dynamic") {
+      if (this._pstrykActive() && this._pstryk && typeof this._pstryk.avg_today === 'number') return this._pstryk.avg_today;
+      return parseFloat(this._haState("sensor.entso_e_srednia_dzisiaj")) || 0.50;
+    }
     const prices = (SH_PROVIDER_PRICES[provider] || SH_PROVIDER_PRICES.tauron);
     if (t === "G11") return (prices.G11 || {}).flat || 0.87;
     if (t === "G12") {
@@ -2985,7 +3081,7 @@ class SmartingHomePanel extends HTMLElement {
     const bodyEl = this.shadowRoot.getElementById('pricing-table-body');
     const footerEl = this.shadowRoot.getElementById('pricing-table-footer');
     if (!bodyEl) return;
-    if (titleEl) titleEl.textContent = `📋 Cennik ${label} 2026 — porównanie taryf`;
+    if (titleEl) titleEl.textContent = provider === 'pstryk' ? '📋 Pstryk — cena godzinowa' : `📋 Cennik ${label} 2026 — porównanie taryf`;
 
     // Define rows per provider
     const rows = [];
@@ -2997,7 +3093,7 @@ class SmartingHomePanel extends HTMLElement {
     // Computed from the system price table (backend const, loaded via smartinghome/tariffs)
     const f2 = (v) => (typeof v === 'number' ? v.toFixed(2) : '—');
     const winterNow = [9, 10, 11, 0, 1, 2].includes(new Date().getMonth());
-    const defs = provider === 'pge'
+    const defs = provider === 'pstryk' ? [] : provider === 'pge'
       ? [
           ['G11', 'brak — stała'],
           ['G12', winterNow ? '13–15 + 22–06 (zima)' : '15–17 + 22–06 (lato)'],
@@ -3052,7 +3148,7 @@ class SmartingHomePanel extends HTMLElement {
       <td style="text-align:center; padding:6px; color:#a855f7">zmienna</td>
       <td style="text-align:center; padding:6px; color:#a855f7">zmienna</td>
       <td style="text-align:center; padding:6px; color:#a855f7">zmienna</td>
-      <td style="text-align:center; padding:6px; color:#a855f7; font-weight:700">cena co godzinę wg ENTSO-E</td>
+      <td style="text-align:center; padding:6px; color:#a855f7; font-weight:700">cena co godzinę wg ${provider === 'pstryk' ? 'Pstryk' : 'ENTSO-E'}</td>
     </tr>`;
     html += '</tbody></table>';
     bodyEl.innerHTML = html;
@@ -7936,7 +8032,7 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Update all ─────────────────────────── */
-  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateAlertsVisibility(); this._applyFeatureLocks(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); this._updateAlertsTab(); this._updateSystemHealth(); this._renderConfigGuide(); this._updateForecastCharts().catch(e => console.error('[SH] charts err:', e)); this._refreshAutopilotLive(); this._loadTariffs(); }
+  _updateAll() { this._updateFlow(); this._updateStats(); this._updateHomeImage(); this._updateG13Timeline(); this._updateSunWidget(); this._renderWeatherForecast(); this._updateEcowittCard(); this._calcHEMSScore(); this._updateWindTab(); this._updateHEMSArbitrage(); this._updateHistoryTab(); this._updateAutopilotVisibility(); this._updateAlertsVisibility(); this._applyFeatureLocks(); this._updateSubMeters(); this._updateSubMetersInCard(); this._updateOverviewBanner(); this._updateAlertsTab(); this._updateSystemHealth(); this._renderConfigGuide(); this._updateForecastCharts().catch(e => console.error('[SH] charts err:', e)); this._refreshAutopilotLive(); this._loadTariffs(); this._loadPstrykStatus(); }
 
 
   /* ── Overview Autopilot banner (runs every 5s via _updateAll) ── */
@@ -14735,6 +14831,7 @@ class SmartingHomePanel extends HTMLElement {
                 <select id="sel-energy-provider" style="width:100%; max-width:400px; padding:10px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:8px; color:#fff; font-size:13px" onchange="this.getRootNode().host._saveEnergyProvider()">
                   <option value="tauron">Tauron</option>
                   <option value="pge">PGE (Polska Grupa Energetyczna)</option>
+                  <option value="pstryk">Pstryk (cena dynamiczna)</option>
                 </select>
               </div>
               <div class="settings-field">
@@ -14747,6 +14844,7 @@ class SmartingHomePanel extends HTMLElement {
                   <option value="Dynamic">Dynamiczna — cena godzinowa ENTSO-E</option>
                 </select>
               </div>
+              <div id="pstryk-status" style="display:none; margin-top:12px; padding:10px 12px; border-radius:8px; font-size:11px; line-height:1.6"></div>
             </div>
 
 

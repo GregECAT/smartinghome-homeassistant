@@ -40,6 +40,10 @@ DEFAULT_METER_SETTINGS: dict[str, Any] = {
     "power_entity": "",
     "pf_entity": "",
     "baseload_alert_w": 150,
+    # Energy price: "tariff" (zone prices below) or "pstryk" (hourly Pstryk price —
+    # distribution, fees and zones still from the tariff unless the price includes them)
+    "energy_price": "tariff",
+    "pstryk_includes_distribution": True,  # live prices 1.07–2.29 zł gross (pstryk.py)
 }
 MAX_HOURLY_KWH = 500.0  # guards counter resets / gaps
 
@@ -50,6 +54,8 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_meter_sources)
     websocket_api.async_register_command(hass, ws_meter_summary)
     websocket_api.async_register_command(hass, ws_meter_detect)
+    from .pstryk_ha import async_register as _register_pstryk
+    _register_pstryk(hass)
 
 
 def meter_settings(settings: dict[str, Any]) -> dict[str, Any]:
@@ -217,10 +223,27 @@ def _hours_from_rows(rows: list[dict[str, Any]], unit: str) -> list[tuple[dateti
 
 
 def summarize(
-    hours: list[tuple[datetime, float]], cfg: dict[str, Any], now: datetime
+    hours: list[tuple[datetime, float]], cfg: dict[str, Any], now: datetime,
+    energy_price: dict[datetime, float] | None = None,
 ) -> dict[str, Any]:
-    """Everything the panel shows, from (local naive hour start, kWh) pairs."""
+    """Everything the panel shows, from (local naive hour start, kWh) pairs.
+
+    energy_price — hourly netto energy prices {local naive hour: zł/kWh} when the
+    meter settings price energy from Pstryk (cfg energy_price == "pstryk").
+    """
     tariff = mt.resolve(cfg.get("tariff", "C13"), cfg.get("prices"))
+    dynamic = cfg.get("energy_price") == "pstryk"
+    incl_dist = dynamic and cfg.get("pstryk_includes_distribution", True) is not False
+    if dynamic:
+        energy_price = energy_price or {}
+        # The energy price comes from Pstryk; only distribution needs the invoice
+        # (C11 has no default distribution) — unless Pstryk's price includes it
+        o = cfg.get("prices") or {}
+        tariff["needs_input"] = bool(mt.METER_TARIFFS.get(tariff["id"], {}).get("needs_input")) and not incl_dist \
+            and not any((mt._num(v) or 0) > 0 for v in (o.get("dist") or {}).values())
+
+    def cost(rows: list[tuple[datetime, float]]) -> dict[str, Any]:
+        return mt.cost_hours(tariff, rows, energy_price if dynamic else None, incl_dist)
     contract_kw = mt._num(cfg.get("contract_kw"))
     fixed = mt.monthly_fixed(tariff, contract_kw)
     fixed_total = round(sum(fixed.values()), 2)
@@ -234,7 +257,7 @@ def summarize(
     data_until = max((t for t, _ in hours), default=None)
 
     def month_block(rows: list[tuple[datetime, float]], full_days: int, fixed: float) -> dict[str, Any]:
-        c = mt.cost_hours(tariff, rows)
+        c = cost(rows)
         days = len({t.date() for t, _ in rows})
         return {**c, "days_with_data": days, "days": full_days,
                 "fixed": round(fixed, 2), "total": round(c["variable"] + fixed, 2)}
@@ -267,7 +290,7 @@ def summarize(
             by_day.setdefault(t.date().isoformat(), []).append((t, k))
     daily = []
     for day in sorted(by_day):
-        c = mt.cost_hours(tariff, by_day[day])
+        c = cost(by_day[day])
         d = datetime.fromisoformat(day).date()
         # hours < 23: the day eLicznik has not finished yet (23/25 h on DST days)
         daily.append({"date": day, "free": mt.is_free_day(d), "kwh": c["kwh"],
@@ -308,7 +331,17 @@ def summarize(
 
     baseload_year_kwh = round(baseload_w * 8.76, 0) if baseload_w is not None else None
     off_price = sum(mt.variable_price(tariff, "off_peak" if "off_peak" in tariff["zones"] else "flat"))
+    if dynamic and energy_price:
+        recent_prices = [p for t, p in energy_price.items() if data_until and t >= data_until - timedelta(days=14)]
+        if recent_prices:
+            off_price = sum(recent_prices) / len(recent_prices) + (
+                0.0 if incl_dist else sum(mt.variable_price(tariff, "off_peak" if "off_peak" in tariff["zones"] else "flat")[1:]))
     return {
+        "energy_price": {
+            "source": "pstryk" if dynamic else "tariff",
+            "includes_distribution": incl_dist,
+            "hours": len(energy_price or {}) if dynamic else 0,
+        },
         "tariff": tariff,
         "contract_kw": contract_kw,
         "fixed_breakdown": fixed,
@@ -385,7 +418,14 @@ async def ws_meter_summary(hass: HomeAssistant, connection, msg: dict[str, Any])
     balanced = bool(exp) and cfg.get("balance_hourly", True) is not False
     cost_hours = md.balance_hours(imp, exp)[0] if balanced else imp
     now_naive = now.replace(tzinfo=None)
-    result = summarize(cost_hours, cfg, now_naive)
+    energy_price = None
+    if cfg.get("energy_price") == "pstryk":
+        energy_price = await _pstryk_netto_prices(hass, dt_util.as_utc(start), dt_util.utcnow() + timedelta(days=2))
+    result = summarize(cost_hours, cfg, now_naive, energy_price)
+    if energy_price is not None:
+        from .pstryk_ha import resolve_entities
+
+        result["energy_price"]["entity"] = resolve_entities(hass).get("buy")
     result["cost_basis"] = "balanced" if balanced else "import"
     if exp:
         by_day: dict[str, float] = {}
@@ -435,6 +475,21 @@ async def ws_meter_summary(hass: HomeAssistant, connection, msg: dict[str, Any])
     connection.send_result(msg["id"], {
         **result, "settings": cfg, "source": stat, "export_source": export_src, **lists,
     })
+
+
+async def _pstryk_netto_prices(hass: HomeAssistant, start: datetime, end: datetime) -> dict[datetime, float]:
+    """Pstryk buy prices as {local naive hour: netto zł/kWh} (history Store + recorder)."""
+    from homeassistant.util import dt as dt_util
+
+    from . import pstryk as pk
+    from .pstryk_ha import async_start_history, get_history
+
+    hist = get_history(hass)
+    if hist is None:
+        await async_start_history(hass)
+        hist = get_history(hass)
+    gross = await hist.async_buy_history(start, end) if hist else {}
+    return pk.local_naive(gross, dt_util.now().tzinfo, 1 / mt.VAT)
 
 
 def meter_extras(

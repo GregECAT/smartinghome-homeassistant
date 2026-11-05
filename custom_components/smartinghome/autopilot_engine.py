@@ -698,7 +698,8 @@ def build_autopilot_ai_prompt(
     # Dynamic tariff context from user's config
     tariff_type = current_data.get('tariff_type', TariffType.G13)
     provider = current_data.get('energy_provider', DEFAULT_ENERGY_PROVIDER)
-    tariff_ctx = build_tariff_prompt_context(tariff_type, provider, now)
+    tariff_ctx = build_tariff_prompt_context(
+        tariff_type, provider, now, hourly_prices=current_data.get('pstryk_buy_hourly'))
 
     # Build hourly plan summary
     plan_lines = []
@@ -1080,10 +1081,12 @@ def build_ai_controller_prompt(
     # Dynamic tariff context from user's config
     tariff_type = current_data.get('tariff_type', TariffType.G13)
     provider = current_data.get('energy_provider', DEFAULT_ENERGY_PROVIDER)
-    tariff_ctx = build_tariff_prompt_context(tariff_type, provider, now)
+    tariff_ctx = build_tariff_prompt_context(
+        tariff_type, provider, now, hourly_prices=current_data.get('pstryk_buy_hourly'))
 
     # Upcoming zones
-    next_zones_text = render_next_zones(tariff_type, provider, now, hours_ahead=3)
+    next_zones_text = render_next_zones(
+        tariff_type, provider, now, hours_ahead=3, hourly_prices=current_data.get('pstryk_buy_hourly'))
 
     # RCE data
     rce_mwh = float(current_data.get('rce_price') or 250)
@@ -1270,7 +1273,8 @@ def build_ai_strategist_prompt(
     # Dynamic tariff context from user's config
     tariff_type = current_data.get('tariff_type', TariffType.G13)
     provider = current_data.get('energy_provider', DEFAULT_ENERGY_PROVIDER)
-    tariff_ctx = build_tariff_prompt_context(tariff_type, provider, now)
+    tariff_ctx = build_tariff_prompt_context(
+        tariff_type, provider, now, hourly_prices=current_data.get('pstryk_buy_hourly'))
 
     # RCE data
     rce_mwh = float(current_data.get('rce_price') or 250)

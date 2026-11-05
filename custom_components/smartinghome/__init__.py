@@ -324,6 +324,14 @@ async def async_setup_entry(
         except Exception as err:  # noqa: BLE001
             _LOGGER.warning("Auto updater not started: %s", err)
 
+    # Pstryk hourly prices kept for the meter panel (no-op without the Pstryk.pl integration)
+    try:
+        from .pstryk_ha import async_start_history
+
+        await async_start_history(hass)
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.warning("Pstryk price history not started: %s", err)
+
     # Installation showcase (opt-in, off by default — settings "showcase")
     if "_showcase" not in hass.data[DOMAIN]:
         from .showcase_service import ShowcasePublisher
@@ -504,6 +512,9 @@ async def async_unload_entry(
             publisher = hass.data[DOMAIN].pop("_showcase", None)
             if publisher:
                 publisher.stop()
+            from .pstryk_ha import stop_history
+
+            stop_history(hass)
         for url_path in (DOMAIN, METER_PANEL_URL, SITE_PANEL_URL):
             # Remove sidebar panel
             try:

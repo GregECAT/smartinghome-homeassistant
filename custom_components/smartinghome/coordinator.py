@@ -960,7 +960,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if pv is None or bat is None or grid is None:
             ledger.update_gap()
         else:
-            if self._tariff == TariffType.DYNAMIC:
+            if self._is_dynamic():
                 buy = _safe_float(data.get("g13_buy_price"))
                 peak = not data.get("g13_is_off_peak", True)
             else:
@@ -1334,17 +1334,15 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data["hems_active_loads"] = f"{active}/3"
 
         # —— Tariff zone ——
-        if self._tariff == TariffType.DYNAMIC:
+        if self._is_dynamic():
             tariff_data = self._compute_dynamic_tariff(raw)
         else:
             tariff_data = self._compute_g13(now)
         data.update(tariff_data)
 
         # —— Tariff config for AI prompts ——
-        data["tariff_type"] = self._tariff
-        data["energy_provider"] = self.entry.data.get(
-            CONF_ENERGY_PROVIDER, DEFAULT_ENERGY_PROVIDER
-        )
+        data["tariff_type"] = TariffType.DYNAMIC if self._is_dynamic() else self._tariff
+        data["energy_provider"] = self._provider()
 
         # —— RCE calculations ——
         if self._rce_enabled:
@@ -1664,6 +1662,19 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return data
 
+    def _provider(self) -> str:
+        """Energy provider: the panel's choice (settings, cached ≤ 5 min), else the config entry."""
+        return str(
+            (self._forecast_settings or {}).get("energy_provider")
+            or self.entry.data.get(CONF_ENERGY_PROVIDER, DEFAULT_ENERGY_PROVIDER)
+        )
+
+    def _is_dynamic(self) -> bool:
+        """Dynamic tariff: configured as such, or Pstryk (hourly prices only)."""
+        from .pstryk import is_pstryk
+
+        return self._tariff == TariffType.DYNAMIC or is_pstryk(self._provider())
+
     def _compute_dynamic_tariff(
         self, raw: dict[str, Any]
     ) -> dict[str, Any]:
@@ -1679,6 +1690,25 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         rank = _safe_float(raw.get(SENSOR_ENTSOE_RANK))
         percentile = _safe_float(raw.get(SENSOR_ENTSOE_PERCENTILE))
         market_price = _safe_float(raw.get(SENSOR_ENTSOE_PRICE_NOW))
+        # Pstryk prices replace ENTSO-E's all-in only when chosen (provider Pstryk, or
+        # settings dynamic_price_source = "pstryk") — never just because the sensors exist
+        pstryk = None
+        try:
+            from .pstryk_ha import dynamic_tariff_data
+
+            pstryk = dynamic_tariff_data(
+                self.hass, self._forecast_settings, dt_util.now(), self._provider(), TariffType.DYNAMIC,
+            )
+        except Exception as err:  # noqa: BLE001 — never break the update on it
+            _LOGGER.debug("Pstryk prices unavailable: %s", err)
+        if pstryk is not None:
+            allin_now, allin_next = pstryk["allin_now"], pstryk["allin_next"]
+            allin_min, allin_max, avg_today = pstryk["min"], pstryk["max"], pstryk["avg"]
+            rank, percentile = pstryk["rank"], pstryk["percentile"]
+            data["dynamic_price_source"] = "pstryk"
+            data["pstryk_buy_hourly"] = pstryk["hourly"]
+        else:
+            data["dynamic_price_source"] = "entsoe"
 
         # Determine dynamic zone based on percentile
         thresholds = DYNAMIC_PRICE_THRESHOLDS
@@ -1916,9 +1946,10 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data["arbitrage_available_kwh"] = round(available_kwh, 2)
 
         # If dynamic tariff — override with actual ENTSO-E prices
-        if self._tariff == TariffType.DYNAMIC:
-            entsoe_min = _safe_float(raw.get(SENSOR_ENTSOE_ALLIN_MIN))
-            entsoe_max = _safe_float(raw.get(SENSOR_ENTSOE_ALLIN_MAX))
+        if self._is_dynamic():
+            # ENTSO-E all-in min / max — or Pstryk's (_compute_dynamic_tariff)
+            entsoe_min = _safe_float(g13_data.get("dynamic_min_today", raw.get(SENSOR_ENTSOE_ALLIN_MIN)))
+            entsoe_max = _safe_float(g13_data.get("dynamic_max_today", raw.get(SENSOR_ENTSOE_ALLIN_MAX)))
             if entsoe_min > 0 and entsoe_max > 0:
                 dyn_margin = entsoe_max - entsoe_min
                 data["arbitrage_margin_per_kwh"] = round(dyn_margin, 4)
@@ -1974,7 +2005,7 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return "⚠️ Bateria wyczerpana — import z sieci w szczycie"
 
         # Dynamic tariff
-        if self._tariff == TariffType.DYNAMIC:
+        if self._is_dynamic():
             if hour < 6:
                 return "🌙 Noc — tanio, ładuj baterię z sieci"
             if 16 <= hour <= 21:

@@ -186,6 +186,26 @@ Choose your electricity tariff:
 
 Enable **RCE PSE** dynamic pricing for real-time market data.
 
+### Pstryk (dynamic hourly prices) ⚡
+
+Smarting HOME can use the hourly prices of [Pstryk](https://pstryk.pl) when you buy energy from Pstryk.
+
+**Requirements**
+- The HACS integration **Pstryk.pl** — [github.com/Bankilo/pstryk-home-assistant](https://github.com/Bankilo/pstryk-home-assistant) (add it as a custom repository in HACS, restart HA, add the integration).
+- An API key from the Pstryk app (account settings) entered in that integration. Prices are those of the contract / meter the key belongs to.
+
+**What Smarting HOME does with it**
+- Settings → *Dostawca energii* → **Pstryk**: the Max Zysk planner prices every hour of purchase from the Pstryk buy price (before ENTSO-E) and values exports with the Pstryk prosumer price instead of RCE × 1.23. Hours not published yet are estimated from the same hour of the last known day; the plan note says „ceny Pstryk”.
+- On the dynamic tariff of another seller Pstryk can be chosen explicitly as the price source (instead of ENTSO-E). **The Pstryk sensors alone never change planning or costs** — with another provider their prices are shown only as a comparison.
+- „Energia i koszty” → Settings → *Cena energii* → **Pstryk (dynamiczna)**: the energy cost is computed hour by hour from the Pstryk buy price (Smarting HOME keeps an hourly price history for that); zones, fixed fees and — if the Pstryk price does not include it — variable distribution come from the selected OSD tariff (C11/C13/G11/G12/G12w/G13).
+- The AI advisor gets today's / tomorrow's cheapest and most expensive Pstryk hours and averages instead of G13 zones.
+- Settings → Tariff shows a diagnostic: integration found, hours of prices today / tomorrow.
+
+**Limits**
+- Hourly prices only (the integration reads resolution=hour); tomorrow's prices appear around 13:00.
+- Prices are contract-specific. Pstryk does not document what the price contains; the observed level (1.07–2.29 zł/kWh gross on a business meter, Nov 2026) indicates an all-in price incl. distribution, so „Cena Pstryk zawiera dystrybucję” is on by default — switch it off if your OSD invoices distribution separately. Verify against your first Pstryk invoice.
+- Read only: Smarting HOME never calls the Pstryk API itself and never changes your Pstryk account.
+
 ### Step 4 — AI Configuration 🤖 *(PRO only, optional)*
 
 Provide your own API keys for AI energy advisory:

@@ -13,8 +13,8 @@ G13-specific data into prompts, preventing AI hallucination on zone times.
 """
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Final
+from datetime import datetime, timedelta
+from typing import Any, Final
 
 from .pl_holidays import is_day_off, tariff_weekday
 from .const import (
@@ -187,13 +187,16 @@ def build_tariff_prompt_context(
     tariff_type: str = TariffType.G13,
     provider: str = DEFAULT_ENERGY_PROVIDER,
     now: datetime | None = None,
+    hourly_prices: Any = None,
 ) -> TariffPromptContext:
     """Build complete tariff context for AI prompts.
 
     Args:
         tariff_type: User's configured tariff (g11, g12, g12w, g12n, g13, dynamic).
-        provider: Energy provider (tauron, pge).
+        provider: Energy provider (tauron, pge, pstryk).
         now: Current datetime (defaults to datetime.now()).
+        hourly_prices: Pstryk buy prices {ISO hour or datetime: PLN/kWh} (coordinator
+            key pstryk_buy_hourly) — used when the provider is Pstryk.
 
     Returns:
         TariffPromptContext with all fields filled.
@@ -211,7 +214,11 @@ def build_tariff_prompt_context(
     month = now.month
     weekday = tariff_weekday(now.date())
 
-    if tariff_type == TariffType.G13:
+    if str(provider or "").lower() == EnergyProvider.PSTRYK:
+        # Pstryk sells at hourly prices only — no G1x zones, whatever tariff is configured
+        ctx.tariff_type = TariffType.DYNAMIC
+        ctx = _build_pstryk_context(ctx, hourly_prices, now)
+    elif tariff_type == TariffType.G13:
         ctx = _build_g13_context(ctx, hour, month, weekday)
     elif tariff_type == TariffType.G11:
         ctx = _build_g11_context(ctx, provider)
@@ -596,6 +603,73 @@ def _build_dynamic_context(ctx: TariffPromptContext) -> TariffPromptContext:
     return ctx
 
 
+def _aware(now: datetime) -> datetime:
+    """A naive local `now` (datetime.now() of the prompt builders) in HA's time zone."""
+    if now.tzinfo is not None:
+        return now
+    try:
+        from homeassistant.util import dt as dt_util
+
+        tz = dt_util.now().tzinfo
+    except (ImportError, AttributeError):  # unit tests without Home Assistant
+        tz = None
+    return now.replace(tzinfo=tz) if tz is not None else now.astimezone()
+
+
+def _build_pstryk_context(ctx: TariffPromptContext, hourly_prices: Any, now: datetime) -> TariffPromptContext:
+    """Pstryk: hourly prices from the Pstryk.pl integration (cheapest / dearest hours, averages)."""
+    from .pstryk import day_summary, deserialize, hour_utc
+
+    series = deserialize(hourly_prices)
+    aware = _aware(now)
+    tz = aware.tzinfo
+    today = day_summary(series, tz, aware.date())
+    ctx.current_zone = "dynamic"
+    ctx.current_price = series.get(hour_utc(aware), today["avg"] if today else 0.0)
+    if today:
+        ctx.cheapest_price, ctx.most_expensive_price = today["min"], today["max"]
+        ctx.arbitrage_margin = max(today["max"] - today["min"], 0.0)
+        cheap = ", ".join(f"{t} {p:.2f}" for t, p in today["cheapest"])
+        dear = ", ".join(f"{t} {p:.2f}" for t, p in today["dearest"])
+        ctx.schedule_text = (
+            "  Pstryk — cena zmienia się CO GODZINĘ (brak stref G11/G12/G13).\n"
+            f"  Dziś ({today['hours']} h): średnio {today['avg']:.2f}, min {today['min']:.2f} o {today['min_at']}, "
+            f"max {today['max']:.2f} o {today['max_at']} PLN/kWh\n"
+            f"  Najtańsze godziny: {cheap}\n"
+            f"  Najdroższe godziny: {dear}"
+        )
+        tomorrow = day_summary(series, tz, (aware + timedelta(days=1)).date())
+        if tomorrow:
+            ctx.schedule_text += (
+                f"\n  Jutro ({tomorrow['hours']} h): średnio {tomorrow['avg']:.2f}, "
+                f"min {tomorrow['min']:.2f} o {tomorrow['min_at']}, max {tomorrow['max']:.2f} o {tomorrow['max_at']} PLN/kWh"
+            )
+        else:
+            ctx.schedule_text += "\n  Jutro: ceny jeszcze nieopublikowane (zwykle po ~13:00)."
+        ctx.prices_summary = (
+            f"Pstryk hourly — today avg {today['avg']:.2f}, min {today['min']:.2f} @ {today['min_at']}, "
+            f"max {today['max']:.2f} @ {today['max_at']} PLN/kWh"
+        )
+    else:
+        ctx.schedule_text = (
+            "  Pstryk — cena zmienia się CO GODZINĘ, ale brak cen z integracji Pstryk.pl "
+            "(sprawdź integrację w HA). Nie zakładaj stref G13."
+        )
+        ctx.prices_summary = "Pstryk hourly — no prices available"
+    ctx.prices_text = "  " + ctx.prices_summary
+    ctx.arbitrage_text = (
+        "Pstryk: ładuj baterię w najtańszych godzinach doby, korzystaj z niej w najdroższych."
+    )
+    ctx.key_rules_text = (
+        "TARYFA DYNAMICZNA PSTRYK:\n"
+        "  - Cena zakupu zmienia się CO GODZINĘ (brutto PLN/kWh z integracji Pstryk.pl)\n"
+        "  - Brak stałych stref szczytu — decyduj wg listy najtańszych / najdroższych godzin\n"
+        "  - Ceny na jutro publikowane ok. 13:00"
+    )
+    ctx.warning_text = "Pstryk: cena godzinowa — nie stosuj harmonogramu G13!"
+    return ctx
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Prompt section formatters — drop-in replacements for AI prompts
 # ═══════════════════════════════════════════════════════════════════════════
@@ -675,10 +749,23 @@ def render_next_zones(
     provider: str = DEFAULT_ENERGY_PROVIDER,
     now: datetime | None = None,
     hours_ahead: int = 3,
+    hourly_prices: Any = None,
 ) -> str:
     """Render upcoming zone transitions for the next N hours."""
     if now is None:
         now = datetime.now()
+    if str(provider or "").lower() == EnergyProvider.PSTRYK:
+        from .pstryk import deserialize, hour_utc
+
+        series = deserialize(hourly_prices)
+        aware = _aware(now)
+        out = []
+        for offset in range(1, hours_ahead + 1):
+            t = aware + timedelta(hours=offset)
+            price = series.get(hour_utc(t))
+            out.append(f"+{offset}h ({t.strftime('%H')}:00): pstryk "
+                       + (f"({price:.2f} PLN/kWh)" if price is not None else "(cena nieznana)"))
+        return chr(10).join(out)
 
     hour = now.hour
     month = now.month
