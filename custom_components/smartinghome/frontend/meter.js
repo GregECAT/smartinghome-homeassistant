@@ -496,8 +496,9 @@ class SmartingHomeMeterPanel extends HTMLElement {
         <div class="row"><span class="k">Moc</span><span class="v">${m.power_w !== null && m.power_w !== undefined ? `${this._num(m.power_w, 0)} W <span class="muted">(${esc(this._hm(m.power_at))})</span>` : "—"}</span></div>
       </div>
       ${block(m.today, "Dziś")}${block(m.current_month, "Ten miesiąc")}${block(m.previous_month, "Poprzedni miesiąc")}
-      <div class="hint">Dane godzinowe co 20 min, moc co 5 min. Zużycie trafia do statystyki <b>${esc(m.statistic_id || "smartinghome:pstryk_consumption")}</b>
-        (panel Energia HA). Brak odczytu przez 3 h → powiadomienie; według umowy po 30 dobach bez danych w roku Pstryk rozlicza po cenie stałej.</div>
+      <div class="hint">Dane godzinowe co 20 min, moc co 5 min. Statystyki HA: zużycie <b>${esc(m.statistic_id || "smartinghome:pstryk_consumption")}</b>,
+        koszt według Pstryk <b>${esc(m.cost_statistic_id || "smartinghome:pstryk_cost")}</b> (oba do panelu Energia) i koszt tych samych kWh w taryfie z faktury
+        <b>${esc(m.tariff_cost_statistic_id || "smartinghome:pstryk_tariff_cost")}</b> — do wykresu porównawczego. Brak odczytu przez 3 h → powiadomienie; według umowy po 30 dobach bez danych w roku Pstryk rozlicza po cenie stałej.</div>
     </div>`;
   }
 

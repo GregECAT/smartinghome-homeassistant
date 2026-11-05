@@ -44,6 +44,9 @@ LIVE_EVERY = timedelta(minutes=5)
 OFFLINE_AFTER = timedelta(hours=3)
 STAT_IMPORT = f"{DOMAIN}:pstryk_consumption"
 STAT_EXPORT = f"{DOMAIN}:pstryk_export"
+STAT_COST = f"{DOMAIN}:pstryk_cost"
+STAT_TARIFF_COST = f"{DOMAIN}:pstryk_tariff_cost"
+STATS_VERSION = 3  # 2: + pstryk_cost, 3: + tariff cost of the same kWh
 
 
 class AuthFailed(Exception):
@@ -74,6 +77,7 @@ class PstrykMeter:
         self._blocked_until: datetime | None = None
         self._bad_token: str | None = None
         self._next_hourly: datetime | None = None
+        self._stats_version = 0
         self._unsub = None
         self._lock = asyncio.Lock()
 
@@ -86,6 +90,7 @@ class PstrykMeter:
         self.backfilled = bool(raw.get("backfilled"))
         self.offline_notified = bool(raw.get("offline_notified"))
         self.last_data = pa._time(raw.get("last_data"))
+        self._stats_version = int(raw.get("stats_version") or 0)
         self._unsub = async_track_time_interval(self.hass, self._tick, LIVE_EVERY)
         self.hass.async_create_task(self._tick())
 
@@ -100,6 +105,7 @@ class PstrykMeter:
             "backfilled": self.backfilled,
             "offline_notified": self.offline_notified,
             "last_data": self.last_data.isoformat() if self.last_data else None,
+            "stats_version": self._stats_version,
         })
 
     # ── polling ────────────────────────────────────────────────────────────
@@ -191,6 +197,9 @@ class PstrykMeter:
         if newest and (self.last_data is None or newest > self.last_data):
             self.last_data = newest
         self.backfilled = True
+        if self._stats_version < STATS_VERSION and self.hours:
+            changed_from, changed = None, True  # new statistic (cost) → write all hours once
+            self._stats_version = STATS_VERSION
         if changed:
             await self._save()
             await self._import_statistics(changed_from)
@@ -211,15 +220,33 @@ class PstrykMeter:
             from homeassistant.components.recorder.statistics import async_add_external_statistics
         except ImportError:
             return
-        for stat_id, field, name in ((STAT_IMPORT, "i", "Pstryk — energia pobrana"),
-                                     (STAT_EXPORT, "e", "Pstryk — energia oddana")):
+        prices = self._buy_prices()
+
+        def cost(key: int, row: dict[str, Any]) -> float:
+            # Pstryk's own cost; an hour without it (no contract yet, API gap): kWh × the
+            # Pstryk.pl buy price (gross, all-in — matched Pstryk's cost on 2026-11-05)
+            gross = pa.hour_gross(row)
+            if gross is None:
+                price = prices.get(pa.hour_dt(key))
+                gross = (row.get("i") or 0.0) * price if price is not None else 0.0
+            return gross
+
+        tariff_cost = await self._tariff_cost_fn()
+
+        for stat_id, field, name, unit in ((STAT_IMPORT, "i", "Pstryk — energia pobrana", "kWh"),
+                                           (STAT_EXPORT, "e", "Pstryk — energia oddana", "kWh"),
+                                           (STAT_COST, cost, "Pstryk — koszt energii (brutto)", "PLN"),
+                                           (STAT_TARIFF_COST, tariff_cost,
+                                            "Taryfa z faktury — koszt tych samych kWh (brutto)", "PLN")):
+            if field is None:
+                continue
             if field == "e" and sum(r.get("e") or 0 for r in self.hours.values()) < 0.01:
                 continue
             rows = pa.statistic_rows(self.hours, field, from_key)
             if not rows:
                 continue
             meta: dict[str, Any] = {"has_mean": False, "has_sum": True, "name": name, "source": DOMAIN,
-                                    "statistic_id": stat_id, "unit_of_measurement": "kWh"}
+                                    "statistic_id": stat_id, "unit_of_measurement": unit}
             try:  # HA 2025.x: mean type / unit class
                 from homeassistant.components.recorder.models import StatisticMeanType
 
@@ -230,7 +257,7 @@ class PstrykMeter:
             try:
                 from homeassistant.util.unit_conversion import EnergyConverter
 
-                meta["unit_class"] = EnergyConverter.UNIT_CLASS
+                meta["unit_class"] = EnergyConverter.UNIT_CLASS if unit == "kWh" else None
             except (ImportError, AttributeError):
                 pass
             data = [StatisticData(start=t, state=kwh, sum=total) for t, kwh, total in rows]
@@ -242,6 +269,41 @@ class PstrykMeter:
                 meta["has_mean"] = False
                 _LOGGER.debug("Pstryk statistics retry without new meta keys: %s", err)
                 async_add_external_statistics(self.hass, StatisticMetaData(**meta), data)
+
+    async def _tariff_cost_fn(self):
+        """kWh × the invoice tariff's zone price (energy + variable distribution + fees) × VAT.
+
+        Same hours and kWh as Pstryk's cost — both are variable costs (fixed fees apart).
+        None when the meter tariff has no prices (C11 without the invoice).
+        """
+        from homeassistant.util import dt as dt_util
+
+        from . import meter_tariffs as mt
+        from .meter_ws import meter_settings
+        from .settings_io import read_async
+
+        cfg = meter_settings(await read_async(self.hass))
+        tariff = mt.resolve(cfg.get("tariff", "C13"), cfg.get("prices"))
+        if tariff.get("needs_input"):
+            return None
+        tz = dt_util.now().tzinfo
+
+        def fn(key: int, row: dict[str, Any]) -> float:
+            when = pa.hour_dt(key).astimezone(tz).replace(tzinfo=None)
+            e, d = mt.variable_price(tariff, mt.zone_at(tariff["id"], when))
+            return (row.get("i") or 0.0) * (e + d) * mt.VAT
+
+        return fn
+
+    def _buy_prices(self) -> dict[datetime, float]:
+        """Stored Pstryk.pl buy prices {UTC hour: gross zł/kWh} (pstryk_ha history)."""
+        try:
+            from .pstryk_ha import get_history
+
+            hist = get_history(self.hass)
+            return dict(hist.buy) if hist else {}
+        except Exception:  # noqa: BLE001
+            return {}
 
     # ── offline alert ──────────────────────────────────────────────────────
     async def _check_offline(self, now: datetime) -> None:
@@ -300,6 +362,8 @@ class PstrykMeter:
             "current_month": pa.period(self.hours, month_start, now + timedelta(hours=1)),
             "previous_month": pa.period(self.hours, prev_start, month_start),
             "statistic_id": STAT_IMPORT if self.hours else None,
+            "cost_statistic_id": STAT_COST if self.hours else None,
+            "tariff_cost_statistic_id": STAT_TARIFF_COST if self.hours else None,
             "cost_labels": pa.COST_LABELS,
         }
 

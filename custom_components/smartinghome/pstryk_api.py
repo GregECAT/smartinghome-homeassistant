@@ -167,10 +167,23 @@ def last_data(frames: Iterable[Mapping[str, Any]]) -> datetime | None:
     return max(starts) if starts else None
 
 
-def statistic_rows(stored: Mapping[int, Mapping[str, Any]], field: str, from_key: int | None
-                   ) -> list[tuple[datetime, float, float]]:
-    """(hour start UTC, kWh, cumulative sum) for complete hours from from_key on.
+def hour_gross(row: Mapping[str, Any]) -> float | None:
+    """Pstryk's gross cost of one stored hour (None when the API sent no cost)."""
+    c = row.get("c") or {}
+    if not c:
+        return None
+    if "energy_import_cost" in c:
+        return float(c["energy_import_cost"])
+    parts = sum(c.get(k, 0.0) for k in NET_PARTS)
+    vat = c["vat"] if "vat" in c else parts * VAT_RATE
+    return parts + vat + sum(c.get(k, 0.0) for k in EXCISE_KEYS)
 
+
+def statistic_rows(stored: Mapping[int, Mapping[str, Any]], field: Any, from_key: int | None
+                   ) -> list[tuple[datetime, float, float]]:
+    """(hour start UTC, value, cumulative sum) for complete hours from from_key on.
+
+    field — a stored key ("i", "e") or a function (epoch hour, row) → value.
     The running hour is left out — statistics are written once an hour is done.
     """
     total = 0.0
@@ -179,7 +192,7 @@ def statistic_rows(stored: Mapping[int, Mapping[str, Any]], field: str, from_key
         row = stored[key]
         if row.get("live"):
             continue
-        kwh = float(row.get(field) or 0.0)
+        kwh = float((field(key, row) if callable(field) else row.get(field)) or 0.0)
         total += kwh
         if from_key is None or key >= from_key:
             out.append((hour_dt(key), round(kwh, 4), round(total, 4)))

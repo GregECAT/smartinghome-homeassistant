@@ -114,3 +114,17 @@ def test_period_without_vat_field_adds_23_percent_and_excise():
     parts = 6 * (0.475 + 0.0533 + 0.1167)
     assert abs(p["net"] - round(parts + 6 * 0.0017, 2)) < 0.006
     assert abs(p["gross"] - round(parts * 1.23 + 6 * 0.0017, 2)) < 0.006
+
+
+def test_hour_gross_and_cost_rows_with_fallback():
+    h = datetime(2026, 11, 5, 10, tzinfo=UTC)
+    cost = {"energy_cost_net": 0.4, "service_cost_net": 0.05, "var_dist_cost_net": 0.1, "excise": 0.002}
+    stored = {}
+    pa.merge_hours(stored, pa.parse_frames({"frames": [
+        _frame(h, cost=cost), _frame(h + timedelta(hours=1), imp=0.5)]}), NOW)
+    k0 = int(h.timestamp()) // 3600
+    assert abs(pa.hour_gross(stored[k0]) - (0.55 * 1.23 + 0.002)) < 1e-9
+    assert pa.hour_gross(stored[k0 + 1]) is None
+    fn = lambda k, r: pa.hour_gross(r) if pa.hour_gross(r) is not None else r["i"] * 2.0  # noqa: E731
+    rows = pa.statistic_rows(stored, fn, None)
+    assert abs(rows[0][1] - 0.6785) < 1e-4 and abs(rows[1][2] - (0.6785 + 1.0)) < 1e-3
