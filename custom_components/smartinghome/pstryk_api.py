@@ -43,9 +43,16 @@ COST_LABELS = {
     "var_dist_cost_net": "Dystrybucja zmienna",
     "fix_dist_cost_net": "Dystrybucja stała",
     "power_fee_cost_net": "Opłata mocowa",
+    "excise": "Akcyza",
     "excise_cost": "Akcyza",
     "vat": "VAT",
 }
+EXCISE_KEYS = ("excise", "excise_cost")  # outside the VAT base
+VAT_RATE = 0.23
+# Live check 2026-11-05 (business meter, before the sales contract starts): cost frames
+# carry energy_cost_net, service_cost_net, var_dist_cost_net, power_fee_cost_net, excise,
+# energy_sold_value(_net) — no vat / fix_dist_cost_net / energy_import_cost. Their sum
+# matched kWh × the integration's buy price ÷ 1.23 to the grosz.
 DEFAULT_RETRY_S = 900
 MAX_HOURLY_KWH = 500.0
 
@@ -187,11 +194,14 @@ def period(stored: Mapping[int, Mapping[str, Any]], start: datetime, end: dateti
     for r in rows:
         for k, v in (r.get("c") or {}).items():
             cost[k] = cost.get(k, 0.0) + v
-    net = sum(cost.get(k, 0.0) for k in NET_PARTS)
+    parts = sum(cost.get(k, 0.0) for k in NET_PARTS)
+    excise = sum(cost.get(k, 0.0) for k in EXCISE_KEYS)
+    net = parts + excise
     priced = sum(1 for r in rows if r.get("c"))
     gross = cost.get("energy_import_cost")
     if gross is None and priced:
-        gross = net + cost.get("vat", 0.0) + cost.get("excise_cost", 0.0)
+        vat = cost["vat"] if "vat" in cost else parts * VAT_RATE
+        gross = parts + vat + excise
     return {
         "hours": len(rows),
         "priced_hours": priced,

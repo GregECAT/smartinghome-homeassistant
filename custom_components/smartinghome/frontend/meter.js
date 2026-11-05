@@ -481,7 +481,7 @@ class SmartingHomeMeterPanel extends HTMLElement {
     const block = (p, title) => {
       if (!p || !p.hours) return "";
       const labels = m.cost_labels || {};
-      const parts = Object.entries(p.cost || {}).filter(([k]) => labels[k] && k !== "vat").map(([k, v]) =>
+      const parts = Object.entries(p.cost || {}).filter(([k, v]) => labels[k] && k !== "vat" && Math.abs(v) >= 0.005).map(([k, v]) =>
         `<div class="row"><span class="k muted">${esc(labels[k])}</span><span class="v muted">${this._zl(v)}</span></div>`).join("");
       return `<div class="rows" style="margin-top:8px">
         <div class="row"><span class="k"><b>${esc(title)}</b> <span class="muted">· ${p.hours} h</span></span><span class="v">${this._num(p.kwh, 1)} kWh</span></div>

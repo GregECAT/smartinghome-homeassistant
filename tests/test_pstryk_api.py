@@ -101,3 +101,16 @@ def test_period_sums_pstryk_cost():
 
 def test_retry_after():
     assert pa.retry_after("120") == 120 and pa.retry_after("5") == 60 and pa.retry_after(None) == pa.DEFAULT_RETRY_S
+
+
+def test_period_without_vat_field_adds_23_percent_and_excise():
+    # live shape (2026-11-05): no vat / energy_import_cost, excise under "excise"
+    h = datetime(2026, 11, 5, 10, tzinfo=UTC)
+    cost = {"energy_cost_net": 0.475, "service_cost_net": 0.0533, "var_dist_cost_net": 0.1167,
+            "power_fee_cost_net": 0, "excise": 0.0017, "energy_sold_value": 0}
+    stored = {}
+    pa.merge_hours(stored, pa.parse_frames({"frames": [_frame(h + timedelta(hours=i), cost=cost) for i in range(6)]}), NOW)
+    p = pa.period(stored, h, h + timedelta(hours=6))
+    parts = 6 * (0.475 + 0.0533 + 0.1167)
+    assert abs(p["net"] - round(parts + 6 * 0.0017, 2)) < 0.006
+    assert abs(p["gross"] - round(parts * 1.23 + 6 * 0.0017, 2)) < 0.006

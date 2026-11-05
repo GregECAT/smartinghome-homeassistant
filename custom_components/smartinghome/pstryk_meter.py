@@ -213,7 +213,7 @@ class PstrykMeter:
             return
         for stat_id, field, name in ((STAT_IMPORT, "i", "Pstryk — energia pobrana"),
                                      (STAT_EXPORT, "e", "Pstryk — energia oddana")):
-            if field == "e" and not any((r.get("e") or 0) > 0 for r in self.hours.values()):
+            if field == "e" and sum(r.get("e") or 0 for r in self.hours.values()) < 0.01:
                 continue
             rows = pa.statistic_rows(self.hours, field, from_key)
             if not rows:
