@@ -253,6 +253,7 @@ class SmartingHomeMeterPanel extends HTMLElement {
         .hint b { color:#e0e6ed; }
         .muted { color:#64748b; }
         .foot { font-size:11px; color:#64748b; margin-top:18px; line-height:1.6; }
+        .cmp2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; }
         form .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
         label.f { display:flex; flex-direction:column; gap:5px; font-size:12px; color:#a0aec0; }
         label.f span.h { font-size:11px; color:#64748b; }
@@ -345,7 +346,9 @@ class SmartingHomeMeterPanel extends HTMLElement {
       const w = Math.max(280, Math.round(el.clientWidth || 600));
       el.innerHTML = el.dataset.chart === "daily"
         ? this._dailyChart(d.daily || [], d.tariff, w)
-        : this._profileChart(d.profile || {}, d.zone_by_hour || [], d.tariff, w);
+        : el.dataset.chart === "pstryk"
+          ? this._pstrykChart((d.pstryk_compare && d.pstryk_compare.hourly) || [], w)
+          : this._profileChart(d.profile || {}, d.zone_by_hour || [], d.tariff, w);
     });
   }
 
@@ -419,6 +422,7 @@ class SmartingHomeMeterPanel extends HTMLElement {
 
     return `${banners.join("")}${kpis}
       <div class="grid cols">
+        ${this._pstrykCompareCard(d.pstryk_compare)}
         ${this._costCard(cm, "Koszt w tym miesiącu", costHidden)}
         ${this._baseloadCard(bl, alertW)}
         <div class="card wide"><h3>Zużycie dzień po dniu <small>ostatnie 31 dni · strefy taryfy</small></h3><div class="chart" data-chart="daily"></div></div>
@@ -437,6 +441,100 @@ class SmartingHomeMeterPanel extends HTMLElement {
         Kwoty ${this._showGross ? "brutto (z VAT 23%)" : "netto"} · ceny z Ustawień panelu (domyślnie taryfy TAURON 2026) ·
         ${d.fixed_breakdown && d.fixed_breakdown.bierna ? "energia bierna jako średnia z faktury" : "bez energii biernej"} i rozliczeń korygujących. Moc szczytowa to średnia godzinowa — licznik rozlicza maksimum 15-minutowe.
       </div>`;
+  }
+
+  // ── your tariff vs Pstryk (informational, meter_ws.compare_pstryk) ──────
+  _pstrykCompareCard(c) {
+    if (!c) return "";
+    if (c.needs_input) {
+      return `<div class="card wide"><h3>Twoja taryfa a Pstryk</h3><div class="hint">Uzupełnij ceny z faktury w Ustawieniach — bez nich nie ma z czym porównać cen Pstryk.</div></div>`;
+    }
+    const sign = (v) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${this._zl(Math.abs(v))}`;
+    const cls = (v) => (v > 0.005 ? "up" : v < -0.005 ? "down" : "");
+    const pct = (a, b) => (a ? ` (${b - a > 0 ? "+" : "−"}${this._num(Math.abs((b - a) / a * 100), 0)}%)` : "");
+    const a = c.all || {};
+    const day = (iso) => (iso || "").slice(0, 10).split("-").reverse().join(".");
+    const head = a.hours
+      ? `<div class="rows">
+          <div class="row"><span class="k">Porównane godziny</span><span class="v">${a.hours} h · ${this._num(a.kwh, 1)} kWh · ${esc(day(c.first))}–${esc(day(c.last))}</span></div>
+          <div class="row"><span class="k">Twoja taryfa (energia + dystrybucja zmienna)</span><span class="v">${this._zl(a.tariff)}</span></div>
+          <div class="row"><span class="k">Pstryk w tych samych godzinach</span><span class="v">${this._zl(a.pstryk)}</span></div>
+          <div class="row total"><span class="k" style="color:#e0e6ed">Różnica (Pstryk − taryfa)</span><span class="v ${cls(a.diff)}">${sign(a.diff)}${pct(a.tariff, a.pstryk)}</span></div>
+          ${a.kwh ? `<div class="hint">Za 1 kWh: taryfa <b>${this._zl(a.tariff / a.kwh)}</b>, Pstryk <b>${this._zl(a.pstryk / a.kwh)}</b> (bez opłat stałych).</div>` : ""}
+        </div>`
+      : `<div class="hint">Czekamy na pierwsze godziny, dla których jest i odczyt licznika, i cena Pstryk.
+          Ceny Pstryk zapisujemy od ${esc((c.prices_from || "").replace("T", " ") || "teraz")}; eLicznik przysyła dane z opóźnieniem około doby.</div>`;
+    const m = c.month;
+    const month = m ? `<div class="rows" style="margin-top:10px">
+        <div class="row"><span class="k"><b>Szacunek na ten miesiąc</b> <span class="muted">· ${this._num(m.kwh, 0)} kWh</span></span><span class="v"></span></div>
+        <div class="row"><span class="k">Taryfa: ${this._zl(m.tariff_variable, 0)} zmienne + ${this._zl(c.fixed_tariff, 0)} stałe</span><span class="v">${this._zl(m.tariff_total, 0)}</span></div>
+        <div class="row"><span class="k">Pstryk: ${this._zl(m.pstryk_variable, 0)} zmienne + ${this._zl(c.fixed_pstryk, 0)} stałe</span><span class="v">${this._zl(m.pstryk_total, 0)}</span></div>
+        <div class="row total"><span class="k" style="color:#e0e6ed">Różnica w miesiącu</span><span class="v ${cls(m.diff)}">${sign(m.diff)}</span></div>
+      </div>` : "";
+    const daily = (c.daily || []).slice(-10).reverse();
+    const table = daily.length > 1 ? `<table class="prices" style="margin-top:10px"><thead><tr><th>Dzień</th><th>kWh</th><th>Taryfa</th><th>Pstryk</th><th>Różnica</th></tr></thead><tbody>
+        ${daily.map((r) => `<tr><td>${esc(day(r.date))}${r.hours < 23 ? ` <span class="muted">(${r.hours} h)</span>` : ""}</td><td>${this._num(r.kwh, 1)}</td><td>${this._zl(r.tariff)}</td><td>${this._zl(r.pstryk)}</td><td class="${cls(r.diff)}">${sign(r.diff)}</td></tr>`).join("")}
+      </tbody></table>` : "";
+    const hourly = c.hourly || [];
+    const n = new Date();
+    const today = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
+    const sumDay = (pred, label) => {
+      const hs = hourly.filter(pred);
+      if (!hs.length) return "";
+      const cheaper = hs.filter((h) => h.pstryk < h.tariff);
+      const best = hs.reduce((x, y) => (y.pstryk - y.tariff < x.pstryk - x.tariff ? y : x));
+      const worst = hs.reduce((x, y) => (y.pstryk - y.tariff > x.pstryk - x.tariff ? y : x));
+      return `<div class="row"><span class="k">${label}</span><span class="v">Pstryk taniej w <b>${cheaper.length}</b> z ${hs.length} h ·
+        najkorzystniej ${esc(best.t.slice(11, 16))} (${sign(best.pstryk - best.tariff)}/kWh) · najgorzej ${esc(worst.t.slice(11, 16))} (${sign(worst.pstryk - worst.tariff)}/kWh)</span></div>`;
+    };
+    const localDay = (h) => h.t.slice(0, 10);
+    const days = [...new Set(hourly.map(localDay))];
+    const fee = c.monthly_fee ? `opłata Pstryk ${this._zl(c.monthly_fee)}/mies.` : "opłata miesięczna Pstryk 0 zł (Ustawienia)";
+    return `<div class="card wide"><h3>Twoja taryfa a Pstryk <small>poglądowo · te same godziny, te same opłaty dystrybucyjne</small></h3>
+      <div class="cmp2">
+        <div>${head}${month}</div>
+        <div>${table}</div>
+      </div>
+      ${hourly.length ? `<div style="margin-top:12px"><div class="muted" style="font-size:12px;margin-bottom:4px">Cena 1 kWh godzina po godzinie (energia + dystrybucja zmienna, ${this._showGross ? "brutto" : "netto"})</div>
+        <div class="chart" data-chart="pstryk"></div>
+        <div class="rows">${days.map((dd, i) => sumDay((h) => localDay(h) === dd, i === 0 && dd === today ? "Dziś" : esc(day(dd)))).join("")}</div></div>` : ""}
+      <div class="hint">Pstryk: ceny z integracji Pstryk.pl (${esc(c.entity || "")}), brutto ÷ 1,23${c.includes_distribution ? ", traktowane jako cena z dystrybucją" : " + dystrybucja zmienna z taryfy"}.
+        Opłaty stałe OSD (moc umowna, mocowa, abonament${this._data.fixed_breakdown && this._data.fixed_breakdown.bierna ? ", energia bierna" : ""}) są takie same po obu stronach;
+        opłata handlowa sprzedawcy (${this._zl(c.seller_fee)}) zastąpiona: ${fee}. Ceny Pstryk zapisywane od ${esc((c.prices_from || "—").replace("T", " "))} — wcześniejszych godzin nie da się porównać.</div>
+    </div>`;
+  }
+
+  _pstrykChart(hourly, W) {
+    if (!hourly.length) return `<div class="hint">Brak cen Pstryk na dziś i jutro.</div>`;
+    const g = this._showGross ? 1.23 : 1;
+    const H = 200, padL = 40, padB = 22, padT = 8;
+    const vals = hourly.flatMap((h) => [h.tariff * g, h.pstryk * g]);
+    const max = Math.max(...vals) * 1.08, min = Math.min(0, ...vals);
+    const step = (W - padL) / hourly.length;
+    const y = (v) => padT + (H - padT - padB) * (1 - (v - min) / (max - min || 1));
+    let out = "";
+    hourly.forEach((h, i) => {
+      const x = padL + i * step;
+      const better = h.pstryk < h.tariff;
+      out += `<rect x="${x.toFixed(1)}" y="${padT}" width="${step.toFixed(1)}" height="${H - padT - padB}" fill="${better ? "#2ecc71" : "#e74c3c"}" opacity="0.07"/>`;
+      const t = h.t.slice(11, 13);
+      if (t === "00" && i) out += `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${padT}" y2="${H - padB}" stroke="rgba(255,255,255,0.25)" stroke-dasharray="3 3"/>`;
+      if (Number(t) % (W < 520 ? 6 : 3) === 0) out += `<text x="${(x + step / 2).toFixed(1)}" y="${H - 6}" text-anchor="middle">${Number(t)}</text>`;
+      out += `<rect x="${x.toFixed(1)}" y="${padT}" width="${step.toFixed(1)}" height="${H - padT - padB}" fill="transparent"><title>${esc(h.t.replace("T", " "))} · ${esc(this._zoneLabel(h.zone))}\ntaryfa ${this._num(h.tariff * g, 3)} zł/kWh · Pstryk ${this._num(h.pstryk * g, 3)} zł/kWh</title></rect>`;
+    });
+    const line = (key, color, stepped) => {
+      let d = "";
+      hourly.forEach((h, i) => {
+        const x0 = padL + i * step, x1 = x0 + step, yy = y(h[key] * g).toFixed(1);
+        d += stepped ? `${i ? "L" : "M"}${x0.toFixed(1)},${yy} L${x1.toFixed(1)},${yy} ` : `${i ? "L" : "M"}${(x0 + step / 2).toFixed(1)},${yy} `;
+      });
+      return `<path d="${d}" fill="none" stroke="${color}" stroke-width="2"/>`;
+    };
+    out += line("tariff", "#f7b731", true) + line("pstryk", "#00d4ff", false);
+    const grid = [0.5, 1].map((f) => { const v = min + (max - min) * f / 1.08; return `<line x1="${padL}" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="rgba(255,255,255,0.06)"/><text x="${padL - 4}" y="${y(v) + 3}" text-anchor="end">${this._num(v, 2)}</text>`; }).join("");
+    const legend = `<span><i style="background:#f7b731"></i>Twoja taryfa (strefy)</span><span><i style="background:#00d4ff"></i>Pstryk (co godzinę)</span>`
+      + `<span><i style="background:#2ecc71;opacity:.45"></i>Pstryk taniej</span><span><i style="background:#e74c3c;opacity:.45"></i>Pstryk drożej</span><span>zł/kWh</span>`;
+    return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="max-width:100%;display:block">${grid}${out}</svg><div class="legend">${legend}</div>`;
   }
 
   _costCard(m, title, hidden) {
@@ -876,10 +974,12 @@ class SmartingHomeMeterPanel extends HTMLElement {
                 <option value="tariff"${s.energy_price !== "pstryk" ? " selected" : ""}>z taryfy (ceny w strefach poniżej)</option>
                 <option value="pstryk"${s.energy_price === "pstryk" ? " selected" : ""}>Pstryk (dynamiczna) — cena co godzinę</option>
               </select></label>
-            ${s.energy_price === "pstryk" ? `<label class="f" style="grid-column:1/-1"><span><input type="checkbox" name="pstryk_includes_distribution" style="width:auto"${s.pstryk_includes_distribution !== false ? " checked" : ""}>
+            <label class="f">Opłata miesięczna Pstryk <span class="h">zł netto — do porównania z taryfą (zastępuje opłatę handlową)</span>
+              <input type="number" step="0.01" min="0" name="pstryk_monthly_fee" value="${esc(s.pstryk_monthly_fee ?? "")}"></label>
+            <label class="f" style="grid-column:1/-1"><span><input type="checkbox" name="pstryk_includes_distribution" style="width:auto"${s.pstryk_includes_distribution !== false ? " checked" : ""}>
               Cena Pstryk zawiera dystrybucję</span>
-              <span class="h">Zaznaczone: koszt godziny = kWh × cena Pstryk (netto), bez dystrybucji z taryfy. Odznacz, jeśli faktura OSD
-              nalicza dystrybucję osobno — wtedy panel doliczy składnik zmienny dystrybucji z cen poniżej. Strefy i opłaty stałe zawsze z taryfy.</span></label>` : ""}
+              <span class="h">Dotyczy wyceny Pstryk i porównania z taryfą. Zaznaczone: koszt godziny = kWh × cena Pstryk (netto), bez dystrybucji z taryfy. Odznacz, jeśli faktura OSD
+              nalicza dystrybucję osobno — wtedy panel doliczy składnik zmienny dystrybucji z cen poniżej. Strefy i opłaty stałe zawsze z taryfy.</span></label>
             ${(s.import_stats || []).length ? sumLine("import_stats", "Energia pobrana — suma liczników faz") : `
             <label class="f" style="grid-column:1/-1">Energia pobrana z sieci (statystyka kWh)
               <span class="h">Tauron AMIplus: tauron_amiplus:…_consumption · Shelly: total active energy · Eastron: Total Import kWh</span>
@@ -981,6 +1081,7 @@ class SmartingHomeMeterPanel extends HTMLElement {
       const num = (v) => (v === "" || v === null ? null : Number(v));
       s.contract_kw = num(f.elements.contract_kw.value);
       s.baseload_alert_w = num(f.elements.baseload_alert_w.value);
+      if (f.elements.pstryk_monthly_fee) s.pstryk_monthly_fee = num(f.elements.pstryk_monthly_fee.value);
       const prices = { energy: {}, dist: {}, fixed: {} };
       f.querySelectorAll("input[data-part]").forEach((i) => {
         if (i.value === "") return;

@@ -72,3 +72,56 @@ def test_reactive_energy_from_invoice_is_a_monthly_fee():
     # invoice 05.07–04.09.2026: fixed part without reactive was 106.61 zł / month
     assert abs(s["fixed_total"] - (106.61 + 290.28)) < 0.01
     assert "bierna" not in mw.summarize(_hours(), CFG, NOW)["fixed_breakdown"]
+
+
+# ── Twoja taryfa a Pstryk (compare_pstryk) ──────────────────────────────────
+
+def _prices(rows, price):
+    return {t: price for t, _ in rows}
+
+
+def test_pstryk_compare_uses_the_same_hours_and_fixed_fees():
+    hours = _hours()
+    prices = _prices(hours[24:], 1.0)  # Pstryk only for the last 5 hours (01.10)
+    cfg = {**CFG, "pstryk_monthly_fee": 30}
+    c = mw.compare_pstryk(hours, cfg, NOW, prices)
+    assert c["all"]["hours"] == 5 and abs(c["all"]["kwh"] - 2.0) < 1e-9
+    # 01.10 00–05 is off-peak: tariff 0.932 + 0.1527 + fees; Pstryk all-in 1.0
+    fees = mw.mt.PER_KWH_FEES_NETTO
+    assert abs(c["all"]["tariff"] - round(2.0 * (0.932 + 0.1527 + fees), 2)) < 0.011
+    assert abs(c["all"]["pstryk"] - 2.0) < 0.011
+    # fixed: seller's handlowa 35 replaced by the Pstryk fee 30
+    assert abs(c["fixed_tariff"] - c["fixed_pstryk"] - 5.0) < 0.01
+    assert c["daily"][0]["date"] == "2026-10-01" and c["daily"][0]["hours"] == 5
+    assert "month" not in c  # fewer than 24 compared hours
+
+
+def test_pstryk_compare_without_distribution_adds_the_tariffs():
+    hours = _hours()
+    prices = _prices(hours, 0.5)
+    c = mw.compare_pstryk(hours, {**CFG, "pstryk_includes_distribution": False}, NOW, prices)
+    fees = mw.mt.PER_KWH_FEES_NETTO
+    # energy 0.5 + the zone's distribution → more than 0.5 per kWh
+    assert c["all"]["pstryk"] > c["all"]["kwh"] * (0.5 + 0.1527 + fees) - 0.01
+    assert c["includes_distribution"] is False
+    # 29 compared hours → a month estimate from last month's kWh (Sept: 24 × 0.4)
+    m = c["month"]
+    assert abs(m["kwh"] - 9.6) < 0.01
+    assert abs(m["diff"] - (m["pstryk_total"] - m["tariff_total"])) < 0.02
+
+
+def test_pstryk_compare_hourly_series_from_today():
+    now = datetime(2026, 10, 1, 12, 0)  # noqa: DTZ001
+    up = {datetime(2026, 10, 1, h): 1.2 for h in range(24)}  # noqa: DTZ001
+    up[datetime(2026, 9, 30, 23)] = 9.9  # noqa: DTZ001 — yesterday: dropped
+    c = mw.compare_pstryk(_hours(), CFG, now, {}, up)
+    assert len(c["hourly"]) == 24
+    h8 = next(r for r in c["hourly"] if r["t"].endswith("08:00"))
+    assert h8["zone"] == "morning" and abs(h8["tariff"] - (1.01 + 0.2155 + mw.mt.PER_KWH_FEES_NETTO)) < 1e-6
+    assert h8["pstryk"] == 1.2
+
+
+def test_pstryk_compare_none_without_prices_and_needs_input_for_c11():
+    assert mw.compare_pstryk(_hours(), CFG, NOW, {}) is None
+    c = mw.compare_pstryk(_hours(), {"tariff": "C11"}, NOW, _prices(_hours(), 1.0))
+    assert c == {"needs_input": True}

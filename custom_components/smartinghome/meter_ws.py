@@ -44,6 +44,9 @@ DEFAULT_METER_SETTINGS: dict[str, Any] = {
     # distribution, fees and zones still from the tariff unless the price includes them)
     "energy_price": "tariff",
     "pstryk_includes_distribution": True,  # live prices 1.07–2.29 zł gross (pstryk.py)
+    # Pstryk's own monthly fee (netto zł) — replaces the seller's "handlowa" in the
+    # tariff-vs-Pstryk comparison; None/0 when the contract has none
+    "pstryk_monthly_fee": None,
 }
 MAX_HOURLY_KWH = 500.0  # guards counter resets / gaps
 
@@ -418,14 +421,24 @@ async def ws_meter_summary(hass: HomeAssistant, connection, msg: dict[str, Any])
     balanced = bool(exp) and cfg.get("balance_hourly", True) is not False
     cost_hours = md.balance_hours(imp, exp)[0] if balanced else imp
     now_naive = now.replace(tzinfo=None)
-    energy_price = None
-    if cfg.get("energy_price") == "pstryk":
-        energy_price = await _pstryk_netto_prices(hass, dt_util.as_utc(start), dt_util.utcnow() + timedelta(days=2))
-    result = summarize(cost_hours, cfg, now_naive, energy_price)
-    if energy_price is not None:
-        from .pstryk_ha import resolve_entities
+    from .pstryk_ha import resolve_entities
 
-        result["energy_price"]["entity"] = resolve_entities(hass).get("buy")
+    energy_price = None
+    pstryk_buy = resolve_entities(hass).get("buy")
+    if cfg.get("energy_price") == "pstryk" or pstryk_buy:
+        energy_price = await _pstryk_netto_prices(hass, dt_util.as_utc(start), dt_util.utcnow() + timedelta(days=2))
+    dynamic = cfg.get("energy_price") == "pstryk"
+    result = summarize(cost_hours, cfg, now_naive, energy_price if dynamic else None)
+    if dynamic:
+        result["energy_price"]["entity"] = pstryk_buy
+    if pstryk_buy:
+        # Informational comparison, whatever the cost basis (eLicznik lags a day, so the
+        # compared hours trail; today / tomorrow prices come straight from the sensor)
+        today = now_naive.replace(hour=0, minute=0, second=0, microsecond=0)
+        upcoming = {t: p for t, p in (energy_price or {}).items() if t >= today}
+        result["pstryk_compare"] = compare_pstryk(cost_hours, cfg, now_naive, energy_price, upcoming)
+        if result["pstryk_compare"] is not None:
+            result["pstryk_compare"]["entity"] = pstryk_buy
     result["cost_basis"] = "balanced" if balanced else "import"
     if exp:
         by_day: dict[str, float] = {}
@@ -475,6 +488,93 @@ async def ws_meter_summary(hass: HomeAssistant, connection, msg: dict[str, Any])
     connection.send_result(msg["id"], {
         **result, "settings": cfg, "source": stat, "export_source": export_src, **lists,
     })
+
+
+def compare_pstryk(
+    hours: list[tuple[datetime, float]], cfg: dict[str, Any], now: datetime,
+    prices: dict[datetime, float] | None,
+    upcoming: dict[datetime, float] | None = None,
+) -> dict[str, Any] | None:
+    """Your tariff (zone prices from the invoice) vs Pstryk hourly prices — informational.
+
+    Computed whatever the meter's energy_price setting is, on the SAME hours: those
+    with both a meter reading and a stored Pstryk price (netto, {local naive hour: zł}).
+    Distribution fixed fees are the same in both; the seller's "handlowa" is replaced by
+    the Pstryk monthly fee (settings pstryk_monthly_fee). upcoming — Pstryk netto prices
+    for today / tomorrow (local naive hours) for the hour-by-hour price comparison.
+    """
+    if not prices and not upcoming:
+        return None
+    prices = prices or {}
+    tariff = mt.resolve(cfg.get("tariff", "C13"), cfg.get("prices"))
+    if tariff.get("needs_input"):
+        return {"needs_input": True}
+    incl = cfg.get("pstryk_includes_distribution", True) is not False
+    fixed = mt.monthly_fixed(tariff, mt._num(cfg.get("contract_kw")))
+    fee = mt._num(cfg.get("pstryk_monthly_fee")) or 0.0
+    fixed_tariff = round(sum(fixed.values()), 2)
+    fixed_pstryk = round(fixed_tariff - fixed.get("handlowa", 0.0) + fee, 2)
+
+    def pair(rows: list[tuple[datetime, float]]) -> dict[str, Any]:
+        a = mt.cost_hours(tariff, rows)
+        b = mt.cost_hours(tariff, rows, prices, incl)
+        return {"hours": len(rows), "kwh": a["kwh"], "tariff": a["variable"], "pstryk": b["variable"],
+                "diff": round(b["variable"] - a["variable"], 2)}
+
+    rows = [(t, k) for t, k in hours if t in prices]
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    out: dict[str, Any] = {
+        "includes_distribution": incl,
+        "monthly_fee": fee,
+        "fixed_tariff": fixed_tariff,
+        "fixed_pstryk": fixed_pstryk,
+        "seller_fee": round(fixed.get("handlowa", 0.0), 2),
+        "price_hours": len(prices),
+        "prices_from": min(prices).isoformat(timespec="minutes") if prices else None,
+        "all": pair(rows),
+        "current_month": pair([r for r in rows if r[0] >= month_start]),
+        "first": rows[0][0].isoformat(timespec="minutes") if rows else None,
+        "last": rows[-1][0].isoformat(timespec="minutes") if rows else None,
+    }
+    by_day: dict[str, list[tuple[datetime, float]]] = {}
+    for t, k in rows:
+        if t >= now - timedelta(days=31):
+            by_day.setdefault(t.date().isoformat(), []).append((t, k))
+    out["daily"] = [{"date": d, **pair(by_day[d])} for d in sorted(by_day)]
+
+    # Month estimate: this month's kWh (forecast, else last month's) × the variable
+    # cost per kWh of the compared hours + each side's fixed fees. Needs a day of hours.
+    cur = [(t, k) for t, k in hours if t >= month_start]
+    days_in_month = monthrange(now.year, now.month)[1]
+    if len(cur) >= 72:
+        month_kwh = sum(k for _, k in cur) * days_in_month * 24 / len(cur)
+    else:
+        prev_start = (month_start - timedelta(days=1)).replace(day=1)
+        month_kwh = sum(k for t, k in hours if prev_start <= t < month_start) or None
+    a = out["all"]
+    if month_kwh and a["hours"] >= 24 and a["kwh"] > 0:
+        t_var = a["tariff"] / a["kwh"] * month_kwh
+        p_var = a["pstryk"] / a["kwh"] * month_kwh
+        out["month"] = {
+            "kwh": round(month_kwh, 1),
+            "tariff_variable": round(t_var, 2), "pstryk_variable": round(p_var, 2),
+            "tariff_total": round(t_var + fixed_tariff, 2), "pstryk_total": round(p_var + fixed_pstryk, 2),
+            "diff": round(p_var + fixed_pstryk - t_var - fixed_tariff, 2),
+        }
+
+    # Hour-by-hour all-in netto price (energy + variable distribution + per-kWh fees)
+    if upcoming:
+        series = []
+        for t in sorted(upcoming):
+            if t.date() < now.date():
+                continue
+            zone = mt.zone_at(tariff["id"], t)
+            e, d = mt.variable_price(tariff, zone)
+            p = upcoming[t] + (0.0 if incl else d)
+            series.append({"t": t.isoformat(timespec="minutes"), "zone": zone,
+                           "tariff": round(e + d, 4), "pstryk": round(p, 4)})
+        out["hourly"] = series
+    return out
 
 
 async def _pstryk_netto_prices(hass: HomeAssistant, start: datetime, end: datetime) -> dict[datetime, float]:
