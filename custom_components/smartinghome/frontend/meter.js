@@ -87,6 +87,7 @@ class SmartingHomeMeterPanel extends HTMLElement {
       this._renderBody();
     }
     this._timer = setInterval(() => this._load(), SUMMARY_REFRESH_MS);
+    this._pmTimer = setInterval(() => this._loadPstrykMeter(), 2 * 60 * 1000);
     this._vis = () => { if (!document.hidden && this._hass) this._load(); };
     document.addEventListener("visibilitychange", this._vis);
     if (window.ResizeObserver && !this._ro) {
@@ -103,6 +104,7 @@ class SmartingHomeMeterPanel extends HTMLElement {
   }
   disconnectedCallback() {
     clearInterval(this._timer);
+    clearInterval(this._pmTimer);
     document.removeEventListener("visibilitychange", this._vis);
     if (this._ro) { this._ro.disconnect(); this._ro = null; }
   }
@@ -116,6 +118,7 @@ class SmartingHomeMeterPanel extends HTMLElement {
         this._catalog = await this._hass.callWS({ type: "smartinghome/meter/tariffs" });
       }
       this._data = await this._hass.callWS({ type: "smartinghome/meter/summary" });
+      if (this._data && this._data.pstryk_meter) this._pstrykMeter = this._data.pstryk_meter;
       this._error = "";
     } catch (e) {
       this._error = (e && (e.message || e.code)) || String(e);
@@ -124,6 +127,22 @@ class SmartingHomeMeterPanel extends HTMLElement {
     }
     if (this._view === "settings" && this._draft) return; // don't wipe unsaved edits
     this._renderBody();
+  }
+
+  // Pstryk meter (API): live power every 2 min between the 10-min summaries
+  async _loadPstrykMeter(refresh = false) {
+    if (!this._hass || !(this._settings.pstryk_meter || refresh)) return;
+    try {
+      this._pstrykMeter = await this._hass.callWS({ type: "smartinghome/pstryk/meter", refresh });
+    } catch (e) { this._pstrykMeter = null; }
+    this._updateLive();
+    const el = this.shadowRoot && this.shadowRoot.querySelector("#pstryk-meter");
+    if (el && this._view === "overview" && this._pstrykMeter) el.outerHTML = this._pstrykMeterCard(this._pstrykMeter);
+  }
+
+  _hm(iso) {
+    const d = new Date(iso);
+    return isNaN(d) ? "" : d.toLocaleString("pl-PL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
   }
 
   get _settings() { return (this._data && this._data.settings) || {}; }
@@ -423,6 +442,7 @@ class SmartingHomeMeterPanel extends HTMLElement {
     return `${banners.join("")}${kpis}
       <div class="grid cols">
         ${this._pstrykCompareCard(d.pstryk_compare)}
+        ${this._pstrykMeter && (s.pstryk_meter || (this._pstrykMeter.stored_hours || 0) > 0) ? this._pstrykMeterCard(this._pstrykMeter) : ""}
         ${this._costCard(cm, "Koszt w tym miesiącu", costHidden)}
         ${this._baseloadCard(bl, alertW)}
         <div class="card wide"><h3>Zużycie dzień po dniu <small>ostatnie 31 dni · strefy taryfy</small></h3><div class="chart" data-chart="daily"></div></div>
@@ -443,6 +463,44 @@ class SmartingHomeMeterPanel extends HTMLElement {
       </div>`;
   }
 
+  // ── Pstryk meter over the Pstryk API (pstryk_meter.py) ─────────────────
+  _pstrykMeterCard(m) {
+    const ERR = {
+      auth: "Pstryk odrzucił klucz API. Wpisz aktualny klucz w integracji Pstryk.pl (Pstryk ma jeden aktywny klucz na konto — nowy klucz unieważnia poprzedni).",
+      no_integration: "Brak integracji Pstryk.pl z kluczem API — z niej panel bierze klucz.",
+    };
+    let err = "";
+    if (m.error) {
+      err = ERR[m.error] || (String(m.error).startsWith("rate_limited")
+        ? `Pstryk ograniczył liczbę zapytań — kolejna próba za ${Math.round(Number(String(m.error).split(":")[1] || 900) / 60)} min.`
+        : `Ostatnie pobranie nie powiodło się: ${m.error}`);
+    }
+    const status = !m.enabled ? `<span class="muted">wyłączony</span>`
+      : m.offline ? `<b class="up">brak danych od ${esc(this._hm(m.last_data))}</b>`
+        : m.last_data ? `<b class="down">przesyła dane</b> <span class="muted">· ostatni odczyt ${esc(this._hm(m.last_data))}</span>` : `<span class="muted">czekamy na pierwszy odczyt</span>`;
+    const block = (p, title) => {
+      if (!p || !p.hours) return "";
+      const labels = m.cost_labels || {};
+      const parts = Object.entries(p.cost || {}).filter(([k]) => labels[k] && k !== "vat").map(([k, v]) =>
+        `<div class="row"><span class="k muted">${esc(labels[k])}</span><span class="v muted">${this._zl(v)}</span></div>`).join("");
+      return `<div class="rows" style="margin-top:8px">
+        <div class="row"><span class="k"><b>${esc(title)}</b> <span class="muted">· ${p.hours} h</span></span><span class="v">${this._num(p.kwh, 1)} kWh</span></div>
+        ${p.net !== null && p.net !== undefined ? `${parts}
+        <div class="row total"><span class="k" style="color:#e0e6ed">Koszt według Pstryk</span><span class="v">${this._showGross && p.gross !== null ? this._zl(p.gross / 1.23) : this._zl(p.net)}</span></div>` : `<div class="hint">Pstryk nie podaje jeszcze kosztu tych godzin — zwykle do startu umowy sprzedaży.</div>`}
+      </div>`;
+    };
+    return `<div class="card" id="pstryk-meter"><h3>Miernik Pstryk <small>przez API Pstryk · tylko odczyt</small></h3>
+      ${err ? `<div class="banner warn" style="margin:0 0 8px">${esc(err)}</div>` : ""}
+      <div class="rows">
+        <div class="row"><span class="k">Stan</span><span class="v">${status}</span></div>
+        <div class="row"><span class="k">Moc</span><span class="v">${m.power_w !== null && m.power_w !== undefined ? `${this._num(m.power_w, 0)} W <span class="muted">(${esc(this._hm(m.power_at))})</span>` : "—"}</span></div>
+      </div>
+      ${block(m.today, "Dziś")}${block(m.current_month, "Ten miesiąc")}${block(m.previous_month, "Poprzedni miesiąc")}
+      <div class="hint">Dane godzinowe co 20 min, moc co 5 min. Zużycie trafia do statystyki <b>${esc(m.statistic_id || "smartinghome:pstryk_consumption")}</b>
+        (panel Energia HA). Brak odczytu przez 3 h → powiadomienie; według umowy po 30 dobach bez danych w roku Pstryk rozlicza po cenie stałej.</div>
+    </div>`;
+  }
+
   // ── your tariff vs Pstryk (informational, meter_ws.compare_pstryk) ──────
   _pstrykCompareCard(c) {
     if (!c) return "";
@@ -456,7 +514,7 @@ class SmartingHomeMeterPanel extends HTMLElement {
     const day = (iso) => (iso || "").slice(0, 10).split("-").reverse().join(".");
     const head = a.hours
       ? `<div class="rows">
-          <div class="row"><span class="k">Porównane godziny</span><span class="v">${a.hours} h · ${this._num(a.kwh, 1)} kWh · ${esc(day(c.first))}–${esc(day(c.last))}</span></div>
+          <div class="row"><span class="k">Porównane godziny${c.meter_hours ? ` <span class="muted">(${c.meter_hours} h z Miernika Pstryk, reszta z eLicznika)</span>` : ""}</span><span class="v">${a.hours} h · ${this._num(a.kwh, 1)} kWh · ${esc(day(c.first))}–${esc(day(c.last))}</span></div>
           <div class="row"><span class="k">Twoja taryfa (energia + dystrybucja zmienna)</span><span class="v">${this._zl(a.tariff)}</span></div>
           <div class="row"><span class="k">Pstryk w tych samych godzinach</span><span class="v">${this._zl(a.pstryk)}</span></div>
           <div class="row total"><span class="k" style="color:#e0e6ed">Różnica (Pstryk − taryfa)</span><span class="v ${cls(a.diff)}">${sign(a.diff)}${pct(a.tariff, a.pstryk)}</span></div>
@@ -826,6 +884,13 @@ class SmartingHomeMeterPanel extends HTMLElement {
         if (noteEl) noteEl.textContent = `${s.power_entity || "moc faz"} — brak wartości`;
       }
     }
+    const pm = this._pstrykMeter;
+    if (valEl && !(s.power_entity || this._hasPhases()) && pm && pm.power_w !== null && pm.power_w !== undefined) {
+      const w = pm.power_w;
+      valEl.innerHTML = Math.abs(w) >= 1000 ? `${this._num(w / 1000, 2)}<small>kW</small>` : `${this._num(w, 0)}<small>W</small>`;
+      valEl.className = `val ${w < 0 ? "down" : ""}`;
+      if (noteEl) noteEl.textContent = `Miernik Pstryk · średnia z minuty ${pm.power_at ? this._hm(pm.power_at) : ""}`;
+    }
     const pfEl = root.querySelector("#pf-val");
     if (pfEl && s.pf_entity) {
       const v = this._pfVal(s.pf_entity);
@@ -974,7 +1039,11 @@ class SmartingHomeMeterPanel extends HTMLElement {
                 <option value="tariff"${s.energy_price !== "pstryk" ? " selected" : ""}>z taryfy (ceny w strefach poniżej)</option>
                 <option value="pstryk"${s.energy_price === "pstryk" ? " selected" : ""}>Pstryk (dynamiczna) — cena co godzinę</option>
               </select></label>
-            <label class="f">Opłata miesięczna Pstryk <span class="h">zł netto — do porównania z taryfą (zastępuje opłatę handlową)</span>
+            <label class="f" style="grid-column:1/-1"><span><input type="checkbox" name="pstryk_meter" style="width:auto"${s.pstryk_meter ? " checked" : ""}>
+              Odczytuj Miernik Pstryk przez API</span>
+              <span class="h">Zużycie godzinowe, moc na żywo i koszt liczony przez Pstryk, klucz z integracji Pstryk.pl. Włącz tylko w HA obiektu,
+              w którym Pstryk zamontował miernik — inna instalacja z tym samym kluczem czytałaby ten sam licznik.</span></label>
+                        <label class="f">Opłata miesięczna Pstryk <span class="h">zł netto — do porównania z taryfą (zastępuje opłatę handlową)</span>
               <input type="number" step="0.01" min="0" name="pstryk_monthly_fee" value="${esc(s.pstryk_monthly_fee ?? "")}"></label>
             <label class="f" style="grid-column:1/-1"><span><input type="checkbox" name="pstryk_includes_distribution" style="width:auto"${s.pstryk_includes_distribution !== false ? " checked" : ""}>
               Cena Pstryk zawiera dystrybucję</span>
@@ -1082,6 +1151,7 @@ class SmartingHomeMeterPanel extends HTMLElement {
       s.contract_kw = num(f.elements.contract_kw.value);
       s.baseload_alert_w = num(f.elements.baseload_alert_w.value);
       if (f.elements.pstryk_monthly_fee) s.pstryk_monthly_fee = num(f.elements.pstryk_monthly_fee.value);
+      if (f.elements.pstryk_meter) s.pstryk_meter = !!f.elements.pstryk_meter.checked;
       const prices = { energy: {}, dist: {}, fixed: {} };
       f.querySelectorAll("input[data-part]").forEach((i) => {
         if (i.value === "") return;
@@ -1142,6 +1212,7 @@ class SmartingHomeMeterPanel extends HTMLElement {
       btn.textContent = "Zapisywanie…";
       try {
         await this._hass.callWS({ type: "smartinghome/settings/update", settings: { meter: s } });
+        if (s.pstryk_meter) this._loadPstrykMeter(true);
         this._draft = null;
         this._detect = null;
         this._vrepTs = 0;

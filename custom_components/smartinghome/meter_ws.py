@@ -47,6 +47,9 @@ DEFAULT_METER_SETTINGS: dict[str, Any] = {
     # Pstryk's own monthly fee (netto zł) — replaces the seller's "handlowa" in the
     # tariff-vs-Pstryk comparison; None/0 when the contract has none
     "pstryk_monthly_fee": None,
+    # Read the Pstryk meter over the Pstryk API (pstryk_meter.py) — only on the HA of
+    # the site whose meter Pstryk installed
+    "pstryk_meter": False,
 }
 MAX_HOURLY_KWH = 500.0  # guards counter resets / gaps
 
@@ -57,6 +60,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_meter_sources)
     websocket_api.async_register_command(hass, ws_meter_summary)
     websocket_api.async_register_command(hass, ws_meter_detect)
+    websocket_api.async_register_command(hass, ws_pstryk_meter)
     from .pstryk_ha import async_register as _register_pstryk
     _register_pstryk(hass)
 
@@ -436,7 +440,17 @@ async def ws_meter_summary(hass: HomeAssistant, connection, msg: dict[str, Any])
         # compared hours trail; today / tomorrow prices come straight from the sensor)
         today = now_naive.replace(hour=0, minute=0, second=0, microsecond=0)
         upcoming = {t: p for t, p in (energy_price or {}).items() if t >= today}
-        result["pstryk_compare"] = compare_pstryk(cost_hours, cfg, now_naive, energy_price, upcoming)
+        # Hours eLicznik has not sent yet come from the Pstryk meter (when it is read)
+        cmp_hours = cost_hours
+        pm = _pstryk_meter(hass)
+        if pm is not None and cfg.get("pstryk_meter") and pm.hours:
+            last = max((t for t, _ in cost_hours), default=None)
+            extra = [(t, k) for t, k in pm.local_hours() if last is None or t > last]
+            if extra:
+                cmp_hours = [*cost_hours, *extra]
+        result["pstryk_compare"] = compare_pstryk(cmp_hours, cfg, now_naive, energy_price, upcoming)
+        if result["pstryk_compare"] is not None and cmp_hours is not cost_hours:
+            result["pstryk_compare"]["meter_hours"] = len(cmp_hours) - len(cost_hours)
         if result["pstryk_compare"] is not None:
             result["pstryk_compare"]["entity"] = pstryk_buy
     result["cost_basis"] = "balanced" if balanced else "import"
@@ -485,9 +499,35 @@ async def ws_meter_summary(hass: HomeAssistant, connection, msg: dict[str, Any])
                           for r in short.get(eid, [])]
         result["phases_today"] = md.day_extremes(rows)
 
+    pm = _pstryk_meter(hass)
+    if pm is not None and (cfg.get("pstryk_meter") or pm.hours):
+        result["pstryk_meter"] = pm.status()
+
     connection.send_result(msg["id"], {
         **result, "settings": cfg, "source": stat, "export_source": export_src, **lists,
     })
+
+
+def _pstryk_meter(hass: HomeAssistant):
+    from .pstryk_meter import get_meter
+
+    return get_meter(hass)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smartinghome/pstryk/meter",
+    vol.Optional("refresh", default=False): bool,
+})
+@websocket_api.async_response
+async def ws_pstryk_meter(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Pstryk meter status (live power, last reading, Pstryk's cost); refresh = poll now."""
+    pm = _pstryk_meter(hass)
+    if pm is None:
+        connection.send_result(msg["id"], {"enabled": False, "running": False})
+        return
+    if msg.get("refresh"):
+        await pm.async_refresh()
+    connection.send_result(msg["id"], {**pm.status(), "running": True})
 
 
 def compare_pstryk(
