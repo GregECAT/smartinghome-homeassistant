@@ -50,9 +50,19 @@ def test_surplus_expires_with_30_percent_refund():
     r = pd.settle(flows, first_month="2025-04", current_month="2026-06",
                   projection=pd.project(flows, "2026-06"))
     assert r["lost_total"] > 0 and r["refund_total"] > 0
-    # refund never above 30 % of a month's deposit
-    assert r["refund_total"] <= 0.3 * 100 * 2 + 0.01
+    # refund never above 30 % of the energy's value, i.e. of the deposit before × 1.23
+    assert r["refund_total"] <= 0.3 * 100 / 1.23 * 2 + 0.01
     assert r["export_value_factor"] < 1.0
+
+
+def test_refund_cap_is_30_percent_of_energy_value_not_of_deposit():
+    # 123 zł of deposit = 100 zł of energy at RCE → refund at most 30 zł, not 36.90
+    assert round(pd.refund_cap(123.0), 2) == 30.0
+    flows = {"2025-01": {"deposit": 123.0, "energy_charge": 0.0}}
+    flows.update({f"2025-{m:02d}": {"deposit": 0.0, "energy_charge": 0.0} for m in range(2, 13)})
+    flows.update({f"2026-{m:02d}": {"deposit": 0.0, "energy_charge": 0.0} for m in range(1, 4)})
+    r = pd.settle(flows, first_month="2025-01", current_month="2026-03")
+    assert r["refund_total"] == 30.0 and r["lost_total"] == 93.0
 
 
 def test_opening_balance_used_first():
