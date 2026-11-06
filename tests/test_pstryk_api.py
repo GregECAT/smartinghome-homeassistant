@@ -128,3 +128,16 @@ def test_hour_gross_and_cost_rows_with_fallback():
     fn = lambda k, r: pa.hour_gross(r) if pa.hour_gross(r) is not None else r["i"] * 2.0  # noqa: E731
     rows = pa.statistic_rows(stored, fn, None)
     assert abs(rows[0][1] - 0.6785) < 1e-4 and abs(rows[1][2] - (0.6785 + 1.0)) < 1e-3
+
+
+def test_breakeven_threshold_matches_equal_cost():
+    h = datetime(2026, 11, 5, 10, tzinfo=UTC)
+    # 2 h × 1 kWh: exchange 1.0 zł/kWh, Pstryk adders 0.30 zł/kWh → Pstryk 1.30/kWh; tariff 1.20/kWh
+    cost = {"energy_cost_net": 1.0, "service_cost_net": 0.11, "var_dist_cost_net": 0.185, "excise": 0.005}
+    stored = {}
+    pa.merge_hours(stored, pa.parse_frames({"frames": [_frame(h + timedelta(hours=i), imp=1.0, cost=cost) for i in range(2)]}), NOW)
+    be = pa.breakeven(stored, h, h + timedelta(hours=2), lambda k, r: r["i"] * 1.2)
+    assert be["hours"] == 2 and abs(be["market_avg"] - 1.0) < 1e-9
+    assert abs(be["pstryk_avg"] - 1.3) < 1e-9 and abs(be["threshold"] - 0.9) < 1e-9  # 1.0 + (1.2 − 1.3)
+    assert abs(be["margin"] + 0.1) < 1e-9 and be["daily"][0]["hours"] == 2
+    assert pa.breakeven({}, h, h, lambda k, r: 0) is None

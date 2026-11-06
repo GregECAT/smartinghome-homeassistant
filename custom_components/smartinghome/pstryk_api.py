@@ -226,6 +226,49 @@ def period(stored: Mapping[int, Mapping[str, Any]], start: datetime, end: dateti
     }
 
 
+def breakeven(stored: Mapping[int, Mapping[str, Any]], start: datetime, end: datetime,
+              tariff_net: Any, tz: Any = timezone.utc) -> dict[str, Any] | None:
+    """Market price at which Pstryk costs the same as a fixed tariff — same hours, netto.
+
+    Uses hours in [start, end) with a reading and Pstryk's cost (energy_cost_net = the
+    exchange-price part). tariff_net(key, row) → the tariff's netto cost of that hour
+    (energy + variable distribution + per-kWh fees). Pstryk's netto = NET_PARTS + excise.
+    market_avg — consumption-weighted exchange price paid; threshold — the weighted
+    average exchange price at which both would cost the same with this hourly shape:
+    market_avg + (tariff − Pstryk) / kWh. Below the threshold Pstryk is cheaper.
+    Fixed fees are not included (meter_ws adds the monthly fee difference).
+    """
+    a, b = int(start.timestamp()) // 3600, int(end.timestamp()) // 3600
+    days: dict[str, list[float]] = {}
+    tot = [0.0, 0.0, 0.0, 0.0]  # kWh, market, pstryk, tariff
+    hours = 0
+    for key in sorted(stored):
+        row = stored[key]
+        c = row.get("c") or {}
+        kwh = float(row.get("i") or 0.0)
+        if not a <= key < b or row.get("live") or kwh <= 0 or "energy_cost_net" not in c:
+            continue
+        pst = sum(c.get(k, 0.0) for k in NET_PARTS) + sum(c.get(k, 0.0) for k in EXCISE_KEYS)
+        vals = (kwh, float(c["energy_cost_net"]), pst, float(tariff_net(key, row)))
+        day = hour_dt(key).astimezone(tz).date().isoformat()
+        d = days.setdefault(day, [0.0, 0.0, 0.0, 0.0, 0])
+        for i, v in enumerate(vals):
+            tot[i] += v
+            d[i] += v
+        d[4] += 1
+        hours += 1
+    if not hours or tot[0] <= 0:
+        return None
+
+    def summary(k: float, m: float, p: float, t: float) -> dict[str, float]:
+        return {"kwh": round(k, 3), "market_avg": round(m / k, 4), "pstryk_avg": round(p / k, 4),
+                "tariff_avg": round(t / k, 4), "threshold": round((m + t - p) / k, 4),
+                "margin": round((t - p) / k, 4)}
+
+    return {"hours": hours, **summary(*tot),
+            "daily": [{"date": day, "hours": int(v[4]), **summary(*v[:4])} for day, v in sorted(days.items())]}
+
+
 def local_hours(stored: Mapping[int, Mapping[str, Any]], tz: Any) -> list[tuple[datetime, float]]:
     """(local naive hour start, import kWh) — the meter panel's hour keys."""
     return [(hour_dt(k).astimezone(tz).replace(tzinfo=None), float(stored[k].get("i") or 0.0))

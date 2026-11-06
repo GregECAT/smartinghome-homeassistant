@@ -554,12 +554,44 @@ class SmartingHomeMeterPanel extends HTMLElement {
         <div>${head}${month}</div>
         <div>${table}</div>
       </div>
+      ${this._breakevenHtml(c.breakeven)}
       ${hourly.length ? `<div style="margin-top:12px"><div class="muted" style="font-size:12px;margin-bottom:4px">Cena 1 kWh godzina po godzinie (energia + dystrybucja zmienna, ${this._showGross ? "brutto" : "netto"})</div>
         <div class="chart" data-chart="pstryk"></div>
         <div class="rows">${days.map((dd, i) => sumDay((h) => localDay(h) === dd, i === 0 && dd === today ? "Dziś" : esc(day(dd)))).join("")}</div></div>` : ""}
       <div class="hint">Pstryk: ceny z integracji Pstryk.pl (${esc(c.entity || "")}), brutto ÷ 1,23${c.includes_distribution ? ", traktowane jako cena z dystrybucją" : " + dystrybucja zmienna z taryfy"}.
         Opłaty stałe OSD (moc umowna, mocowa, abonament${this._data.fixed_breakdown && this._data.fixed_breakdown.bierna ? ", energia bierna" : ""}) są takie same po obu stronach;
         opłata handlowa sprzedawcy (${this._zl(c.seller_fee)}) zastąpiona: ${fee}. Ceny Pstryk zapisywane od ${esc((c.prices_from || "—").replace("T", " "))} — wcześniejszych godzin nie da się porównać.</div>
+    </div>`;
+  }
+
+  // Break-even exchange price (meter_ws: pstryk_api.breakeven + monthly fee difference)
+  _breakevenHtml(b) {
+    if (!b) return "";
+    const n2 = (v) => `${this._num(v, 2)} zł/kWh`;
+    const thr = b.threshold_total ?? b.threshold;
+    const margin = thr - b.market_avg; // > 0: Pstryk cheaper
+    const ok = margin > 0;
+    const scaleMax = Math.max(thr, b.market_avg) * 1.35 || 1;
+    const pos = (v) => `${Math.max(0, Math.min(100, v / scaleMax * 100)).toFixed(1)}%`;
+    const day = (iso) => (iso || "").slice(0, 10).split("-").reverse().slice(0, 2).join(".");
+    const daily = (b.daily || []).slice(-7).map((d) => {
+      const m = (d.threshold + (b.fixed_adj || 0)) - d.market_avg;
+      return `<tr><td>${esc(day(d.date))}${d.hours < 23 ? ` <span class="muted">(${d.hours} h)</span>` : ""}</td><td>${this._num(d.market_avg, 2)}</td><td>${this._num(d.threshold + (b.fixed_adj || 0), 2)}</td>
+        <td class="${m > 0 ? "down" : "up"}">${m > 0 ? "Pstryk taniej" : "Tauron taniej"}</td></tr>`;
+    }).join("");
+    return `<div class="banner ${ok ? "" : "warn"}" style="margin-top:12px">
+      <b>Próg opłacalności Pstryk</b> <span class="muted">· ten miesiąc, ${b.hours} h z Miernika Pstryk, ${this._num(b.kwh, 1)} kWh · netto</span>
+      <div style="margin:8px 0 4px">Pstryk wychodzi taniej, gdy średnia cena energii z giełdy, ważona Twoim zużyciem, jest poniżej <b>${n2(thr)}</b>.
+        W tym miesiącu płacisz średnio <b>${n2(b.market_avg)}</b> — <b class="${ok ? "down" : "up"}">${ok ? `Pstryk taniej o ${n2(margin)}` : `Pstryk drożej o ${n2(-margin)}`}</b>.</div>
+      <div style="position:relative;height:14px;border-radius:7px;background:linear-gradient(90deg,rgba(46,204,113,.35) 0%,rgba(46,204,113,.35) ${pos(thr)},rgba(231,76,60,.35) ${pos(thr)},rgba(231,76,60,.35) 100%);margin:10px 0 18px">
+        <span title="próg" style="position:absolute;left:${pos(thr)};top:-4px;width:2px;height:22px;background:#e0e6ed"></span>
+        <span title="cena giełdowa w tym miesiącu" style="position:absolute;left:calc(${pos(b.market_avg)} - 6px);top:1px;width:12px;height:12px;border-radius:50%;background:#00d4ff;border:2px solid #0b1221"></span>
+        <span class="muted" style="position:absolute;left:${pos(thr)};top:18px;font-size:10px;transform:translateX(-50%)">próg ${this._num(thr, 2)}</span>
+      </div>
+      ${daily ? `<table class="prices"><thead><tr><th>Dzień</th><th>Cena giełdowa (ważona)</th><th>Próg</th><th>Wynik</th></tr></thead><tbody>${daily}</tbody></table>` : ""}
+      <div class="hint">Cena giełdowa = część „energia” kosztu z API Pstryk podzielona przez kWh. Próg = przy jakiej średniej cenie giełdowej koszt Pstryk
+        (energia, opłaty za kWh, akcyza, dystrybucja zmienna) zrówna się z kosztem tych samych kWh w taryfie z faktury${b.fixed_adj ? ` — z różnicą opłat miesięcznych (${b.fixed_adj > 0 ? "+" : ""}${this._num(b.fixed_adj, 3)} zł/kWh)` : ""}.
+        Zależy od rozkładu zużycia w ciągu doby: przesunięcie poboru na tanie godziny podnosi próg.</div>
     </div>`;
   }
 

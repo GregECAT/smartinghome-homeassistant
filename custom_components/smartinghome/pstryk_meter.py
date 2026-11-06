@@ -367,6 +367,26 @@ class PstrykMeter:
             "cost_labels": pa.COST_LABELS,
         }
 
+    def breakeven(self, cfg: dict[str, Any]) -> dict[str, Any] | None:
+        """This month's break-even exchange price vs the meter tariff (pstryk_api.breakeven)."""
+        from homeassistant.util import dt as dt_util
+
+        from . import meter_tariffs as mt
+
+        tariff = mt.resolve(cfg.get("tariff", "C13"), cfg.get("prices"))
+        if tariff.get("needs_input") or not self.hours:
+            return None
+        tz = dt_util.now().tzinfo
+
+        def tariff_net(key: int, row: dict[str, Any]) -> float:
+            when = pa.hour_dt(key).astimezone(tz).replace(tzinfo=None)
+            e, d = mt.variable_price(tariff, mt.zone_at(tariff["id"], when))
+            return (row.get("i") or 0.0) * (e + d)
+
+        now = datetime.now(timezone.utc)
+        month_start = dt_util.as_local(now).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        return pa.breakeven(self.hours, month_start, now + timedelta(hours=1), tariff_net, tz)
+
     def local_hours(self) -> list[tuple[datetime, float]]:
         from homeassistant.util import dt as dt_util
 

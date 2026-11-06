@@ -451,6 +451,17 @@ async def ws_meter_summary(hass: HomeAssistant, connection, msg: dict[str, Any])
         result["pstryk_compare"] = compare_pstryk(cmp_hours, cfg, now_naive, energy_price, upcoming)
         if result["pstryk_compare"] is not None and cmp_hours is not cost_hours:
             result["pstryk_compare"]["meter_hours"] = len(cmp_hours) - len(cost_hours)
+        cmp = result["pstryk_compare"]
+        if cmp is not None and not cmp.get("needs_input") and pm is not None and cfg.get("pstryk_meter"):
+            be = pm.breakeven(cfg)
+            if be:
+                # The monthly fees differ too (seller's trade fee vs the Pstryk fee): spread
+                # over this month's kWh they move the threshold
+                month_kwh = (cmp.get("month") or {}).get("kwh") or result["current_month"].get("forecast_kwh")
+                fee_diff = (cmp.get("seller_fee") or 0.0) - (cmp.get("monthly_fee") or 0.0)
+                be["fixed_adj"] = round(fee_diff / month_kwh, 4) if month_kwh else 0.0
+                be["threshold_total"] = round(be["threshold"] + be["fixed_adj"], 4)
+                cmp["breakeven"] = be
         if result["pstryk_compare"] is not None:
             result["pstryk_compare"]["entity"] = pstryk_buy
     result["cost_basis"] = "balanced" if balanced else "import"
