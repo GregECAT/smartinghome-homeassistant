@@ -187,5 +187,102 @@
         }
       }
     }
+  },
+  "entity": {
+    "sensor": {
+      "heating_boiler_state": {
+        "name": "Stan kotła",
+        "state": {
+          "unknown": "Brak danych",
+          "cold": "Zimny",
+          "ignition": "Rozpalanie",
+          "burning": "Praca",
+          "burnout": "Wygasanie",
+          "idle": "Wygasły (ciepły)",
+          "overheat": "Przegrzanie"
+        }
+      },
+      "heating_buffer_energy": {
+        "name": "Energia w buforze"
+      },
+      "heating_buffer_charge": {
+        "name": "Naładowanie bufora"
+      },
+      "heating_buffer_space": {
+        "name": "Miejsce w buforze"
+      },
+      "heating_wood_max": {
+        "name": "Maks. załadunek drewna"
+      },
+      "heating_buffer_mean": {
+        "name": "Średnia temperatura bufora"
+      },
+      "heating_dhw_energy": {
+        "name": "Energia w zasobniku CWU"
+      },
+      "heating_buffer_runtime": {
+        "name": "Bufor wystarczy na"
+      },
+      "heating_last_fire_energy": {
+        "name": "Energia ostatniego palenia"
+      },
+      "heating_supply_target": {
+        "name": "Zadana temperatura zasilania"
+      },
+      "heating_valve_position": {
+        "name": "Położenie zaworu mieszającego"
+      },
+      "heating_empty_at": {
+        "name": "Bufor wystarczy do"
+      },
+      "heating_light_at": {
+        "name": "Rozpal w kotle do"
+      },
+      "heating_wood_recommended": {
+        "name": "Zalecany załadunek drewna"
+      },
+      "heating_demand_24h": {
+        "name": "Zapotrzebowanie na ciepło 24 h"
+      },
+      "heating_building_ua": {
+        "name": "Straty ciepła budynku"
+      }
+    },
+    "binary_sensor": {
+      "heating_firing": {
+        "name": "Kocioł pracuje"
+      },
+      "heating_overheat": {
+        "name": "Przegrzanie kotła"
+      },
+      "heating_probe_fault": {
+        "name": "Awaria czujnika temperatury"
+      },
+      "heating_buffer_full": {
+        "name": "Bufor pełny"
+      },
+      "heating_dump": {
+        "name": "Zrzut ciepła do domu"
+      }
+    },
+    "select": {
+      "heating_mode": {
+        "name": "Tryb ogrzewania",
+        "state": {
+          "off": "Wyłączone — tylko pomiary",
+          "manual": "Ręczne",
+          "auto": "Automatyczne",
+          "summer": "Lato (bez grzania domu)"
+        }
+      }
+    },
+    "number": {
+      "heating_room_target": {
+        "name": "Temperatura pokojowa zadana"
+      },
+      "heating_curve_shift": {
+        "name": "Przesunięcie krzywej grzewczej"
+      }
+    }
   }
 }

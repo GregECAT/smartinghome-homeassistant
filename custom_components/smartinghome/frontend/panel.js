@@ -190,7 +190,7 @@ class SmartingHomePanel extends HTMLElement {
     if (tab === 'hems') { this._updateHEMSArbitrage(); this._loadForecastStatus(); }
     if (tab === 'tariff') { this._loadDeposit(); }
     if (tab === 'battery') { this._loadFullLog(); }
-    if (tab === 'settings') { this._loadAutoUpdate(); this._loadGrid(); this._loadShowcase(); }
+    if (tab === 'settings') { this._loadAutoUpdate(); this._loadGrid(); this._loadShowcase(); this._loadHeating(); }
     if (tab === 'energy') { this._loadVoltageReport(); }
     if (tab === 'history') { this._updateHistoryTab(); }
     if (tab === 'autopilot') { this._updateAutopilot(); }
@@ -830,6 +830,64 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Automatic updates (Ustawienia) ───────────────── */
+  /* ── Heating module switch (panel "Ogrzewanie": frontend/heating.js) ── */
+  async _loadHeating() {
+    const el = this.shadowRoot.getElementById('heat-content');
+    if (!el || !this._hass?.connection) return;
+    try {
+      this._heat = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/heating/status' });
+    } catch (e) {
+      this._heat = { error: e.message || e.code || String(e) };
+    }
+    this._renderHeating();
+  }
+
+  _renderHeating() {
+    const el = this.shadowRoot.getElementById('heat-content');
+    if (!el) return;
+    const r = this._heat || {};
+    if (r.error) { el.innerHTML = `<span style="color:#e74c3c">${this._esc(r.error)}</span>`; return; }
+    const admin = this._hass?.user?.is_admin !== false;
+    const btn = (label, on, color) => admin
+      ? `<button onclick="this.getRootNode().host._setHeating(${on})" style="background:${color};color:#0f172a;border:none;border-radius:6px;padding:6px 14px;font-weight:700;cursor:pointer">${label}</button>`
+      : '<span style="color:#64748b">(zmienia administrator)</span>';
+    if (!r.enabled) {
+      el.innerHTML = `
+        <div style="margin-bottom:8px">Kocioł zgazowujący, bufor i CWU na czujnikach Shelly (DS18B20): energia w buforze,
+          ile drewna bufor jeszcze przyjmie, stan kotła i sesje palenia, alarmy przegrzania i awarii czujników,
+          sterowanie zaworem mieszającym i pompą CO według krzywej pogodowej, skrypt bezpieczeństwa na Shelly.
+          PRO: korekta pokojowa i doradca palenia (do której rozpalić, ile drewna załadować).
+          Po włączeniu moduł tylko mierzy — sterowanie włączasz osobno w panelu Ogrzewanie.</div>
+        ${btn('🔥 Włącz moduł', true, '#f7b731')}`;
+      return;
+    }
+    const st = r.status || {}, b = st.boiler || {}, buf = st.buffer || {};
+    const alarms = (st.alarms || []).length;
+    el.innerHTML = `
+      <div style="margin-bottom:8px">Moduł włączony — panel <b>Ogrzewanie</b> jest w menu bocznym Home Assistant.
+        ${b.label ? `Kocioł: <b>${this._esc(b.label)}</b>${b.temp_c != null ? ` (${b.temp_c} °C)` : ''}` : ''}
+        ${buf.charge_pct != null ? ` · bufor ${buf.charge_pct}% (${buf.energy_kwh} kWh)` : ''}
+        ${alarms ? ` · <b style="color:#e74c3c">alarmy: ${alarms}</b>` : ''}</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <button onclick="this.getRootNode().host._openHeating()" style="background:#00d4ff;color:#0f172a;border:none;border-radius:6px;padding:6px 14px;font-weight:700;cursor:pointer">Otwórz panel Ogrzewanie</button>
+        ${btn('Wyłącz moduł', false, '#94a3b8')}
+      </div>`;
+  }
+
+  async _setHeating(on) {
+    try {
+      this._heat = await this._hass.connection.sendMessagePromise({ type: 'smartinghome/heating/save', config: { enabled: !!on } });
+    } catch (e) {
+      this._heat = { error: e.message || e.code || String(e) };
+    }
+    this._renderHeating();
+  }
+
+  _openHeating() {
+    history.pushState(null, '', '/smartinghome-ogrzewanie');
+    window.dispatchEvent(new CustomEvent('location-changed', { detail: { replace: false } }));
+  }
+
   async _loadAutoUpdate() {
     const el = this.shadowRoot.getElementById('aupd-content');
     if (!el || !this._hass?.connection) return;
@@ -4617,11 +4675,13 @@ class SmartingHomePanel extends HTMLElement {
         <span>Okno: <input type="number" id="w4b-start" min="0" max="23" value="${cfg.window[0]}" style="${inputStyle}"/> – <input type="number" id="w4b-end" min="1" max="24" value="${cfg.window[1]}" style="${inputStyle}"/> h</span>
         <span>Bateria ≥ <input type="number" id="w4b-soc" min="80" max="100" value="${cfg.min_soc}" style="${inputStyle}"/> %</span>
         <span>Eksport ≥ <input type="number" id="w4b-exp" min="300" step="100" value="${cfg.min_export_w}" style="${inputStyle}"/> W</span>
+        <span title="Temperatura z czujnika zasobnika CWU w module „Ogrzewanie”. Puste = bez limitu.">CWU maks. <input type="number" id="w4b-water" min="30" max="90" placeholder="—" value="${cfg.water_max_c ? cfg.water_max_c : ''}" style="${inputStyle}"/> °C</span>
         <button onclick="this.getRootNode().host._saveBoilerSurplus()" style="background:#2ecc71;color:#0f172a;border:none;border-radius:6px;padding:6px 14px;font-weight:700;cursor:pointer">💾 Zapisz</button>
         <span id="w4b-saved" style="font-size:11px; color:#2ecc71"></span>
       </div>
       <div>Bojler (<code>${cfg.entity}</code>): <b style="color:${state === 'on' ? '#f7b731' : state === 'off' ? '#94a3b8' : '#e67e22'}">${state === 'on' ? '🔥 włączony (grzeje, gdy termostat bojlera tego wymaga)' : state === 'off' ? 'wyłączony' : state}</b>
-        ${st.owned ? ' · włączony przez autopilota' : ''}${st.reason ? ` · ostatnio: ${st.reason}` : ''}</div>`;
+        ${st.owned ? ' · włączony przez autopilota' : ''}${st.reason ? ` · ostatnio: ${st.reason}` : ''}</div>
+      <div style="font-size:10px; color:#64748b; margin-top:6px">CWU maks.: temperatura z czujnika zasobnika CWU w module „Ogrzewanie”${st.water_hot ? ' — <b style="color:#f7b731">woda już nagrzana, bojler nie będzie włączany</b>' : ''}. Puste pole = bez limitu.</div>`;
   }
 
   async _saveBoilerSurplus() {
@@ -4633,6 +4693,7 @@ class SmartingHomePanel extends HTMLElement {
       window: [parseInt(v('w4b-start').value) || 10, parseInt(v('w4b-end').value) || 16],
       min_soc: parseFloat(v('w4b-soc').value) || 98,
       min_export_w: parseInt(v('w4b-exp').value) || 3000,
+      water_max_c: (() => { const w = parseFloat(v('w4b-water').value); return Number.isFinite(w) && w > 0 ? Math.min(Math.max(w, 30), 90) : null; })(),
     };
     await this._savePanelSettings({ boiler_surplus: cfg });
     const el = v('w4b-saved'); if (el) el.textContent = '✓ Zapisano — autopilot użyje w ciągu 5 min';
@@ -15005,6 +15066,12 @@ class SmartingHomePanel extends HTMLElement {
               </style>
             </div>
 
+            <!-- 🔥 Solid-fuel boiler + heat buffer (heating_ha.py, own sidebar panel) -->
+            <div class="card" style="grid-column: 1 / -1">
+              <div class="card-title">🔥 Ogrzewanie — kocioł na drewno i bufor ciepła</div>
+              <div id="heat-content" style="font-size:12px; color:#94a3b8">Ładowanie…</div>
+            </div>
+
             <!-- 🔄 Auto update -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">🔄 Automatyczne aktualizacje <span data-pro-lock="auto_update"></span></div>
@@ -15026,7 +15093,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.80.0</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.81.0</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/hems/" target="_blank" style="color:#00d4ff">smartinghome.pl/hems</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>

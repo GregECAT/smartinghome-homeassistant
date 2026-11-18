@@ -692,6 +692,10 @@ FEATURE_INVOICE_COMPARE: Final = "invoice_compare"  # "Faktura vs Home Assistant
 FEATURE_AUTO_UPDATE: Final = "auto_update"  # nightly updates with backup
 FEATURE_MULTI_TURBINE: Final = "multi_turbine"  # wind: more than one turbine
 FEATURE_PV_STRINGS_10: Final = "pv_strings_10"  # up to 10 PV strings (FREE: 4)
+# Solid-fuel boiler (heating_*.py): FREE measures, warns (all safety alarms — never gated),
+# controls the valve by the weather curve and by hand; PRO adds:
+FEATURE_HEATING_AUTO: Final = "heating_auto"  # room correction of the curve (reference room sensor)
+FEATURE_HEATING_ADVISOR: Final = "heating_advisor"  # building model, "light by", how much wood, season report
 
 PRO_FEATURES: Final = frozenset({
     FEATURE_AI,
@@ -704,6 +708,8 @@ PRO_FEATURES: Final = frozenset({
     FEATURE_AUTO_UPDATE,
     FEATURE_MULTI_TURBINE,
     FEATURE_PV_STRINGS_10,
+    FEATURE_HEATING_AUTO,
+    FEATURE_HEATING_ADVISOR,
 })
 FREE_FEATURES: Final = frozenset()  # gated features enabled without a license: none
 

@@ -120,7 +120,8 @@ def test_feature_matrix(tier, legacy, expected):
 
 def test_legacy_never_grants_ai_weather_or_more_strings():
     mgr = _mgr(LicenseTier.FREE, free_legacy=True)
-    for feature in (const.FEATURE_AI, const.FEATURE_WEATHER_STRATEGY, const.FEATURE_PV_STRINGS_10):
+    for feature in (const.FEATURE_AI, const.FEATURE_WEATHER_STRATEGY, const.FEATURE_PV_STRINGS_10,
+                    const.FEATURE_HEATING_AUTO, const.FEATURE_HEATING_ADVISOR):
         assert not mgr.has_feature(feature)
     for feature in (const.FEATURE_ADVANCED_ALERTS, const.FEATURE_DAILY_REPORT, const.FEATURE_AUTO_UPDATE,
                     const.FEATURE_VOLTAGE_REPORT_EXPORT, const.FEATURE_INVOICE_COMPARE,

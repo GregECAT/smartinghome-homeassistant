@@ -15,10 +15,16 @@ draws from the grid, the battery drops below full or the window ends — it is
 switched off again. High grid voltage while exporting (inverter close to its
 disconnect limit) also turns it on.
 
+With a hot-water probe (the "Ogrzewanie" module's hot-water tank sensor) and
+water_max_c set, a tank already at that temperature is not switched on — its
+own thermostat would not take the energy anyway — and a boiler we switched on
+is switched off once the water gets there.
+
 This module is the only automatic owner of the boiler: the voltage / surplus
 cascades and the peak load guard leave it alone, and the old time schedule
 automation stays disabled. Settings "boiler_surplus":
-  {enabled, entity, window: [start_h, end_h], min_soc, min_export_w}
+  {enabled, entity, window: [start_h, end_h], min_soc, min_export_w, water_max_c}
+  water_max_c: hot-water limit in °C (None / 0 = off; needs the heating module's probe)
 """
 from __future__ import annotations
 
@@ -32,6 +38,7 @@ DEFAULTS: dict[str, Any] = {
     "window": [10, 16],     # local hours [start, end)
     "min_soc": 98.0,        # battery treated as full
     "min_export_w": 3000,   # export needed to switch on (boiler ≈ 3.8 kW)
+    "water_max_c": None,    # hot-water limit °C from the heating module's probe (None / 0 = off)
 }
 ON_HOLD_S = 180            # conditions must hold this long to switch on
 OFF_HOLD_S = 120           # … or off
@@ -50,6 +57,7 @@ class BoilerInput:
     max_voltage: float
     state: str               # "on" / "off" / "unavailable"
     export_cap_w: float | None = None  # export limit set by the voltage guard (None = none)
+    water_c: float | None = None       # hot-water tank temperature (None = unknown)
 
 
 @dataclass
@@ -60,10 +68,11 @@ class BoilerSurplus:
     _last_switch: float = float("-inf")
     reason: str = ""
     mode: str = ""                 # "surplus" (battery full) / "voltage" (taking what the grid won't)
+    water_hot: bool = False        # last decide(): the tank is already at water_max_c
 
     def can_switch_on(self, now: float | None = None) -> bool:
         now = time.time() if now is None else now
-        return self.enabled and now - self._last_switch >= MIN_OFF_S
+        return self.enabled and not self.water_hot and now - self._last_switch >= MIN_OFF_S
 
     def force_on(self, reason: str, now: float | None = None) -> None:
         """The voltage guard switches the boiler on instead of curtailing PV."""
@@ -84,6 +93,13 @@ class BoilerSurplus:
     def enabled(self) -> bool:
         return bool(self.cfg.get("enabled")) and bool(self.entity)
 
+    def _water_limit(self) -> float | None:
+        try:
+            limit = float(self.cfg.get("water_max_c") or 0)
+        except (TypeError, ValueError):
+            return None
+        return limit if limit > 0 else None
+
     def _held(self, key: str, active: bool, hold: float, now: float) -> bool:
         if not active:
             self._since.pop(key, None)
@@ -99,6 +115,8 @@ class BoilerSurplus:
         in_window = int(start) <= inp.hour < int(end)
         min_soc = float(self.cfg.get("min_soc", 98))
         min_export = float(self.cfg.get("min_export_w", 3000))
+        limit = self._water_limit()
+        self.water_hot = limit is not None and inp.water_c is not None and inp.water_c >= limit
 
         if inp.state == "off":
             self.owned = False  # off (by us or by hand) — nothing of ours is running
@@ -109,7 +127,9 @@ class BoilerSurplus:
             # is being curtailed — the real surplus is bigger than the export shows
             capped = (inp.export_cap_w is not None and inp.export_w >= inp.export_cap_w - 300
                       and inp.battery_w >= -800)
-            if (self._held("on", surplus or high_v or capped, ON_HOLD_S if surplus else 60, now)
+            # a tank already at its limit wouldn't take the energy — its thermostat is open
+            wanted = (surplus or high_v or capped) and not self.water_hot
+            if (self._held("on", wanted, ON_HOLD_S if surplus else 60, now)
                     and now - self._last_switch >= MIN_OFF_S):
                 self._last_switch, self.owned = now, True
                 self.mode = "surplus" if surplus else "voltage"
@@ -139,11 +159,14 @@ class BoilerSurplus:
             gone = (
                 not in_window and inp.max_voltage < VOLTAGE_ON
             ) or inp.import_w > 300 or inp.battery_w > 800 or inp.soc < min_soc - 6
+        gone = gone or self.water_hot
         if self._held("off", gone, OFF_HOLD_S, now) and now - self._last_switch >= MIN_ON_S:
             self._last_switch, self.owned = now, False
             self._since.clear()
             mode, self.mode = self.mode, ""
-            if inp.import_w > 300:
+            if self.water_hot:
+                why = f"woda w zasobniku ma już {inp.water_c:.0f} °C"
+            elif inp.import_w > 300:
                 why = f"dom bierze {inp.import_w:.0f} W z sieci"
             elif inp.battery_w > 800:
                 why = f"bateria oddaje {inp.battery_w:.0f} W — nadwyżka PV się skończyła"
@@ -158,4 +181,5 @@ class BoilerSurplus:
         return None
 
     def status(self) -> dict[str, Any]:
-        return {**self.cfg, "owned": self.owned, "mode": self.mode, "reason": self.reason}
+        return {**self.cfg, "owned": self.owned, "mode": self.mode, "reason": self.reason,
+                "water_hot": self.water_hot}

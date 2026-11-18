@@ -1490,6 +1490,16 @@ class StrategyController:
         if not boiler.enabled:
             return []
         st = self.hass.states.get(boiler.entity)
+        water_c: float | None = None
+        try:
+            # hot-water tank probe of the "Ogrzewanie" module (water_max_c limit)
+            from .heating_ha import get_manager
+
+            heating = get_manager(self.hass)
+            if heating is not None and heating.enabled:
+                water_c = (heating.snapshot.get("dhw") or {}).get("temp_c")
+        except Exception:  # noqa: BLE001 — the limit is optional; never block W4b
+            water_c = None
         owned_before = boiler.owned
         snapshot = (boiler.owned, boiler.mode, boiler._last_switch, boiler.reason)
         decision = boiler.decide(BoilerInput(
@@ -1501,6 +1511,7 @@ class StrategyController:
             max_voltage=max_voltage,
             state=st.state if st else "unavailable",
             export_cap_w=self._em.export_cap_w,
+            water_c=water_c,
         ))
         msgs: list[str] = []
         if decision:

@@ -190,6 +190,7 @@ async def ws_ai_test(hass: HomeAssistant, connection, msg: dict[str, Any]) -> No
 # change view/analysis settings).
 ADMIN_SETTINGS = frozenset({
     "arbitrage_params", "auto_update", "boiler_surplus", "dynamic_price_source", "energy_provider", "grid",
+    "heating",
     "notification_config", "open_meteo_api_key", "peak_load_control",
     "peak_sell_soc_percent", "pv_string_config", "sensor_map_overrides",
     "showcase", "tariff_plan", "telemetry", "voltage_guard",

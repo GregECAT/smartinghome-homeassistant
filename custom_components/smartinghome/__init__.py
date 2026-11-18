@@ -340,6 +340,14 @@ async def async_setup_entry(
     except Exception as err:  # noqa: BLE001
         _LOGGER.warning("Pstryk meter not started: %s", err)
 
+    # Solid-fuel boiler + heat buffer (opt-in — settings "heating"; own loop, own sidebar panel)
+    try:
+        from .heating_ha import async_start as _start_heating
+
+        await _start_heating(hass)
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.warning("Heating module not started: %s", err)
+
     # Installation showcase (opt-in, off by default — settings "showcase")
     if "_showcase" not in hass.data[DOMAIN]:
         from .showcase_service import ShowcasePublisher
@@ -513,7 +521,11 @@ async def async_unload_entry(
             await cron.async_stop()
         await async_unload_services(hass)
         hass.data[DOMAIN].pop(entry.entry_id)
+        from .heating_ha import async_stop as _stop_heating, unregister_entry as _heating_unregister
+
+        _heating_unregister(hass, entry.entry_id)
         if not any(k for k in hass.data[DOMAIN] if not str(k).startswith("_")):
+            await _stop_heating(hass)
             updater = hass.data[DOMAIN].pop("_auto_updater", None)
             if updater:
                 updater.stop()

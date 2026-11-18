@@ -334,6 +334,63 @@
       },
       "license_tier": {
         "name": "License Tier"
+      },
+      "heating_boiler_state": {
+        "name": "Boiler state",
+        "state": {
+          "unknown": "No data",
+          "cold": "Cold",
+          "ignition": "Ignition",
+          "burning": "Burning",
+          "burnout": "Burning out",
+          "idle": "Out (warm)",
+          "overheat": "Overheat"
+        }
+      },
+      "heating_buffer_energy": {
+        "name": "Buffer energy"
+      },
+      "heating_buffer_charge": {
+        "name": "Buffer charge"
+      },
+      "heating_buffer_space": {
+        "name": "Buffer room left"
+      },
+      "heating_wood_max": {
+        "name": "Max wood load"
+      },
+      "heating_buffer_mean": {
+        "name": "Buffer mean temperature"
+      },
+      "heating_dhw_energy": {
+        "name": "Hot water tank energy"
+      },
+      "heating_buffer_runtime": {
+        "name": "Buffer runtime"
+      },
+      "heating_last_fire_energy": {
+        "name": "Last fire energy"
+      },
+      "heating_supply_target": {
+        "name": "Supply target temperature"
+      },
+      "heating_valve_position": {
+        "name": "Mixing valve position"
+      },
+      "heating_empty_at": {
+        "name": "Buffer runs out at"
+      },
+      "heating_light_at": {
+        "name": "Light the boiler by"
+      },
+      "heating_wood_recommended": {
+        "name": "Recommended wood load"
+      },
+      "heating_demand_24h": {
+        "name": "Heat demand next 24 h"
+      },
+      "heating_building_ua": {
+        "name": "Building heat loss"
       }
     },
     "binary_sensor": {
@@ -345,6 +402,21 @@
       },
       "license_valid": {
         "name": "License Valid"
+      },
+      "heating_firing": {
+        "name": "Boiler firing"
+      },
+      "heating_overheat": {
+        "name": "Boiler overheat"
+      },
+      "heating_probe_fault": {
+        "name": "Temperature probe fault"
+      },
+      "heating_buffer_full": {
+        "name": "Buffer full"
+      },
+      "heating_dump": {
+        "name": "Heat dump"
       }
     },
     "switch": {
@@ -370,6 +442,15 @@
       },
       "hems_strategy": {
         "name": "HEMS Strategy"
+      },
+      "heating_mode": {
+        "name": "Heating mode",
+        "state": {
+          "off": "Off — measuring only",
+          "manual": "Manual",
+          "auto": "Automatic",
+          "summer": "Summer (no space heating)"
+        }
       }
     },
     "number": {
@@ -381,6 +462,12 @@
       },
       "hems_export_limit": {
         "name": "Export Limit"
+      },
+      "heating_room_target": {
+        "name": "Room target temperature"
+      },
+      "heating_curve_shift": {
+        "name": "Heating curve shift"
       }
     }
   }

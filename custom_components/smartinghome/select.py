@@ -68,6 +68,11 @@ async def async_setup_entry(
         )
 
     async_add_entities(entities)
+
+    # Solid-fuel boiler entities (device "Ogrzewanie") — added once the module is switched on
+    from .heating_ha import register_platform as _heating_platform
+
+    _heating_platform(hass, entry, "select", async_add_entities)
     _LOGGER.info("Added %d Smarting HOME selects", len(entities))
 
 

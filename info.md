@@ -17,6 +17,7 @@ Smarting HOME turns your Home Assistant into an **autonomous energy command cent
 - 📊 **46 Entities**: 33 sensors, 3 binary sensors, 5 switches, 2 selects, 3 numbers
 - 💰 **Arbitrage planner (FREE)**: autopilot strategy *Max Zysk* — charge cheap, use / sell expensive
 - 🛡️ **Safety**: Voltage cascade (252/253/254V), SOC emergency protection
+- 🔥 **Wood boiler room (optional)**: buffer energy, *how much wood the buffer can take*, fire sessions, safety alarms, weather-curve mixing valve and CH pump on Shelly, local safety script; PRO: *light the boiler by* and *load X kg*
 - 🎨 **Dashboards**: 3 pre-configured Lovelace dashboards
 - 📋 **Blueprints**: 7 ready-to-use automation templates
 - 🌍 **Bilingual**: English + Polish (EN/PL)
@@ -33,7 +34,7 @@ Smarting HOME turns your Home Assistant into an **autonomous energy command cent
 Commercial integration with a free tier — [buy PRO at smartinghome.pl](https://smartinghome.pl/buy)
 
 - **FREE**: all sensors, autopilot incl. the *Max Zysk* arbitrage planner, schedules, manual control, voltage guard, basic alerts (HA notification + one phone), prosumer deposit
-- **PRO (Paid)**: AI (advisor, reports, ROI analysis, *AI Pełna Autonomia*), weather-adaptive strategy, calibrated PV forecast, SMS / e-mail alerts and several phones, daily report, voltage complaint export, *Faktura vs Home Assistant*, automatic updates, up to 10 PV strings and several wind turbines
+- **PRO (Paid)**: AI (advisor, reports, ROI analysis, *AI Pełna Autonomia*), weather-adaptive strategy, calibrated PV forecast, SMS / e-mail alerts and several phones, daily report, voltage complaint export, *Faktura vs Home Assistant*, automatic updates, up to 10 PV strings and several wind turbines, heating room correction and the firing advisor
 - **ENTERPRISE (Paid)**: PRO for up to 5 installations, priority support
 - Installed before v1.71? You keep the features you already had for free (everything above except AI and the weather-adaptive strategy).
 
