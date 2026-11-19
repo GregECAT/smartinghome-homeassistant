@@ -159,7 +159,6 @@ class AutopilotEngine:
         """
         now = datetime.now()
         month = now.month
-        weekday = now.weekday()
         current_hour = now.hour
 
         # Extract current data
