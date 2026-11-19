@@ -129,8 +129,13 @@ class SmartingHomeHeatingPanel extends HTMLElement {
   }
 
   // ── full screen (wall tablet / TV): the panel alone, the screen kept awake ──
+  // Inside Home Assistant the panel sits in nested shadow roots: document.fullscreenElement is the
+  // outermost shadow host there, never this element. The panel's own root node reports it right;
+  // and whatever is full screen while this panel is on screen, the button has to leave it.
   _isFs() {
-    return (document.fullscreenElement || document.webkitFullscreenElement) === this;
+    const root = this.getRootNode && this.getRootNode();
+    const own = root && (root.fullscreenElement || root.webkitFullscreenElement);
+    return own === this || !!(document.fullscreenElement || document.webkitFullscreenElement);
   }
 
   _toggleFullscreen() {
