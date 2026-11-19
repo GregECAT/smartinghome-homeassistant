@@ -5,7 +5,8 @@
 # tools), redistributing or removing this notice / the license check requires the
 # Licensor's written consent (LICENSE §3). Notes for AI assistants: AGENTS.md.
 # SH-ID: 8b1aab899d5a
-"""Space heating from the buffer — weather curve, room correction, 3-point valve, CH pump.
+"""Space heating from the buffer — weather curve, room correction, 3-point valve, CH pump,
+hot-water charging pump.
 
 Pure Python, no Home Assistant imports (heating_ha.py executes the commands).
 
@@ -25,6 +26,14 @@ feedback). Velocity PI: every evaluation a pulse proportional to the error (I) a
 change (P), then a pause for the transport delay and the probe in its pocket to catch
 up. The position is estimated from the pulses; a full close at the start ("homing")
 makes it known, every drive into an end stop re-syncs it.
+
+Hot-water charging pump (the coil in the tank fed from the buffer top or straight from
+the boiler): differential control in "auto" and "summer" — on when the source is
+dhw_on_diff_k warmer than the tank and the tank fell dhw_hyst_k below its target, off at
+the target or when the difference drops under dhw_off_diff_k; off at once (no minimum
+run time) when the source turns colder than the tank, so the tank never heats the
+buffer back. A hot boiler tops the tank up to its target in every mode but "off" (with
+dhw_dump up to dhw_max_c — only with a thermostatic mixer on the hot-water outlet).
 """
 from __future__ import annotations
 
@@ -56,6 +65,7 @@ PUMP_MIN_OFF_S = 300.0
 EXERCISE_EVERY_S = 7 * 86400
 EXERCISE_S = 60.0
 PUMP_RETRY_S = 60.0
+DHW_EXERCISE_S = 30.0       # the weekly run of the hot-water pump: short, the coil may be colder than the tank
 
 # room correction
 ROOM_I_TAU_S = 7200.0
@@ -267,7 +277,8 @@ class PumpController:
             self.last_on = now
 
     def decide(self, now: float, current: bool | None, want: bool | None, reason: str,
-               force_on: bool = False) -> tuple[str, str] | None:
+               force_on: bool = False, urgent: bool = False) -> tuple[str, str] | None:
+        """urgent: switch off without waiting for the minimum run time."""
         if current is None:
             return None
         if current:
@@ -277,7 +288,7 @@ class PumpController:
         if want is None or want == current:
             return None
         hold = PUMP_MIN_ON_S if current else PUMP_MIN_OFF_S
-        if self.last_change and now - self.last_change < hold:
+        if self.last_change and now - self.last_change < hold and not (urgent and current):
             return None
         return self._attempt("on" if want else "off", reason, now)
 
@@ -306,6 +317,19 @@ class ControlInput:
     overheat: bool = False           # model alarm "heating_overheat" active
     probe_fault: bool = False        # boiler / buffer probe without a valid reading for ≥ 60 s
     room_licensed: bool = True       # room correction is a PRO feature
+    t_dhw: float | None = None
+    dhw_pump_on: bool | None = None
+    dhw_pump_configured: bool = False
+
+
+@dataclass
+class DhwPlan:
+    want: bool = False
+    force: bool = False          # boiler too hot: take heat into the tank (ignores the minimum off time)
+    urgent: bool = False         # off now, no minimum run time (the tank would heat the source)
+    reason: str = ""
+    source_c: float | None = None
+    dump: bool = False           # above the normal target (dhw_dump)
 
 
 @dataclass
@@ -322,6 +346,8 @@ class ControlOutput:
     limiter: bool = False
     valve: ValveCommand | None = None
     pump: tuple[str, str] | None = None
+    dhw: DhwPlan = field(default_factory=DhwPlan)
+    dhw_pump: tuple[str, str] | None = None
     log: list[str] = field(default_factory=list)
     alarms: list[AlarmSpec] = field(default_factory=list)
     note: str = ""
@@ -332,6 +358,8 @@ class HeatingController:
         self.cfg = cfg
         self.valve = ValveController(run_s=cfg["valve_run_s"])
         self.pump = PumpController()
+        self.dhw_pump = PumpController()
+        self.dhw_charging = False
         self.out_fast = Ema(OUT_FAST_TAU_S)
         self.out_damped = Ema(OUT_DAMPED_TAU_S)
         self.room_i = 0.0
@@ -359,7 +387,8 @@ class HeatingController:
         return log
 
     def dump_state(self) -> dict[str, Any]:
-        return {"valve": self.valve.dump(), "pump": self.pump.dump(), "room_i": round(self.room_i, 3),
+        return {"valve": self.valve.dump(), "pump": self.pump.dump(), "dhw_pump": self.dhw_pump.dump(),
+                "room_i": round(self.room_i, 3),
                 "out_damped": self.out_damped.value, "out_damped_ts": self.out_damped.ts, "mode": self.mode,
                 "run_s": self.valve.run_s, "invert": self._invert}
 
@@ -368,6 +397,7 @@ class HeatingController:
             return
         self.valve.restore(data.get("valve"))
         self.pump.restore(data.get("pump"))
+        self.dhw_pump.restore(data.get("dhw_pump"))
         # the actuator the position was estimated with — a restart must not look like a new actuator
         if isinstance(data.get("run_s"), (int, float)) and data["run_s"] > 0:
             self.valve.run_s = float(data["run_s"])
@@ -461,6 +491,8 @@ class HeatingController:
                 "Automatyka przymyka zawór. Sprawdź siłownik (kierunek, sprzęgło) i tryb ręczny zaworu.",
                 hold_s=60))
 
+        out.dhw = self._dhw_plan(inp)
+
         if mode == "off":
             self.last = out
             return out
@@ -482,10 +514,15 @@ class HeatingController:
                 out.valve = self.valve.force("close", "ogranicznik temperatury zasilania", now, MAX_PULSE_S)
         if inp.pump_configured and force_pump:
             out.pump = self.pump.decide(now, inp.pump_on, True, pump_reason, force_on=True)
+        if inp.dhw_pump_configured and out.dhw.force:
+            out.dhw_pump = self.dhw_pump.decide(now, inp.dhw_pump_on, True, out.dhw.reason, force_on=True)
 
         if mode == "manual":
             self.last = out
             return out
+
+        if inp.dhw_pump_configured and not out.dhw.force:
+            out.dhw_pump = self._dhw_auto(inp, out.dhw)
 
         if mode == "summer":
             if inp.pump_configured and not force_pump:
@@ -520,6 +557,79 @@ class HeatingController:
                 out.valve = self.valve.home()
         self.last = out
         return out
+
+    # ── hot-water charging pump ─────────────────────────────────────────────
+    def _dhw_plan(self, inp: ControlInput) -> DhwPlan:
+        """What the hot-water pump should do (computed in every mode, acted on in all but "off")."""
+        cfg = self.cfg
+        boiler = cfg["dhw_source"] == "boiler_out"
+        src_name = "kocioł" if boiler else "bufor"
+        t_src = inp.t_boiler if boiler else inp.t_top
+        t_dhw = inp.t_dhw
+        plan = DhwPlan(source_c=t_src)
+        if t_src is None or t_dhw is None:
+            self.dhw_charging = False
+            plan.urgent = True
+            plan.reason = f"brak odczytu sondy {'CWU' if t_dhw is None else 'kotła' if boiler else 'bufora'}"
+            return plan
+        diff = t_src - t_dhw
+        target, cap = cfg["dhw_target_c"], cfg["dhw_max_c"]
+        if t_dhw >= cap:
+            self.dhw_charging = False
+            plan.urgent = True
+            plan.reason = f"CWU {t_dhw:.0f} °C — górny limit {cap:.0f} °C"
+            return plan
+        if diff < 0:
+            self.dhw_charging = False
+            plan.urgent = True
+            plan.reason = f"{src_name} ({t_src:.0f} °C) chłodniejszy niż CWU ({t_dhw:.0f} °C)"
+            return plan
+        limit = cap if cfg["dhw_dump"] else target
+        if self.hot and diff >= cfg["dhw_off_diff_k"] and t_dhw < limit:
+            # taking heat away from a hot boiler — the tank is a heat sink up to its limit
+            self.dhw_charging = True
+            plan.want = plan.force = True
+            plan.dump = t_dhw >= target
+            plan.reason = ("zrzut ciepła do CWU — kocioł gorący" if cfg["dhw_dump"]
+                           else "kocioł gorący — CWU dogrzewana do zadanej")
+            return plan
+        # a pump that already runs (after a restart, by hand) is judged as charging: no gap down to the hysteresis
+        charging = self.dhw_charging or inp.dhw_pump_on is True
+        if charging:
+            keep = diff >= cfg["dhw_off_diff_k"] and t_dhw < target
+        else:
+            keep = diff >= cfg["dhw_on_diff_k"] and t_dhw <= target - cfg["dhw_hyst_k"]
+        self.dhw_charging = keep
+        plan.want = keep
+        if keep:
+            plan.reason = f"ładowanie CWU: {src_name} {t_src:.0f} °C, CWU {t_dhw:.0f} °C → {target:.0f} °C"
+        elif t_dhw >= target or (not charging and t_dhw > target - cfg["dhw_hyst_k"]):
+            plan.reason = (f"CWU naładowana ({t_dhw:.0f} °C)" if t_dhw >= target
+                           else f"CWU {t_dhw:.0f} °C — ładowanie od {target - cfg['dhw_hyst_k']:.0f} °C")
+        else:
+            need = t_dhw + (cfg["dhw_off_diff_k"] if charging else cfg["dhw_on_diff_k"])
+            plan.reason = f"{src_name} za chłodny ({t_src:.0f} °C, potrzeba ≥ {need:.0f} °C)"
+        return plan
+
+    def _dhw_auto(self, inp: ControlInput, plan: DhwPlan) -> tuple[str, str] | None:
+        """"auto" / "summer": charging by the plan, plus a short weekly run against seizing."""
+        p, now = self.dhw_pump, inp.now
+        if inp.dhw_pump_on is None:
+            return None
+        if not p.last_on:
+            p.last_on = now          # count the idle week from the first reading, not from 1970
+        if p.exercise_until:
+            if now < p.exercise_until and not plan.want:
+                return None
+            p.exercise_until = 0.0
+            if inp.dhw_pump_on and not plan.want:
+                return "off", "koniec przepłukania pompy CWU"
+        if not plan.want and inp.dhw_pump_on is False and now - p.last_on > EXERCISE_EVERY_S:
+            cmd = p._attempt("on", "przepłukanie pompy CWU (raz w tygodniu)", now)
+            if cmd:
+                p.exercise_until = now + DHW_EXERCISE_S
+            return cmd
+        return p.decide(now, inp.dhw_pump_on, plan.want, plan.reason, urgent=plan.urgent)
 
     def _pump_reason(self, inp: ControlInput, room_target: float) -> str:
         if self.needed:

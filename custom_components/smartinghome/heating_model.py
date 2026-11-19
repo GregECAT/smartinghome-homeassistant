@@ -23,7 +23,8 @@ Wi-Fi or HA. Here we measure, explain and warn:
   burning → burn-out → idle, overheat), each fire is a session,
 - how long the buffer lasts at the current draw,
 - alarms with hold times and hysteresis (overheat, buffer full, heat not reaching
-  the buffer, probe fault, CH pump not drawing power, room cold with an empty buffer).
+  the buffer, probe fault, CH / hot-water pump not drawing power, room cold with an
+  empty buffer).
 
 Settings "heating" (settings.json): see DEFAULTS / normalize().
 """
@@ -65,6 +66,8 @@ ROLES: dict[str, tuple[str, str]] = {
     "outdoor": ("Temperatura zewnętrzna", "temperature"),
     "pump_switch": ("Pompa CO — przekaźnik", "switch"),
     "pump_power": ("Pompa CO — moc", "power"),
+    "dhw_pump_switch": ("Pompa CWU — przekaźnik", "switch"),
+    "dhw_pump_power": ("Pompa CWU — moc", "power"),
 }
 TEMP_ROLES = tuple(r for r, (_, kind) in ROLES.items() if kind == "temperature")
 PROBE_ROLES = ("boiler_out", "buffer_top", "buffer_bottom", "dhw", "heating_supply", "heating_return")
@@ -89,6 +92,11 @@ VALVE_TYPES = {
     "none": "Brak / ręczny zawór",
     "cover": "Siłownik jako roleta (Shelly 2PM w trybie Cover)",
     "switches": "Dwa przekaźniki (otwórz / zamknij)",
+}
+# where the hot-water tank's coil takes its heat from: the probe compared with the tank
+DHW_SOURCES = {
+    "buffer_top": "Z bufora",
+    "boiler_out": "Prosto z kotła",
 }
 
 DEFAULTS: dict[str, Any] = {
@@ -131,6 +139,13 @@ DEFAULTS: dict[str, Any] = {
     "night_setback_k": 0.0,
     "night_from": 22,
     "night_to": 5,
+    # hot-water charging pump (differential: source probe vs the tank)
+    "dhw_source": "buffer_top",
+    "dhw_on_diff_k": 5.0,       # start when the source is this much warmer than the tank …
+    "dhw_off_diff_k": 2.0,      # … stop below this (else the tank heats the source back)
+    "dhw_hyst_k": 5.0,          # recharge once the tank fell this far below dhw_target_c
+    "dhw_dump": False,          # boiler too hot → tank up to dhw_max_c (needs a thermostatic mixer)
+    "dhw_max_c": 80.0,
     # advisor (phase 4)
     "weather_entity": "",
     "light_lead_h": 1.0,        # from lighting to the buffer taking heat
@@ -186,6 +201,11 @@ def _f(value: Any) -> float | None:
 def _num(value: Any, default: float, lo: float, hi: float) -> float:
     v = _f(value)
     return min(max(default if v is None else v, lo), hi)
+
+
+def switch_state(state: Any) -> bool | None:
+    """HA switch state → on / off / unknown (unavailable, no entity)."""
+    return True if state == "on" else False if state == "off" else None
 
 
 # ── configuration ────────────────────────────────────────────────────────────
@@ -246,6 +266,13 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     out["night_setback_k"] = _num(raw.get("night_setback_k"), 0.0, 0.0, 6.0)
     out["night_from"] = int(_num(raw.get("night_from"), 22, 0, 23))
     out["night_to"] = int(_num(raw.get("night_to"), 5, 0, 23))
+    # hot-water charging pump
+    out["dhw_source"] = raw.get("dhw_source") if raw.get("dhw_source") in DHW_SOURCES else "buffer_top"
+    out["dhw_on_diff_k"] = _num(raw.get("dhw_on_diff_k"), 5.0, 2.0, 15.0)
+    out["dhw_off_diff_k"] = _num(raw.get("dhw_off_diff_k"), 2.0, 0.5, out["dhw_on_diff_k"] - 1.0)
+    out["dhw_hyst_k"] = _num(raw.get("dhw_hyst_k"), 5.0, 1.0, 20.0)
+    out["dhw_dump"] = bool(raw.get("dhw_dump", False))
+    out["dhw_max_c"] = _num(raw.get("dhw_max_c"), max(80.0, out["dhw_target_c"]), out["dhw_target_c"], 90.0)
     # advisor
     out["light_lead_h"] = _num(raw.get("light_lead_h"), 1.0, 0.0, 6.0)
     out["burn_hours"] = _num(raw.get("burn_hours"), 4.0, 1.0, 12.0)
@@ -494,6 +521,8 @@ class HeatingModel:
         self.humidity: float | None = None
         self.pump_on: bool | None = None
         self.pump_w: float | None = None
+        self.dhw_pump_on: bool | None = None
+        self.dhw_pump_w: float | None = None
         self.state = "unknown"
         self.state_since: float | None = None
         self.session: dict[str, Any] | None = None
@@ -506,6 +535,7 @@ class HeatingModel:
         self._top_trend = Trend(1200)
         self._buffer_trend = Trend(RUNTIME_WINDOW_S)
         self._pump_low_since: float | None = None
+        self._dhw_pump_low_since: float | None = None
         self._alarms: dict[str, _AlarmTrack] = {}
         self.updated: float | None = None
         self.first_update: float | None = None
@@ -540,9 +570,10 @@ class HeatingModel:
             self.probes[role].update(raw.get(role), now, cfg["offsets"].get(role, 0.0))
         hum = _f(raw.get("room_humidity"))
         self.humidity = hum if hum is not None and 0.0 <= hum <= 100.0 else None
-        sw = raw.get("pump_switch")
-        self.pump_on = None if sw is None else (sw == "on" if sw in ("on", "off") else None)
+        self.pump_on = switch_state(raw.get("pump_switch"))
         self.pump_w = _f(raw.get("pump_power"))
+        self.dhw_pump_on = switch_state(raw.get("dhw_pump_switch"))
+        self.dhw_pump_w = _f(raw.get("dhw_pump_power"))
         self.grid_outage = raw.get("grid_outage") is True
 
         self.buffer = buffer_state(cfg, self.t("buffer_top"), self.t("buffer_bottom"))
@@ -723,15 +754,23 @@ class HeatingModel:
                 "Sprawdź Shelly w kotłowni (zasilanie, Wi-Fi) i przewody sond; wartości −127 °C lub "
                 "stałe 85 °C oznaczają przerwany przewód albo zanik zasilania sondy."))
 
-        if self.pump_on and self.pump_w is not None and self.pump_w < 3.0:
-            self._pump_low_since = self._pump_low_since or now
-            if now - self._pump_low_since >= 120:
-                out.append(AlarmSpec(
-                    "heating_pump_fault", "warning", "Pompa CO nie pobiera prądu",
-                    f"Przekaźnik pompy jest włączony, a moc wynosi {self.pump_w:.0f} W.",
-                    "Sprawdź zasilanie i bezpiecznik pompy oraz przewód za przekaźnikiem."))
-        else:
-            self._pump_low_since = None
+        # a relay on with ~0 W behind it: the pump has no power (fuse, wire, the AUTO–0–HAND switch at 0 / HAND)
+        low = self.pump_on and self.pump_w is not None and self.pump_w < 3.0
+        self._pump_low_since = (self._pump_low_since or now) if low else None
+        if low and now - self._pump_low_since >= 120:
+            out.append(AlarmSpec(
+                "heating_pump_fault", "warning", "Pompa CO nie pobiera prądu",
+                f"Przekaźnik pompy jest włączony, a moc wynosi {self.pump_w:.0f} W.",
+                "Sprawdź zasilanie i bezpiecznik pompy, przewód za przekaźnikiem i położenie "
+                "przełącznika AUTO–0–RĘKA (jeśli jest)."))
+        low = self.dhw_pump_on and self.dhw_pump_w is not None and self.dhw_pump_w < 3.0
+        self._dhw_pump_low_since = (self._dhw_pump_low_since or now) if low else None
+        if low and now - self._dhw_pump_low_since >= 120:
+            out.append(AlarmSpec(
+                "heating_dhw_pump_fault", "warning", "Pompa CWU nie pobiera prądu",
+                f"Przekaźnik pompy CWU jest włączony, a moc wynosi {self.dhw_pump_w:.0f} W.",
+                "Sprawdź zasilanie i bezpiecznik pompy, przewód za przekaźnikiem i położenie "
+                "przełącznika AUTO–0–RĘKA (jeśli jest)."))
 
         room = self.t("room")
         if (room is not None and self.buffer and self.buffer.get("charge_pct") is not None
@@ -812,6 +851,7 @@ class HeatingModel:
             "probes": probes,
             "humidity": self.humidity,
             "pump": {"on": self.pump_on, "power_w": self.pump_w},
+            "dhw_pump": {"on": self.dhw_pump_on, "power_w": self.dhw_pump_w},
             "boiler": {
                 "state": self.state, "label": STATE_LABELS.get(self.state, self.state),
                 "since": self.state_since, "temp_c": probes["boiler_out"]["value"],

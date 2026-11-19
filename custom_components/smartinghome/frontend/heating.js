@@ -46,6 +46,8 @@ const ROLE_HINTS = {
   outdoor: "opcjonalnie — czujnik lub pogoda",
   pump_switch: "opcjonalnie — przekaźnik Shelly 1PM",
   pump_power: "opcjonalnie — moc z Shelly 1PM (wykrywa awarię pompy)",
+  dhw_pump_switch: "opcjonalnie — przekaźnik pompy ładującej CWU (np. Shelly 1PM Mini)",
+  dhw_pump_power: "opcjonalnie — moc pompy CWU (wykrywa awarię pompy)",
 };
 
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -390,8 +392,13 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const lbl = (r) => (v(r) == null ? (p[r] && p[r].status !== "missing" ? "⚠" : "—") : `${num(v(r))}°`);
     const top = v("buffer_top"), bot = v("buffer_bottom");
     const fire = STATE_COLOR[b.state] || "#64748b";
-    const pump = st.pump || {};
+    const pump = st.pump || {}, dpump = st.dhw_pump || {};
     const pumpTxt = pump.on == null ? "" : pump.on ? `pompa CO ON${pump.power_w != null ? ` · ${num(pump.power_w, 0)} W` : ""}` : "pompa CO OFF";
+    const dhwTxt = dpump.on == null ? "" : dpump.on ? "pompa CWU ON" : "pompa CWU OFF";
+    const dhwW = dpump.on && dpump.power_w != null ? `${num(dpump.power_w, 0)} W` : "";
+    const fromBoiler = this._data.config.dhw_source === "boiler_out";
+    const dhwFeed = fromBoiler ? "M90 170 H105 V215 H290" : "M255 150 H275 V200 H290";
+    const dhwFeedT = fromBoiler ? v("boiler_out") : top;
     return `<svg viewBox="0 0 440 230" width="100%" role="img" aria-label="Schemat kotłowni">
       <defs>
         <linearGradient id="gbuf" x1="0" y1="1" x2="0" y2="0">
@@ -428,7 +435,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       <rect x="290" y="178" width="70" height="44" rx="10" fill="${tempColor(v("dhw"))}" opacity="0.8" stroke="#475569"/>
       <text x="325" y="198" text-anchor="middle" style="fill:#0a1628;font-weight:700">CWU</text>
       <text x="325" y="214" text-anchor="middle" style="fill:#0a1628;font-weight:700">${lbl("dhw")}</text>
-      <path d="M255 150 H275 V200 H290" stroke="${tempColor(top)}" stroke-width="2" fill="none" stroke-dasharray="4 3" opacity="0.6"/>
+      <path d="${dhwFeed}" stroke="${tempColor(dhwFeedT)}" stroke-width="${dpump.on ? 4 : 2}" fill="none" ${dpump.on ? "" : 'stroke-dasharray="4 3"'} opacity="${dpump.on ? 1 : 0.6}"/>
+      <text x="400" y="198" text-anchor="middle" style="font-size:10px">${esc(dhwTxt)}</text>
+      <text x="400" y="212" text-anchor="middle" style="font-size:10px">${esc(dhwW)}</text>
       ${v("outdoor") != null ? `<text x="430" y="20" text-anchor="end">na zewnątrz ${lbl("outdoor")}</text>` : ""}
     </svg>`;
   }
@@ -488,7 +497,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const modes = d.modes || {};
     const modeBtns = Object.entries(modes).map(([k, label]) =>
       `<button data-act="mode" data-mode="${k}" class="${c.mode === k ? "on" : ""}" ${admin ? "" : "disabled"} title="${esc(label)}">${esc({ off: "Wyłączone", manual: "Ręczne", auto: "Auto", summer: "Lato" }[k] || label)}</button>`).join("");
-    const v = ctl.valve || {}, pump = ctl.pump || {};
+    const v = ctl.valve || {}, pump = ctl.pump || {}, dpump = ctl.dhw_pump || {};
     const supply = ((st.probes || {}).heating_supply || {}).value;
     let html = `<h3>Sterowanie <small>${esc(ctl.mode_label || "")}</small></h3>
       <div class="seg modes">${modeBtns}</div>`;
@@ -515,18 +524,26 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     } else {
       html += `<div class="hint">Siłownik zaworu nie jest skonfigurowany — zadana temperatura zasilania jest podpowiedzią do ręcznego ustawienia zaworu.</div>`;
     }
+    const pill = (on) => (on == null ? '<span class="pill">brak odczytu</span>' : on ? '<span class="pill on">pracuje</span>' : '<span class="pill">stoi</span>');
     if (pump.configured) {
-      html += `<div style="margin-top:10px; font-size:12px; color:#a0aec0">Pompa CO: ${pump.on == null ? '<span class="pill">brak odczytu</span>' : pump.on ? '<span class="pill on">pracuje</span>' : '<span class="pill">stoi</span>'}</div>`;
+      html += `<div style="margin-top:10px; font-size:12px; color:#a0aec0">Pompa CO: ${pill(pump.on)}</div>`;
     }
-    if (admin && c.mode !== "off" && (v.configured || pump.configured)) {
+    if (dpump.configured) {
+      const auto = c.mode === "auto" || c.mode === "summer";
+      html += `<div style="margin-top:6px; font-size:12px; color:#a0aec0">Pompa CWU: ${pill(dpump.on)}
+        ${dpump.dump ? '<span class="pill hot">zrzut ciepła do CWU</span>' : ""}
+        ${dpump.reason && c.mode !== "off" ? `<span class="muted">· ${auto || dpump.dump ? "" : "w trybie Auto: "}${esc(dpump.reason)}</span>` : ""}</div>`;
+    }
+    if (admin && c.mode !== "off" && (v.configured || pump.configured || dpump.configured)) {
       const manual = c.mode === "manual";
       html += `<div class="btns">
         ${v.configured && manual ? `<button class="btn sm" data-act="cmd" data-cmd="valve_close" data-seconds="5">◀ Zimniej 5 s</button>
           <button class="btn sm" data-act="cmd" data-cmd="valve_open" data-seconds="5">Cieplej 5 s ▶</button>
           <button class="btn sm" data-act="cmd" data-cmd="valve_stop">■ Stop</button>` : ""}
         ${v.configured ? `<button class="btn sm" data-act="cmd" data-cmd="valve_home" title="Dojazd do pełnego zamknięcia (ok. ${num(c.valve_run_s, 0)} s)">Kalibruj zawór</button>` : ""}
-        ${pump.configured && manual ? `<button class="btn sm" data-act="cmd" data-cmd="pump_on">Pompa ON</button><button class="btn sm" data-act="cmd" data-cmd="pump_off">Pompa OFF</button>` : ""}
-      </div>${manual ? "" : '<div class="hint">Przyciski zaworu i pompy działają w trybie „Ręczne”.</div>'}`;
+        ${pump.configured && manual ? `<button class="btn sm" data-act="cmd" data-cmd="pump_on">Pompa CO ON</button><button class="btn sm" data-act="cmd" data-cmd="pump_off">Pompa CO OFF</button>` : ""}
+        ${dpump.configured && manual ? `<button class="btn sm" data-act="cmd" data-cmd="dhw_pump_on">Pompa CWU ON</button><button class="btn sm" data-act="cmd" data-cmd="dhw_pump_off">Pompa CWU OFF</button>` : ""}
+      </div>${manual ? "" : '<div class="hint">Przyciski zaworu i pomp działają w trybie „Ręczne”.</div>'}`;
     }
     return html;
   }
@@ -728,6 +745,19 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         : `<div class="hint">Zrzut ciepła do domu jest wyłączony przy podłogówce (wylewka nie ma własnego zabezpieczenia). Przy przegrzaniu pompa CO i tak zostanie włączona.</div>`}</div>
     </div></div>`;
 
+    const hasDhwPump = !!((c.entities || {}).dhw_pump_switch);
+    html += `<div class="card" style="margin-top:14px"><h3>Pompa ładująca CWU <small>sterowanie różnicowe: pompa pracuje tylko wtedy, gdy źródło jest cieplejsze od wody w zasobniku</small></h3>
+      ${hasDhwPump ? "" : `<div class="hint" style="margin-top:0">Wybierz przekaźnik pompy w sekcji „Czujniki” (Pompa CWU — przekaźnik). Bez niego te ustawienia nic nie przełączają.</div>`}
+      <div class="grid2">
+      <label class="f">Skąd grzana jest CWU${sel("dhw_source", d.dhw_sources || {}, c.dhw_source)}<span class="h">z CWU porównywana jest sonda góry bufora albo wyjścia kotła</span></label>
+      ${field("dhw_on_diff_k", "Start, gdy źródło cieplejsze o (K)", "", c.dhw_on_diff_k, 'min="2" max="15" step="0.5"')}
+      ${field("dhw_off_diff_k", "Stop, gdy różnica spadnie poniżej (K)", "poniżej 0 K pompa staje od razu", c.dhw_off_diff_k, 'min="0.5" max="14" step="0.5"')}
+      ${field("dhw_hyst_k", "Ponowne ładowanie po spadku o (K)", `od zadanej CWU (${num(c.dhw_target_c, 0)} °C, sekcja „Bufor i CWU”)`, c.dhw_hyst_k, 'min="1" max="20" step="0.5"')}
+      ${field("dhw_max_c", "CWU — górny limit (°C)", "nigdy powyżej, także przy zrzucie ciepła", c.dhw_max_c, 'min="40" max="90"')}
+      <div>${chk("dhw_dump", "Zrzut ciepła do CWU przy przegrzaniu kotła (do górnego limitu)", c.dhw_dump,
+        "tylko z termostatycznym zaworem mieszającym na wyjściu ciepłej wody — inaczej grozi poparzenie. Bez tej opcji gorący kocioł dogrzewa CWU tylko do zadanej.")}</div>
+    </div></div>`;
+
     html += `<div class="card" style="margin-top:14px"><h3>Krzywa grzewcza <small>zasilanie = pokój + nachylenie × (pokój − zewnątrz) + przesunięcie</small></h3>
       <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr)); gap:14px">
       <div class="grid2">
@@ -851,7 +881,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     form.addEventListener("change", (e) => {
       if (e.target.name && e.target.name.startsWith("ent_")) this._updateLiveProbes();
       this._collect();
-      if (e.target.name === "valve_type" || e.target.name === "emitters") this._renderBody();   // other fields / defaults
+      if (["valve_type", "emitters", "ent_dhw_pump_switch"].includes(e.target.name)) this._renderBody();   // other fields / defaults
     });
     form.addEventListener("input", () => {
       this._collect();
@@ -871,9 +901,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const nums = ["buffer_l", "buffer_max_c", "buffer_min_c", "buffer_full_c", "dhw_l", "dhw_cold_c", "dhw_target_c",
       "room_target_c", "warn_c", "alarm_c", "efficiency", "wood_kwh_per_kg", "valve_run_s", "curve_slope", "curve_shift",
       "supply_min_c", "supply_max_c", "heating_limit_c", "room_gain", "night_setback_k", "night_from", "night_to",
-      "light_lead_h", "burn_hours", "wood_price_kg"];
-    const checks = ["enabled", "notify", "valve_invert", "safety_dump", "room_correction", "advisor_notify"];
-    const selects = ["profile", "emitters", "mode", "valve_type", "valve_cover", "valve_open_switch", "valve_close_switch", "weather_entity"];
+      "light_lead_h", "burn_hours", "wood_price_kg", "dhw_on_diff_k", "dhw_off_diff_k", "dhw_hyst_k", "dhw_max_c"];
+    const checks = ["enabled", "notify", "valve_invert", "safety_dump", "room_correction", "advisor_notify", "dhw_dump"];
+    const selects = ["profile", "emitters", "mode", "valve_type", "valve_cover", "valve_open_switch", "valve_close_switch", "weather_entity", "dhw_source"];
     for (const el of form.elements) {
       if (!el.name) continue;
       if (checks.includes(el.name)) c[el.name] = el.checked;

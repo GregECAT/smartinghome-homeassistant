@@ -15,8 +15,9 @@ heating_control.py (weather curve, mixing valve, CH pump, modes), heating_adviso
 - its own loop (every 10 s) — independent of the energy strategy controller: an
   error there must not stop the boiler room and the other way round,
 - control: mode "off" never switches anything; "manual" = the panel's buttons; "auto"
-  and "summer" drive the valve and the CH pump. A valve pulse goes to a Shelly cover as
-  Cover.Open/Close with a duration (an HA restart mid-pulse can't leave it running);
+  and "summer" drive the valve, the CH pump and the hot-water charging pump. A valve
+  pulse goes to a Shelly cover as Cover.Open/Close with a duration (an HA restart
+  mid-pulse can't leave it running);
   any other actuator gets HA services and a timed stop,
 - HA is never the boiler's safety: it may only take heat away (heat dump, pump on),
 - entities (device "Ogrzewanie"), added when the module is switched on (no restart),
@@ -296,8 +297,9 @@ class HeatingManager:
             if t_out is None and self._weather_now is not None:
                 t_out, t_out_source = self._weather_now, "pogoda"
             active = {a.id: a for a in self.model.active_alarms()}
-            pump_state = raw.get("pump_switch")
-            pump_on = True if pump_state == "on" else False if pump_state == "off" else None
+            pump_on = self.model.pump_on
+            dhw_pump_on = self.model.dhw_pump_on
+            dhw_pump_configured = bool(cfg["entities"]["dhw_pump_switch"])
             local = dt_util.now()
             out = self.ctrl.step(hc.ControlInput(
                 now=now, local_hour=local.hour + local.minute / 60.0,
@@ -310,6 +312,7 @@ class HeatingManager:
                                 and self.model.probes[r].bad_for(now) >= PROBE_FORCE_S
                                 for r in ("boiler_out", "buffer_top")),
                 room_licensed=self.has(FEATURE_HEATING_AUTO),
+                t_dhw=self.model.t("dhw"), dhw_pump_on=dhw_pump_on, dhw_pump_configured=dhw_pump_configured,
             ))
             for line in out.log:
                 self._log(line, now)
@@ -319,14 +322,18 @@ class HeatingManager:
                 await self._exec_valve(out.valve, now)
             if out.pump:
                 await self._exec_pump(out.pump, now)
+            if out.dhw_pump:
+                await self._exec_pump(out.dhw_pump, now, dhw=True)
             # the forecast only after the actuators — and never longer than a few seconds
             await self._fetch_forecast(now, entity, advisor_on)
 
-            # building model; the house's share of each fire (for kWh per kg)
+            # building model; the house's share of each fire (for kWh per kg). An hour with the hot-water
+            # tank charging from the buffer is not the house's draw either.
             firing = self.model.state in hm.FIRE_STATES or self.model.session is not None
+            dhw_charging = dhw_pump_on is True and cfg["dhw_source"] == "buffer_top"
             if self.model.buffer:
-                self.building.add(now, self.model.buffer.get("total_kwh"), self.model.t("room"), t_out, firing,
-                                  pump_on if cfg["entities"]["pump_switch"] else None)
+                self.building.add(now, self.model.buffer.get("total_kwh"), self.model.t("room"), t_out,
+                                  firing or dhw_charging, pump_on if cfg["entities"]["pump_switch"] else None)
             dt = 0.0 if self._last_tick is None else min(max(now - self._last_tick, 0.0), 60.0)
             self._last_tick = now
             if self.model.session is not None and t_out is not None:
@@ -365,6 +372,9 @@ class HeatingManager:
                           "known": valve.known, "saturated": valve.saturated, "busy": now < valve.busy_until,
                           "run_last_h_s": round(valve.run_last_hour(now))},
                 "pump": {"configured": bool(cfg["entities"]["pump_switch"]), "on": pump_on},
+                "dhw_pump": {"configured": dhw_pump_configured, "on": dhw_pump_on, "want": out.dhw.want,
+                             "reason": out.dhw.reason, "dump": out.dhw.dump,
+                             "source_c": None if out.dhw.source_c is None else round(out.dhw.source_c, 1)},
             }
             self.snapshot = {**status, "control": self.control, "advice": self.advice,
                              "log": list(self.log)[-30:], "valve_moves": list(valve.moves)[-15:]}
@@ -540,17 +550,18 @@ class HeatingManager:
                 return True
         return False
 
-    async def _exec_pump(self, cmd: tuple[str, str], now: float) -> bool:
+    async def _exec_pump(self, cmd: tuple[str, str], now: float, dhw: bool = False) -> bool:
         state, reason = cmd
-        entity = self.cfg["entities"]["pump_switch"]
+        entity = self.cfg["entities"]["dhw_pump_switch" if dhw else "pump_switch"]
+        name = "Pompa CWU" if dhw else "Pompa CO"
         try:
             await self.hass.services.async_call("homeassistant", "turn_on" if state == "on" else "turn_off",
                                                 {"entity_id": entity}, blocking=True)
         except Exception as err:  # noqa: BLE001
-            self._log(f"⚠️ Pompa CO nie przyjęła polecenia ({state}): {err}", now)
+            self._log(f"⚠️ {name} nie przyjęła polecenia ({state}): {err}", now)
             return False
-        self.ctrl.pump.note(state == "on", now)
-        self._log(f"Pompa CO {'włączona' if state == 'on' else 'wyłączona'} — {reason}", now)
+        (self.ctrl.dhw_pump if dhw else self.ctrl.pump).note(state == "on", now)
+        self._log(f"{name} {'włączona' if state == 'on' else 'wyłączona'} — {reason}", now)
         self._save_soon()
         return True
 
@@ -588,6 +599,14 @@ class HeatingManager:
                     raise ValueError("Nie wybrano przekaźnika pompy CO")
                 if not await self._exec_pump(("on" if action == "pump_on" else "off", "ręcznie z panelu"), now):
                     raise ValueError("Przekaźnik pompy nie przyjął polecenia")
+            elif action in ("dhw_pump_on", "dhw_pump_off"):
+                if mode != "manual":
+                    raise ValueError("Ręczne sterowanie pompą CWU działa w trybie „Ręczne”")
+                if not self.cfg["entities"]["dhw_pump_switch"]:
+                    raise ValueError("Nie wybrano przekaźnika pompy CWU")
+                if not await self._exec_pump(("on" if action == "dhw_pump_on" else "off", "ręcznie z panelu"), now,
+                                             dhw=True):
+                    raise ValueError("Przekaźnik pompy CWU nie przyjął polecenia")
             elif action == "log_load":
                 kg = hm._f(data.get("kg"))
                 if kg is None or not 0.5 <= kg <= 200:
@@ -754,6 +773,7 @@ class HeatingManager:
             "emitter_defaults": hm.EMITTERS,
             "modes": hm.MODES,
             "valve_types": hm.VALVE_TYPES,
+            "dhw_sources": hm.DHW_SOURCES,
             "states": hm.STATE_LABELS,
             "weather_entities": sorted(self.hass.states.async_entity_ids("weather")),
         }
@@ -881,6 +901,8 @@ BINARY_SENSORS: tuple[dict[str, Any], ...] = (
     {"key": "heating_buffer_full", "icon": "mdi:storage-tank",
      "fn": lambda s: any(a["id"] == "heating_buffer_full" for a in s.get("alarms") or [])},
     {"key": "heating_dump", "icon": "mdi:radiator", "fn": lambda s: _get(s, "control", "dump")},
+    {"key": "heating_dhw_charging", "device_class": BinarySensorDeviceClass.RUNNING, "icon": "mdi:water-boiler",
+     "fn": lambda s: _get(s, "control", "dhw_pump", "on") if _get(s, "control", "dhw_pump", "configured") else None},
 )
 
 NUMBERS: tuple[dict[str, Any], ...] = (

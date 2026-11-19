@@ -223,6 +223,9 @@
       },
       "heating_dump": {
         "name": "Heat dump"
+      },
+      "heating_dhw_charging": {
+        "name": "Hot water pump running"
       }
     },
     "select": {

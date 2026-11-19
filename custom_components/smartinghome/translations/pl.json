@@ -263,6 +263,9 @@
       },
       "heating_dump": {
         "name": "Zrzut ciepła do domu"
+      },
+      "heating_dhw_charging": {
+        "name": "Pompa CWU pracuje"
       }
     },
     "select": {

@@ -17,7 +17,7 @@ Smarting HOME turns your Home Assistant into an **autonomous energy command cent
 - 📊 **46 Entities**: 33 sensors, 3 binary sensors, 5 switches, 2 selects, 3 numbers
 - 💰 **Arbitrage planner (FREE)**: autopilot strategy *Max Zysk* — charge cheap, use / sell expensive
 - 🛡️ **Safety**: Voltage cascade (252/253/254V), SOC emergency protection
-- 🔥 **Wood boiler room (optional)**: buffer energy, *how much wood the buffer can take*, fire sessions, safety alarms, weather-curve mixing valve and CH pump on Shelly, local safety script; PRO: *light the boiler by* and *load X kg*
+- 🔥 **Wood boiler room (optional)**: buffer energy, *how much wood the buffer can take*, fire sessions, safety alarms, weather-curve mixing valve, CH pump and hot-water charging pump on Shelly, local safety script; PRO: *light the boiler by* and *load X kg*
 - 🎨 **Dashboards**: 3 pre-configured Lovelace dashboards
 - 📋 **Blueprints**: 7 ready-to-use automation templates
 - 🌍 **Bilingual**: English + Polish (EN/PL)
