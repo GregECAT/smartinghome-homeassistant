@@ -82,7 +82,6 @@ SERVICE_GET_WIND_CALENDAR = "get_wind_calendar"
 SERVICE_GET_WIND_SUMMARY = "get_wind_summary"
 SERVICE_RECALCULATE_WIND_CALENDAR = "recalculate_wind_calendar"
 
-from .const import ALERT_WEBHOOK_URL  # noqa: E402
 
 # Client-side alert ids from panels older than v1.61 (see handle_send_alert_notification)
 _LEGACY_PANEL_ALERT_PREFIXES = (
