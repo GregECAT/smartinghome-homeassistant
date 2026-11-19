@@ -53,6 +53,7 @@ const ROLE_HINTS = {
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const num = (v, d = 1) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toLocaleString("pl-PL", { minimumFractionDigits: d, maximumFractionDigits: d }));
 const fmtTime = (ts) => (ts ? new Date(ts * 1000).toLocaleString("pl-PL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
+const hhmm = (ts) => (ts ? new Date(ts * 1000).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" }) : "—");
 const fmtHours = (h) => {
   if (h == null) return "—";
   const m = Math.round(h * 60);
@@ -108,10 +109,66 @@ class SmartingHomeHeatingPanel extends HTMLElement {
 
   connectedCallback() {
     this._timer = setInterval(() => { if (!document.hidden) this._load(); }, REFRESH_MS);
+    this._onFs = () => this._fsChanged();
+    this._onResize = () => this._measure();
+    this._onVis = () => { if (!document.hidden && this._isFs()) this._wake(true); };
+    document.addEventListener("fullscreenchange", this._onFs);
+    document.addEventListener("webkitfullscreenchange", this._onFs);
+    document.addEventListener("visibilitychange", this._onVis);
+    window.addEventListener("resize", this._onResize);
   }
 
   disconnectedCallback() {
     clearInterval(this._timer);
+    document.removeEventListener("fullscreenchange", this._onFs);
+    document.removeEventListener("webkitfullscreenchange", this._onFs);
+    document.removeEventListener("visibilitychange", this._onVis);
+    window.removeEventListener("resize", this._onResize);
+    this._wake(false);
+  }
+
+  // ── full screen (wall tablet / TV): the panel alone, the screen kept awake ──
+  _isFs() {
+    return (document.fullscreenElement || document.webkitFullscreenElement) === this;
+  }
+
+  _toggleFullscreen() {
+    if (this._isFs()) {
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      return;
+    }
+    const req = this.requestFullscreen || this.webkitRequestFullscreen;
+    if (!req) { alert("Ta przeglądarka nie obsługuje trybu pełnoekranowego."); return; }
+    const p = req.call(this, { navigationUI: "hide" });
+    if (p && p.catch) p.catch(() => {});
+  }
+
+  _fsChanged() {
+    const on = this._isFs();
+    const b = this.shadowRoot.getElementById("fs");
+    if (b) { b.textContent = on ? "✕" : "⛶"; b.title = on ? "Zamknij pełny ekran" : "Pełny ekran — kotłownia na cały ekran, ekran nie gaśnie"; }
+    this._wake(on);
+    this._measure();
+  }
+
+  async _wake(on) {
+    try {
+      if (on && "wakeLock" in navigator) {
+        if (!this._lock || this._lock.released) this._lock = await navigator.wakeLock.request("screen");
+      } else if (this._lock) {
+        await this._lock.release();
+        this._lock = null;
+      }
+    } catch (e) {
+      this._lock = null;      // not allowed here (no HTTPS, battery saver) — full screen still works
+    }
+  }
+
+  _measure() {
+    const root = this.shadowRoot;
+    const h = root && root.querySelector(".header");
+    const w = root && root.querySelector(".wrap");
+    if (h && w) w.style.setProperty("--hdr", `${h.offsetHeight}px`);
   }
 
   async _load() {
@@ -250,6 +307,77 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         pre.code { white-space:pre-wrap; font-size:11px; background:rgba(0,0,0,0.3); padding:10px; border-radius:8px; max-height:300px; overflow:auto; margin-top:8px; }
         .inline { display:flex; gap:6px; align-items:center; margin-top:10px; }
         .inline input { width:90px; }
+        /* hero: the boiler room on the first screen */
+        :host(:fullscreen) { overflow-y:auto; background:#0a1628; }
+        .hero { display:flex; flex-direction:column; gap:10px; height:calc(100vh - var(--hdr, 58px) - 26px); min-height:560px; margin-bottom:14px; }
+        .hero-top { flex:0 0 auto; display:flex; flex-direction:column; gap:6px; }
+        .hero-main { flex:1 1 auto; min-height:0; padding:6px 8px; display:flex; }
+        .hero-main svg { width:100%; height:100%; display:block; }
+        .hero-chart { flex:0 0 25%; min-height:150px; display:flex; flex-direction:column; padding:10px 14px 8px; }
+        .hero-chart h3 { margin-bottom:2px; }
+        .hc { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
+        .hc svg { flex:1 1 auto; min-height:0; width:100%; }
+        .hc .legend { margin-top:2px; }
+        .chips { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+        .chip { display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:999px; font-size:13px; color:#cbd5e1;
+          background:rgba(20,30,48,0.6); border:1px solid rgba(255,255,255,0.08); white-space:nowrap; }
+        .chip b { color:#fff; font-weight:600; }
+        .chip.ghost { background:transparent; border-color:transparent; color:#64748b; margin-left:auto; }
+        .chip.bad { background:rgba(231,76,60,0.15); border-color:rgba(231,76,60,0.5); color:#fca5a5; }
+        .chip.warn { background:rgba(247,183,49,0.1); border-color:rgba(247,183,49,0.4); color:#fcd34d; }
+        .chip.hot { border-color:rgba(247,183,49,0.45); }
+        .led { width:8px; height:8px; border-radius:50%; background:#64748b; display:inline-block; }
+        .led.on { background:#2ecc71; box-shadow:0 0 8px #2ecc71; }
+        .alarm { border-radius:10px; padding:7px 12px; font-size:13px; line-height:1.4; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+          background:rgba(0,212,255,0.07); border:1px solid rgba(0,212,255,0.25); }
+        .alarm.warn { background:rgba(247,183,49,0.08); border-color:rgba(247,183,49,0.35); }
+        .alarm.err { background:rgba(231,76,60,0.14); border-color:rgba(231,76,60,0.55); animation:alarmp 1.6s ease-in-out infinite alternate; }
+        .alarm b { color:#fff; } .alarm span { color:#cbd5e1; } .alarm .act { color:#94a3b8; }
+        .t-h { fill:#e0e6ed; font-size:17px; font-weight:700; }
+        .t-h2 { fill:#e0e6ed; font-size:14px; font-weight:700; }
+        .t-big { font-size:36px; font-weight:800; }
+        .t-big2 { fill:#e0e6ed; font-size:28px; font-weight:800; }
+        .t-xl { font-size:46px; font-weight:800; }
+        .t-l { font-size:20px; font-weight:700; }
+        .t-m { font-size:14px; font-weight:600; }
+        .t-s { fill:#94a3b8; font-size:12px; }
+        .t-s2 { font-size:12.5px; font-weight:600; }
+        svg text.t-in { fill:#0a1628; }
+        svg text.dim { fill:#64748b; }
+        .pc { fill:none; stroke:#060c18; stroke-width:13; stroke-linecap:round; stroke-linejoin:round; }
+        .pp { fill:none; stroke-width:7; stroke-linecap:round; stroke-linejoin:round; }
+        .pf { fill:none; stroke:rgba(255,255,255,0.85); stroke-width:2.5; stroke-linecap:round; stroke-dasharray:3 15;
+          animation:flow 1s linear infinite; animation-delay:var(--ph-flow,0ms); }
+        .pump { fill:#0f172a; stroke:#64748b; stroke-width:2.5; }
+        .pump.on { stroke:#2ecc71; filter:drop-shadow(0 0 6px rgba(46,204,113,0.6)); }
+        .imp { stroke:#64748b; stroke-width:2.5; stroke-linecap:round; } .imp.on { stroke:#2ecc71; }
+        .spin { transform-box:fill-box; transform-origin:center; animation:spin 1.2s linear infinite; animation-delay:var(--ph-spin,0ms); }
+        .flame { transform-box:fill-box; transform-origin:50% 100%; animation:flick 0.7s ease-in-out infinite alternate; animation-delay:var(--ph-flick,0ms); }
+        .flame.f2 { animation-duration:0.55s; } .flame.f3 { animation-duration:0.8s; } .flame.low { opacity:0.55; }
+        .hotpulse { animation:hp 1.2s ease-in-out infinite alternate; animation-delay:var(--ph-pulse,0ms); }
+        .bub { fill:rgba(255,255,255,0.65); animation:bub 3s linear infinite; }
+        .draw { stroke-dasharray:1; stroke-dashoffset:1; animation:draw 1.6s ease-out forwards; }
+        .endp { opacity:0; animation:fadein 0.5s ease-out forwards; }
+        @keyframes flow { to { stroke-dashoffset:-18; } }
+        @keyframes spin { to { transform:rotate(360deg); } }
+        @keyframes flick { from { transform:scaleY(0.82) skewX(-4deg); opacity:0.8; } to { transform:scaleY(1.06) skewX(4deg); opacity:1; } }
+        @keyframes hp { from { stroke-opacity:0.35; } to { stroke-opacity:1; } }
+        @keyframes bub { 0% { transform:translateY(0); opacity:0; } 15% { opacity:0.7; } 100% { transform:translateY(-330px); opacity:0; } }
+        @keyframes draw { to { stroke-dashoffset:0; } }
+        @keyframes fadein { to { opacity:1; } }
+        @keyframes alarmp { from { box-shadow:0 0 0 rgba(231,76,60,0); } to { box-shadow:0 0 18px rgba(231,76,60,0.35); } }
+        @media (prefers-reduced-motion: reduce) {
+          .pf, .spin, .flame, .bub, .hotpulse, .alarm.err { animation:none; }
+          .draw { stroke-dasharray:none; animation:none; } .endp { opacity:1; animation:none; }
+        }
+        @media (max-width:700px), (max-height:520px) {
+          .hero { height:auto; min-height:0; }
+          .hero-main svg { height:auto; }
+          .hero-chart { flex:none; height:auto; }
+          .hc svg { flex:none; height:auto; }
+          .chip.ghost { margin-left:0; }
+          .alarm { white-space:normal; }
+        }
         @media (max-width:700px) {
           .header { padding:8px 12px; } .content { padding:12px 12px 32px; }
           .kpi .val { font-size:24px; }
@@ -272,6 +400,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
               <button data-view="settings">Ustawienia</button>
             </div>
             <button class="btn" id="refresh" title="Odśwież">⟳</button>
+            <button class="btn" id="fs" title="Pełny ekran — kotłownia na cały ekran, ekran nie gaśnie">⛶</button>
           </div>
         </div>
         <div class="content" id="body"><div class="banner">Wczytywanie…</div></div>
@@ -284,11 +413,14 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       this._view = b.dataset.view;
       this._draft = null;
       this._saveMsg = "";
+      this._skel = false;
       root.querySelectorAll("#views button").forEach((x) => x.classList.toggle("on", x === b));
       if (this._view === "overview") this._chartTs = 0;
       this._load();
     }));
     root.querySelector("#refresh").addEventListener("click", () => { this._chartTs = 0; this._load(); });
+    root.querySelector("#fs").addEventListener("click", () => this._toggleFullscreen());
+    this._measure();
     root.getElementById("body").addEventListener("click", (e) => {
       const b = e.target.closest("[data-act]");
       if (b && !b.disabled) this._onAction(b.dataset.act, b.dataset);
@@ -302,41 +434,102 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const body = this.shadowRoot.getElementById("body");
     if (!body) return;
     if (this._error) {
+      this._skel = false;
       body.innerHTML = `<div class="banner err">Nie udało się pobrać danych modułu: <b>${esc(this._error)}</b></div>`;
       return;
     }
     if (!this._data) return;
-    body.innerHTML = this._view === "settings" ? this._settingsHtml() : this._overviewHtml();
-    if (this._view === "settings") this._bindSettings();
+    if (this._view === "settings") {
+      this._skel = false;
+      body.innerHTML = this._settingsHtml();
+      this._bindSettings();
+      return;
+    }
+    this._renderOverview();
   }
 
   // ── overview ──────────────────────────────────────────────────────────────
-  _overviewHtml() {
+  // The first screen is the boiler room itself (hero: status strip, live diagram, 24 h chart);
+  // the cards follow below. Each part is replaced only when its HTML changed, so the
+  // animations keep running and the chart's draw-in plays only when new history arrives.
+  _renderOverview() {
+    const body = this.shadowRoot.getElementById("body");
     const d = this._data;
     if (!d.enabled) {
-      return `<div class="banner warn">Moduł ogrzewania jest wyłączony. Włącz go w zakładce <b>Ustawienia</b>.</div>`;
+      this._skel = false;
+      body.innerHTML = `<div class="banner warn">Moduł ogrzewania jest wyłączony. Włącz go w zakładce <b>Ustawienia</b>.</div>`;
+      return;
+    }
+    if (!this._skel) {
+      body.innerHTML = `<section class="hero" id="hero">
+          <div class="hero-top" id="heroTop"></div>
+          <div class="hero-main card" id="heroMain"></div>
+          <div class="hero-chart card"><h3>Ostatnie ${CHART_HOURS} h <small>°C</small></h3><div class="hc" id="heroChart"></div></div>
+        </section>
+        <div id="rest"></div>`;
+      this._skel = true;
+      this._parts = {};
     }
     const st = d.status || {};
-    const ents = d.config.entities || {};
-    const configured = ["boiler_out", "buffer_top", "buffer_bottom"].some((r) => ents[r]);
-    let html = "";
-    if (!configured) {
-      html += `<div class="banner warn">Nie przypisano jeszcze czujników. W zakładce <b>Ustawienia</b> wybierz sondy kotła,
-        bufora i CWU (np. czujniki DS18B20 z Shelly Plus Add-on).</div>`;
+    this._patch("heroTop", this._heroTopHtml(st));
+    if (this._patch("heroMain", this._heroSvg(st))) this._phase(this.shadowRoot.getElementById("heroMain"));
+    const narrow = this.clientWidth > 0 && this.clientWidth < 700;
+    this._patch("heroChart", narrow ? this._chartSvg(600, 300, true) : this._chartSvg(1200, 200, true));
+    const focused = this.shadowRoot.activeElement;
+    if (!(focused && focused.tagName === "INPUT")) this._patch("rest", this._restHtml(st));   // typing the wood weight
+  }
+
+  _patch(id, html) {
+    if (this._parts[id] === html) return false;
+    const el = this.shadowRoot.getElementById(id);
+    if (!el) return false;
+    el.innerHTML = html;
+    this._parts[id] = html;
+    return true;
+  }
+
+  // a re-rendered diagram continues its animations where they were (negative delay = the current phase)
+  _phase(el) {
+    const now = Date.now();
+    for (const [k, ms] of [["flow", 1000], ["spin", 1200], ["flick", 1400], ["pulse", 2400], ["bub", 3000]]) {
+      el.style.setProperty(`--ph-${k}`, `${-(now % ms)}ms`);
     }
-    for (const a of st.alarms || []) {
-      html += `<div class="banner ${LEVEL_CLASS[a.level] || ""}">${LEVEL_ICON[a.level] || ""} <b>${esc(a.title)}</b><br>${esc(a.message)}
-        ${a.action ? `<div class="act">→ ${esc(a.action)}</div>` : ""}</div>`;
+  }
+
+  _heroTopHtml(st) {
+    const d = this._data, c = d.config, ctl = st.control || {}, b = st.boiler || {}, a = st.advice || {};
+    const modeLbl = { off: "Wyłączone", manual: "Ręczne", auto: "Automatyczne", summer: "Lato" }[c.mode] || c.mode;
+    const chips = [
+      `<span class="chip"><i class="led ${c.mode === "off" ? "" : "on"}"></i>Tryb <b>${esc(modeLbl)}</b></span>`,
+      `<span class="chip">${b.firing ? "🔥" : "◻"} Kocioł <b style="color:${STATE_COLOR[b.state] || "#e0e6ed"}">${esc(b.label || "—")}</b></span>`,
+    ];
+    if (ctl.dump) chips.push(`<span class="chip bad">⚠ Zrzut ciepła do domu</span>`);
+    if (ctl.limiter) chips.push(`<span class="chip warn">Ogranicznik zasilania</span>`);
+    if (st.buffer) chips.push(`<span class="chip">Bufor <b>${num(st.buffer.charge_pct, 0)}%</b> · przyjmie <b>${num(st.buffer.wood_max_kg, 0)} kg</b></span>`);
+    if (!a.locked && a.empty_at) chips.push(`<span class="chip">⏳ Ciepła do <b>${hhmm(a.empty_at)}</b></span>`);
+    if (!a.locked && !a.firing && a.light_at) chips.push(`<span class="chip hot">🪵 Rozpal do <b>${hhmm(a.light_at)}</b>${a.wood_kg != null ? ` · ${num(a.wood_kg, 0)} kg` : ""}</span>`);
+    if (st.runtime_h != null && (a.locked || !a.empty_at)) chips.push(`<span class="chip">⏳ Bufor na <b>${fmtHours(st.runtime_h)}</b></span>`);
+    chips.push(`<span class="chip ghost">odczyt ${hhmm(st.updated)}</span>`);
+    let html = `<div class="chips">${chips.join("")}</div>`;
+    const ents = c.entities || {};
+    if (!["boiler_out", "buffer_top", "buffer_bottom"].some((r) => ents[r])) {
+      html += `<div class="alarm warn">Nie przypisano jeszcze czujników — w zakładce <b>Ustawienia</b> wybierz sondy kotła, bufora i CWU.</div>`;
     }
-    html += `<div class="grid kpis">${this._kpis(st)}</div>`;
+    for (const al of st.alarms || []) {
+      html += `<div class="alarm ${LEVEL_CLASS[al.level] || "info"}" title="${esc(al.action || "")}">${LEVEL_ICON[al.level] || ""} <b>${esc(al.title)}</b>
+        <span>${esc(al.message)}</span>${al.action ? ` <span class="act">→ ${esc(al.action)}</span>` : ""}</div>`;
+    }
+    return html;
+  }
+
+  _restHtml(st) {
+    let html = `<div class="grid kpis">${this._kpis(st)}</div>`;
     if (this._msg) html += `<div class="banner ${this._msgErr ? "err" : ""}" style="margin-top:14px">${esc(this._msg)}</div>`;
     html += `<div class="grid cols">
       <div class="card">${this._controlHtml(st)}</div>
       <div class="card">${this._advisorHtml(st)}</div>
     </div>`;
     html += `<div class="grid cols">
-      <div class="card"><h3>Kotłownia <small>na żywo</small></h3>${this._schematic(st)}</div>
-      <div class="card"><h3>Ostatnie ${CHART_HOURS} h <small>°C</small></h3>${this._chartHtml()}</div>
       <div class="card wide"><h3>Palenia w kotle <small>sesja = jedno palenie; energia to przyrost ciepła w buforze i CWU (bez tego, co w tym czasie zużył dom)</small></h3>${this._sessionsHtml(st)}</div>
       <div class="card">${this._seasonHtml()}</div>
       <div class="card"><h3>Dziennik decyzji <small>sterowanie, bezpieczeństwo, doradca</small></h3>${this._logHtml()}</div>
@@ -386,68 +579,164 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     return out.join("");
   }
 
-  _schematic(st) {
-    const p = st.probes || {}, b = st.boiler || {};
+  // ── hero: the whole boiler room on one screen ─────────────────────────────
+  // viewBox 1200 × 520. Pipes are drawn in the direction of flow: the dashes of a running
+  // circuit move that way. Re-rendering keeps the animations in phase (_phase).
+  _heroSvg(st) {
+    const d = this._data, c = d.config, p = st.probes || {}, b = st.boiler || {}, ctl = st.control || {};
     const v = (r) => (p[r] && p[r].value != null ? p[r].value : null);
-    const lbl = (r) => (v(r) == null ? (p[r] && p[r].status !== "missing" ? "⚠" : "—") : `${num(v(r))}°`);
-    const top = v("buffer_top"), bot = v("buffer_bottom");
-    const fire = STATE_COLOR[b.state] || "#64748b";
-    const pump = st.pump || {}, dpump = st.dhw_pump || {};
-    const pumpTxt = pump.on == null ? "" : pump.on ? `pompa CO ON${pump.power_w != null ? ` · ${num(pump.power_w, 0)} W` : ""}` : "pompa CO OFF";
-    const dhwTxt = dpump.on == null ? "" : dpump.on ? "pompa CWU ON" : "pompa CWU OFF";
-    const dhwW = dpump.on && dpump.power_w != null ? `${num(dpump.power_w, 0)} W` : "";
-    const fromBoiler = this._data.config.dhw_source === "boiler_out";
-    const dhwFeed = fromBoiler ? "M90 170 H105 V215 H290" : "M255 150 H275 V200 H290";
-    const dhwFeedT = fromBoiler ? v("boiler_out") : top;
-    return `<svg viewBox="0 0 440 230" width="100%" role="img" aria-label="Schemat kotłowni">
+    const lbl = (r) => { const x = v(r); return x == null ? (p[r] && p[r].status !== "missing" ? "⚠" : "—") : `${num(x)}°`; };
+    const tb = v("boiler_out"), top = v("buffer_top"), bot = v("buffer_bottom"), dhwT = v("dhw");
+    const sup = v("heating_supply"), ret = v("heating_return");
+    const fire = !!b.firing, over = b.state === "overheat";
+    const sc = STATE_COLOR[b.state] || "#64748b";
+    const pump = ctl.pump || {}, dp = ctl.dhw_pump || {}, valve = ctl.valve || {};
+    const coOn = pump.on === true, dhwOn = dp.on === true;
+    const fromBoiler = c.dhw_source === "boiler_out";
+    const buf = st.buffer, dhw = st.dhw;
+    const pw = (x) => (x != null && x >= 1 ? ` · ${num(x, 0)} W` : "");
+    const pipe = (dd, color, flow) => `<path class="pc" d="${dd}"/><path class="pp" d="${dd}" stroke="${color}"/>${flow ? `<path class="pf" d="${dd}"/>` : ""}`;
+    const pumpSym = (x, y, on, r = 16) => `<circle cx="${x}" cy="${y}" r="${r}" class="pump${on ? " on" : ""}"/>
+      <g class="${on ? "spin" : ""}"><path class="imp${on ? " on" : ""}" d="M${x} ${y - r + 5}V${y + r - 5}M${x - r + 5} ${y}H${x + r - 5}M${x - r + 8} ${y - r + 8}L${x + r - 8} ${y + r - 8}M${x + r - 8} ${y - r + 8}L${x - r + 8} ${y + r - 8}"/></g>
+      <circle cx="${x}" cy="${y}" r="3.5" fill="#cbd5e1"/>`;
+    // buffer probe heights → gradient stops and labels
+    const hTop = Number(c.probe_top_h) || 0.85, hBot = Number(c.probe_bottom_h) || 0.15;
+    const yTop = 470 - 400 * hTop, yBot = 470 - 400 * hBot;
+    const supC = tempColor(sup ?? top), retC = tempColor(ret ?? (sup != null ? sup - 10 : bot));
+    const feedC = tempColor(fromBoiler ? tb : top);
+    const pos = Math.round(valve.position ?? 0);
+    const feed = fromBoiler ? "M190 160H210V30H540V100a10 10 0 0 1 0 20V390H640" : "M495 175H540V390H640";
+    const coilBack = fromBoiler ? "M640 464H560V512H215V390H190" : "M640 464H560V445H495";
+    const coil = "M640 392H728q14 0 14 12t-14 12H662q-14 0-14 12t14 12H728q14 0 14 12t-14 12H640";
+
+    let s = `<svg viewBox="0 0 1200 520" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Kotłownia na żywo">
       <defs>
-        <linearGradient id="gbuf" x1="0" y1="1" x2="0" y2="0">
-          <stop offset="0%" stop-color="${tempColor(bot ?? top)}"/><stop offset="100%" stop-color="${tempColor(top ?? bot)}"/>
+        <linearGradient id="hgBuf" x1="0" y1="1" x2="0" y2="0">
+          <stop offset="0" stop-color="${tempColor(bot ?? top)}"/><stop offset="${hBot}" stop-color="${tempColor(bot ?? top)}"/>
+          <stop offset="${hTop}" stop-color="${tempColor(top ?? bot)}"/><stop offset="1" stop-color="${tempColor(top ?? bot)}"/>
         </linearGradient>
+        <linearGradient id="hgShine" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset=".35" stop-color="#fff" stop-opacity="0"/>
+          <stop offset=".85" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".25"/>
+        </linearGradient>
+        <linearGradient id="hgSteel" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#2a3a52"/><stop offset=".5" stop-color="#1c283b"/><stop offset="1" stop-color="#111a29"/>
+        </linearGradient>
+        <radialGradient id="hgFire" cx=".5" cy="1" r=".9">
+          <stop offset="0" stop-color="#ffd166" stop-opacity=".9"/><stop offset=".5" stop-color="#e67e22" stop-opacity=".45"/>
+          <stop offset="1" stop-color="#e74c3c" stop-opacity="0"/>
+        </radialGradient>
+        <filter id="hgGlow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="6"/></filter>
       </defs>
-      <!-- boiler -->
-      <rect x="10" y="60" width="80" height="120" rx="10" fill="rgba(255,255,255,0.04)" stroke="${fire}" stroke-width="2"/>
-      <text x="50" y="80" text-anchor="middle" style="fill:#e0e6ed;font-weight:600">Kocioł</text>
-      <text x="50" y="120" text-anchor="middle" style="fill:${fire};font-size:20px;font-weight:700">${lbl("boiler_out")}</text>
-      <text x="50" y="150" text-anchor="middle" style="fill:${fire}">${esc(b.label || "")}</text>
-      ${b.firing ? `<text x="50" y="172" text-anchor="middle" style="font-size:16px">🔥</text>` : ""}
-      <!-- boiler → buffer -->
-      <path d="M90 85 H150 V70 H175" stroke="${tempColor(v("boiler_out"))}" stroke-width="4" fill="none"/>
-      <path d="M175 170 H120 V160 H90" stroke="${tempColor(bot)}" stroke-width="4" fill="none" opacity="0.7"/>
-      <rect x="118" y="77" width="34" height="18" rx="4" fill="#0f172a" stroke="#334155"/>
-      <text x="135" y="90" text-anchor="middle" style="font-size:9px">Ladd.</text>
-      <!-- buffer -->
-      <rect x="175" y="30" width="80" height="170" rx="16" fill="url(#gbuf)" opacity="0.85" stroke="#475569"/>
-      <text x="215" y="22" text-anchor="middle" style="fill:#e0e6ed;font-weight:600">Bufor</text>
-      <text x="215" y="62" text-anchor="middle" style="fill:#0a1628;font-weight:700;font-size:14px">${lbl("buffer_top")}</text>
-      <text x="215" y="185" text-anchor="middle" style="fill:#0a1628;font-weight:700;font-size:14px">${lbl("buffer_bottom")}</text>
-      ${st.buffer ? `<text x="215" y="122" text-anchor="middle" style="fill:#0a1628;font-weight:700;font-size:16px">${num(st.buffer.charge_pct, 0)}%</text>` : ""}
-      <!-- buffer → house -->
-      <path d="M255 60 H300 V95 H330" stroke="${tempColor(v("heating_supply") ?? top)}" stroke-width="4" fill="none"/>
-      <circle cx="300" cy="78" r="9" fill="#0f172a" stroke="#94a3b8"/><text x="300" y="82" text-anchor="middle" style="font-size:9px">M</text>
-      <text x="300" y="112" text-anchor="middle" style="font-size:10px">${v("heating_supply") != null ? `zas. ${lbl("heating_supply")}` : ""}</text>
-      <text x="300" y="126" text-anchor="middle" style="font-size:10px">${v("heating_return") != null ? `pow. ${lbl("heating_return")}` : ""}</text>
-      <path d="M330 95 L380 60 L430 95 V150 H330 Z" fill="rgba(255,255,255,0.04)" stroke="#475569"/>
-      <text x="380" y="118" text-anchor="middle" style="fill:#e0e6ed;font-size:15px;font-weight:700">${lbl("room")}</text>
-      <text x="380" y="138" text-anchor="middle" style="font-size:10px">${st.humidity != null ? `${num(st.humidity, 0)}% RH` : "dom"}</text>
-      <text x="380" y="168" text-anchor="middle" style="font-size:10px">${esc(pumpTxt)}</text>
-      <!-- DHW -->
-      <rect x="290" y="178" width="70" height="44" rx="10" fill="${tempColor(v("dhw"))}" opacity="0.8" stroke="#475569"/>
-      <text x="325" y="198" text-anchor="middle" style="fill:#0a1628;font-weight:700">CWU</text>
-      <text x="325" y="214" text-anchor="middle" style="fill:#0a1628;font-weight:700">${lbl("dhw")}</text>
-      <path d="${dhwFeed}" stroke="${tempColor(dhwFeedT)}" stroke-width="${dpump.on ? 4 : 2}" fill="none" ${dpump.on ? "" : 'stroke-dasharray="4 3"'} opacity="${dpump.on ? 1 : 0.6}"/>
-      <text x="400" y="198" text-anchor="middle" style="font-size:10px">${esc(dhwTxt)}</text>
-      <text x="400" y="212" text-anchor="middle" style="font-size:10px">${esc(dhwW)}</text>
-      ${v("outdoor") != null ? `<text x="430" y="20" text-anchor="end">na zewnątrz ${lbl("outdoor")}</text>` : ""}
-    </svg>`;
+      <line x1="10" y1="514" x2="1190" y2="514" stroke="rgba(255,255,255,.06)"/>`;
+
+    // pipes first (under the equipment)
+    s += pipe("M190 180H240", tempColor(tb), fire);
+    s += pipe("M300 180H318V100H345", tempColor(tb), fire);
+    s += pipe("M345 440H318V210H300", tempColor(bot), fire);
+    s += pipe("M240 210H215V390H190", tempColor(bot), fire);
+    s += pipe("M495 110H559", tempColor(top), coOn);
+    s += pipe("M591 110H647", supC, coOn);
+    s += pipe("M683 110H760V170H780", supC, coOn);
+    s += pipe("M780 315H600V360H550a10 10 0 0 0 -20 0H495", retC, coOn);
+    s += pipe(feed, feedC, dhwOn);
+    s += pipe(coilBack, tempColor(dhwT), dhwOn);
+
+    // boiler
+    s += `<text x="110" y="136" text-anchor="middle" class="t-h">Kocioł</text>
+      ${over || fire ? `<rect x="22" y="142" width="176" height="276" rx="18" fill="${over ? "#e74c3c" : "#e67e22"}" opacity="${over ? 0.35 : 0.18}" filter="url(#hgGlow)"/>` : ""}
+      <rect x="30" y="150" width="160" height="260" rx="14" fill="url(#hgSteel)" stroke="${sc}" stroke-width="3" class="${over ? "hotpulse" : ""}"/>
+      <text x="110" y="205" text-anchor="middle" class="t-big" style="fill:${sc}">${lbl("boiler_out")}</text>
+      <text x="110" y="232" text-anchor="middle" class="t-m" style="fill:${sc}">${esc(b.label || "brak danych")}</text>
+      ${b.trend_k_min != null ? `<text x="110" y="252" text-anchor="middle" class="t-s">${b.trend_k_min > 0.2 ? "↑" : b.trend_k_min < -0.2 ? "↓" : "→"} ${num(b.trend_k_min, 2)} K/min</text>` : ""}
+      <rect x="55" y="270" width="110" height="115" rx="10" fill="#0b1220" stroke="#475569"/>`;
+    if (fire) {
+      const low = b.state === "burnout" ? " low" : "";
+      s += `<rect x="58" y="273" width="104" height="109" rx="8" fill="url(#hgFire)"/>
+        <g class="flame${low}"><path d="M78 380C66 350 92 334 86 300C108 326 114 348 104 380Z" fill="#e67e22"/></g>
+        <g class="flame f2${low}"><path d="M98 380C90 342 120 326 111 288C136 320 141 352 128 380Z" fill="#f39c12"/></g>
+        <g class="flame f3${low}"><path d="M122 380C115 352 141 341 136 312C154 336 154 360 144 380Z" fill="#f7b731"/></g>
+        <path d="M66 380H156" stroke="#ffd166" stroke-width="3" stroke-linecap="round" opacity=".7"/>`;
+    } else {
+      s += `<path d="M70 372H150" stroke="#334155" stroke-width="3" stroke-linecap="round"/>`;
+    }
+
+    // Laddomat (its pump runs with the boiler, controlled by the boiler)
+    s += `<rect x="240" y="160" width="60" height="70" rx="9" fill="#0f172a" stroke="#475569"/>
+      ${pumpSym(270, 195, fire, 14)}
+      <text x="270" y="248" text-anchor="middle" class="t-s">Laddomat</text>`;
+
+    // buffer
+    s += `<text x="420" y="52" text-anchor="middle" class="t-h">Bufor ${num(c.buffer_l, 0)} L</text>
+      <rect x="345" y="70" width="150" height="400" rx="34" fill="url(#hgBuf)" stroke="#64748b" stroke-width="2"/>
+      <rect x="345" y="70" width="150" height="400" rx="34" fill="url(#hgShine)"/>`;
+    if (fire) {
+      s += [[372, 0], [398, -0.8], [426, -1.7], [452, -2.4], [470, -1.2]].map(([x, dl]) =>
+        `<circle cx="${x}" cy="452" r="3.5" class="bub" style="animation-delay:calc(var(--ph-bub,0ms) + ${dl}s)"/>`).join("");
+    }
+    s += `<path d="M345 ${yTop}h14M481 ${yTop}h14M345 ${yBot}h14M481 ${yBot}h14" stroke="rgba(10,22,40,.55)" stroke-width="2"/>
+      <text x="420" y="${yTop + 8}" text-anchor="middle" class="t-in t-l">${lbl("buffer_top")}</text>
+      <text x="420" y="${yBot + 8}" text-anchor="middle" class="t-in t-l">${lbl("buffer_bottom")}</text>`;
+    if (buf) {
+      s += `<text x="420" y="266" text-anchor="middle" class="t-in t-xl">${num(buf.charge_pct, 0)}%</text>
+        <text x="420" y="292" text-anchor="middle" class="t-in t-m">${num(buf.energy_kwh)} / ${num(buf.capacity_kwh, 0)} kWh</text>
+        <text x="420" y="312" text-anchor="middle" class="t-in t-s2">przyjmie ${num(buf.wood_max_kg, 0)} kg</text>`;
+    }
+
+    // mixing valve (3-way, motorised)
+    s += `<path d="M575 110L559 100V120ZM575 110L591 100V120ZM575 110L565 126H585Z" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5" stroke-linejoin="round"/>
+      <path d="M575 94V110" stroke="#94a3b8" stroke-width="2"/>
+      <rect x="564" y="76" width="22" height="18" rx="3" fill="#1e293b" stroke="${valve.busy ? "#f7b731" : "#64748b"}" class="${valve.busy ? "hotpulse" : ""}"/>
+      <text x="575" y="89" text-anchor="middle" class="t-s">M</text>
+      <text x="575" y="146" text-anchor="middle" class="t-s">${valve.configured ? `${valve.known ? "" : "~"}${pos}%` : "zawór"}</text>`;
+
+    // CH pump and supply
+    s += pumpSym(665, 110, coOn) + `<text x="665" y="148" text-anchor="middle" class="t-s">pompa CO${coOn ? pw((st.pump || {}).power_w) : ""}</text>
+      ${!pump.configured ? `<text x="665" y="163" text-anchor="middle" class="t-s dim">nieprzypisana</text>` : ""}
+      <text x="722" y="98" text-anchor="middle" class="t-l" style="fill:${supC}">${lbl("heating_supply")}</text>
+      ${ctl.supply_target != null ? `<text x="722" y="136" text-anchor="middle" class="t-s">zad. ${num(ctl.supply_target, 0)}°</text>` : ""}`;
+
+    // house
+    const room = v("room");
+    s += `<path d="M780 160L895 62L1010 160V340H780Z" fill="rgba(255,255,255,.035)" stroke="#475569" stroke-width="2" stroke-linejoin="round"/>
+      <text x="895" y="132" text-anchor="middle" class="t-s">Dom</text>
+      <text x="895" y="206" text-anchor="middle" class="t-big" style="fill:#e0e6ed">${room != null ? `${num(room)}°` : "—"}</text>
+      <text x="895" y="230" text-anchor="middle" class="t-s">zadana ${num(ctl.room_target ?? c.room_target_c)}°${st.humidity != null ? ` · ${num(st.humidity, 0)}%` : ""}</text>`;
+    const radC = coOn ? supC : "#334155";
+    s += `${coOn ? `<rect x="846" y="246" width="98" height="54" rx="8" fill="${radC}" opacity=".35" filter="url(#hgGlow)"/>` : ""}
+      <rect x="850" y="250" width="90" height="46" rx="6" fill="#0f172a" stroke="${radC}" stroke-width="2"/>
+      ${[0, 1, 2, 3, 4, 5, 6].map((i) => `<rect x="${857 + i * 11.5}" y="255" width="7" height="36" rx="3" fill="${radC}" opacity="${coOn ? 0.9 : 0.5}"/>`).join("")}
+      <text x="895" y="322" text-anchor="middle" class="t-s">${ctl.dump ? "zrzut ciepła" : coOn ? "grzanie" : ctl.heating_needed ? "zapotrzebowanie" : "bez grzania"}</text>`;
+
+    // outdoor
+    if (ctl.t_out != null) {
+      s += `<text x="1110" y="58" text-anchor="middle" class="t-s">na zewnątrz</text>
+        <text x="1110" y="92" text-anchor="middle" class="t-big2">${num(ctl.t_out)}°</text>
+        ${ctl.t_out_damped != null ? `<text x="1110" y="114" text-anchor="middle" class="t-s">średnio ${num(ctl.t_out_damped)}°</text>` : ""}`;
+    }
+
+    // hot-water pump and tank
+    s += pumpSym(540, 260, dhwOn) + `<text x="562" y="256" class="t-s">pompa CWU</text>
+      <text x="562" y="271" class="t-s ${dp.configured ? "" : "dim"}">${dp.configured ? (dhwOn ? `ładuje${pw((st.dhw_pump || {}).power_w)}` : "stoi") : "nieprzypisana"}</text>
+      <text x="700" y="345" text-anchor="middle" class="t-h2">CWU ${num(c.dhw_l, 0)} L</text>
+      <rect x="640" y="355" width="120" height="150" rx="26" fill="${tempColor(dhwT)}" opacity=".85" stroke="#64748b" stroke-width="2"/>
+      <rect x="640" y="355" width="120" height="150" rx="26" fill="url(#hgShine)"/>`;
+    s += `<path class="pc" d="${coil}" style="stroke-width:9"/><path class="pp" d="${coil}" stroke="${dhwOn ? feedC : "#475569"}" style="stroke-width:5"/>${dhwOn ? `<path class="pf" d="${coil}"/>` : ""}`;
+    s += `<text x="776" y="412" class="t-big2" style="fill:#e0e6ed">${lbl("dhw")}</text>`;
+    if (dhw) {
+      s += `<text x="776" y="434" class="t-s">${num(dhw.charge_pct, 0)}% · ${num(dhw.energy_kwh)} kWh</text>
+        <text x="776" y="452" class="t-s">do ${num(c.dhw_target_c, 0)}°</text>`;
+    }
+    return s + `</svg>`;
   }
 
-  _chartHtml() {
+  // ── 24 h chart (hero) ────────────────────────────────────────────────────
+  _chartSvg(W, H, anim) {
     const c = this._chart;
     if (!c) return `<div class="muted" style="font-size:12px">Brak przypisanych czujników albo historii.</div>`;
     if (c.error) return `<div class="muted" style="font-size:12px">Historia niedostępna: ${esc(c.error)}</div>`;
     const ents = this._data.config.entities || {}, offs = this._data.config.offsets || {};
-    const W = 440, H = 200, L = 30, R = 6, T = 8, B = 20;
+    const L = 34, R = 56, T = 10, B = 22;
     const series = [];
     let lo = Infinity, hi = -Infinity;
     for (const [role, name, color] of CHART_SERIES) {
@@ -469,24 +758,27 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     lo = Math.floor((lo - 2) / 10) * 10; hi = Math.ceil((hi + 2) / 10) * 10;
     const x = (ts) => L + (ts - c.start) / (c.end - c.start) * (W - L - R);
     const y = (v) => T + (hi - v) / (hi - lo) * (H - T - B);
-    let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Temperatury z ostatniej doby">`;
-    for (let g = lo; g <= hi; g += 10) {
-      svg += `<line x1="${L}" x2="${W - R}" y1="${y(g)}" y2="${y(g)}" stroke="rgba(255,255,255,0.06)"/><text x="${L - 4}" y="${y(g) + 3}" text-anchor="end">${g}</text>`;
+    let svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Temperatury z ostatniej doby">`;
+    const step = hi - lo > 60 ? 20 : 10;
+    for (let g = lo; g <= hi; g += step) {
+      svg += `<line x1="${L}" x2="${W - R}" y1="${y(g)}" y2="${y(g)}" stroke="rgba(255,255,255,0.06)"/><text x="${L - 6}" y="${y(g) + 4}" text-anchor="end">${g}°</text>`;
     }
-    for (let h = 0; h <= CHART_HOURS; h += 6) {
+    for (let h = 0; h <= CHART_HOURS; h += 3) {
       const ts = c.start + h * 3600;
       const t = new Date(ts * 1000).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
       const anchor = h === 0 ? "start" : h === CHART_HOURS ? "end" : "middle";
       svg += `<text x="${x(ts)}" y="${H - 5}" text-anchor="${anchor}">${t}</text>`;
     }
-    for (const s of series) {
-      // step line: a value holds until the next report
-      let d = "";
-      s.pts.forEach(([ts, v], i) => {
-        d += i === 0 ? `M${x(ts).toFixed(1)} ${y(v).toFixed(1)}` : ` H${x(ts).toFixed(1)} V${y(v).toFixed(1)}`;
-      });
-      svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="1.6"/>`;
-    }
+    series.forEach((s, i) => {
+      let dd = "";
+      s.pts.forEach(([ts, v], k) => { dd += k === 0 ? `M${x(ts).toFixed(1)} ${y(v).toFixed(1)}` : ` H${x(ts).toFixed(1)} V${y(v).toFixed(1)}`; });
+      const last = s.pts[s.pts.length - 1];
+      const delay = anim ? ` style="animation-delay:${(i * 0.18).toFixed(2)}s"` : "";
+      const endDelay = anim ? `animation-delay:${(1.4 + i * 0.18).toFixed(2)}s;` : "";
+      svg += `<path d="${dd}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" pathLength="1" class="${anim ? "draw" : ""}"${delay}/>
+        <circle cx="${x(last[0]).toFixed(1)}" cy="${y(last[1]).toFixed(1)}" r="3.5" fill="${s.color}" class="${anim ? "endp" : ""}" style="${endDelay}"/>
+        <text x="${(x(last[0]) + 7).toFixed(1)}" y="${(y(last[1]) + 4).toFixed(1)}" style="${endDelay}fill:${s.color};font-weight:600" class="${anim ? "endp" : ""}">${num(last[1])}°</text>`;
+    });
     svg += "</svg>";
     const legend = series.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("");
     return svg + `<div class="legend">${legend}</div>`;

@@ -167,6 +167,18 @@ włącza pompę CO i jednorazowo otwiera zawór (przy grzejnikach). Gdy sonda ni
 Pompy nigdy nie wyłącza. Działa bez Home Assistanta i bez internetu; nie zastępuje TZB ani termostatów kotła.
 Integracja wgrywa go jednym przyciskiem, a kod można też skopiować i wgrać ręcznie w panelu Shelly.
 
+## Panel „Ogrzewanie” — kotłownia na jednym ekranie
+
+Pierwszy ekran panelu to cała kotłownia na żywo, bez przewijania: pasek stanu (tryb, kocioł, bufor,
+„rozpal do”, alarmy), animowany schemat i wykres temperatur z ostatniej doby. Na schemacie płomień
+pali się w trakcie palenia, w rurach płynie woda, gdy pracuje pompa Laddomatu, pompa CO albo pompa
+CWU, wirniki pomp się kręcą, a bufor ma kolory warstw od dołu do góry. Karty ze sterowaniem,
+doradcą, paleniami i dziennikiem są niżej, po przewinięciu.
+
+Przycisk **⛶** w nagłówku włącza **pełny ekran**: panel zasłania pasek boczny Home Assistanta,
+a ekran nie gaśnie (np. tablet na ścianie w kotłowni albo telewizor). **✕** albo Esc wraca do
+zwykłego widoku. Na telefonie schemat i wykres układają się jeden pod drugim.
+
 ## Encje (urządzenie „Ogrzewanie”)
 
 Stan kotła · energia, naładowanie, średnia temperatura i miejsce w buforze · maks. załadunek drewna ·

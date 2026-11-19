@@ -12,7 +12,7 @@
   <a href="https://hacs.xyz"><img src="https://img.shields.io/badge/HACS-Custom-41BDF5?style=for-the-badge&logo=homeassistantcommunitystore&logoColor=white" alt="HACS" /></a>
   <a href="https://www.home-assistant.io"><img src="https://img.shields.io/badge/Home%20Assistant-2025.1+-18BCF2?style=for-the-badge&logo=homeassistant&logoColor=white" alt="Home Assistant" /></a>
   <a href="https://smartinghome.pl"><img src="https://img.shields.io/badge/License-Commercial-E74C3C?style=for-the-badge&logo=keycdn&logoColor=white" alt="License" /></a>
-  <img src="https://img.shields.io/badge/Version-1.82.0-2ECC71?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/Version-1.83.0-2ECC71?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
 </p>
 
@@ -279,6 +279,7 @@ with a 3-point actuator on a Shelly 2PM (Cover mode), the CH pump and the hot-wa
 - **Control** — weather curve, night setback, modes off / manual / auto / summer, heat dump to radiators on overheat, supply limiter; valve pulses timed on the Shelly itself
 - **Hot-water charging pump** (v1.82.0+) — differential control from the buffer or the boiler, never lets the tank heat the buffer back, tops the tank up when the boiler runs hot
 - **Local safety script** on the pump's Shelly — works without HA and without internet
+- **Whole boiler room on one screen** (v1.83.0+) — animated live diagram and a 24 h chart above the fold, full-screen mode that keeps the screen awake (wall tablet, TV)
 - **PRO** — room correction, building heat-loss model, *buffer lasts until*, *light the boiler by*, *load X kg of wood*
 
 Home Assistant is never the boiler's safety layer — see the guide: [docs/ogrzewanie.md](docs/ogrzewanie.md).
