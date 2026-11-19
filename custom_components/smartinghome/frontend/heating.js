@@ -116,6 +116,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     document.addEventListener("webkitfullscreenchange", this._onFs);
     document.addEventListener("visibilitychange", this._onVis);
     window.addEventListener("resize", this._onResize);
+    requestAnimationFrame(() => this._measure());
   }
 
   disconnectedCallback() {
@@ -164,11 +165,22 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     }
   }
 
+  // the hero fills the screen below the header. Home Assistant sets hass before the panel is
+  // shown, so the first measurement can be 0 — keep the CSS fallback and measure again once laid out.
   _measure() {
     const root = this.shadowRoot;
     const h = root && root.querySelector(".header");
     const w = root && root.querySelector(".wrap");
-    if (h && w) w.style.setProperty("--hdr", `${h.offsetHeight}px`);
+    if (!h || !w) return;
+    const px = h.offsetHeight;
+    if (px > 0) {
+      if (this._hdr !== px) {
+        this._hdr = px;
+        w.style.setProperty("--hdr", `${px}px`);
+      }
+    } else if (this.isConnected && !this._measureRetry) {
+      this._measureRetry = requestAnimationFrame(() => { this._measureRetry = 0; this._measure(); });
+    }
   }
 
   async _load() {
@@ -470,6 +482,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       this._skel = true;
       this._parts = {};
     }
+    if (!this._hdr) this._measure();
     const st = d.status || {};
     this._patch("heroTop", this._heroTopHtml(st));
     if (this._patch("heroMain", this._heroSvg(st))) this._phase(this.shadowRoot.getElementById("heroMain"));
