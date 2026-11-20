@@ -63,6 +63,13 @@ ROLES: dict[str, tuple[str, str]] = {
     "heating_return": ("Powrót z grzejników", "temperature"),
     "room": ("Pokój referencyjny — temperatura", "temperature"),
     "room_humidity": ("Pokój referencyjny — wilgotność", "humidity"),
+    # one sensor per storey (optional; the reference room already counts for its own storey)
+    "floor0_temp": ("Kondygnacja 1 — temperatura", "temperature"),
+    "floor0_humidity": ("Kondygnacja 1 — wilgotność", "humidity"),
+    "floor1_temp": ("Kondygnacja 2 — temperatura", "temperature"),
+    "floor1_humidity": ("Kondygnacja 2 — wilgotność", "humidity"),
+    "floor2_temp": ("Kondygnacja 3 — temperatura", "temperature"),
+    "floor2_humidity": ("Kondygnacja 3 — wilgotność", "humidity"),
     "outdoor": ("Temperatura zewnętrzna", "temperature"),
     "pump_switch": ("Pompa CO — przekaźnik", "switch"),
     "pump_power": ("Pompa CO — moc", "power"),
@@ -93,6 +100,9 @@ VALVE_TYPES = {
     "cover": "Siłownik jako roleta (Shelly 2PM w trybie Cover)",
     "switches": "Dwa przekaźniki (otwórz / zamknij)",
 }
+MAX_FLOORS = 3
+FLOOR_NAMES = ("Parter", "1. piętro", "Poddasze")
+
 # where the hot-water tank's coil takes its heat from: the probe compared with the tank
 DHW_SOURCES = {
     "buffer_top": "Z bufora",
@@ -115,6 +125,11 @@ DEFAULTS: dict[str, Any] = {
     "dhw_cold_c": 10.0,
     "dhw_target_c": 55.0,
     "room_target_c": 21.0,
+    # storeys: the house shown floor by floor, its mean temperature weighted by floor area
+    "floors": 1,
+    "floor_names": list(FLOOR_NAMES),
+    "floor_areas": [None, None, None],   # m² (empty → equal weights)
+    "room_floor": 0,            # the storey of the reference room (index)
     "warn_c": None,             # None → profile
     "alarm_c": None,
     "efficiency": None,
@@ -203,6 +218,11 @@ def _num(value: Any, default: float, lo: float, hi: float) -> float:
     return min(max(default if v is None else v, lo), hi)
 
 
+def _humidity(value: Any) -> float | None:
+    h = _f(value)
+    return h if h is not None and 0.0 <= h <= 100.0 else None
+
+
 def switch_state(state: Any) -> bool | None:
     """HA switch state → on / off / unknown (unavailable, no entity)."""
     return True if state == "on" else False if state == "off" else None
@@ -239,6 +259,16 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     out["dhw_cold_c"] = _num(raw.get("dhw_cold_c"), DEFAULTS["dhw_cold_c"], 0.0, 25.0)
     out["dhw_target_c"] = _num(raw.get("dhw_target_c"), DEFAULTS["dhw_target_c"], out["dhw_cold_c"] + 10.0, 80.0)
     out["room_target_c"] = _num(raw.get("room_target_c"), DEFAULTS["room_target_c"], 10.0, 28.0)
+    out["floors"] = int(_num(raw.get("floors"), 1, 1, MAX_FLOORS))
+    names = raw.get("floor_names") if isinstance(raw.get("floor_names"), list) else []
+    out["floor_names"] = [(str(names[i]).strip()[:24] if i < len(names) and str(names[i] or "").strip() else FLOOR_NAMES[i])
+                          for i in range(MAX_FLOORS)]
+    areas = raw.get("floor_areas") if isinstance(raw.get("floor_areas"), list) else []
+    out["floor_areas"] = [None] * MAX_FLOORS
+    for i in range(MAX_FLOORS):
+        a = _f(areas[i]) if i < len(areas) else None
+        out["floor_areas"][i] = round(min(a, 5000.0), 1) if a is not None and a > 0 else None
+    out["room_floor"] = int(_num(raw.get("room_floor"), 0, 0, out["floors"] - 1))
     out["warn_c"] = _num(raw.get("warn_c"), profile["warn_c"], 70.0, 94.0)
     out["alarm_c"] = _num(raw.get("alarm_c"), profile["alarm_c"], out["warn_c"] + 1.0, 98.0)
     out["efficiency"] = _num(raw.get("efficiency"), profile["efficiency"], 0.4, 0.95)
@@ -421,6 +451,33 @@ def dhw_state(cfg: dict[str, Any], t: float | None) -> dict[str, Any] | None:
     }
 
 
+def floors_state(cfg: dict[str, Any], temps: list[float | None], hums: list[float | None],
+                 t_room: float | None, h_room: float | None) -> tuple[list[dict[str, Any]], float | None]:
+    """Storey by storey: its own sensor, else the reference room when it is on that storey.
+    → (storeys, the house's mean temperature weighted by floor area — equal weights without areas)."""
+    out: list[dict[str, Any]] = []
+    for i in range(cfg["floors"]):
+        ref = i == cfg["room_floor"]
+        t = temps[i] if i < len(temps) else None
+        h = hums[i] if i < len(hums) else None
+        source = "probe" if t is not None else None
+        if t is None and ref and t_room is not None:
+            t, source = t_room, "room"
+        if h is None and ref:
+            h = h_room
+        out.append({"name": cfg["floor_names"][i], "temp_c": None if t is None else round(t, 1),
+                    "humidity": None if h is None else round(h, 0), "area_m2": cfg["floor_areas"][i],
+                    "ref": ref, "source": source})
+    known = [(f["temp_c"], f["area_m2"]) for f in out if f["temp_c"] is not None]
+    if not known:
+        return out, None
+    if all(a for _, a in known):
+        mean = sum(t * a for t, a in known) / sum(a for _, a in known)
+    else:
+        mean = sum(t for t, _ in known) / len(known)
+    return out, round(mean, 1)
+
+
 def monthly_summary(sessions: list[dict[str, Any]], utc_offset_s: float = 0.0,
                     price_kg: float | None = None) -> list[dict[str, Any]]:
     """Fires per calendar month (local time): count, hours, heat stored, wood (weighed where known)."""
@@ -519,6 +576,9 @@ class HeatingModel:
         self.cfg = normalize(cfg)
         self.probes: dict[str, Probe] = {role: Probe() for role in TEMP_ROLES}
         self.humidity: float | None = None
+        self.floor_humidity: list[float | None] = [None] * MAX_FLOORS
+        self.floors: list[dict[str, Any]] = []
+        self.house_c: float | None = None
         self.pump_on: bool | None = None
         self.pump_w: float | None = None
         self.dhw_pump_on: bool | None = None
@@ -568,8 +628,11 @@ class HeatingModel:
             self.first_update = now
         for role in TEMP_ROLES:
             self.probes[role].update(raw.get(role), now, cfg["offsets"].get(role, 0.0))
-        hum = _f(raw.get("room_humidity"))
-        self.humidity = hum if hum is not None and 0.0 <= hum <= 100.0 else None
+        self.humidity = _humidity(raw.get("room_humidity"))
+        self.floor_humidity = [_humidity(raw.get(f"floor{i}_humidity")) for i in range(MAX_FLOORS)]
+        self.floors, self.house_c = floors_state(
+            cfg, [self.t(f"floor{i}_temp") for i in range(MAX_FLOORS)], self.floor_humidity,
+            self.t("room"), self.humidity)
         self.pump_on = switch_state(raw.get("pump_switch"))
         self.pump_w = _f(raw.get("pump_power"))
         self.dhw_pump_on = switch_state(raw.get("dhw_pump_switch"))
@@ -587,6 +650,10 @@ class HeatingModel:
     def t(self, role: str) -> float | None:
         p = self.probes.get(role)
         return p.value if p is not None and p.status == "ok" else None
+
+    def house_temp(self) -> float | None:
+        """The whole house (area-weighted storeys) — what the building's heat loss depends on."""
+        return self.house_c if self.house_c is not None else self.t("room")
 
     # boiler
     def _set_state(self, state: str, now: float) -> None:
@@ -850,6 +917,8 @@ class HeatingModel:
             "updated": self.updated,
             "probes": probes,
             "humidity": self.humidity,
+            "floors": self.floors,
+            "house_c": self.house_c,
             "pump": {"on": self.pump_on, "power_w": self.pump_w},
             "dhw_pump": {"on": self.dhw_pump_on, "power_w": self.dhw_pump_w},
             "boiler": {

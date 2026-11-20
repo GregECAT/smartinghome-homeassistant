@@ -327,12 +327,13 @@ class HeatingManager:
             # the forecast only after the actuators — and never longer than a few seconds
             await self._fetch_forecast(now, entity, advisor_on)
 
-            # building model; the house's share of each fire (for kWh per kg). An hour with the hot-water
-            # tank charging from the buffer is not the house's draw either.
+            # building model (heat loss against the whole house: storeys weighted by area); the house's share
+            # of each fire (for kWh per kg). An hour with the hot-water tank charging from the buffer is not
+            # the house's draw either.
             firing = self.model.state in hm.FIRE_STATES or self.model.session is not None
             dhw_charging = dhw_pump_on is True and cfg["dhw_source"] == "buffer_top"
             if self.model.buffer:
-                self.building.add(now, self.model.buffer.get("total_kwh"), self.model.t("room"), t_out,
+                self.building.add(now, self.model.buffer.get("total_kwh"), self.model.house_temp(), t_out,
                                   firing or dhw_charging, pump_on if cfg["entities"]["pump_switch"] else None)
             dt = 0.0 if self._last_tick is None else min(max(now - self._last_tick, 0.0), 60.0)
             self._last_tick = now
@@ -867,6 +868,9 @@ SENSORS: tuple[dict[str, Any], ...] = (
     {"key": "heating_dhw_energy", "unit": UnitOfEnergy.KILO_WATT_HOUR,
      "device_class": SensorDeviceClass.ENERGY_STORAGE, "state_class": SensorStateClass.MEASUREMENT,
      "path": ("dhw", "energy_kwh"), "icon": "mdi:water-boiler"},
+    {"key": "heating_house_mean", "unit": UnitOfTemperature.CELSIUS,
+     "device_class": SensorDeviceClass.TEMPERATURE, "state_class": SensorStateClass.MEASUREMENT,
+     "path": ("house_c",), "icon": "mdi:home-thermometer-outline"},
     {"key": "heating_buffer_runtime", "unit": UnitOfTime.HOURS, "device_class": SensorDeviceClass.DURATION,
      "path": ("runtime_h",), "icon": "mdi:timer-sand"},
     {"key": "heating_last_fire_energy", "unit": UnitOfEnergy.KILO_WATT_HOUR,

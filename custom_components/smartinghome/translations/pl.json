@@ -217,6 +217,9 @@
       "heating_buffer_mean": {
         "name": "Średnia temperatura bufora"
       },
+      "heating_house_mean": {
+        "name": "Dom — średnia temperatura"
+      },
       "heating_dhw_energy": {
         "name": "Energia w zasobniku CWU"
       },

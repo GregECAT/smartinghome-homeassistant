@@ -175,6 +175,13 @@ pali się w trakcie palenia, w rurach płynie woda, gdy pracuje pompa Laddomatu,
 CWU, wirniki pomp się kręcą, a bufor ma kolory warstw od dołu do góry. Karty ze sterowaniem,
 doradcą, paleniami i dziennikiem są niżej, po przewinięciu.
 
+**Dom piętro po piętrze** (Ustawienia → „Dom — kondygnacje”): do 3 kondygnacji (np. parter, 1. piętro,
+poddasze) z nazwą, powierzchnią i własnym czujnikiem temperatury / wilgotności. Kondygnacja z pokojem
+referencyjnym bierze jego odczyt, dopóki nie ma własnego czujnika. Na schemacie dom dzieli się na piętra
+(najwyższe pod dachem), a **średnia domu** — ważona powierzchnią, bez powierzchni zwykła — trafia do
+encji „Dom — średnia temperatura” i do modelu strat ciepła doradcy (straty zależą od całego domu, nie
+jednego pokoju). Korekta krzywej grzewczej dalej działa według pokoju referencyjnego.
+
 Przycisk **⛶** w nagłówku włącza **pełny ekran**: panel zasłania pasek boczny Home Assistanta,
 a ekran nie gaśnie (np. tablet na ścianie w kotłowni albo telewizor). **✕** albo Esc wraca do
 zwykłego widoku. Na telefonie schemat i wykres układają się jeden pod drugim.

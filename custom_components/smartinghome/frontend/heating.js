@@ -46,6 +46,10 @@ const ROLE_HINTS = {
   outdoor: "opcjonalnie — czujnik lub pogoda",
   pump_switch: "opcjonalnie — przekaźnik Shelly 1PM",
   pump_power: "opcjonalnie — moc z Shelly 1PM (wykrywa awarię pompy)",
+  floor0_temp: "np. Shelly H&T w środku tej kondygnacji, z dala od grzejnika i okna",
+  floor1_temp: "np. Shelly H&T w środku tej kondygnacji, z dala od grzejnika i okna",
+  floor2_temp: "np. Shelly H&T w środku tej kondygnacji, z dala od grzejnika i okna",
+  floor0_humidity: "opcjonalnie", floor1_humidity: "opcjonalnie", floor2_humidity: "opcjonalnie",
   dhw_pump_switch: "opcjonalnie — przekaźnik pompy ładującej CWU (np. Shelly 1PM Mini)",
   dhw_pump_power: "opcjonalnie — moc pompy CWU (wykrywa awarię pompy)",
 };
@@ -210,7 +214,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
 
   async _loadChart() {
     const ents = (this._data && this._data.config && this._data.config.entities) || {};
-    const ids = CHART_SERIES.map(([role]) => ents[role]).filter(Boolean);
+    const ids = this._chartSeries().map(([role]) => ents[role]).filter(Boolean);
     this._chartTs = Date.now();
     if (!ids.length) { this._chart = null; return; }
     const end = new Date();
@@ -589,7 +593,13 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         <div class="note">${num(dhw.energy_kwh)} kWh · ${num(dhw.charge_pct, 0)}% do ${num(this._data.config.dhw_target_c, 0)} °C</div></div>`);
     }
     const room = probes.room || {};
-    if (room.value != null || st.humidity != null) {
+    const cfg = this._data.config;
+    if ((cfg.floors || 1) >= 2) {
+      const rows = (st.floors || []).map((f) => `${f.ref ? "◉ " : ""}${esc(f.name)}: <b style="color:#e0e6ed">${f.temp_c != null ? `${num(f.temp_c)} °C` : "—"}</b>${f.humidity != null ? ` · ${num(f.humidity, 0)}%` : ""}`);
+      out.push(`<div class="card kpi"><div class="lbl">Dom — średnio</div>
+        <div class="val">${num(st.house_c)}<small>°C</small></div>
+        <div class="note">${rows.join("<br>")}<br>zadana ${num(cfg.room_target_c)} °C${cfg.floor_areas && cfg.floor_areas.some((a) => a) ? " · średnia ważona powierzchnią" : ""}</div></div>`);
+    } else if (room.value != null || st.humidity != null) {
       out.push(`<div class="card kpi"><div class="lbl">Pokój</div>
         <div class="val">${num(room.value)}<small>°C</small></div>
         <div class="note">zadana ${num(this._data.config.room_target_c)} °C${st.humidity != null ? ` · wilgotność ${num(st.humidity, 0)}%` : ""}</div></div>`);
@@ -714,17 +724,44 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       <text x="722" y="98" text-anchor="middle" class="t-l" style="fill:${supC}">${lbl("heating_supply")}</text>
       ${ctl.supply_target != null ? `<text x="722" y="136" text-anchor="middle" class="t-s">zad. ${num(ctl.supply_target, 0)}°</text>` : ""}`;
 
-    // house
+    // house — one room, or storey by storey (the top one under the roof when there are three)
     const room = v("room");
-    s += `<path d="M780 160L895 62L1010 160V340H780Z" fill="rgba(255,255,255,.035)" stroke="#475569" stroke-width="2" stroke-linejoin="round"/>
-      <text x="895" y="132" text-anchor="middle" class="t-s">Dom</text>
-      <text x="895" y="206" text-anchor="middle" class="t-big" style="fill:#e0e6ed">${room != null ? `${num(room)}°` : "—"}</text>
-      <text x="895" y="230" text-anchor="middle" class="t-s">zadana ${num(ctl.room_target ?? c.room_target_c)}°${st.humidity != null ? ` · ${num(st.humidity, 0)}%` : ""}</text>`;
     const radC = coOn ? supC : "#334155";
-    s += `${coOn ? `<rect x="846" y="246" width="98" height="54" rx="8" fill="${radC}" opacity=".35" filter="url(#hgGlow)"/>` : ""}
-      <rect x="850" y="250" width="90" height="46" rx="6" fill="#0f172a" stroke="${radC}" stroke-width="2"/>
-      ${[0, 1, 2, 3, 4, 5, 6].map((i) => `<rect x="${857 + i * 11.5}" y="255" width="7" height="36" rx="3" fill="${radC}" opacity="${coOn ? 0.9 : 0.5}"/>`).join("")}
-      <text x="895" y="322" text-anchor="middle" class="t-s">${ctl.dump ? "zrzut ciepła" : coOn ? "grzanie" : ctl.heating_needed ? "zapotrzebowanie" : "bez grzania"}</text>`;
+    const heatTxt = ctl.dump ? "zrzut ciepła" : coOn ? "grzanie" : ctl.heating_needed ? "zapotrzebowanie" : "bez grzania";
+    const target = num(ctl.room_target ?? c.room_target_c);
+    s += `<path d="M780 160L895 62L1010 160V340H780Z" fill="rgba(255,255,255,.035)" stroke="#475569" stroke-width="2" stroke-linejoin="round"/>`;
+    if ((c.floors || 1) >= 2) {
+      const fl = st.floors || [];
+      const bands = c.floors >= 3 ? [[0, 250, 340], [1, 160, 250], [2, 62, 160]] : [[0, 250, 340], [1, 160, 250]];
+      s += `<path d="M782 250H1008" stroke="#334155" stroke-width="1.5" stroke-dasharray="5 5"/>`;
+      if (c.floors < 3) s += `<text x="895" y="132" text-anchor="middle" class="t-s">Dom</text>`;
+      for (const [i, y0, y1] of bands) {
+        const f = fl[i] || {};
+        const name = `${f.ref ? "◉ " : ""}${esc(f.name || "")}`;
+        const tt = f.temp_c != null ? `${num(f.temp_c)}°` : "—";
+        if (y0 === 62) {      // under the roof
+          s += `<text x="895" y="106" text-anchor="middle" class="t-s">${name}${f.humidity != null ? ` · ${num(f.humidity, 0)}%` : ""}</text>
+            <text x="895" y="140" text-anchor="middle" class="t-l" style="fill:${f.temp_c != null ? "#e0e6ed" : "#64748b"}">${tt}</text>`;
+          continue;
+        }
+        const cy = (y0 + y1) / 2;
+        s += `<text x="792" y="${y0 + 20}" class="t-s">${name}</text>
+          <text x="868" y="${cy + 18}" text-anchor="middle" class="t-big2" style="fill:${f.temp_c != null ? "#e0e6ed" : "#64748b"}">${tt}</text>
+          <text x="868" y="${cy + 36}" text-anchor="middle" class="t-s ${f.temp_c != null ? "" : "dim"}">${f.temp_c == null ? "brak czujnika" : f.humidity != null ? `${num(f.humidity, 0)}%` : ""}</text>
+          ${coOn ? `<rect x="944" y="${cy - 14}" width="54" height="34" rx="6" fill="${radC}" opacity=".3" filter="url(#hgGlow)"/>` : ""}
+          <rect x="948" y="${cy - 10}" width="46" height="26" rx="4" fill="#0f172a" stroke="${radC}" stroke-width="1.5"/>
+          ${[0, 1, 2, 3].map((k) => `<rect x="${953 + k * 10}" y="${cy - 6}" width="5" height="18" rx="2" fill="${radC}" opacity="${coOn ? 0.9 : 0.5}"/>`).join("")}`;
+      }
+      s += `<text x="895" y="362" text-anchor="middle" class="t-s">${st.house_c != null ? `średnio <tspan style="fill:#e0e6ed;font-weight:700">${num(st.house_c)}°</tspan> · ` : ""}zadana ${target}° · ${heatTxt}</text>`;
+    } else {
+      s += `<text x="895" y="132" text-anchor="middle" class="t-s">Dom</text>
+        <text x="895" y="206" text-anchor="middle" class="t-big" style="fill:#e0e6ed">${room != null ? `${num(room)}°` : "—"}</text>
+        <text x="895" y="230" text-anchor="middle" class="t-s">zadana ${target}°${st.humidity != null ? ` · ${num(st.humidity, 0)}%` : ""}</text>
+        ${coOn ? `<rect x="846" y="246" width="98" height="54" rx="8" fill="${radC}" opacity=".35" filter="url(#hgGlow)"/>` : ""}
+        <rect x="850" y="250" width="90" height="46" rx="6" fill="#0f172a" stroke="${radC}" stroke-width="2"/>
+        ${[0, 1, 2, 3, 4, 5, 6].map((i) => `<rect x="${857 + i * 11.5}" y="255" width="7" height="36" rx="3" fill="${radC}" opacity="${coOn ? 0.9 : 0.5}"/>`).join("")}
+        <text x="895" y="322" text-anchor="middle" class="t-s">${heatTxt}</text>`;
+    }
 
     // outdoor
     if (ctl.t_out != null) {
@@ -749,6 +786,19 @@ class SmartingHomeHeatingPanel extends HTMLElement {
   }
 
   // ── 24 h chart (hero) ────────────────────────────────────────────────────
+  // the fixed series plus one per storey (named after it) when the house has storeys
+  _chartSeries() {
+    const c = (this._data && this._data.config) || {};
+    const n = Number(c.floors) || 1;
+    const names = c.floor_names || [];
+    const out = CHART_SERIES.map(([r, name, col]) => [r, r === "room" && n >= 2 ? `Pokój ref. (${names[c.room_floor || 0] || ""})` : name, col]);
+    if (n >= 2) {
+      const colors = ["#f472b6", "#fde68a", "#94a3b8"];
+      for (let i = 0; i < n; i++) out.push([`floor${i}_temp`, names[i] || `Kondygnacja ${i + 1}`, colors[i]]);
+    }
+    return out;
+  }
+
   _chartSvg(W, H, anim) {
     const c = this._chart;
     if (!c) return `<div class="muted" style="font-size:12px">Brak przypisanych czujników albo historii.</div>`;
@@ -757,7 +807,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const L = 34, R = 56, T = 10, B = 22;
     const series = [];
     let lo = Infinity, hi = -Infinity;
-    for (const [role, name, color] of CHART_SERIES) {
+    for (const [role, name, color] of this._chartSeries()) {
       const id = ents[role];
       const rows = id && c.res ? c.res[id] : null;
       if (!rows || !rows.length) continue;
@@ -989,9 +1039,33 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       </div>
       <div class="hint">Alarmy krytyczne (przegrzanie, utrata czujnika w trakcie palenia) zawsze trafiają też do powiadomień Home Assistanta.</div></div>`;
 
+    const nFloors = Number(c.floors) || 1;
+    const floorNames = c.floor_names || ["Parter", "1. piętro", "Poddasze"];
+    const floorOpts = Object.fromEntries(floorNames.slice(0, nFloors).map((n, i) => [String(i), n]));
+    html += `<div class="card" style="margin-top:14px"><h3>Dom — kondygnacje <small>temperatura domu piętro po piętrze</small></h3><div class="grid2">
+      <label class="f">Liczba kondygnacji${sel("floors", { 1: "1 — cały dom jak jeden pokój", 2: "2", 3: "3 (najwyższa pod dachem)" }, String(nFloors))}</label>
+      ${nFloors >= 2 ? `<label class="f">Pokój referencyjny jest na${sel("room_floor", floorOpts, String(c.room_floor || 0))}<span class="h">liczy się jako temperatura tej kondygnacji, gdy nie ma ona własnego czujnika</span></label>` : ""}
+    </div>`;
+    if (nFloors >= 2) {
+      html += `<div class="grid2" style="margin-top:12px">${floorNames.slice(0, nFloors).map((n, i) => `
+        <label class="f">Kondygnacja ${i + 1} — nazwa<input name="floor_name_${i}" type="text" maxlength="24" value="${esc(n)}" ${dis}></label>
+        <label class="f">${esc(n)} — powierzchnia (m²)<input name="floor_area_${i}" type="number" min="0" max="5000" step="1" value="${(c.floor_areas || [])[i] ?? ""}" placeholder="opcjonalnie" ${dis}></label>`).join("")}
+      </div>
+      <div class="hint">Czujniki kondygnacji wybierasz niżej, w sekcji „Czujniki”. Średnia domu jest ważona powierzchnią (bez powierzchni — zwykła średnia)
+        i to ona trafia do modelu strat ciepła doradcy. Korekta krzywej grzewczej dalej działa według pokoju referencyjnego.</div>`;
+    }
+    html += `</div>`;
+
     html += `<div class="card" style="margin-top:14px"><h3>Czujniki <small>na żywo — ogrzej sondę w dłoni, a jej wartość zacznie rosnąć</small></h3>
       <div class="probe head"><div>Punkt pomiaru</div><div>Encja w Home Assistant</div><div style="text-align:right">Odczyt</div><div>Korekta (K)</div></div>`;
     for (const [role, meta] of Object.entries(d.roles || {})) {
+      const fm = /^floor(\d)_/.exec(role);
+      if (fm) {
+        const i = Number(fm[1]);
+        if (nFloors < 2 || i >= nFloors) continue;          // one storey: the reference room is the house
+        html += this._probeRow(role, { ...meta, label: meta.label.replace(/^Kondygnacja \d/, floorNames[i]) }, c, dis);
+        continue;
+      }
       html += this._probeRow(role, meta, c, dis);
     }
     html += `<div class="hint">Korekta: różnica względem termometru referencyjnego (np. wszystkie sondy w jednym naczyniu z wodą przed montażem).
@@ -1191,7 +1265,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     form.addEventListener("change", (e) => {
       if (e.target.name && e.target.name.startsWith("ent_")) this._updateLiveProbes();
       this._collect();
-      if (["valve_type", "emitters", "ent_dhw_pump_switch"].includes(e.target.name)) this._renderBody();   // other fields / defaults
+      if (["valve_type", "emitters", "ent_dhw_pump_switch", "floors"].includes(e.target.name) || /^floor_name_/.test(e.target.name)) {
+        this._renderBody();   // other fields / defaults, storey rows and their names
+      }
     });
     form.addEventListener("input", () => {
       this._collect();
@@ -1221,8 +1297,17 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       else if (el.name.startsWith("ent_")) { c.entities = c.entities || {}; c.entities[el.name.slice(4)] = el.value; }
       else if (el.name.startsWith("off_")) { c.offsets = c.offsets || {}; c.offsets[el.name.slice(4)] = el.value === "" ? 0 : parseFloat(el.value); }
       else if (el.name === "probe_top_h" || el.name === "probe_bottom_h") c[el.name] = el.value === "" ? null : parseFloat(el.value) / 100;
+      else if (el.name === "floors" || el.name === "room_floor") c[el.name] = parseInt(el.value, 10) || 0;
+      else if (el.name.startsWith("floor_name_")) {
+        c.floor_names = [...(c.floor_names || ["Parter", "1. piętro", "Poddasze"])];
+        c.floor_names[Number(el.name.slice(11))] = el.value;
+      } else if (el.name.startsWith("floor_area_")) {
+        c.floor_areas = [...(c.floor_areas || [null, null, null])];
+        c.floor_areas[Number(el.name.slice(11))] = el.value === "" ? null : parseFloat(el.value);
+      }
       else if (nums.includes(el.name)) c[el.name] = el.value === "" ? null : parseFloat(el.value);
     }
+    if ((c.room_floor || 0) >= (c.floors || 1)) c.room_floor = 0;
   }
 
   async _save() {
