@@ -453,6 +453,12 @@ class SmartingHomeHeatingPanel extends HTMLElement {
           background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); }
         .lockrow .nm { flex:1; min-width:140px; color:#e0e6ed; }
         .lockrow.on { border-color:rgba(247,183,49,0.5); background:rgba(247,183,49,0.08); }
+        .seg.sw3 button { min-width:58px; font-weight:600; }
+        .seg.sw3 button:disabled { cursor:default; opacity:1; }
+        .seg.sw3 button.on.pos-auto { background:rgba(46,204,113,0.18); color:#2ecc71; }
+        .seg.sw3 button.on.pos-off { background:rgba(231,76,60,0.2); color:#fca5a5; }
+        .seg.sw3 button.on.pos-on { background:rgba(247,183,49,0.22); color:#f7b731; }
+        .alarm.hand { background:rgba(0,212,255,0.08); border-color:rgba(0,212,255,0.4); }
         .btn.danger { background:rgba(231,76,60,0.16); border-color:rgba(231,76,60,0.55); color:#fecaca; }
         .btn.danger:hover { background:rgba(231,76,60,0.28); color:#fff; }
         .btn:disabled { opacity:0.45; cursor:not-allowed; }
@@ -664,7 +670,15 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       if (!lk[el] || !conf[el]) continue;
       html += `<div class="alarm lock"><span class="txt">🔒 <b>${LOCK_NAMES[el]} ${LOCKED_WORD[el]}</b>
         <span>wyłącznikiem awaryjnym: automatyka i zabezpieczenia ${el === "valve" ? "nie poruszą siłownika" : "jej nie włączą"}.</span></span>
-        ${d.admin ? `<button class="lockbtn" data-act="lockask" data-el="${el}" data-on="0">Odblokuj…</button>` : ""}</div>`;
+        ${d.admin ? (el === "valve" ? `<button class="lockbtn" data-act="lockask" data-el="${el}" data-on="0">Odblokuj…</button>`
+          : `<button class="lockbtn" data-act="swask" data-el="${el}" data-pos="auto">AUTO…</button>`) : ""}</div>`;
+    }
+    const hand = ctl.force_on || {};
+    for (const el of ["pump", "dhw_pump"]) {
+      if (!hand[el] || !conf[el]) continue;
+      html += `<div class="alarm lock hand"><span class="txt">✋ <b>${LOCK_NAMES[el]}: RĘKA</b>
+        <span>pracuje na stałe z przełącznika w panelu, niezależnie od trybu i automatyki.</span></span>
+        ${d.admin ? `<button class="lockbtn" data-act="swask" data-el="${el}" data-pos="auto">AUTO…</button>` : ""}</div>`;
     }
     if (pumpC.forced_active) {
       html += `<div class="alarm ${pumpC.forced === "probe" ? "warn" : "err"}">⚙️ <b>Pompa CO pracuje awaryjnie</b> <span>(${FORCE_TEXT[pumpC.forced] || ""}).</span>${
@@ -859,6 +873,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     s += pumpSym(665, 110, coOn) + `<text x="665" y="148" text-anchor="middle" class="t-s">pompa CO${coOn ? pw((st.pump || {}).power_w) : ""}</text>
       ${!pump.configured ? `<text x="665" y="163" text-anchor="middle" class="t-s dim">nieprzypisana</text>`
         : lk.pump ? `<text x="665" y="163" text-anchor="middle" class="t-lock">🔒 zablokowana</text>`
+        : (ctl.force_on || {}).pump ? `<text x="665" y="163" text-anchor="middle" class="t-lock">✋ RĘKA</text>`
         : pump.forced_active ? `<text x="665" y="163" text-anchor="middle" class="t-lock">awaryjnie</text>` : ""}
       <text x="722" y="98" text-anchor="middle" class="t-l" style="fill:${supC}">${lbl("heating_supply")}</text>
       ${ctl.supply_target != null ? `<text x="722" y="136" text-anchor="middle" class="t-s">zad. ${num(ctl.supply_target, 0)}°</text>` : ""}`;
@@ -911,7 +926,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
 
     // hot-water pump and tank
     s += pumpSym(540, 260, dhwOn) + `<text x="562" y="256" class="t-s">pompa CWU</text>
-      <text x="562" y="271" class="${dp.configured && lk.dhw_pump ? "t-lock" : `t-s ${dp.configured ? "" : "dim"}`}">${dp.configured ? (lk.dhw_pump ? "🔒 zablokowana" : dhwOn ? `ładuje${pw((st.dhw_pump || {}).power_w)}` : "stoi") : "nieprzypisana"}</text>
+      <text x="562" y="271" class="${dp.configured && (lk.dhw_pump || (ctl.force_on || {}).dhw_pump) ? "t-lock" : `t-s ${dp.configured ? "" : "dim"}`}">${dp.configured ? (lk.dhw_pump ? "🔒 zablokowana" : (ctl.force_on || {}).dhw_pump ? `✋ RĘKA${dhwOn ? pw((st.dhw_pump || {}).power_w) : ""}` : dhwOn ? `ładuje${pw((st.dhw_pump || {}).power_w)}` : "stoi") : "nieprzypisana"}</text>
       <text x="700" y="345" text-anchor="middle" class="t-h2">CWU ${num(c.dhw_l, 0)} L</text>
       <rect x="640" y="355" width="120" height="150" rx="26" fill="${tempColor(dhwT)}" opacity=".85" stroke="#64748b" stroke-width="2"/>
       <rect x="640" y="355" width="120" height="150" rx="26" fill="url(#hgShine)"/>`;
@@ -1035,13 +1050,22 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     }
     const lkC = ctl.lockout || {};
     const lockItems = [["pump", pump.configured], ["dhw_pump", dpump.configured], ["valve", v.configured]].filter(([, ok]) => ok);
+    const handC = ctl.force_on || {};
     if (lockItems.length) {
-      html += `<div class="locks"><div class="lh">Wyłączniki awaryjne</div>${lockItems.map(([el]) => {
-        const on = !!lkC[el];
-        return `<div class="lockrow ${on ? "on" : ""}"><span class="nm">${on ? "🔒" : "🔓"} ${LOCK_NAMES[el]}</span>
-          <span class="pill ${on ? "hot" : ""}">${on ? LOCKED_WORD[el] : "normalna praca"}</span>
-          ${admin ? `<button class="btn sm ${on ? "" : "danger"}" data-act="lockask" data-el="${el}" data-on="${on ? 0 : 1}">${on ? "Odblokuj…" : "Zablokuj…"}</button>` : ""}</div>`;
-      }).join("")}<div class="hint">Zablokowanego elementu nie włączy automatyka ani żadne zabezpieczenie. Fizyczny przełącznik AUTO–0–RĘKA w skrzynce działa niezależnie.</div></div>`;
+      html += `<div class="locks"><div class="lh">Przełączniki AUTO / 0 / RĘKA</div>${lockItems.map(([el]) => {
+        if (el === "valve") {
+          const on = !!lkC[el];
+          return `<div class="lockrow ${on ? "on" : ""}"><span class="nm">${on ? "🔒" : "🔓"} ${LOCK_NAMES[el]}</span>
+            <span class="pill ${on ? "hot" : ""}">${on ? LOCKED_WORD[el] : "normalna praca"}</span>
+            ${admin ? `<button class="btn sm ${on ? "" : "danger"}" data-act="lockask" data-el="${el}" data-on="${on ? 0 : 1}">${on ? "Odblokuj…" : "Zablokuj…"}</button>` : ""}</div>`;
+        }
+        const pos = lkC[el] ? "off" : handC[el] ? "on" : "auto";
+        const segs = [["auto", "AUTO"], ["off", "0"], ["on", "RĘKA"]].map(([p, lbl]) =>
+          `<button class="${pos === p ? `on pos-${p}` : ""}" ${admin && pos !== p ? `data-act="swask" data-el="${el}" data-pos="${p}"` : "disabled"}>${lbl}</button>`).join("");
+        return `<div class="lockrow ${pos === "auto" ? "" : "on"}"><span class="nm">${pos === "off" ? "🔒" : pos === "on" ? "✋" : "⚙️"} ${LOCK_NAMES[el]}</span>
+          <span class="seg sw3">${segs}</span></div>`;
+      }).join("")}<div class="hint">AUTO: pompą steruje moduł. 0: wyłączona, nic jej nie włączy (także zabezpieczenia). RĘKA: pracuje na stałe, niezależnie od trybu.
+        Fizyczny przełącznik AUTO–0–RĘKA w skrzynce działa niezależnie od panelu.</div></div>`;
     }
     if (admin && c.mode !== "off" && (v.configured || pump.configured || dpump.configured)) {
       const manual = c.mode === "manual";
@@ -1134,6 +1158,10 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         this._guard = { loading: true };
         this._renderBody();
         this._guard = await this._hass.callWS({ type: "smartinghome/heating/guard", action: ds.guard });
+      } else if (act === "swask") {
+        if (!(await this._confirmSwitch(ds.el, ds.pos))) return;
+        this._data = await this._hass.callWS({ type: "smartinghome/heating/command", action: "set_switch", element: ds.el, position: ds.pos });
+        this._msg = `${LOCK_NAMES[ds.el]}: pozycja ${{ auto: "AUTO", off: "0", on: "RĘKA" }[ds.pos]}.`;
       } else if (act === "lockask") {
         const lock = ds.on === "1";
         if (!(await this._confirmLock(ds.el, lock))) return;
@@ -1150,6 +1178,55 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     }
     if (this._view === "settings" && act !== "guard" && act !== "copy-guard") this._draft = null;
     this._renderBody();
+  }
+
+  // pump switch AUTO / 0 / HAND: "0" is the emergency lock (its own dialog), HAND needs an acknowledgement
+  _confirmSwitch(el, pos) {
+    if (pos === "off") return this._confirmLock(el, true);
+    const name = LOCK_NAMES[el] || el;
+    const ctl = (this._data && this._data.status && this._data.status.control) || {};
+    const fromLock = !!(ctl.lockout || {})[el];
+    let title, body, ack = "";
+    if (pos === "on") {
+      title = `✋ ${name}: pozycja RĘKA?`;
+      body = `<p>${name} zostanie włączona i będzie <b>pracować na stałe</b>, niezależnie od trybu modułu i automatyki, dopóki nie przełączysz jej na AUTO albo 0.</p>
+        ${el === "dhw_pump" ? "<p>Gdy bufor jest chłodniejszy od wody w zasobniku, pompa CWU będzie zasobnik <b>wychładzać</b>.</p>" : "<p>Zawór mieszający dalej działa według trybu modułu.</p>"}
+        ${fromLock && el === "pump" ? "<p>Skrypt bezpieczeństwa na Shelly pompy zostanie uruchomiony ponownie.</p>" : ""}`;
+      ack = "Rozumiem: w instalacji jest woda, a pompa będzie pracować, dopóki jej nie przełączę.";
+    } else {
+      title = `⚙️ ${name}: pozycja AUTO?`;
+      body = fromLock
+        ? `<p>Automatyka i zabezpieczenia znów mogą włączać tę pompę, także od razu, jeśli są ku temu warunki.</p>${el === "pump" ? "<p>Skrypt bezpieczeństwa na Shelly pompy zostanie uruchomiony ponownie.</p>" : ""}`
+        : `<p>Pompą znów steruje moduł. Jeśli w obecnym trybie nie ma powodu, żeby pracowała, <b>zostanie od razu wyłączona</b>.</p>`;
+    }
+    return this._modal({ title, body, ack, yes: pos === "on" ? "Włącz RĘKA" : "Przełącz na AUTO", danger: pos === "on" });
+  }
+
+  _modal({ title, body, ack, yes, danger }) {
+    return new Promise((resolve) => {
+      const bg = document.createElement("div");
+      bg.className = "modal-bg";
+      bg.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mtitle">
+        <h4 id="mtitle">${title}</h4>${body}
+        ${ack ? `<label class="ack"><input type="checkbox" id="mack"><span>${ack}</span></label>` : ""}
+        <div class="mbtns"><button class="btn" id="mno">Anuluj</button>
+          <button class="btn ${danger ? "danger" : "primary"}" id="myes" ${ack ? "disabled" : ""}>${yes}</button></div></div>`;
+      const close = (val) => {
+        document.removeEventListener("keydown", onKey, true);
+        bg.remove();
+        resolve(val);
+      };
+      const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(false); } };
+      document.addEventListener("keydown", onKey, true);
+      bg.addEventListener("click", (e) => { if (e.target === bg) close(false); });
+      bg.querySelector("#mno").addEventListener("click", () => close(false));
+      const yesBtn = bg.querySelector("#myes");
+      yesBtn.addEventListener("click", () => { if (!yesBtn.disabled) close(true); });
+      const box = bg.querySelector("#mack");
+      if (box) box.addEventListener("change", () => { yesBtn.disabled = !box.checked; });
+      this.shadowRoot.appendChild(bg);
+      (box || yesBtn).focus();
+    });
   }
 
   // emergency switch confirmation: locking needs an explicit acknowledgement, unlocking a second click
@@ -1170,30 +1247,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       dhw_pump: "Rozumiem: pompa CWU nie ruszy, nawet gdy kocioł jest gorący.",
       valve: "Rozumiem: przy przegrzaniu kotła zawór się nie otworzy.",
     }[el] : "";
-    return new Promise((resolve) => {
-      const bg = document.createElement("div");
-      bg.className = "modal-bg";
-      bg.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mtitle">
-        <h4 id="mtitle">${lock ? "🔒 Zablokować" : "🔓 Odblokować"}: ${esc(name)}?</h4>${body}
-        ${ack ? `<label class="ack"><input type="checkbox" id="mack"><span>${ack}</span></label>` : ""}
-        <div class="mbtns"><button class="btn" id="mno">Anuluj</button>
-          <button class="btn ${lock ? "danger" : "primary"}" id="myes" ${ack ? "disabled" : ""}>${lock ? "Zablokuj" : "Odblokuj"}</button></div></div>`;
-      const close = (val) => {
-        document.removeEventListener("keydown", onKey, true);
-        bg.remove();
-        resolve(val);
-      };
-      const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(false); } };
-      document.addEventListener("keydown", onKey, true);
-      bg.addEventListener("click", (e) => { if (e.target === bg) close(false); });
-      bg.querySelector("#mno").addEventListener("click", () => close(false));
-      const yes = bg.querySelector("#myes");
-      yes.addEventListener("click", () => { if (!yes.disabled) close(true); });
-      const box = bg.querySelector("#mack");
-      if (box) box.addEventListener("change", () => { yes.disabled = !box.checked; });
-      this.shadowRoot.appendChild(bg);
-      (box || yes).focus();
-    });
+    return this._modal({ title: `${lock ? "🔒 Zablokować" : "🔓 Odblokować"}: ${esc(name)}?`, body, ack,
+      yes: lock ? "Zablokuj" : "Odblokuj", danger: lock });
   }
 
   _sessionsHtml(st) {

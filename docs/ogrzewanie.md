@@ -104,51 +104,30 @@ więc Home Assistant nigdy nie działa wbrew niemu:
 - **ogranicznik zasilania** (zasilanie > maks. + 3 K) → zawór przymykany.
 
 **Przy montażu, serwisie albo gdy w instalacji nie ma wody** przełącz tryb na **Wyłączone** albo zablokuj
-pompę wyłącznikiem awaryjnym. Inaczej, dopóki sondy nie czytają, pompa CO pracuje (także na sucho).
+pompę (pozycja 0). Inaczej, dopóki sondy nie czytają, pompa CO pracuje (także na sucho).
 W trybie „Wyłączone” panel informuje, że zabezpieczenie pompy CO nie działa.
 
-## Wyłączniki awaryjne
+## Przełączniki AUTO / 0 / RĘKA i wyłączniki awaryjne
 
-W karcie **Sterowanie** każdy przypisany element (pompa CO, pompa CWU, siłownik zaworu) ma własny
-**wyłącznik awaryjny**. Zablokowany element:
-- **pompa** jest wyłączana i **nic jej nie włączy**: ani automatyka, ani przyciski trybu Ręczne, ani
-  zabezpieczenia (przegrzanie, brak sond, zrzut ciepła do CWU). Jeśli ktoś włączy przekaźnik poza modułem,
-  moduł od razu go wyłączy;
-- **siłownik zaworu** zatrzymuje się i nie jest poruszany (także przy zrzucie ciepła i ograniczniku);
-- przy pompie CO **skrypt bezpieczeństwa na Shelly** jest zatrzymywany (i nie startuje po restarcie Shelly),
-  a po odblokowaniu uruchamiany ponownie.
+W karcie **Sterowanie** każda przypisana pompa (CO i CWU) ma przełącznik z trzema pozycjami, jak fizyczny
+przełącznik w skrzynce:
+- **AUTO** — pompą steruje moduł według trybu (Wyłączone / Ręczne / Automatyczne / Lato) i zabezpieczeń;
+- **0 (wyłącznik awaryjny)** — pompa jest wyłączana i **nic jej nie włączy**: ani automatyka, ani przyciski
+  trybu Ręczne, ani zabezpieczenia (przegrzanie, brak sond, zrzut ciepła do CWU). Jeśli ktoś włączy przekaźnik
+  poza modułem, moduł od razu go wyłączy. Przy pompie CO **skrypt bezpieczeństwa na Shelly** jest zatrzymywany
+  (i nie startuje po restarcie Shelly), a po wyjściu z pozycji 0 uruchamiany ponownie;
+- **RĘKA** — pompa **pracuje na stałe**, niezależnie od trybu modułu i automatyki, aż do przełączenia na AUTO
+  albo 0. Przydaje się do odpowietrzania, testów i awaryjnej pracy, gdy automatyka zawodzi. Pompa CWU w pozycji
+  RĘKA wychładza zasobnik, gdy bufor jest od niego chłodniejszy.
 
-Blokada działa w każdym trybie i przetrwa restart Home Assistanta. Włączenie i zdjęcie blokady wymaga
-potwierdzenia w oknie dialogowym (przy blokadzie: zaznaczenia „Rozumiem…”). Gdy zabezpieczenie chce włączyć
-zablokowany element, pojawia się alarm „Wyłącznik awaryjny blokuje zabezpieczenie” (krytyczny, gdy kocioł
-jest gorący). Fizyczny przełącznik AUTO–0–RĘKA w skrzynce działa niezależnie od panelu.
+**Siłownik zaworu** ma sam wyłącznik awaryjny: zablokowany zatrzymuje się i nie jest poruszany (także przy
+zrzucie ciepła i ograniczniku).
 
-### Pompa ładująca CWU
-
-Pompa tłoczy wodę ze źródła (góra bufora albo wyjście kotła) przez wężownicę zasobnika. Sterowanie jest
-różnicowe — pompa pracuje tylko wtedy, gdy źródło jest wyraźnie cieplejsze od wody w zasobniku:
-
-- **start:** źródło ≥ CWU + 5 K **i** CWU ≤ zadana − 5 K (domyślnie 50 °C przy zadanej 55 °C),
-- **stop:** CWU osiągnęła zadaną **albo** różnica spadła poniżej 2 K (min. 5 min pracy),
-- **stop od razu** (bez minimalnego czasu pracy): źródło chłodniejsze od CWU, brak odczytu sondy CWU
-  lub źródła, CWU ≥ górny limit — zasobnik nigdy nie grzeje bufora z powrotem,
-- **gorący kocioł:** CWU dogrzewana do zadanej bez czekania na histerezę. Opcja **„Zrzut ciepła do CWU”**
-  pozwala grzać ją aż do górnego limitu (domyślnie 80 °C) — zasobnik 500 L przyjmuje wtedy dodatkowe
-  ~15 kWh. Włączaj ją **tylko z termostatycznym zaworem mieszającym na wyjściu ciepłej wody**
-  (ochrona przed poparzeniem). Przy podłogówce, gdzie zrzutu do domu nie ma, to jedyny dodatkowy odbiór ciepła.
-
-Godziny ładowania CWU z bufora nie trafiają do modelu domu doradcy (to nie jest zużycie domu).
-
-### Krzywa grzewcza
-
-`zasilanie = pokój + nachylenie × (pokój − zewnątrz) + przesunięcie`, w granicach min/maks.
-Startowo: grzejniki nachylenie 1,4 (maks. 75 °C), podłoga 0,5 (maks. 45 °C). W domu jest za zimno
-przy mrozie, a dobrze w okresie przejściowym → zwiększ nachylenie; za zimno zawsze → przesunięcie w górę.
-Głowica termostatyczna na grzejniku w pokoju referencyjnym powinna być w pełni otwarta.
-
-Regulator zaworu to PI w formie przyrostowej dla siłownika 3-punktowego: impuls 2–15 s proporcjonalny
-do uchybu, strefa martwa ±0,8 K, przerwa 60 s na opóźnienie transportowe i bezwładność sondy w tulei,
-limit 15 min pracy siłownika na godzinę.
+Pozycje działają w każdym trybie i przetrwają restart Home Assistanta. Każda zmiana wymaga potwierdzenia
+w oknie dialogowym; przejście na 0 i na RĘKA — dodatkowo zaznaczenia „Rozumiem…”. Pozycja inna niż AUTO jest
+widoczna na górze ekranu i na schemacie kotłowni. Gdy zabezpieczenie chce włączyć element w pozycji 0, pojawia
+się alarm „Wyłącznik awaryjny blokuje zabezpieczenie” (krytyczny, gdy kocioł jest gorący). Fizyczny
+przełącznik AUTO–0–RĘKA w skrzynce działa niezależnie od panelu.
 
 ## Alarmy
 

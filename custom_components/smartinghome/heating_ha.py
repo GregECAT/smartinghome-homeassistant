@@ -383,8 +383,10 @@ class HeatingManager:
                           "run_last_h_s": round(valve.run_last_hour(now))},
                 "pump": {"configured": bool(cfg["entities"]["pump_switch"]), "on": pump_on,
                          "forced": out.pump_forced,
-                         "forced_active": bool(out.pump_forced) and cfg["mode"] != "off" and not cfg["lockout"]["pump"]},
+                         "forced_active": bool(out.pump_forced) and cfg["mode"] != "off" and not cfg["lockout"]["pump"]
+                         and not cfg["force_on"]["pump"]},
                 "lockout": dict(cfg["lockout"]),
+                "force_on": dict(cfg["force_on"]),
                 "dhw_pump": {"configured": dhw_pump_configured, "on": dhw_pump_on, "want": out.dhw.want,
                              "reason": out.dhw.reason, "dump": out.dhw.dump,
                              "source_c": None if out.dhw.source_c is None else round(out.dhw.source_c, 1)},
@@ -606,6 +608,30 @@ class HeatingManager:
             self._log("Skrypt bezpieczeństwa na Shelly pompy " + ("uruchomiony" if want else "zatrzymany"), now)
         return True
 
+    async def _set_switch(self, element: Any, position: Any) -> dict[str, Any]:
+        """A pump's switch in the panel, like the AUTO–0–HAND switch in the box: "auto" (the module
+        decides), "off" (emergency lock — nothing switches it on) or "on" (HAND — runs whatever the mode)."""
+        if element not in hm.FORCE_ELEMENTS:
+            raise ValueError("Przełącznik AUTO / 0 / RĘKA mają tylko pompy")
+        if position not in ("auto", "off", "on"):
+            raise ValueError("Nieznana pozycja przełącznika")
+        name = {"pump": "Pompa CO", "dhw_pump": "Pompa CWU"}[element]
+        now = time.time()
+        lock = {**self.cfg["lockout"], element: position == "off"}
+        hand = {**self.cfg["force_on"], element: position == "on"}
+        if lock != self.cfg["lockout"] or hand != self.cfg["force_on"]:
+            await self.async_save({"lockout": lock, "force_on": hand})
+            self._log({"off": f"🔒 {name}: pozycja 0 — zablokowana wyłącznikiem awaryjnym w panelu",
+                       "on": f"✋ {name}: pozycja RĘKA — pracuje na stałe z panelu",
+                       "auto": f"🔓 {name}: pozycja AUTO — steruje moduł"}[position], now)
+        if element == "pump" and self.cfg["entities"]["pump_switch"]:
+            self._guard_want = position != "off"
+            if not await self._guard_sync(now):
+                self._log("Shelly pompy CO nie odpowiada — skrypt bezpieczeństwa (jeśli jest wgrany) zostanie "
+                          + ("zatrzymany" if position == "off" else "uruchomiony") + ", gdy Shelly wróci do sieci", now)
+        await self._tick()
+        return self.ws_payload(True)
+
     async def _set_lock(self, element: Any, on: bool) -> dict[str, Any]:
         """A panel emergency switch: the element stays off (a valve stays put) whatever wants it on —
         the automation, the safety rules and, for the CH pump, the guard script on its Shelly."""
@@ -633,7 +659,11 @@ class HeatingManager:
     async def async_command(self, action: str, data: dict[str, Any]) -> dict[str, Any]:
         """Panel buttons. Valve / pump by hand only in the manual mode (auto would undo it)."""
         if action in ("lock", "unlock"):
+            if data.get("element") in hm.FORCE_ELEMENTS:
+                return await self._set_switch(data.get("element"), "off" if action == "lock" else "auto")
             return await self._set_lock(data.get("element"), action == "lock")
+        if action == "set_switch":
+            return await self._set_switch(data.get("element"), data.get("position"))
         now = time.time()
         mode = self.cfg["mode"]
         async with self._lock:
@@ -665,6 +695,8 @@ class HeatingManager:
             elif action in ("pump_on", "pump_off"):
                 if action == "pump_on" and self.cfg["lockout"]["pump"]:
                     raise ValueError("Pompa CO jest zablokowana wyłącznikiem awaryjnym")
+                if action == "pump_off" and self.cfg["force_on"]["pump"]:
+                    raise ValueError("Pompa CO jest w pozycji RĘKA — przełącz ją na AUTO")
                 if mode != "manual":
                     raise ValueError("Ręczne sterowanie pompą działa w trybie „Ręczne”")
                 if not self.cfg["entities"]["pump_switch"]:
@@ -674,6 +706,8 @@ class HeatingManager:
             elif action in ("dhw_pump_on", "dhw_pump_off"):
                 if action == "dhw_pump_on" and self.cfg["lockout"]["dhw_pump"]:
                     raise ValueError("Pompa CWU jest zablokowana wyłącznikiem awaryjnym")
+                if action == "dhw_pump_off" and self.cfg["force_on"]["dhw_pump"]:
+                    raise ValueError("Pompa CWU jest w pozycji RĘKA — przełącz ją na AUTO")
                 if mode != "manual":
                     raise ValueError("Ręczne sterowanie pompą CWU działa w trybie „Ręczne”")
                 if not self.cfg["entities"]["dhw_pump_switch"]:
@@ -1166,7 +1200,7 @@ async def ws_heating_save(hass: HomeAssistant, connection, msg: dict[str, Any]) 
     if manager is None:
         return
     # the emergency switches change only through their own command (with its confirmation in the panel)
-    await manager.async_save({k: v for k, v in msg["config"].items() if k != "lockout"})
+    await manager.async_save({k: v for k, v in msg["config"].items() if k not in ("lockout", "force_on")})
     connection.send_result(msg["id"], manager.ws_payload(True))
 
 
@@ -1176,6 +1210,7 @@ async def ws_heating_save(hass: HomeAssistant, connection, msg: dict[str, Any]) 
     vol.Optional("seconds"): vol.Coerce(float),
     vol.Optional("kg"): vol.Coerce(float),
     vol.Optional("element"): vol.In(list(hm.LOCK_ELEMENTS)),
+    vol.Optional("position"): vol.In(["auto", "off", "on"]),
 })
 @websocket_api.async_response
 async def ws_heating_command(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:

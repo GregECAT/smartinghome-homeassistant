@@ -91,6 +91,8 @@ EMITTERS = {
 }
 # panel emergency switches: element → never switched on while locked (automation and safety rules alike)
 LOCK_ELEMENTS = ("pump", "dhw_pump", "valve")
+# pumps also have the HAND position (AUTO / 0 / HAND, like the switch in the box): on whatever the mode
+FORCE_ELEMENTS = ("pump", "dhw_pump")
 
 MODES = {
     "off": "Wyłączone — tylko pomiary",
@@ -130,6 +132,7 @@ DEFAULTS: dict[str, Any] = {
     "room_target_c": 21.0,
     # storeys: the house shown floor by floor, its mean temperature weighted by floor area
     "lockout": {"pump": False, "dhw_pump": False, "valve": False},
+    "force_on": {"pump": False, "dhw_pump": False},
     "floors": 1,
     "floor_names": list(FLOOR_NAMES),
     "floor_areas": [None, None, None],   # m² (empty → equal weights)
@@ -249,6 +252,9 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     out["entities"] = {role: str(ents.get(role) or "").strip() for role in ROLES}
     locks = raw.get("lockout") if isinstance(raw.get("lockout"), dict) else {}
     out["lockout"] = {el: locks.get(el) is True for el in LOCK_ELEMENTS}
+    hand = raw.get("force_on") if isinstance(raw.get("force_on"), dict) else {}
+    # one position at a time; a lock wins over HAND
+    out["force_on"] = {el: hand.get(el) is True and not out["lockout"][el] for el in FORCE_ELEMENTS}
     offs = raw.get("offsets") if isinstance(raw.get("offsets"), dict) else {}
     out["offsets"] = {role: _num(offs.get(role), 0.0, -5.0, 5.0) for role in TEMP_ROLES}
 

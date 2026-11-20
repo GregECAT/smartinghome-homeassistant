@@ -56,6 +56,7 @@ MAX_RUN_PER_H = 900.0
 HOME_EXTRA_S = 10.0
 VALVE_EVERY_S = 20.0
 LOCK_REASON = "wyłącznik awaryjny w panelu"
+HAND_REASON = "przełącznik RĘKA w panelu"
 DUMP_REDRIVE_S = 300.0      # heat dump: drive fully open again every 5 min (the estimate may be wrong)
 RETRY_S = 120.0             # an actuator that didn't take a command: next try after this
 RETRY_SAFETY_S = 30.0
@@ -425,7 +426,7 @@ class HeatingController:
     def _apply_locks(self, inp: ControlInput, out: ControlOutput) -> None:
         """The panel's emergency switches win over everything, safety rules included: a locked
         pump is only ever switched off, a locked valve is not moved. A safety rule that wanted
-        a locked element raises an alarm instead."""
+        a locked element raises an alarm instead. A pump in HAND runs whatever the mode wants."""
         locks = self.cfg.get("lockout") or {}
         acting = self.cfg["mode"] != "off"
         blocked: list[str] = []
@@ -441,6 +442,11 @@ class HeatingController:
             if acting and (self.dumping or self.limiting):
                 blocked.append("zawór")
             out.valve = None
+        hand = self.cfg.get("force_on") or {}
+        if hand.get("pump") and inp.pump_configured and not locks.get("pump"):
+            out.pump = ("on", HAND_REASON) if inp.pump_on is False else None
+        if hand.get("dhw_pump") and inp.dhw_pump_configured and not locks.get("dhw_pump"):
+            out.dhw_pump = ("on", HAND_REASON) if inp.dhw_pump_on is False else None
         if blocked:
             why = ("kocioł gorący" if self.hot else
                    "brak odczytu sondy kotła lub bufora" if inp.probe_fault else "ogranicznik zasilania")

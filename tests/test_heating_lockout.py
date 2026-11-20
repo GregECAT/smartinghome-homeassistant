@@ -82,3 +82,33 @@ def test_unlocked_controller_unchanged():
     ctrl = hc.HeatingController(_cfg())
     out = ctrl.step(_inp(100.0, t_top=70.0, t_dhw=40.0))
     assert out.dhw_pump and out.dhw_pump[0] == "on"
+
+
+# ── HAND position (AUTO / 0 / HAND) ──────────────────────────────────────────
+
+def test_normalize_hand_and_lock_wins():
+    assert hm.normalize({})["force_on"] == {"pump": False, "dhw_pump": False}
+    c = hm.normalize({"force_on": {"pump": True, "dhw_pump": True, "valve": True},
+                      "lockout": {"dhw_pump": True}})
+    assert c["force_on"] == {"pump": True, "dhw_pump": False}          # 0 beats HAND
+    assert hm.to_settings({"force_on": {"pump": True}})["force_on"]["pump"] is True
+
+
+def test_hand_runs_the_pump_in_every_mode():
+    for mode in ("off", "manual", "auto", "summer"):
+        ctrl = hc.HeatingController(_cfg(mode=mode, force_on={"pump": True, "dhw_pump": True}))
+        out = ctrl.step(_inp(100.0, t_out=25.0, t_top=11.0, t_dhw=15.0))   # nothing would want them on
+        assert out.pump == ("on", hc.HAND_REASON) and out.dhw_pump == ("on", hc.HAND_REASON), mode
+        running = ctrl.step(_inp(110.0, t_out=25.0, pump_on=True, dhw_pump_on=True))
+        assert running.pump is None and running.dhw_pump is None, mode  # already on: no command, no off
+
+
+def test_hand_waits_for_an_unknown_relay():
+    out = hc.HeatingController(_cfg(force_on={"pump": True})).step(_inp(100.0, pump_on=None))
+    assert out.pump is None
+
+
+def test_hand_does_not_override_a_lock():
+    cfg = _cfg(force_on={"pump": True}, lockout={"pump": True})
+    out = hc.HeatingController(cfg).step(_inp(100.0, pump_on=True))
+    assert out.pump == ("off", hc.LOCK_REASON)
