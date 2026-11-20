@@ -55,6 +55,7 @@ OVERRUN_S = 15.0      # drive allowed past the estimated end stop before "satura
 MAX_RUN_PER_H = 900.0
 HOME_EXTRA_S = 10.0
 VALVE_EVERY_S = 20.0
+LOCK_REASON = "wyłącznik awaryjny w panelu"
 DUMP_REDRIVE_S = 300.0      # heat dump: drive fully open again every 5 min (the estimate may be wrong)
 RETRY_S = 120.0             # an actuator that didn't take a command: next try after this
 RETRY_SAFETY_S = 30.0
@@ -348,6 +349,8 @@ class ControlOutput:
     pump: tuple[str, str] | None = None
     dhw: DhwPlan = field(default_factory=DhwPlan)
     dhw_pump: tuple[str, str] | None = None
+    # why the CH pump is held on by a safety rule ("dump" / "hot" / "probe"), also in "off" where it is not acted on
+    pump_forced: str = ""
     log: list[str] = field(default_factory=list)
     alarms: list[AlarmSpec] = field(default_factory=list)
     note: str = ""
@@ -415,6 +418,39 @@ class HeatingController:
 
     # ── one evaluation ──────────────────────────────────────────────────────
     def step(self, inp: ControlInput) -> ControlOutput:
+        out = self._step(inp)
+        self._apply_locks(inp, out)
+        return out
+
+    def _apply_locks(self, inp: ControlInput, out: ControlOutput) -> None:
+        """The panel's emergency switches win over everything, safety rules included: a locked
+        pump is only ever switched off, a locked valve is not moved. A safety rule that wanted
+        a locked element raises an alarm instead."""
+        locks = self.cfg.get("lockout") or {}
+        acting = self.cfg["mode"] != "off"
+        blocked: list[str] = []
+        if locks.get("pump") and inp.pump_configured:
+            if acting and out.pump_forced:
+                blocked.append("pompa CO")
+            out.pump = ("off", LOCK_REASON) if inp.pump_on is True else None
+        if locks.get("dhw_pump") and inp.dhw_pump_configured:
+            if acting and out.dhw.force and out.dhw.want:
+                blocked.append("pompa CWU")
+            out.dhw_pump = ("off", LOCK_REASON) if inp.dhw_pump_on is True else None
+        if locks.get("valve") and inp.valve_configured:
+            if acting and (self.dumping or self.limiting):
+                blocked.append("zawór")
+            out.valve = None
+        if blocked:
+            why = ("kocioł gorący" if self.hot else
+                   "brak odczytu sondy kotła lub bufora" if inp.probe_fault else "ogranicznik zasilania")
+            out.alarms.append(AlarmSpec(
+                "heating_lock_blocks_safety", "critical" if self.hot else "warning",
+                "Wyłącznik awaryjny blokuje zabezpieczenie",
+                f"Zabezpieczenie ({why}) chce włączyć: {', '.join(blocked)}, ale wyłącznik awaryjny w panelu to blokuje.",
+                "Gdy instalacja ma wodę, odblokuj w panelu: Sterowanie → Wyłączniki awaryjne."))
+
+    def _step(self, inp: ControlInput) -> ControlOutput:
         cfg, now = self.cfg, inp.now
         mode = cfg["mode"]
         room_target = room_target_now(cfg, inp.local_hour)
@@ -492,6 +528,8 @@ class HeatingController:
                 hold_s=60))
 
         out.dhw = self._dhw_plan(inp)
+        if inp.pump_configured:
+            out.pump_forced = ("dump" if self.dumping else "hot") if self.hot else ("probe" if inp.probe_fault else "")
 
         if mode == "off":
             self.last = out

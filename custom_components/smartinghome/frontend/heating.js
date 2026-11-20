@@ -22,6 +22,9 @@ const CHART_SERIES = [
 ];
 const LEVEL_CLASS = { critical: "err", warning: "warn", info: "" };
 const LEVEL_ICON = { critical: "🔴", warning: "🟠", info: "🔵" };
+const LOCK_NAMES = { pump: "Pompa CO", dhw_pump: "Pompa CWU", valve: "Siłownik zaworu" };
+const LOCKED_WORD = { pump: "zablokowana", dhw_pump: "zablokowana", valve: "zablokowany" };
+const FORCE_TEXT = { probe: "brak odczytu sondy kotła lub bufora", hot: "kocioł gorący, odbiór ciepła", dump: "zrzut ciepła, kocioł gorący" };
 const STATE_COLOR = {
   unknown: "#64748b", cold: "#64748b", idle: "#94a3b8", ignition: "#f7b731",
   burning: "#e67e22", burnout: "#c0846a", overheat: "#e74c3c",
@@ -438,6 +441,33 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         .alarm.warn { background:rgba(247,183,49,0.08); border-color:rgba(247,183,49,0.35); }
         .alarm.err { background:rgba(231,76,60,0.14); border-color:rgba(231,76,60,0.55); animation:alarmp 1.6s ease-in-out infinite alternate; }
         .alarm b { color:#fff; } .alarm span { color:#cbd5e1; } .alarm .act { color:#94a3b8; }
+        .alarm.lock { display:flex; align-items:center; gap:10px; background:rgba(247,183,49,0.1); border-color:rgba(247,183,49,0.5); }
+        .alarm.lock .txt { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+        .alarm .lockbtn { flex:none; font:inherit; font-size:12px; padding:3px 10px; border-radius:8px; cursor:pointer;
+          background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.18); color:#e0e6ed; }
+        .alarm .lockbtn:hover { border-color:#f7b731; color:#f7b731; }
+        .t-lock { fill:#f7b731; font-size:12px; font-weight:700; }
+        .locks { margin-top:14px; display:grid; gap:6px; }
+        .locks .lh { font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:#94a3b8; }
+        .lockrow { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 10px; border-radius:10px; font-size:13px;
+          background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); }
+        .lockrow .nm { flex:1; min-width:140px; color:#e0e6ed; }
+        .lockrow.on { border-color:rgba(247,183,49,0.5); background:rgba(247,183,49,0.08); }
+        .btn.danger { background:rgba(231,76,60,0.16); border-color:rgba(231,76,60,0.55); color:#fecaca; }
+        .btn.danger:hover { background:rgba(231,76,60,0.28); color:#fff; }
+        .btn:disabled { opacity:0.45; cursor:not-allowed; }
+        .modal-bg { position:fixed; inset:0; z-index:100001; background:rgba(5,10,20,0.74); display:flex; align-items:center; justify-content:center;
+          padding:16px; }
+        .modal { width:min(500px,100%); max-height:calc(100% - 32px); overflow:auto; background:#111d35; border:1px solid rgba(255,255,255,0.14);
+          border-radius:16px; padding:20px 20px 16px; box-shadow:0 24px 70px rgba(0,0,0,0.55); color:#e0e6ed; }
+        .modal h4 { margin:0 0 12px; font-size:19px; color:#fff; }
+        .modal p { margin:0 0 10px; font-size:14px; line-height:1.55; color:#cbd5e1; }
+        .modal p b { color:#fff; }
+        .modal .ack { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-radius:10px; font-size:13px; line-height:1.45;
+          background:rgba(231,76,60,0.08); border:1px solid rgba(231,76,60,0.4); margin:4px 0 14px; cursor:pointer; }
+        .modal .ack input { width:18px; height:18px; margin-top:1px; accent-color:#e74c3c; flex:none; }
+        .modal .mbtns { display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap; }
+        .modal .mbtns .btn { padding:9px 16px; font-size:14px; }
         .t-h { fill:#e0e6ed; font-size:17px; font-weight:700; }
         .t-h2 { fill:#e0e6ed; font-size:14px; font-weight:700; }
         .t-big { font-size:36px; font-weight:800; }
@@ -628,6 +658,20 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     if (!["boiler_out", "buffer_top", "buffer_bottom"].some((r) => ents[r])) {
       html += `<div class="alarm warn">Nie przypisano jeszcze czujników — w zakładce <b>Ustawienia</b> wybierz sondy kotła, bufora i CWU.</div>`;
     }
+    const lk = ctl.lockout || {}, pumpC = ctl.pump || {};
+    const conf = { pump: pumpC.configured, dhw_pump: (ctl.dhw_pump || {}).configured, valve: (ctl.valve || {}).configured };
+    for (const el of ["pump", "dhw_pump", "valve"]) {
+      if (!lk[el] || !conf[el]) continue;
+      html += `<div class="alarm lock"><span class="txt">🔒 <b>${LOCK_NAMES[el]} ${LOCKED_WORD[el]}</b>
+        <span>wyłącznikiem awaryjnym: automatyka i zabezpieczenia ${el === "valve" ? "nie poruszą siłownika" : "jej nie włączą"}.</span></span>
+        ${d.admin ? `<button class="lockbtn" data-act="lockask" data-el="${el}" data-on="0">Odblokuj…</button>` : ""}</div>`;
+    }
+    if (pumpC.forced_active) {
+      html += `<div class="alarm ${pumpC.forced === "probe" ? "warn" : "err"}">⚙️ <b>Pompa CO pracuje awaryjnie</b> <span>(${FORCE_TEXT[pumpC.forced] || ""}).</span>${
+        pumpC.forced === "probe" ? ` <span class="act">Wyłączy się, gdy sondy wrócą. Przy montażu albo bez wody: tryb „Wyłączone” albo wyłącznik awaryjny.</span>` : ""}</div>`;
+    } else if (c.mode === "off" && pumpC.forced && !lk.pump) {
+      html += `<div class="alarm">ℹ️ <b>Tryb „Wyłączone”</b> <span>— zabezpieczenie pompy CO nie działa (${FORCE_TEXT[pumpC.forced] || ""}).</span></div>`;
+    }
     for (const al of st.alarms || []) {
       html += `<div class="alarm ${LEVEL_CLASS[al.level] || "info"}" title="${esc(al.action || "")}">${LEVEL_ICON[al.level] || ""} <b>${esc(al.title)}</b>
         <span>${esc(al.message)}</span>${al.action ? ` <span class="act">→ ${esc(al.action)}</span>` : ""}</div>`;
@@ -711,6 +755,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const sc = STATE_COLOR[b.state] || "#64748b";
     const pump = ctl.pump || {}, dp = ctl.dhw_pump || {}, valve = ctl.valve || {};
     const coOn = pump.on === true, dhwOn = dp.on === true;
+    const lk = ctl.lockout || {};
     const fromBoiler = c.dhw_source === "boiler_out";
     const buf = st.buffer, dhw = st.dhw;
     const pw = (x) => (x != null && x >= 1 ? ` · ${num(x, 0)} W` : "");
@@ -807,11 +852,14 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       <path d="M575 94V110" stroke="#94a3b8" stroke-width="2"/>
       <rect x="564" y="76" width="22" height="18" rx="3" fill="#1e293b" stroke="${valve.busy ? "#f7b731" : "#64748b"}" class="${valve.busy ? "hotpulse" : ""}"/>
       <text x="575" y="89" text-anchor="middle" class="t-s">M</text>
-      <text x="575" y="146" text-anchor="middle" class="t-s">${valve.configured ? `${valve.known ? "" : "~"}${pos}%` : "zawór"}</text>`;
+      <text x="575" y="146" text-anchor="middle" class="t-s">${valve.configured ? `${valve.known ? "" : "~"}${pos}%` : "zawór"}</text>
+      ${valve.configured && lk.valve ? `<text x="575" y="161" text-anchor="middle" class="t-lock">🔒 blokada</text>` : ""}`;
 
     // CH pump and supply
     s += pumpSym(665, 110, coOn) + `<text x="665" y="148" text-anchor="middle" class="t-s">pompa CO${coOn ? pw((st.pump || {}).power_w) : ""}</text>
-      ${!pump.configured ? `<text x="665" y="163" text-anchor="middle" class="t-s dim">nieprzypisana</text>` : ""}
+      ${!pump.configured ? `<text x="665" y="163" text-anchor="middle" class="t-s dim">nieprzypisana</text>`
+        : lk.pump ? `<text x="665" y="163" text-anchor="middle" class="t-lock">🔒 zablokowana</text>`
+        : pump.forced_active ? `<text x="665" y="163" text-anchor="middle" class="t-lock">awaryjnie</text>` : ""}
       <text x="722" y="98" text-anchor="middle" class="t-l" style="fill:${supC}">${lbl("heating_supply")}</text>
       ${ctl.supply_target != null ? `<text x="722" y="136" text-anchor="middle" class="t-s">zad. ${num(ctl.supply_target, 0)}°</text>` : ""}`;
 
@@ -863,7 +911,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
 
     // hot-water pump and tank
     s += pumpSym(540, 260, dhwOn) + `<text x="562" y="256" class="t-s">pompa CWU</text>
-      <text x="562" y="271" class="t-s ${dp.configured ? "" : "dim"}">${dp.configured ? (dhwOn ? `ładuje${pw((st.dhw_pump || {}).power_w)}` : "stoi") : "nieprzypisana"}</text>
+      <text x="562" y="271" class="${dp.configured && lk.dhw_pump ? "t-lock" : `t-s ${dp.configured ? "" : "dim"}`}">${dp.configured ? (lk.dhw_pump ? "🔒 zablokowana" : dhwOn ? `ładuje${pw((st.dhw_pump || {}).power_w)}` : "stoi") : "nieprzypisana"}</text>
       <text x="700" y="345" text-anchor="middle" class="t-h2">CWU ${num(c.dhw_l, 0)} L</text>
       <rect x="640" y="355" width="120" height="150" rx="26" fill="${tempColor(dhwT)}" opacity=".85" stroke="#64748b" stroke-width="2"/>
       <rect x="640" y="355" width="120" height="150" rx="26" fill="url(#hgShine)"/>`;
@@ -985,6 +1033,16 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         ${dpump.dump ? '<span class="pill hot">zrzut ciepła do CWU</span>' : ""}
         ${dpump.reason && c.mode !== "off" ? `<span class="muted">· ${auto || dpump.dump ? "" : "w trybie Auto: "}${esc(dpump.reason)}</span>` : ""}</div>`;
     }
+    const lkC = ctl.lockout || {};
+    const lockItems = [["pump", pump.configured], ["dhw_pump", dpump.configured], ["valve", v.configured]].filter(([, ok]) => ok);
+    if (lockItems.length) {
+      html += `<div class="locks"><div class="lh">Wyłączniki awaryjne</div>${lockItems.map(([el]) => {
+        const on = !!lkC[el];
+        return `<div class="lockrow ${on ? "on" : ""}"><span class="nm">${on ? "🔒" : "🔓"} ${LOCK_NAMES[el]}</span>
+          <span class="pill ${on ? "hot" : ""}">${on ? LOCKED_WORD[el] : "normalna praca"}</span>
+          ${admin ? `<button class="btn sm ${on ? "" : "danger"}" data-act="lockask" data-el="${el}" data-on="${on ? 0 : 1}">${on ? "Odblokuj…" : "Zablokuj…"}</button>` : ""}</div>`;
+      }).join("")}<div class="hint">Zablokowanego elementu nie włączy automatyka ani żadne zabezpieczenie. Fizyczny przełącznik AUTO–0–RĘKA w skrzynce działa niezależnie.</div></div>`;
+    }
     if (admin && c.mode !== "off" && (v.configured || pump.configured || dpump.configured)) {
       const manual = c.mode === "manual";
       html += `<div class="btns">
@@ -1076,6 +1134,11 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         this._guard = { loading: true };
         this._renderBody();
         this._guard = await this._hass.callWS({ type: "smartinghome/heating/guard", action: ds.guard });
+      } else if (act === "lockask") {
+        const lock = ds.on === "1";
+        if (!(await this._confirmLock(ds.el, lock))) return;
+        this._data = await this._hass.callWS({ type: "smartinghome/heating/command", action: lock ? "lock" : "unlock", element: ds.el });
+        this._msg = `${LOCK_NAMES[ds.el]}: ${lock ? LOCKED_WORD[ds.el] + " wyłącznikiem awaryjnym" : "odblokowan" + (ds.el === "valve" ? "y" : "a")}.`;
       } else if (act === "copy-guard") {
         await navigator.clipboard.writeText((this._guard && this._guard.code) || "");
         this._msg = "Skopiowano kod skryptu.";
@@ -1087,6 +1150,50 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     }
     if (this._view === "settings" && act !== "guard" && act !== "copy-guard") this._draft = null;
     this._renderBody();
+  }
+
+  // emergency switch confirmation: locking needs an explicit acknowledgement, unlocking a second click
+  _confirmLock(el, lock) {
+    const name = LOCK_NAMES[el] || el;
+    const body = lock ? {
+      pump: `<p>Pompa CO zostanie wyłączona i <b>nic jej nie włączy</b>: ani automatyka, ani zabezpieczenia, także przy przegrzaniu kotła.
+        Skrypt bezpieczeństwa na Shelly pompy też zostanie zatrzymany.</p>
+        <p>Używaj przy montażu, serwisie albo gdy w instalacji nie ma wody. Fizyczny przełącznik AUTO–0–RĘKA w skrzynce działa niezależnie.</p>`,
+      dhw_pump: `<p>Pompa CWU zostanie wyłączona i <b>nic jej nie włączy</b>: ani ładowanie zasobnika, ani zrzut ciepła do CWU przy przegrzaniu kotła.</p>
+        <p>Używaj przy montażu, serwisie albo gdy w instalacji nie ma wody.</p>`,
+      valve: `<p>Siłownik zatrzyma się w obecnym położeniu i <b>nic go nie poruszy</b>: ani regulacja, ani zrzut ciepła do domu przy przegrzaniu,
+        ani ogranicznik temperatury zasilania.</p><p>Używaj przy montażu albo serwisie zaworu.</p>`,
+    }[el] : `<p>Automatyka i zabezpieczenia znów mogą ${el === "valve" ? "poruszać siłownikiem" : "włączać tę pompę"},
+        także od razu, jeśli są ku temu warunki.</p>${el === "pump" ? "<p>Skrypt bezpieczeństwa na Shelly pompy zostanie uruchomiony ponownie.</p>" : ""}`;
+    const ack = lock ? {
+      pump: "Rozumiem: gdy w kotle się pali, pompa CO nie odbierze ciepła.",
+      dhw_pump: "Rozumiem: pompa CWU nie ruszy, nawet gdy kocioł jest gorący.",
+      valve: "Rozumiem: przy przegrzaniu kotła zawór się nie otworzy.",
+    }[el] : "";
+    return new Promise((resolve) => {
+      const bg = document.createElement("div");
+      bg.className = "modal-bg";
+      bg.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="mtitle">
+        <h4 id="mtitle">${lock ? "🔒 Zablokować" : "🔓 Odblokować"}: ${esc(name)}?</h4>${body}
+        ${ack ? `<label class="ack"><input type="checkbox" id="mack"><span>${ack}</span></label>` : ""}
+        <div class="mbtns"><button class="btn" id="mno">Anuluj</button>
+          <button class="btn ${lock ? "danger" : "primary"}" id="myes" ${ack ? "disabled" : ""}>${lock ? "Zablokuj" : "Odblokuj"}</button></div></div>`;
+      const close = (val) => {
+        document.removeEventListener("keydown", onKey, true);
+        bg.remove();
+        resolve(val);
+      };
+      const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(false); } };
+      document.addEventListener("keydown", onKey, true);
+      bg.addEventListener("click", (e) => { if (e.target === bg) close(false); });
+      bg.querySelector("#mno").addEventListener("click", () => close(false));
+      const yes = bg.querySelector("#myes");
+      yes.addEventListener("click", () => { if (!yes.disabled) close(true); });
+      const box = bg.querySelector("#mack");
+      if (box) box.addEventListener("change", () => { yes.disabled = !box.checked; });
+      this.shadowRoot.appendChild(bg);
+      (box || yes).focus();
+    });
   }
 
   _sessionsHtml(st) {

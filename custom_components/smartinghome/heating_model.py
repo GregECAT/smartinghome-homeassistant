@@ -89,6 +89,9 @@ EMITTERS = {
     "mixed": {"label": "Grzejniki + podłogówka", "buffer_min_c": 40.0, "supply_max_c": 75.0,
               "curve_slope": 1.2, "safety_dump": False},
 }
+# panel emergency switches: element → never switched on while locked (automation and safety rules alike)
+LOCK_ELEMENTS = ("pump", "dhw_pump", "valve")
+
 MODES = {
     "off": "Wyłączone — tylko pomiary",
     "manual": "Ręczne",
@@ -126,6 +129,7 @@ DEFAULTS: dict[str, Any] = {
     "dhw_target_c": 55.0,
     "room_target_c": 21.0,
     # storeys: the house shown floor by floor, its mean temperature weighted by floor area
+    "lockout": {"pump": False, "dhw_pump": False, "valve": False},
     "floors": 1,
     "floor_names": list(FLOOR_NAMES),
     "floor_areas": [None, None, None],   # m² (empty → equal weights)
@@ -243,6 +247,8 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
 
     ents = raw.get("entities") if isinstance(raw.get("entities"), dict) else {}
     out["entities"] = {role: str(ents.get(role) or "").strip() for role in ROLES}
+    locks = raw.get("lockout") if isinstance(raw.get("lockout"), dict) else {}
+    out["lockout"] = {el: locks.get(el) is True for el in LOCK_ELEMENTS}
     offs = raw.get("offsets") if isinstance(raw.get("offsets"), dict) else {}
     out["offsets"] = {role: _num(offs.get(role), 0.0, -5.0, 5.0) for role in TEMP_ROLES}
 
@@ -815,11 +821,14 @@ class HeatingModel:
             fire = self.state in FIRE_STATES or self.session is not None
             hot = any(role in ("boiler_out", "buffer_top") for role in faulty) and fire
             names = ", ".join(ROLES[r][0] for r in faulty)
+            action = ("Sprawdź Shelly w kotłowni (zasilanie, Wi-Fi) i przewody sond; wartości −127 °C lub "
+                      "stałe 85 °C oznaczają przerwany przewód albo zanik zasilania sondy.")
+            if any(role in ("boiler_out", "buffer_top") for role in faulty):
+                action += (" Dopóki kocioł lub góra bufora nie mają odczytu, w trybach Auto, Ręczne i Lato pompa CO "
+                           "pracuje awaryjnie. Przy montażu albo bez wody w instalacji przełącz tryb na „Wyłączone”.")
             out.append(AlarmSpec(
                 "heating_probe_fault", "critical" if hot else "warning", "Brak odczytu czujnika temperatury",
-                f"Bez poprawnego odczytu: {names}.",
-                "Sprawdź Shelly w kotłowni (zasilanie, Wi-Fi) i przewody sond; wartości −127 °C lub "
-                "stałe 85 °C oznaczają przerwany przewód albo zanik zasilania sondy."))
+                f"Bez poprawnego odczytu: {names}.", action))
 
         # a relay on with ~0 W behind it: the pump has no power (fuse, wire, the AUTO–0–HAND switch at 0 / HAND)
         low = self.pump_on and self.pump_w is not None and self.pump_w < 3.0

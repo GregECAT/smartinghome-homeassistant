@@ -99,8 +99,29 @@ więc Home Assistant nigdy nie działa wbrew niemu:
   (zawór jedzie do pełnego otwarcia i ponawia to co 5 min); przy podłogówce zrzutu nie ma nigdy,
 - **kocioł gorący** → pompa CWU dogrzewa zasobnik do zadanej (z opcją „zrzut ciepła do CWU” — do górnego
   limitu), o ile źródło jest cieplejsze od CWU,
-- **brak odczytu sondy kotła lub bufora** przez 60 s → pompa CO włączona,
+- **brak odczytu sondy kotła lub bufora** przez 60 s → pompa CO włączona (bez odczytu kotła moduł nie wie,
+  czy się pali). Panel pokazuje wtedy pasek „Pompa CO pracuje awaryjnie” z powodem,
 - **ogranicznik zasilania** (zasilanie > maks. + 3 K) → zawór przymykany.
+
+**Przy montażu, serwisie albo gdy w instalacji nie ma wody** przełącz tryb na **Wyłączone** albo zablokuj
+pompę wyłącznikiem awaryjnym. Inaczej, dopóki sondy nie czytają, pompa CO pracuje (także na sucho).
+W trybie „Wyłączone” panel informuje, że zabezpieczenie pompy CO nie działa.
+
+## Wyłączniki awaryjne
+
+W karcie **Sterowanie** każdy przypisany element (pompa CO, pompa CWU, siłownik zaworu) ma własny
+**wyłącznik awaryjny**. Zablokowany element:
+- **pompa** jest wyłączana i **nic jej nie włączy**: ani automatyka, ani przyciski trybu Ręczne, ani
+  zabezpieczenia (przegrzanie, brak sond, zrzut ciepła do CWU). Jeśli ktoś włączy przekaźnik poza modułem,
+  moduł od razu go wyłączy;
+- **siłownik zaworu** zatrzymuje się i nie jest poruszany (także przy zrzucie ciepła i ograniczniku);
+- przy pompie CO **skrypt bezpieczeństwa na Shelly** jest zatrzymywany (i nie startuje po restarcie Shelly),
+  a po odblokowaniu uruchamiany ponownie.
+
+Blokada działa w każdym trybie i przetrwa restart Home Assistanta. Włączenie i zdjęcie blokady wymaga
+potwierdzenia w oknie dialogowym (przy blokadzie: zaznaczenia „Rozumiem…”). Gdy zabezpieczenie chce włączyć
+zablokowany element, pojawia się alarm „Wyłącznik awaryjny blokuje zabezpieczenie” (krytyczny, gdy kocioł
+jest gorący). Fizyczny przełącznik AUTO–0–RĘKA w skrzynce działa niezależnie od panelu.
 
 ### Pompa ładująca CWU
 
@@ -141,6 +162,7 @@ limit 15 min pracy siłownika na godzinę.
 | Zanik prądu w trakcie palenia (falownik widzi 0 V w sieci) | krytyczny |
 | Pompa CO / pompa CWU nie pobiera prądu (przekaźnik włączony, moc < 3 W przez 2 min) | ostrzeżenie |
 | Zasilanie CO za gorące (ogranicznik) | ostrzeżenie |
+| Wyłącznik awaryjny blokuje zabezpieczenie (zabezpieczenie chce włączyć zablokowany element) | ostrzeżenie; krytyczny, gdy kocioł gorący |
 | Czas rozpalić (zimno w pokoju, bufor < 15 %), wilgotność | informacja |
 
 Alarmy trafiają kanałami z panelu Smarting HOME (Awarie → powiadomienia). Krytyczne zawsze tworzą

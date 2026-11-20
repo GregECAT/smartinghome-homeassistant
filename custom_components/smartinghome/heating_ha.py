@@ -372,7 +372,10 @@ class HeatingManager:
                 "valve": {"configured": self._valve_configured(), "position": round(valve.position),
                           "known": valve.known, "saturated": valve.saturated, "busy": now < valve.busy_until,
                           "run_last_h_s": round(valve.run_last_hour(now))},
-                "pump": {"configured": bool(cfg["entities"]["pump_switch"]), "on": pump_on},
+                "pump": {"configured": bool(cfg["entities"]["pump_switch"]), "on": pump_on,
+                         "forced": out.pump_forced,
+                         "forced_active": bool(out.pump_forced) and cfg["mode"] != "off" and not cfg["lockout"]["pump"]},
+                "lockout": dict(cfg["lockout"]),
                 "dhw_pump": {"configured": dhw_pump_configured, "on": dhw_pump_on, "want": out.dhw.want,
                              "reason": out.dhw.reason, "dump": out.dhw.dump,
                              "source_c": None if out.dhw.source_c is None else round(out.dhw.source_c, 1)},
@@ -566,11 +569,42 @@ class HeatingManager:
         self._save_soon()
         return True
 
+    async def _set_lock(self, element: Any, on: bool) -> dict[str, Any]:
+        """A panel emergency switch: the element stays off (a valve stays put) whatever wants it on —
+        the automation, the safety rules and, for the CH pump, the guard script on its Shelly."""
+        if element not in hm.LOCK_ELEMENTS:
+            raise ValueError("Nieznany element wyłącznika awaryjnego")
+        name = {"pump": "Pompa CO", "dhw_pump": "Pompa CWU", "valve": "Siłownik zaworu"}[element]
+        now = time.time()
+        if self.cfg["lockout"].get(element) != on:
+            await self.async_save({"lockout": {**self.cfg["lockout"], element: on}})
+            self._log(f"🔒 {name}: zablokowany wyłącznikiem awaryjnym w panelu" if on
+                      else f"🔓 {name}: odblokowany w panelu", now)
+        if on and element == "valve" and self._valve_configured():
+            try:
+                await self._valve_stop()
+            except Exception as err:  # noqa: BLE001
+                self._log(f"⚠️ Zawór nie przyjął polecenia stop: {err}", now)
+        if element == "pump" and self.cfg["entities"]["pump_switch"]:
+            res = await hs.guard_set_enabled(self.hass, self.cfg, not on)
+            if res == "error":
+                self._log("⚠️ Nie udało się " + ("zatrzymać" if on else "uruchomić")
+                          + " skryptu bezpieczeństwa na Shelly pompy — sprawdź go w karcie Bezpieczeństwo", now)
+            elif res in ("stopped", "started"):
+                self._log("Skrypt bezpieczeństwa na Shelly pompy " + ("zatrzymany" if on else "uruchomiony"), now)
+        await self._tick()
+        return self.ws_payload(True)
+
     async def async_command(self, action: str, data: dict[str, Any]) -> dict[str, Any]:
         """Panel buttons. Valve / pump by hand only in the manual mode (auto would undo it)."""
+        if action in ("lock", "unlock"):
+            return await self._set_lock(data.get("element"), action == "lock")
         now = time.time()
         mode = self.cfg["mode"]
         async with self._lock:
+            if action in ("valve_open", "valve_close") or action == "valve_home":
+                if self.cfg["lockout"]["valve"]:
+                    raise ValueError("Siłownik zaworu jest zablokowany wyłącznikiem awaryjnym")
             if action in ("valve_open", "valve_close"):
                 if mode != "manual":
                     raise ValueError("Ręczne sterowanie zaworem działa w trybie „Ręczne”")
@@ -594,6 +628,8 @@ class HeatingManager:
                 if not await self._exec_valve(self.ctrl.valve.home(), now):
                     raise ValueError("Siłownik nie przyjął polecenia")
             elif action in ("pump_on", "pump_off"):
+                if action == "pump_on" and self.cfg["lockout"]["pump"]:
+                    raise ValueError("Pompa CO jest zablokowana wyłącznikiem awaryjnym")
                 if mode != "manual":
                     raise ValueError("Ręczne sterowanie pompą działa w trybie „Ręczne”")
                 if not self.cfg["entities"]["pump_switch"]:
@@ -601,6 +637,8 @@ class HeatingManager:
                 if not await self._exec_pump(("on" if action == "pump_on" else "off", "ręcznie z panelu"), now):
                     raise ValueError("Przekaźnik pompy nie przyjął polecenia")
             elif action in ("dhw_pump_on", "dhw_pump_off"):
+                if action == "dhw_pump_on" and self.cfg["lockout"]["dhw_pump"]:
+                    raise ValueError("Pompa CWU jest zablokowana wyłącznikiem awaryjnym")
                 if mode != "manual":
                     raise ValueError("Ręczne sterowanie pompą CWU działa w trybie „Ręczne”")
                 if not self.cfg["entities"]["dhw_pump_switch"]:
@@ -1092,7 +1130,8 @@ async def ws_heating_save(hass: HomeAssistant, connection, msg: dict[str, Any]) 
     manager = _manager_or_error(hass, connection, msg)
     if manager is None:
         return
-    await manager.async_save(msg["config"])
+    # the emergency switches change only through their own command (with its confirmation in the panel)
+    await manager.async_save({k: v for k, v in msg["config"].items() if k != "lockout"})
     connection.send_result(msg["id"], manager.ws_payload(True))
 
 
@@ -1101,6 +1140,7 @@ async def ws_heating_save(hass: HomeAssistant, connection, msg: dict[str, Any]) 
     vol.Required("action"): str,
     vol.Optional("seconds"): vol.Coerce(float),
     vol.Optional("kg"): vol.Coerce(float),
+    vol.Optional("element"): vol.In(list(hm.LOCK_ELEMENTS)),
 })
 @websocket_api.async_response
 async def ws_heating_command(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:

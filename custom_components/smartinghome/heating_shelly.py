@@ -373,14 +373,38 @@ async def guard_install(hass: Any, cfg: dict[str, Any]) -> dict[str, Any]:
         for i, start in enumerate(range(0, len(code), PUT_CODE_CHUNK)):
             await rpc(hass, pump, "Script.PutCode",
                       {"id": sid, "code": code[start:start + PUT_CODE_CHUNK], "append": i > 0}, timeout=10.0)
-        await rpc(hass, pump, "Script.SetConfig", {"id": sid, "config": {"enable": True}})
-        await rpc(hass, pump, "Script.Start", {"id": sid})
+        locked = bool((cfg.get("lockout") or {}).get("pump"))
+        # a CH pump locked in the panel: the script is installed but stays stopped until unlocked
+        await rpc(hass, pump, "Script.SetConfig", {"id": sid, "config": {"enable": not locked}})
+        if not locked:
+            await rpc(hass, pump, "Script.Start", {"id": sid})
     except (ShellyRpcError, KeyError, TypeError, ValueError) as err:
         out = await guard_status(hass, cfg)
         out["error"] = f"Instalacja skryptu nie powiodła się: {err}"
         return out
     _LOGGER.info("Heating: guard script installed on %s (script %s)", pump.address, sid)
     return await guard_status(hass, cfg)
+
+
+async def guard_set_enabled(hass: Any, cfg: dict[str, Any], enabled: bool) -> str:
+    """Stop (and keep stopped across reboots) or restart an installed guard script.
+    Returns "stopped" / "started", "none" without a script or Shelly pump, "error" when it failed."""
+    pump, _boiler, _buffer, _valve = await _targets(hass, cfg)
+    if pump is None or pump.component != "switch":
+        return "none"
+    try:
+        sid = await _find_script(hass, pump)
+        if sid is None:
+            return "none"
+        await rpc(hass, pump, "Script.SetConfig", {"id": sid, "config": {"enable": enabled}})
+        try:
+            await rpc(hass, pump, "Script.Start" if enabled else "Script.Stop", {"id": sid})
+        except ShellyRpcError:
+            pass  # already running / already stopped
+    except ShellyRpcError as err:
+        _LOGGER.warning("Heating guard: %s failed: %s", "start" if enabled else "stop", err)
+        return "error"
+    return "started" if enabled else "stopped"
 
 
 async def guard_remove(hass: Any, cfg: dict[str, Any]) -> dict[str, Any]:
