@@ -181,10 +181,15 @@ referencyjnym bierze jego odczyt, dopóki nie ma własnego czujnika. Na schemaci
 (najwyższe pod dachem), a **średnia domu** — ważona powierzchnią, bez powierzchni zwykła — trafia do
 encji „Dom — średnia temperatura” i do modelu strat ciepła doradcy (straty zależą od całego domu, nie
 jednego pokoju). Korekta krzywej grzewczej dalej działa według pokoju referencyjnego.
+Po wpisaniu powierzchni wszystkich kondygnacji karta pokazuje sumę i udział każdej w średniej (np. 105 /
+105 / 40 m² → 42% / 42% / 16%). Kondygnacja bez odczytu jest pomijana, a udziały pozostałych rosną
+proporcjonalnie; gdy brakuje którejś powierzchni, kondygnacje liczą się po równo.
 
 Przycisk **⛶** w nagłówku włącza **pełny ekran**: panel zasłania pasek boczny Home Assistanta,
 a ekran nie gaśnie (np. tablet na ścianie w kotłowni albo telewizor). **✕** albo Esc wraca do
-zwykłego widoku. Na telefonie schemat i wykres układają się jeden pod drugim.
+zwykłego widoku. W aplikacji Home Assistant na iPadzie / iPhonie (i w przeglądarkach bez trybu
+pełnoekranowego) panel sam rozciąga się na całe okno — pasek stanu systemu zostaje. Na telefonie schemat
+i wykres układają się jeden pod drugim.
 
 ## Encje (urządzenie „Ogrzewanie”)
 

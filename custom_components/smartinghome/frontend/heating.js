@@ -129,6 +129,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     document.removeEventListener("webkitfullscreenchange", this._onFs);
     document.removeEventListener("visibilitychange", this._onVis);
     window.removeEventListener("resize", this._onResize);
+    if (this._cssFs) this._setCssFs(false);   // leaving the panel leaves its full screen too
     this._wake(false);
   }
 
@@ -136,21 +137,43 @@ class SmartingHomeHeatingPanel extends HTMLElement {
   // Inside Home Assistant the panel sits in nested shadow roots: document.fullscreenElement is the
   // outermost shadow host there, never this element. The panel's own root node reports it right;
   // and whatever is full screen while this panel is on screen, the button has to leave it.
+  // The Home Assistant app on iPad / iPhone (and some kiosk browsers) has no Fullscreen API: there
+  // the panel covers the whole window itself (sidebar included) — like the Smarting HOME panel does.
   _isFs() {
+    if (this._cssFs) return true;
     const root = this.getRootNode && this.getRootNode();
     const own = root && (root.fullscreenElement || root.webkitFullscreenElement);
     return own === this || !!(document.fullscreenElement || document.webkitFullscreenElement);
   }
 
   _toggleFullscreen() {
-    if (this._isFs()) {
-      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    if (this._cssFs) { this._setCssFs(false); return; }
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      if (exit) { const p = exit.call(document); if (p && p.catch) p.catch(() => {}); }
       return;
     }
     const req = this.requestFullscreen || this.webkitRequestFullscreen;
-    if (!req) { alert("Ta przeglądarka nie obsługuje trybu pełnoekranowego."); return; }
-    const p = req.call(this, { navigationUI: "hide" });
-    if (p && p.catch) p.catch(() => {});
+    if (!req) { this._setCssFs(true); return; }
+    try {
+      const p = req.call(this, { navigationUI: "hide" });
+      if (p && p.catch) p.catch(() => this._setCssFs(true));   // refused (no gesture, iframe policy…)
+    } catch (e) {
+      this._setCssFs(true);
+    }
+  }
+
+  _setCssFs(on) {
+    this._cssFs = !!on;
+    this.toggleAttribute("data-fs", this._cssFs);
+    if (this._cssFs && !this._onKey) {
+      this._onKey = (e) => { if (e.key === "Escape") this._setCssFs(false); };
+      document.addEventListener("keydown", this._onKey);
+    } else if (!this._cssFs && this._onKey) {
+      document.removeEventListener("keydown", this._onKey);
+      this._onKey = null;
+    }
+    this._fsChanged();
   }
 
   _fsChanged() {
@@ -291,6 +314,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         .muted { color:#64748b; }
         .foot { font-size:11px; color:#64748b; margin-top:18px; line-height:1.6; }
         form .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+        form .grid2.floorsg { grid-template-columns:repeat(2,minmax(0,1fr)); }   /* one storey per row: name | area */
         label.f { display:flex; flex-direction:column; gap:5px; font-size:12px; color:#a0aec0; }
         label.f span.h { font-size:11px; color:#64748b; }
         label.chk { display:flex; gap:8px; align-items:center; font-size:13px; cursor:pointer; }
@@ -330,7 +354,12 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         .inline input { width:90px; }
         /* hero: the boiler room on the first screen */
         :host(:fullscreen) { overflow-y:auto; background:#0a1628; }
-        .hero { display:flex; flex-direction:column; gap:10px; height:calc(100vh - var(--hdr, 58px) - 26px); min-height:560px; margin-bottom:14px; }
+        :host([data-fs]) { position:fixed; inset:0; z-index:99999; height:auto; overflow-y:auto; -webkit-overflow-scrolling:touch;
+          background:#0a1628; padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px);
+          --sa:calc(env(safe-area-inset-top,0px) + env(safe-area-inset-bottom,0px)); }
+        :host([data-fs]) .menu-btn { display:none !important; }
+        .hero { display:flex; flex-direction:column; gap:10px; min-height:560px; margin-bottom:14px;
+          height:calc(100vh - var(--hdr, 58px) - 26px - var(--sa, 0px)); height:calc(100dvh - var(--hdr, 58px) - 26px - var(--sa, 0px)); }
         .hero-top { flex:0 0 auto; display:flex; flex-direction:column; gap:6px; }
         .hero-main { flex:1 1 auto; min-height:0; padding:6px 8px; display:flex; }
         .hero-main svg { width:100%; height:100%; display:block; }
@@ -1047,10 +1076,11 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       ${nFloors >= 2 ? `<label class="f">Pokój referencyjny jest na${sel("room_floor", floorOpts, String(c.room_floor || 0))}<span class="h">liczy się jako temperatura tej kondygnacji, gdy nie ma ona własnego czujnika</span></label>` : ""}
     </div>`;
     if (nFloors >= 2) {
-      html += `<div class="grid2" style="margin-top:12px">${floorNames.slice(0, nFloors).map((n, i) => `
+      html += `<div class="grid2 floorsg" style="margin-top:12px">${floorNames.slice(0, nFloors).map((n, i) => `
         <label class="f">Kondygnacja ${i + 1} — nazwa<input name="floor_name_${i}" type="text" maxlength="24" value="${esc(n)}" ${dis}></label>
         <label class="f">${esc(n)} — powierzchnia (m²)<input name="floor_area_${i}" type="number" min="0" max="5000" step="1" value="${(c.floor_areas || [])[i] ?? ""}" placeholder="opcjonalnie" ${dis}></label>`).join("")}
       </div>
+      <div class="hint" id="floorw">${this._floorWeightsHtml(c)}</div>
       <div class="hint">Czujniki kondygnacji wybierasz niżej, w sekcji „Czujniki”. Średnia domu jest ważona powierzchnią (bez powierzchni — zwykła średnia)
         i to ona trafia do modelu strat ciepła doradcy. Korekta krzywej grzewczej dalej działa według pokoju referencyjnego.</div>`;
     }
@@ -1271,6 +1301,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     });
     form.addEventListener("input", () => {
       this._collect();
+      const fw = root.getElementById("floorw");
+      if (fw) fw.innerHTML = this._floorWeightsHtml(this._draft);
       const box = root.getElementById("curvebox");
       if (box) box.innerHTML = this._curveSvg(this._draft);
     });
@@ -1308,6 +1340,20 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       else if (nums.includes(el.name)) c[el.name] = el.value === "" ? null : parseFloat(el.value);
     }
     if ((c.room_floor || 0) >= (c.floors || 1)) c.room_floor = 0;
+  }
+
+  // how each storey counts in the house mean — same rule as heating_model.floors_state
+  _floorWeightsHtml(c) {
+    const n = Math.min(Math.max(Number(c.floors) || 1, 1), 3);
+    const names = (c.floor_names || ["Parter", "1. piętro", "Poddasze"]).slice(0, n);
+    const areas = (c.floor_areas || []).slice(0, n).map((a) => (Number(a) > 0 ? Number(a) : null));
+    if (areas.every((a) => a)) {
+      const sum = areas.reduce((x, a) => x + a, 0);
+      const fmt = (v) => v.toLocaleString("pl-PL", { maximumFractionDigits: 1 });
+      return `Razem <b>${fmt(sum)} m²</b> · udział w średniej domu: ${names.map((nm, i) => `${esc(nm)} <b>${Math.round((areas[i] / sum) * 100)}%</b>`).join(" · ")}.
+        Kondygnacja bez odczytu jest pomijana, a udziały pozostałych rosną proporcjonalnie.`;
+    }
+    return `Wpisz powierzchnię każdej kondygnacji, a średnia domu będzie ważona powierzchnią — teraz każda kondygnacja liczy się po równo.`;
   }
 
   async _save() {
