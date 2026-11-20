@@ -80,6 +80,29 @@ function tempColor(t) {
   return "rgb(231,76,60)";
 }
 
+// After an update Home Assistant serves this file under a new ?v=<hash>, but an open app (phone, wall
+// tablet) keeps running the code it loaded until the page reloads. The URL seen first is the one this
+// code came from; a different one later means the panel is out of date.
+const ELEMENT = "smartinghome-heating-panel";
+const RELOAD_KEY = "shh-heating-reloaded";
+const CSSFS_KEY = "shh-heating-cssfs";
+let LOADED_URL = null;
+function servedUrl(hass) {
+  for (const p of Object.values((hass && hass.panels) || {})) {
+    const c = p && p.config && p.config._panel_custom;
+    if (c && c.name === ELEMENT) return c.module_url || c.js_url || "";
+  }
+  return "";
+}
+function store(kind, key, value) {
+  try {
+    const s = kind === "session" ? sessionStorage : localStorage;
+    if (value === undefined) return s.getItem(key);
+    if (value === null) s.removeItem(key); else s.setItem(key, value);
+  } catch (e) { /* private mode / blocked storage */ }
+  return null;
+}
+
 class SmartingHomeHeatingPanel extends HTMLElement {
   constructor() {
     super();
@@ -97,6 +120,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
+    if (hass && hass.panels !== this._panelsRef) { this._panelsRef = hass.panels; this._checkVersion(); }
     if (first) {
       this._renderShell();
       this._load();
@@ -121,6 +145,10 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     document.addEventListener("visibilitychange", this._onVis);
     window.addEventListener("resize", this._onResize);
     requestAnimationFrame(() => this._measure());
+    if (store("session", CSSFS_KEY)) {        // the panel reloaded itself after an update while full screen
+      store("session", CSSFS_KEY, null);
+      this._setCssFs(true);
+    }
   }
 
   disconnectedCallback() {
@@ -131,6 +159,27 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     window.removeEventListener("resize", this._onResize);
     if (this._cssFs) this._setCssFs(false);   // leaving the panel leaves its full screen too
     this._wake(false);
+  }
+
+  // ── a newer panel on the server: reload, unless someone is editing the settings ──
+  _checkVersion() {
+    const url = servedUrl(this._hass);
+    if (!url) return;
+    if (LOADED_URL === null) { LOADED_URL = url; return; }
+    if (url === LOADED_URL || this._stale) return;
+    this._stale = true;
+    // once per new version — if the reload did not help, only the banner stays
+    if (this._view !== "settings" && store("session", RELOAD_KEY) !== url) {
+      store("session", RELOAD_KEY, url);
+      if (this._cssFs) store("session", CSSFS_KEY, "1");
+      setTimeout(() => location.reload(), 1500);
+    }
+    this._showUpdate();
+  }
+
+  _showUpdate() {
+    const el = this.shadowRoot && this.shadowRoot.getElementById("upd");
+    if (el && this._stale) el.hidden = false;
   }
 
   // ── full screen (wall tablet / TV): the panel alone, the screen kept awake ──
@@ -147,9 +196,10 @@ class SmartingHomeHeatingPanel extends HTMLElement {
   }
 
   _toggleFullscreen() {
-    if (this._cssFs) { this._setCssFs(false); return; }
-    if (document.fullscreenElement || document.webkitFullscreenElement) {
-      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+    const native = document.fullscreenElement || document.webkitFullscreenElement;
+    if (this._cssFs || native) {
+      if (this._cssFs) this._setCssFs(false);
+      const exit = native && (document.exitFullscreen || document.webkitExitFullscreen);
       if (exit) { const p = exit.call(document); if (p && p.catch) p.catch(() => {}); }
       return;
     }
@@ -158,6 +208,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     try {
       const p = req.call(this, { navigationUI: "hide" });
       if (p && p.catch) p.catch(() => this._setCssFs(true));   // refused (no gesture, iframe policy…)
+      // some phone web views expose the call but do nothing — then cover the window ourselves
+      setTimeout(() => { if (!this._isFs()) this._setCssFs(true); }, 1000);
     } catch (e) {
       this._setCssFs(true);
     }
@@ -358,6 +410,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
           background:#0a1628; padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px);
           --sa:calc(env(safe-area-inset-top,0px) + env(safe-area-inset-bottom,0px)); }
         :host([data-fs]) .menu-btn { display:none !important; }
+        .upd { display:flex; align-items:center; justify-content:center; gap:10px; padding:8px 16px; font-size:13px; color:#fde68a;
+          background:rgba(247,183,49,0.12); border-bottom:1px solid rgba(247,183,49,0.25); }
+        .upd[hidden] { display:none; }
         .hero { display:flex; flex-direction:column; gap:10px; min-height:560px; margin-bottom:14px;
           height:calc(100vh - var(--hdr, 58px) - 26px - var(--sa, 0px)); height:calc(100dvh - var(--hdr, 58px) - 26px - var(--sa, 0px)); }
         .hero-top { flex:0 0 auto; display:flex; flex-direction:column; gap:6px; }
@@ -453,6 +508,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
             <button class="btn" id="fs" title="Pełny ekran — kotłownia na cały ekran, ekran nie gaśnie">⛶</button>
           </div>
         </div>
+        <div class="upd" id="upd" hidden>Jest nowsza wersja panelu Ogrzewanie. <button class="btn" id="updbtn">Odśwież</button></div>
         <div class="content" id="body"><div class="banner">Wczytywanie…</div></div>
       </div>`;
     const root = this.shadowRoot;
@@ -470,6 +526,12 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     }));
     root.querySelector("#refresh").addEventListener("click", () => { this._chartTs = 0; this._load(); });
     root.querySelector("#fs").addEventListener("click", () => this._toggleFullscreen());
+    root.querySelector("#updbtn").addEventListener("click", () => {
+      if (this._cssFs) store("session", CSSFS_KEY, "1");
+      location.reload();
+    });
+    this._showUpdate();
+    if (this._cssFs) this._fsChanged();       // full screen restored before the header existed
     this._measure();
     root.getElementById("body").addEventListener("click", (e) => {
       const b = e.target.closest("[data-act]");
@@ -1385,6 +1447,6 @@ class SmartingHomeHeatingPanel extends HTMLElement {
   }
 }
 
-if (!customElements.get("smartinghome-heating-panel")) {
-  customElements.define("smartinghome-heating-panel", SmartingHomeHeatingPanel);
+if (!customElements.get(ELEMENT)) {
+  customElements.define(ELEMENT, SmartingHomeHeatingPanel);
 }

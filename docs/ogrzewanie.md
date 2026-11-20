@@ -191,6 +191,10 @@ zwykłego widoku. W aplikacji Home Assistant na iPadzie / iPhonie (i w przegląd
 pełnoekranowego) panel sam rozciąga się na całe okno — pasek stanu systemu zostaje. Na telefonie schemat
 i wykres układają się jeden pod drugim.
 
+Po aktualizacji Smarting HOME otwarty panel (telefon, tablet na ścianie) sam się przeładowuje, żeby nie
+działał na starej wersji — z zachowaniem pełnego ekranu. Gdy akurat edytujesz ustawienia, zamiast tego
+pojawia się pasek „Jest nowsza wersja panelu” z przyciskiem **Odśwież**.
+
 ## Encje (urządzenie „Ogrzewanie”)
 
 Stan kotła · energia, naładowanie, średnia temperatura i miejsce w buforze · maks. załadunek drewna ·
