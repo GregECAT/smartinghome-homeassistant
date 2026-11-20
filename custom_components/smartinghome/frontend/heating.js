@@ -766,6 +766,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const tb = v("boiler_out"), top = v("buffer_top"), bot = v("buffer_bottom"), dhwT = v("dhw");
     const sup = v("heating_supply"), ret = v("heating_return");
     const fire = !!b.firing, over = b.state === "overheat";
+    const lad = st.laddomat || {}, ladOn = lad.on === true;   // started by the boiler's thermostat, not by fire
     const sc = STATE_COLOR[b.state] || "#64748b";
     const pump = ctl.pump || {}, dp = ctl.dhw_pump || {}, valve = ctl.valve || {};
     const coOn = pump.on === true, dhwOn = dp.on === true;
@@ -809,10 +810,10 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       <line x1="10" y1="514" x2="1190" y2="514" stroke="rgba(255,255,255,.06)"/>`;
 
     // pipes first (under the equipment)
-    s += pipe("M190 180H240", tempColor(tb), fire);
-    s += pipe("M300 180H318V100H345", tempColor(tb), fire);
-    s += pipe("M345 440H318V210H300", tempColor(bot), fire);
-    s += pipe("M240 210H215V390H190", tempColor(bot), fire);
+    s += pipe("M190 180H240", tempColor(tb), ladOn);
+    s += pipe("M300 180H318V100H345", tempColor(tb), ladOn);
+    s += pipe("M345 440H318V210H300", tempColor(bot), ladOn);
+    s += pipe("M240 210H215V390H190", tempColor(bot), ladOn);
     s += pipe("M495 110H559", tempColor(top), coOn);
     s += pipe("M591 110H647", supC, coOn);
     s += pipe("M683 110H760V170H780", supC, coOn);
@@ -839,10 +840,11 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       s += `<path d="M70 372H150" stroke="#334155" stroke-width="3" stroke-linecap="round"/>`;
     }
 
-    // Laddomat (its pump runs with the boiler, controlled by the boiler)
+    // Laddomat: its pump is started by the boiler's own thermostat (Atmos ≈ 75 °C), inferred from the outlet
     s += `<rect x="240" y="160" width="60" height="70" rx="9" fill="#0f172a" stroke="#475569"/>
-      ${pumpSym(270, 195, fire, 14)}
-      <text x="270" y="248" text-anchor="middle" class="t-s">Laddomat</text>`;
+      ${pumpSym(270, 195, ladOn, 14)}
+      <text x="270" y="248" text-anchor="middle" class="t-s">Laddomat</text>
+      <text x="270" y="263" text-anchor="middle" class="t-s dim">${lad.on == null ? "" : ladOn ? "pracuje" : `od ${num(lad.on_c, 0)}°`}</text>`;
 
     // buffer
     s += `<text x="420" y="52" text-anchor="middle" class="t-h">Bufor ${num(c.buffer_l, 0)} L</text>
@@ -1342,6 +1344,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       ${field("warn_c", "Ostrzeżenie — kocioł gorący (°C)", "", c.warn_c, 'min="70" max="94"', `profil: ${num(prof.warn_c, 0)}`)}
       ${field("alarm_c", "Alarm przegrzania (°C)", `zawór termiczny: ${num(prof.tzb_c, 0)} °C`, c.alarm_c, 'min="71" max="98"', `profil: ${num(prof.alarm_c, 0)}`)}
       ${field("efficiency", "Sprawność kotła (0–1)", "", c.efficiency, 'min="0.4" max="0.95" step="0.01"', `profil: ${num(prof.efficiency, 2)}`)}
+      ${field("laddomat_on_c", "Pompa Laddomatu rusza od (°C)", "ustawienie termostatu kotła; tylko do schematu", c.laddomat_on_c, 'min="40" max="90"', `profil: ${num(prof.laddomat_on_c, 0)}`)}
       ${field("wood_kwh_per_kg", "Drewno (kWh/kg)", "sezonowane ~4,0; mokre mniej", c.wood_kwh_per_kg, 'min="2.5" max="5.2" step="0.1"')}
     </div></div>`;
 
@@ -1541,7 +1544,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     if (!form || !this._draft) return;
     const c = this._draft;
     const nums = ["buffer_l", "buffer_max_c", "buffer_min_c", "buffer_full_c", "dhw_l", "dhw_cold_c", "dhw_target_c",
-      "room_target_c", "warn_c", "alarm_c", "efficiency", "wood_kwh_per_kg", "valve_run_s", "curve_slope", "curve_shift",
+      "room_target_c", "warn_c", "alarm_c", "efficiency", "laddomat_on_c", "wood_kwh_per_kg", "valve_run_s", "curve_slope", "curve_shift",
       "supply_min_c", "supply_max_c", "heating_limit_c", "room_gain", "night_setback_k", "night_from", "night_to",
       "light_lead_h", "burn_hours", "wood_price_kg", "dhw_on_diff_k", "dhw_off_diff_k", "dhw_hyst_k", "dhw_max_c"];
     const checks = ["enabled", "notify", "valve_invert", "safety_dump", "room_correction", "advisor_notify", "dhw_dump"];
@@ -1588,7 +1591,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const d = this._data.config;
     const prof = (this._data.profile_defaults || {})[d.profile] || {};
     const emit = (this._data.emitter_defaults || {})[d.emitters] || {};
-    for (const [k, def] of [["warn_c", prof.warn_c], ["alarm_c", prof.alarm_c], ["efficiency", prof.efficiency],
+    for (const [k, def] of [["warn_c", prof.warn_c], ["alarm_c", prof.alarm_c], ["efficiency", prof.efficiency], ["laddomat_on_c", prof.laddomat_on_c],
       ["buffer_min_c", emit.buffer_min_c], ["curve_slope", emit.curve_slope], ["supply_max_c", emit.supply_max_c]]) {
       if (cfg[k] != null && def != null && Math.abs(cfg[k] - def) < 1e-6) cfg[k] = null;
     }

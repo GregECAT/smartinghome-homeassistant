@@ -46,10 +46,12 @@ PROFILES: dict[str, dict[str, Any]] = {
     "atmos_dc": {
         "label": "Atmos DC…S / DC…GD (zgazowujący, wentylator wyciągowy)",
         "warn_c": 88.0, "alarm_c": 92.0, "tzb_c": 95.0, "min_return_c": 65.0, "efficiency": 0.80,
+        "laddomat_on_c": 75.0,
     },
     "generic": {
         "label": "Inny kocioł zgazowujący drewno",
         "warn_c": 88.0, "alarm_c": 92.0, "tzb_c": 95.0, "min_return_c": 60.0, "efficiency": 0.78,
+        "laddomat_on_c": 72.0,
     },
 }
 
@@ -139,6 +141,7 @@ DEFAULTS: dict[str, Any] = {
     "room_floor": 0,            # the storey of the reference room (index)
     "warn_c": None,             # None → profile
     "alarm_c": None,
+    "laddomat_on_c": None,      # None → profile; the boiler's own thermostat starts the Laddomat pump here
     "efficiency": None,
     "wood_kwh_per_kg": WOOD_KWH_PER_KG,
     "notify": True,
@@ -201,6 +204,7 @@ MAX_SESSIONS = 400       # a whole heating season
 
 # probes
 PROBE_FAULT_S = 120      # unavailable / invalid this long → probe fault
+LADDOMAT_HYST_K = 3.0    # the boiler thermostat's switching difference, roughly
 STARTUP_GRACE_S = 300    # after an HA restart integrations (Shelly …) come up unavailable for a while
 JUMP_K = 10.0            # single-sample jump bigger than this is dropped …
 JUMP_CONFIRM = 3         # … unless the next samples confirm it
@@ -283,6 +287,7 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     out["room_floor"] = int(_num(raw.get("room_floor"), 0, 0, out["floors"] - 1))
     out["warn_c"] = _num(raw.get("warn_c"), profile["warn_c"], 70.0, 94.0)
     out["alarm_c"] = _num(raw.get("alarm_c"), profile["alarm_c"], out["warn_c"] + 1.0, 98.0)
+    out["laddomat_on_c"] = _num(raw.get("laddomat_on_c"), profile["laddomat_on_c"], 40.0, 90.0)
     out["efficiency"] = _num(raw.get("efficiency"), profile["efficiency"], 0.4, 0.95)
     out["wood_kwh_per_kg"] = _num(raw.get("wood_kwh_per_kg"), WOOD_KWH_PER_KG, 2.5, 5.2)
     out["tzb_c"] = profile["tzb_c"]
@@ -324,7 +329,8 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     return out
 
 
-OPTIONAL_DEFAULTS = ("buffer_min_c", "warn_c", "alarm_c", "efficiency", "curve_slope", "supply_max_c")
+OPTIONAL_DEFAULTS = ("buffer_min_c", "warn_c", "alarm_c", "efficiency", "curve_slope", "supply_max_c",
+                     "laddomat_on_c")
 
 
 def to_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
@@ -595,6 +601,7 @@ class HeatingModel:
         self.pump_w: float | None = None
         self.dhw_pump_on: bool | None = None
         self.dhw_pump_w: float | None = None
+        self.laddomat_on: bool | None = None
         self.state = "unknown"
         self.state_since: float | None = None
         self.session: dict[str, Any] | None = None
@@ -656,8 +663,19 @@ class HeatingModel:
         if self.t("buffer_top") is not None:
             self._top_trend.add(now, self.t("buffer_top"))
         self._update_boiler(now)
+        self._update_laddomat()
         self._update_runtime(now)
         self.updated = now
+
+    def _update_laddomat(self) -> None:
+        """The Laddomat pump is started by the boiler's own thermostat (Atmos ≈ 75 °C); nothing reports
+        it, so it is inferred from the boiler outlet, with a small hysteresis. None without a reading."""
+        tb = self.t("boiler_out")
+        if tb is None:
+            self.laddomat_on = None
+            return
+        on_c = self.cfg["laddomat_on_c"]
+        self.laddomat_on = tb >= (on_c - LADDOMAT_HYST_K if self.laddomat_on else on_c)
 
     def t(self, role: str) -> float | None:
         p = self.probes.get(role)
@@ -936,6 +954,7 @@ class HeatingModel:
             "house_c": self.house_c,
             "pump": {"on": self.pump_on, "power_w": self.pump_w},
             "dhw_pump": {"on": self.dhw_pump_on, "power_w": self.dhw_pump_w},
+            "laddomat": {"on": self.laddomat_on, "on_c": self.cfg["laddomat_on_c"]},
             "boiler": {
                 "state": self.state, "label": STATE_LABELS.get(self.state, self.state),
                 "since": self.state_since, "temp_c": probes["boiler_out"]["value"],

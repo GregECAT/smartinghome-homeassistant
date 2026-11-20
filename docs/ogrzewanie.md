@@ -176,6 +176,10 @@ pali się w trakcie palenia, w rurach płynie woda, gdy pracuje pompa Laddomatu,
 CWU, wirniki pomp się kręcą, a bufor ma kolory warstw od dołu do góry. Karty ze sterowaniem,
 doradcą, paleniami i dziennikiem są niżej, po przewinięciu.
 
+Pompą Laddomatu steruje termostat kotła, więc moduł jej nie widzi: schemat pokazuje ją jako pracującą,
+gdy wyjście z kotła osiągnie próg włączenia (Ustawienia → „Kocioł i drewno” → „Pompa Laddomatu rusza od”;
+Atmos: 75 °C), i jako stojącą 3 K poniżej progu. Wcześniej, w trakcie rozpalania, schemat pokazuje „od 75°”.
+
 **Dom piętro po piętrze** (Ustawienia → „Dom — kondygnacje”): do 3 kondygnacji (np. parter, 1. piętro,
 poddasze) z nazwą, powierzchnią i własnym czujnikiem temperatury / wilgotności. Kondygnacja z pokojem
 referencyjnym bierze jego odczyt, dopóki nie ma własnego czujnika. Na schemacie dom dzieli się na piętra
