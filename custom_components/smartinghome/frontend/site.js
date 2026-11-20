@@ -55,10 +55,27 @@ function since(iso) {
   return `${Math.round(s / 86400)} dni temu`;
 }
 
+// ── open panels and updates ──
+// An open Home Assistant app (phone, wall tablet) keeps running the panel code it loaded until the page
+// reloads, while Home Assistant already serves the updated file under a new ?v=<hash>. The URL seen
+// first is the one this code came from; a different one later means this panel is out of date.
+const SH_TAG = "smartinghome-site-panel";
+let SH_LOADED_URL = null;
+function shServedUrl(hass) {
+  for (const p of Object.values((hass && hass.panels) || {})) {
+    const c = p && p.config && p.config._panel_custom;
+    if (c && c.name === SH_TAG) return c.module_url || c.js_url || "";
+  }
+  return "";
+}
+
 class SmartingHomeSitePanel extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
+    const edited = () => { this._lastEdit = Date.now(); };
+    this.shadowRoot.addEventListener("input", edited, true);
+    this.shadowRoot.addEventListener("change", edited, true);
     this._hass = null;
     this._view = "overview";
     this._settings = {};
@@ -69,7 +86,58 @@ class SmartingHomeSitePanel extends HTMLElement {
     this._lastRender = 0;
   }
 
+  // reload after an update when nobody is editing here (settings, a focused field, a change in the
+  // last 10 minutes) — once per version; otherwise a reload button, re-checked every minute
+  _checkVersion(hass) {
+    const url = shServedUrl(hass);
+    if (!url) return;
+    if (SH_LOADED_URL === null) { SH_LOADED_URL = url; return; }
+    if (url === SH_LOADED_URL || this._staleUrl) return;
+    this._staleUrl = url;
+    this._staleResume();
+  }
+  _staleResume() {
+    if (!this._staleUrl || this._staleTick || !this.isConnected) return;
+    this._staleTick = setInterval(() => this._reloadIfIdle(), 60000);
+    setTimeout(() => this._reloadIfIdle(), 1500);
+  }
+  _reloadIfIdle() {
+    if (!this._staleUrl || !this.isConnected) return;
+    const key = `shh-reloaded-${SH_TAG}`;
+    let done = null;
+    try { done = sessionStorage.getItem(key); } catch (e) { /* storage blocked */ }
+    const a = this.shadowRoot.activeElement;
+    const editing = (this._activeTab || this._view) === "settings"
+      || Date.now() - (this._lastEdit || 0) < 600000
+      || !!(a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName));
+    if (!editing && done !== this._staleUrl) {
+      try { sessionStorage.setItem(key, this._staleUrl); } catch (e) { /* storage blocked */ }
+      this._reloadNow();
+      return;
+    }
+    this._showUpdateToast();
+  }
+  _reloadNow() {
+    if (this._beforeReload) this._beforeReload();
+    location.reload();
+  }
+  _showUpdateToast() {
+    if (!this._staleUrl || this.shadowRoot.getElementById("sh-upd")) return;
+    const el = document.createElement("div");
+    el.id = "sh-upd";
+    el.style.cssText = "position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:100000;display:flex;"
+      + "align-items:center;gap:10px;padding:8px 8px 8px 16px;border-radius:999px;background:#2a2410;"
+      + "border:1px solid rgba(247,183,49,0.45);color:#fde68a;font:13px/1.3 system-ui,sans-serif;"
+      + "box-shadow:0 6px 24px rgba(0,0,0,0.45);white-space:nowrap;max-width:calc(100vw - 24px)";
+    el.innerHTML = 'Jest nowsza wersja panelu. <button style="border:none;border-radius:999px;padding:6px 14px;'
+      + 'background:#f7b731;color:#1a1405;font:600 13px system-ui,sans-serif;cursor:pointer">Odśwież</button>';
+    el.querySelector("button").addEventListener("click", () => this._reloadNow());
+    this.shadowRoot.appendChild(el);
+  }
+
   set hass(hass) {
+    if (hass && hass.panels !== this._panelsRef) { this._panelsRef = hass.panels; this._checkVersion(hass); }
+    else if (this._staleUrl) this._showUpdateToast();
     const first = !this._hass;
     this._hass = hass;
     if (first) {
@@ -82,6 +150,7 @@ class SmartingHomeSitePanel extends HTMLElement {
   set panel(p) { this._panel = p; }
 
   connectedCallback() {
+    this._staleResume();
     if (this._hass && !this.shadowRoot.querySelector(".wrap")) {
       this._renderShell();
       this._sections = {};
@@ -90,6 +159,7 @@ class SmartingHomeSitePanel extends HTMLElement {
     this._clock = setInterval(() => this._tick(), 1000);
   }
   disconnectedCallback() {
+    clearInterval(this._staleTick); this._staleTick = 0;
     clearInterval(this._clock);
   }
 

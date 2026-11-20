@@ -172,7 +172,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     if (this._view !== "settings" && store("session", RELOAD_KEY) !== url) {
       store("session", RELOAD_KEY, url);
       if (this._cssFs) store("session", CSSFS_KEY, "1");
-      setTimeout(() => location.reload(), 1500);
+      setTimeout(() => { if (this.isConnected) location.reload(); }, 1500);
     }
     this._showUpdate();
   }
