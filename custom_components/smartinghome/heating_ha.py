@@ -82,6 +82,7 @@ PROBE_FORCE_S = 60.0          # like the Shelly guard: a boiler / buffer probe l
 MAXTIME_TTL_S = 3600.0
 SAVE_DELAY_S = 10.0
 ADVISOR_EVERY_S = 60
+GUARD_RETRY_S = 60.0          # a locked / unlocked CH pump whose Shelly did not answer: try the guard again
 LOG_LEN = 100
 SOURCE = "Kotłownia"
 
@@ -133,6 +134,11 @@ class HeatingManager:
         self._final_unsub = None
         self._maxtime: dict[str, tuple[float, float | None]] = {}
         self._lock = asyncio.Lock()
+        # the guard script state a CH-pump emergency switch asks for (True = running), until the Shelly confirms
+        self._guard_want: bool | None = None
+        self._guard_retry = 0.0
+        self._guard_busy = False
+        self._guard_checked = False
 
     @property
     def enabled(self) -> bool:
@@ -213,6 +219,9 @@ class HeatingManager:
         self.model.configure(self.cfg)
         for line in self.ctrl.configure(self.cfg):
             self._log(line)
+        if self.enabled and self.cfg["lockout"]["pump"] and not self._guard_checked:
+            self._guard_checked = True
+            self._guard_want = False
         if self.enabled:
             await self._async_show_panel()
             self.ensure_entities()
@@ -385,6 +394,10 @@ class HeatingManager:
             async_dispatcher_send(self.hass, SIGNAL_UPDATE)
             await self._notify(raised, cleared)
             await self._advisor_notify(now)
+            if (self._guard_want is not None and not self._guard_busy
+                    and time.monotonic() >= self._guard_retry):
+                self._guard_retry = time.monotonic() + GUARD_RETRY_S
+                self.hass.async_create_task(self._guard_sync())
             if (len(self.model.sessions) != self._sessions_seen
                     or time.monotonic() - self._last_save > SAVE_EVERY_S):
                 self._sessions_seen = len(self.model.sessions)
@@ -569,6 +582,30 @@ class HeatingManager:
         self._save_soon()
         return True
 
+    async def _guard_sync(self, now: float | None = None) -> bool:
+        """Bring the guard script on the CH pump's Shelly to the state the emergency switch asks for.
+        False when the Shelly did not answer (tried again every GUARD_RETRY_S from the tick)."""
+        want = self._guard_want
+        if want is None:
+            return True
+        self._guard_busy = True
+        try:
+            res = await hs.guard_set_enabled(self.hass, self.cfg, want)
+        except Exception as err:  # noqa: BLE001 — retried from the tick
+            _LOGGER.warning("Heating guard sync failed: %s", err)
+            res = "error"
+        finally:
+            self._guard_busy = False
+        if want != self._guard_want:            # changed meanwhile — the next attempt follows the new wish
+            return True
+        if res == "error":
+            self._guard_retry = time.monotonic() + GUARD_RETRY_S
+            return False
+        self._guard_want = None
+        if res in ("stopped", "started"):       # "none": no script installed — nothing to say
+            self._log("Skrypt bezpieczeństwa na Shelly pompy " + ("uruchomiony" if want else "zatrzymany"), now)
+        return True
+
     async def _set_lock(self, element: Any, on: bool) -> dict[str, Any]:
         """A panel emergency switch: the element stays off (a valve stays put) whatever wants it on —
         the automation, the safety rules and, for the CH pump, the guard script on its Shelly."""
@@ -586,12 +623,10 @@ class HeatingManager:
             except Exception as err:  # noqa: BLE001
                 self._log(f"⚠️ Zawór nie przyjął polecenia stop: {err}", now)
         if element == "pump" and self.cfg["entities"]["pump_switch"]:
-            res = await hs.guard_set_enabled(self.hass, self.cfg, not on)
-            if res == "error":
-                self._log("⚠️ Nie udało się " + ("zatrzymać" if on else "uruchomić")
-                          + " skryptu bezpieczeństwa na Shelly pompy — sprawdź go w karcie Bezpieczeństwo", now)
-            elif res in ("stopped", "started"):
-                self._log("Skrypt bezpieczeństwa na Shelly pompy " + ("zatrzymany" if on else "uruchomiony"), now)
+            self._guard_want = not on
+            if not await self._guard_sync(now):
+                self._log("Shelly pompy CO nie odpowiada — skrypt bezpieczeństwa (jeśli jest wgrany) zostanie "
+                          + ("zatrzymany" if on else "uruchomiony") + ", gdy Shelly wróci do sieci", now)
         await self._tick()
         return self.ws_payload(True)
 
