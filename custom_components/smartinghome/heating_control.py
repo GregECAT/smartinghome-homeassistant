@@ -73,6 +73,12 @@ DHW_EXERCISE_S = 30.0       # the weekly run of the hot-water pump: short, the c
 ROOM_I_TAU_S = 7200.0
 ROOM_I_MAX = 4.0
 ROOM_CORR_MAX = 6.0
+ROOM_I_UNWIND = 8.0         # the memory pushing against the house (≥ ROOM_I_WRONG_K off) fades this many times faster
+ROOM_I_WRONG_K = 0.3
+
+# heating on / off by the house: on below target + ON_K, off at target + OFF_K
+ROOM_ON_K = 0.5
+ROOM_OFF_K = 1.0
 
 OUT_FAST_TAU_S = 900.0
 OUT_DAMPED_TAU_S = 6 * 3600.0
@@ -376,6 +382,7 @@ class HeatingController:
         self.room_i = 0.0
         self._room_ts: float | None = None
         self._night: bool | None = None
+        self._target: float | None = None       # the house target the room memory was built for
         self.needed = False
         self.hot = False
         self.dumping = False
@@ -482,7 +489,7 @@ class HeatingController:
         damped = out.t_out_damped
         cold = damped is None or damped < (limit + 1.0 if self.needed else limit)
         buffer_ok = inp.t_top is None or inp.t_top >= room_target + 5.0
-        room_ok = inp.t_room is None or inp.t_room < room_target + (2.0 if self.needed else 1.0)
+        room_ok = inp.t_room is None or inp.t_room < room_target + (ROOM_OFF_K if self.needed else ROOM_ON_K)
         self.needed = cold and buffer_ok and room_ok
         out.heating_needed = self.needed and mode == "auto"
 
@@ -493,12 +500,27 @@ class HeatingController:
         out.curve_c = round(curve_target(cfg, t_out, room_target), 1)
         corr = 0.0
         flowing = inp.pump_on is True or not inp.pump_configured
+        # a new target (set by hand, or day ↔ night) starts the room memory afresh: what was learnt for the
+        # old one would push the wrong way (a warm night target left +4 K in a house that is already warm)
+        if self._target is not None and abs(room_target - self._target) >= 0.05:
+            self.room_i = 0.0
+        self._target = room_target
         if (mode == "auto" and cfg["room_correction"] and inp.room_licensed and inp.t_room is not None
                 and cfg["room_gain"] > 0):
             err = room_target - inp.t_room
-            if flowing and self.needed and self._room_ts is not None:
+            if self._room_ts is not None:
                 dt = min(max(now - self._room_ts, 0.0), 600.0)
-                self.room_i = _clamp(self.room_i + cfg["room_gain"] * err * dt / ROOM_I_TAU_S, -ROOM_I_MAX, ROOM_I_MAX)
+                step = cfg["room_gain"] * err * dt / ROOM_I_TAU_S
+                wrong = self.room_i * err < 0 and abs(err) >= ROOM_I_WRONG_K   # memory against the house
+                if wrong:
+                    step *= ROOM_I_UNWIND
+                if flowing and self.needed:
+                    self.room_i = _clamp(self.room_i + step, -ROOM_I_MAX, ROOM_I_MAX)
+                elif wrong:
+                    # not heating now, but the memory would still push the wrong way when heating resumes:
+                    # let it fade, never past zero
+                    i = self.room_i + step
+                    self.room_i = max(i, 0.0) if self.room_i > 0 else min(i, 0.0)
             self._room_ts = now
             corr = _clamp(cfg["room_gain"] * err + self.room_i, -ROOM_CORR_MAX, ROOM_CORR_MAX)
         else:

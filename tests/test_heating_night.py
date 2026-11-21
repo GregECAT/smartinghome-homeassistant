@@ -109,7 +109,7 @@ def test_warm_house_at_night_needs_no_heating():
     cfg = _cfg(room_target_c=22, night_enabled=True, room_night_c=19, night_from=22, night_to=5)
     c = hc.HeatingController(cfg)
     assert c.step(_inp(12.0, room=21.5)).heating_needed is True
-    assert c.step(_inp(23.0, room=21.5)).heating_needed is False     # 21.5 ≥ 19 + 2
+    assert c.step(_inp(23.0, room=21.5)).heating_needed is False     # 21.5 ≥ 19 + 1
 
 
 # ── advisor ──────────────────────────────────────────────────────────────────
