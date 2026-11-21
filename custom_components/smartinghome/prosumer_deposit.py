@@ -32,6 +32,13 @@ VALIDITY_MONTHS = 12
 REFUND_SHARE = 0.30
 
 
+def refund_cap(deposit_amount: float) -> float:
+    """Refund limit for an expired deposit: 30 % of the fed-in energy's value (RCE), i.e. the
+    deposit amount before the 1.23 coefficient (ustawa o OZE art. 4 ust. 11 pkt 2 / ust. 11a).
+    RCEm settlement (20 %) is not modelled — the integration values exports at hourly RCE."""
+    return deposit_amount / COEFFICIENT * REFUND_SHARE
+
+
 def month_key(d: date | datetime) -> str:
     return f"{d.year:04d}-{d.month:02d}"
 
@@ -103,10 +110,10 @@ def _run(
     month = min([first_month] + [c["credited"] for c in credits])
     while month <= until:
         f = flows.get(month, {}) if month >= first_month else {}
-        # 1. Deposits past their 12 months: refund ≤ 30 % of their value, the rest is lost
+        # 1. Deposits past their 12 months: refund ≤ 30 % of the energy's value (before × 1.23), the rest is lost
         for c in credits:
             if c["expires"] < month and c["left"] > 0.005 and "lost" not in c:
-                refund = min(c["left"], c["amount"] * REFUND_SHARE)
+                refund = min(c["left"], refund_cap(c["amount"]))
                 c["refund"], c["lost"], c["left"] = round(refund, 2), round(c["left"] - refund, 2), 0.0
         # 2. The month's energy bill uses credited, valid deposits — oldest first
         charge = float(f.get("energy_charge") or 0.0)
@@ -171,7 +178,9 @@ def settle(
     cur = fut.get((current_month, add_months(current_month, 1)))
     if cur is not None and cur.get("lost", 0.0) > 0.005:
         # The deposit earned now won't all be used — an extra kWh is worth the refund at most
-        export_value_factor = REFUND_SHARE if cur.get("refund", 0.0) < cur["amount"] * REFUND_SHARE - 0.005 else 0.0
+        # (an extra kWh adds RCE × 1.23 to the deposit but only RCE × 30 % to the refundable part)
+        export_value_factor = (REFUND_SHARE / COEFFICIENT
+                               if cur.get("refund", 0.0) < refund_cap(cur["amount"]) - 0.005 else 0.0)
     else:
         export_value_factor = 1.0
     return {
