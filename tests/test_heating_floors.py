@@ -80,3 +80,24 @@ def test_floor_probes_never_raise_the_probe_fault_alarm():
         model.update({"boiler_out": "30", "floor0_temp": "unavailable"}, t)
         model.evaluate_alarms(t)
     assert not model.active_alarms()          # a room sensor on battery is not boiler safety
+
+
+def test_view_only_storey_is_shown_but_left_out_of_the_mean():
+    cfg = hm.normalize({"floors": 3, "room_floor": 1, "floor_areas": [105, 105, 40],
+                        "floor_view_only": [False, False, True]})
+    assert cfg["floor_view_only"] == [False, False, True]
+    floors, mean = hm.floors_state(cfg, [None, None, 31.2], [None] * 3, 24.0, None)
+    assert floors[2]["temp_c"] == 31.2 and floors[2]["view_only"] is True
+    assert mean == 24.0                      # the radiator head does not pull the house up
+    model = hm.HeatingModel({"enabled": True, "floors": 3, "room_floor": 1, "floor_view_only": [False, False, True],
+                             "entities": {"room": "sensor.ht", "floor2_temp": "sensor.trv"}})
+    model.update({"room": "24.0", "floor2_temp": "31.2"}, 100)
+    assert model.house_temp() == 24.0
+
+
+def test_view_only_needs_the_storeys_own_sensor():
+    cfg = hm.normalize({"floors": 2, "room_floor": 0, "floor_view_only": [True, False]})
+    floors, mean = hm.floors_state(cfg, [None, 22.0], [None] * 2, 21.0, None)
+    assert floors[0]["source"] == "room" and floors[0]["view_only"] is False
+    assert mean == 21.5
+    assert hm.normalize({"floor_view_only": "yes"})["floor_view_only"] == [False, False, False]

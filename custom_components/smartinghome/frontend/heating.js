@@ -774,7 +774,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const ctlNight = !!(st.control || {}).night;
     const ctlT = (st.control || {}).room_target ?? cfg.room_target_c;
     if ((cfg.floors || 1) >= 2) {
-      const rows = (st.floors || []).map((f) => `${f.ref ? "◉ " : ""}${esc(f.name)}: <b style="color:#e0e6ed">${f.temp_c != null ? `${num(f.temp_c)} °C` : "—"}</b>${f.humidity != null ? ` · ${num(f.humidity, 0)}%` : ""}`);
+      const rows = (st.floors || []).map((f) => `${f.ref ? "◉ " : ""}${esc(f.name)}: <b style="color:#e0e6ed">${f.temp_c != null ? `${num(f.temp_c)} °C` : "—"}</b>${f.humidity != null ? ` · ${num(f.humidity, 0)}%` : ""}${f.view_only ? " <span class=\"muted\">(podgląd, poza średnią)</span>" : ""}`);
       out.push(`<div class="card kpi"><div class="lbl">Dom — średnio</div>
         <div class="val">${num(st.house_c)}<small>°C</small></div>
         <div class="note">${rows.join("<br>")}<br>zadana ${num(ctlT)} °C${ctlNight ? " (noc)" : ""}${cfg.floor_areas && cfg.floor_areas.some((a) => a) ? " · średnia ważona powierzchnią" : ""}</div></div>`);
@@ -1372,7 +1372,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     if (nFloors >= 2) {
       html += `<div class="grid2 floorsg" style="margin-top:12px">${floorNames.slice(0, nFloors).map((n, i) => `
         <label class="f">Kondygnacja ${i + 1} — nazwa<input name="floor_name_${i}" type="text" maxlength="24" value="${esc(n)}" ${dis}></label>
-        <label class="f">${esc(n)} — powierzchnia (m²)<input name="floor_area_${i}" type="number" min="0" max="5000" step="1" value="${(c.floor_areas || [])[i] ?? ""}" placeholder="opcjonalnie" ${dis}></label>`).join("")}
+        <label class="f">${esc(n)} — powierzchnia (m²)<input name="floor_area_${i}" type="number" min="0" max="5000" step="1" value="${(c.floor_areas || [])[i] ?? ""}" placeholder="opcjonalnie" ${dis}>
+          <span class="h"><label class="chk" style="margin:4px 0 0"><input type="checkbox" name="floor_view_${i}" ${(c.floor_view_only || [])[i] ? "checked" : ""} ${dis}> tylko podgląd — czujnik tej kondygnacji nie liczy się do średniej domu ani do doradcy (np. głowica przy kaloryferze)</label></span></label>`).join("")}
       </div>
       <div class="hint" id="floorw">${this._floorWeightsHtml(c)}</div>
       <div class="hint">Czujniki kondygnacji wybierasz niżej, w sekcji „Czujniki”. Średnia domu jest ważona powierzchnią (bez powierzchni — zwykła średnia)
@@ -1639,6 +1640,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       else if (el.name.startsWith("floor_name_")) {
         c.floor_names = [...(c.floor_names || ["Parter", "1. piętro", "Poddasze"])];
         c.floor_names[Number(el.name.slice(11))] = el.value;
+      } else if (el.name.startsWith("floor_view_")) {
+        c.floor_view_only = [...(c.floor_view_only || [false, false, false])];
+        c.floor_view_only[Number(el.name.slice(11))] = el.checked;
       } else if (el.name.startsWith("floor_area_")) {
         c.floor_areas = [...(c.floor_areas || [null, null, null])];
         c.floor_areas[Number(el.name.slice(11))] = el.value === "" ? null : parseFloat(el.value);
@@ -1651,15 +1655,19 @@ class SmartingHomeHeatingPanel extends HTMLElement {
   // how each storey counts in the house mean — same rule as heating_model.floors_state
   _floorWeightsHtml(c) {
     const n = Math.min(Math.max(Number(c.floors) || 1, 1), 3);
-    const names = (c.floor_names || ["Parter", "1. piętro", "Poddasze"]).slice(0, n);
-    const areas = (c.floor_areas || []).slice(0, n).map((a) => (Number(a) > 0 ? Number(a) : null));
-    if (areas.every((a) => a)) {
+    const view = c.floor_view_only || [];
+    const idx = [...Array(n).keys()].filter((i) => !view[i]);
+    const names = c.floor_names || ["Parter", "1. piętro", "Poddasze"];
+    const skipped = [...Array(n).keys()].filter((i) => view[i]).map((i) => esc(names[i]));
+    const note = skipped.length ? ` Tylko podgląd (poza średnią): ${skipped.join(", ")}.` : "";
+    const areas = idx.map((i) => (Number((c.floor_areas || [])[i]) > 0 ? Number(c.floor_areas[i]) : null));
+    if (idx.length && areas.every((a) => a)) {
       const sum = areas.reduce((x, a) => x + a, 0);
       const fmt = (v) => v.toLocaleString("pl-PL", { maximumFractionDigits: 1 });
-      return `Razem <b>${fmt(sum)} m²</b> · udział w średniej domu: ${names.map((nm, i) => `${esc(nm)} <b>${Math.round((areas[i] / sum) * 100)}%</b>`).join(" · ")}.
-        Kondygnacja bez odczytu jest pomijana, a udziały pozostałych rosną proporcjonalnie.`;
+      return `Razem <b>${fmt(sum)} m²</b> · udział w średniej domu: ${idx.map((i, k) => `${esc(names[i])} <b>${Math.round((areas[k] / sum) * 100)}%</b>`).join(" · ")}.
+        Kondygnacja bez odczytu jest pomijana, a udziały pozostałych rosną proporcjonalnie.${note}`;
     }
-    return `Wpisz powierzchnię każdej kondygnacji, a średnia domu będzie ważona powierzchnią — teraz każda kondygnacja liczy się po równo.`;
+    return `Wpisz powierzchnię każdej kondygnacji, a średnia domu będzie ważona powierzchnią — teraz każda kondygnacja liczy się po równo.${note}`;
   }
 
   async _save() {

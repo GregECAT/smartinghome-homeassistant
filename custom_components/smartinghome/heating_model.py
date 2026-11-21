@@ -144,6 +144,7 @@ DEFAULTS: dict[str, Any] = {
     "floors": 1,
     "floor_names": list(FLOOR_NAMES),
     "floor_areas": [None, None, None],   # m² (empty → equal weights)
+    "floor_view_only": [False, False, False],   # shown, but left out of the house mean (e.g. a radiator head)
     "room_floor": 0,            # the storey of the reference room (index)
     "warn_c": None,             # None → profile
     "alarm_c": None,
@@ -297,6 +298,8 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     for i in range(MAX_FLOORS):
         a = _f(areas[i]) if i < len(areas) else None
         out["floor_areas"][i] = round(min(a, 5000.0), 1) if a is not None and a > 0 else None
+    views = raw.get("floor_view_only") if isinstance(raw.get("floor_view_only"), list) else []
+    out["floor_view_only"] = [i < len(views) and views[i] is True for i in range(MAX_FLOORS)]
     out["room_floor"] = int(_num(raw.get("room_floor"), 0, 0, out["floors"] - 1))
     out["warn_c"] = _num(raw.get("warn_c"), profile["warn_c"], 70.0, 94.0)
     out["alarm_c"] = _num(raw.get("alarm_c"), profile["alarm_c"], out["warn_c"] + 1.0, 98.0)
@@ -497,8 +500,11 @@ def dhw_state(cfg: dict[str, Any], t: float | None) -> dict[str, Any] | None:
 def floors_state(cfg: dict[str, Any], temps: list[float | None], hums: list[float | None],
                  t_room: float | None, h_room: float | None) -> tuple[list[dict[str, Any]], float | None]:
     """Storey by storey: its own sensor, else the reference room when it is on that storey.
-    → (storeys, the house's mean temperature weighted by floor area — equal weights without areas)."""
+    → (storeys, the house's mean temperature weighted by floor area — equal weights without areas).
+    A storey marked "view only" shows its own sensor but stays out of the mean (and so out of the advisor):
+    a radiator head measures next to a hot radiator, not the room."""
     out: list[dict[str, Any]] = []
+    views = cfg.get("floor_view_only") or []
     for i in range(cfg["floors"]):
         ref = i == cfg["room_floor"]
         t = temps[i] if i < len(temps) else None
@@ -510,8 +516,9 @@ def floors_state(cfg: dict[str, Any], temps: list[float | None], hums: list[floa
             h = h_room
         out.append({"name": cfg["floor_names"][i], "temp_c": None if t is None else round(t, 1),
                     "humidity": None if h is None else round(h, 0), "area_m2": cfg["floor_areas"][i],
-                    "ref": ref, "source": source})
-    known = [(f["temp_c"], f["area_m2"]) for f in out if f["temp_c"] is not None]
+                    "ref": ref, "source": source,
+                    "view_only": source == "probe" and i < len(views) and bool(views[i])})
+    known = [(f["temp_c"], f["area_m2"]) for f in out if f["temp_c"] is not None and not f["view_only"]]
     if not known:
         return out, None
     if all(a for _, a in known):

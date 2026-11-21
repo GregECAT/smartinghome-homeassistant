@@ -248,6 +248,11 @@ jednego pomieszczenia). Grzanie (krzywa, korekta, dzień i noc) działa według 
 Po wpisaniu powierzchni wszystkich kondygnacji karta pokazuje sumę i udział każdej w średniej (np. 105 /
 105 / 40 m² → 42% / 42% / 16%). Kondygnacja bez odczytu jest pomijana, a udziały pozostałych rosną
 proporcjonalnie; gdy brakuje którejś powierzchni, kondygnacje liczą się po równo.
+Opcja **„tylko podgląd”** przy kondygnacji pokazuje jej czujnik w panelu, ale nie wlicza go do średniej domu
+ani do doradcy. Przydaje się, gdy temperaturę daje głowica termostatyczna przy kaloryferze: mierzy tuż przy
+gorącym zaworze, więc zawyża temperaturę pomieszczenia. Głowica sama reguluje swój kaloryfer, a moduł tylko
+pokazuje jej odczyt. Atrybut `current_temperature` encji `climate` udostępnia się jako czujnik pomocnikiem
+„Szablon” (Ustawienia → Urządzenia → Pomocnicy), np. `{{ state_attr('climate.glowica', 'current_temperature') }}`.
 
 Przycisk **⛶** w nagłówku włącza **pełny ekran**: panel zasłania pasek boczny Home Assistanta,
 a ekran nie gaśnie (np. tablet na ścianie w kotłowni albo telewizor). **✕** albo Esc wraca do
