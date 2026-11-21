@@ -318,6 +318,7 @@ class HeatingManager:
             out = self.ctrl.step(hc.ControlInput(
                 now=now, local_hour=local.hour + local.minute / 60.0,
                 t_supply=self.model.t("heating_supply"), t_top=self.model.t("buffer_top"),
+                t_bottom=self.model.t("buffer_bottom"),
                 t_boiler=self.model.t("boiler_out"), t_room=self.model.t("room"), t_out=t_out,
                 pump_on=pump_on, pump_configured=bool(cfg["entities"]["pump_switch"]),
                 valve_configured=self._valve_configured(),

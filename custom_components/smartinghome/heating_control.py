@@ -322,6 +322,7 @@ class ControlInput:
     local_hour: float
     t_supply: float | None = None
     t_top: float | None = None
+    t_bottom: float | None = None    # buffer bottom — stands in where the top has no probe (never warmer than it)
     t_boiler: float | None = None
     t_room: float | None = None
     t_out: float | None = None
@@ -534,7 +535,10 @@ class HeatingController:
         # safety states (computed in every mode, acted on in all but "off"). "Hot" is a superset of the
         # Shelly guard's rule (heating_shelly.guard_config: boiler ≥ alarm − 2, buffer top ≥ full + 4,
         # released 3 K lower), so Home Assistant never works against the script on the pump's Shelly.
-        tb, tt = inp.t_boiler, inp.t_top
+        # Without a top probe the bottom stands in: it is never warmer than the top, so it can only
+        # trigger later than the top would — never a false alarm.
+        tb = inp.t_boiler
+        tt = inp.t_top if inp.t_top is not None else inp.t_bottom
         boiler_hot = cfg["alarm_c"] - 2.0
         buffer_hot = min(cfg["buffer_full_c"] + 4.0, 95.0)
         pair = tb is not None and tt is not None and tb >= cfg["warn_c"] and tt >= cfg["buffer_full_c"]
@@ -644,6 +648,10 @@ class HeatingController:
         boiler = cfg["dhw_source"] == "boiler_out"
         src_name = "kocioł" if boiler else "bufor"
         t_src = inp.t_boiler if boiler else inp.t_top
+        if not boiler and t_src is None and inp.t_bottom is not None:
+            # no top probe: the bottom is the coolest water in the buffer — charging starts a little later,
+            # but never with water colder than the tank
+            t_src, src_name = inp.t_bottom, "bufor (dół)"
         t_dhw = inp.t_dhw
         plan = DhwPlan(source_c=t_src)
         if t_src is None or t_dhw is None:

@@ -55,6 +55,27 @@ Wskazówki montażowe: tuleje 150 mm pasują do zbiorników; na rury DN25–32 l
 leżeć na rurze zasilania kotła. Przed montażem skalibruj wszystkie sondy w jednym naczyniu
 z wodą (np. ~20 °C i ~60 °C), a różnice wpisz jako korekty w panelu.
 
+Każdą sondę prowadź osobnym przewodem do Add-onu i łącz je w jednym miejscu, przy samym Shelly.
+Łączenie kilku sond w jeden przewód przy kotle albo buforze to najczęstsza przyczyna
+„zamrożonych” odczytów i stałych 85,0 °C. Add-on obsługuje do 5 sond DS18B20 na jednej linii (VCC,
+DATA, GND). Zaciski ANALOG IN i VREF OUT nie nadają się do sond DS18B20. Drugą linię sond daje
+dopiero drugi Shelly z Add-onem.
+
+#### Praca z niepełnym zestawem sond
+
+Moduł działa też bez części sond. Nieprzypisaną sondę po prostu pomija, a alarm
+„Brak odczytu czujnika” dotyczy tylko sond, które są przypisane.
+
+| Brak sondy | Co dalej działa | Czego nie ma |
+|---|---|---|
+| Kocioł — wyjście | krzywa grzewcza, zawór, pompa CO według domu, CWU z bufora | stanu kotła i sesji palenia, alarmów przegrzania kotła, wymuszenia pompy przy gorącym kotle |
+| Bufor — góra | CWU ładowana według **dołu** bufora (zaczyna trochę później); dół pilnuje też progu przegrzania bufora; zapas ciepła liczony z samego dołu (szacunek, zaniżony) | alarmu „bufor pełny”, limitu zasilania od góry bufora |
+| Bufor — dół | zapas ciepła liczony z samej góry (szacunek) | dokładnego zapasu ciepła |
+
+Bezpieczeństwa kotła nie zapewnia Home Assistant, tylko termostat kotła, zawór termiczny (TZB)
+i Laddomat. Bez sondy kotła moduł nie pomoże przy przegrzaniu, więc taki układ traktuj jako
+tymczasowy.
+
 ### Ustawienia Shelly
 
 - **1PM (pompa CO):** stan po zaniku zasilania `ON`, próg raportowania temperatury Add-on
