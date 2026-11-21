@@ -889,6 +889,7 @@ class HeatingManager:
             "modes": hm.MODES,
             "valve_types": hm.VALVE_TYPES,
             "dhw_sources": hm.DHW_SOURCES,
+            "dhw_modes": hm.DHW_MODES,
             "states": hm.STATE_LABELS,
             "weather_entities": sorted(self.hass.states.async_entity_ids("weather")),
         }

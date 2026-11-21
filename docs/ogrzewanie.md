@@ -132,7 +132,7 @@ a kafel „Zadana w domu” pokazuje ją z porą („noc, do 05:00”). Te same 
 |---|---|---|---|
 | Wyłączone | nic | nic (również bez zrzutu ciepła — tylko pomiary i alarmy) | nic |
 | Ręczne | przyciski w panelu | przyciski w panelu | przyciski w panelu |
-| Automatyczne | krzywa pogodowa (+ korekta od temperatury w domu, PRO), limit: góra bufora − 2 K | pracuje, gdy jest zapotrzebowanie (średnia temp. zewnętrzna < granicy grzania, ciepło w buforze, w domu poniżej zadanej + 0,5 K; wyłącza przy zadanej + 1 K); min. 5 min pracy / postoju | ładowanie różnicowe (niżej); raz w tygodniu 30 s przepłukania |
+| Automatyczne | krzywa pogodowa (+ korekta od temperatury w domu, PRO), limit: góra bufora − 2 K | pracuje, gdy jest zapotrzebowanie (średnia temp. zewnętrzna < granicy grzania, ciepło w buforze, w domu poniżej zadanej + 0,5 K; wyłącza przy zadanej + 1 K); min. 5 min pracy / postoju | ładowanie różnicowe albo według godzin (niżej); raz w tygodniu 30 s przepłukania |
 | Lato | zamknięty | stoi; raz w tygodniu 60 s przepłukania | jak w trybie automatycznym |
 
 We wszystkich trybach poza „Wyłączone” działa bezpieczeństwo — z tymi samymi progami co skrypt na Shelly,
@@ -145,6 +145,22 @@ więc Home Assistant nigdy nie działa wbrew niemu:
 - **brak odczytu sondy kotła lub bufora** przez 60 s → pompa CO włączona (bez odczytu kotła moduł nie wie,
   czy się pali). Panel pokazuje wtedy pasek „Pompa CO pracuje awaryjnie” z powodem,
 - **ogranicznik zasilania** (zasilanie > maks. + 3 K) → zawór przymykany.
+
+### Pompa CWU według godzin
+
+W karcie **Pompa ładująca CWU** (Ustawienia) wybierz **Sterowanie pompą CWU → Według godzin**, jeśli
+zasobnik nie ma sondy albo jej odczyty są niepewne. Wtedy:
+- pompa ładuje CWU tylko w **dwóch oknach godzinowych** (domyślnie 5–6 i 17–18). Takie samo „od” i „do”
+  wyłącza okno, a okno może przechodzić przez północ (np. 23–1),
+- ładuje tylko wtedy, gdy źródło ma co najmniej **zadaną CWU + różnicę startu** (domyślnie 55 + 5 = 60 °C).
+  Bez sondy CWU moduł nie zna temperatury zasobnika, a ten warunek gwarantuje, że wężownica go nie wychłodzi,
+- przy braku sondy góry bufora źródłem jest dół bufora,
+- jeśli sonda CWU jest przypisana i działa, pompa staje też przy zadanej CWU i przy górnym limicie,
+- „zrzut ciepła do CWU” przy gorącym kotle działa tylko z sondą CWU, bo bez niej nic nie ograniczałoby
+  temperatury w zasobniku.
+
+Ręcznie pompę CWU włączasz przełącznikiem **RĘKA** w karcie Sterowanie, który działa niezależnie od godzin.
+Pozycja **AUTO** wraca do harmonogramu.
 
 **Przy montażu, serwisie albo gdy w instalacji nie ma wody** przełącz tryb na **Wyłączone** albo zablokuj
 pompę (pozycja 0). Inaczej, dopóki sondy nie czytają, pompa CO pracuje (także na sucho).

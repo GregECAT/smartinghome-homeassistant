@@ -94,11 +94,21 @@ def curve_target(cfg: dict[str, Any], t_out: float, room_target: float) -> float
     return _clamp(t, cfg["supply_min_c"], cfg["supply_max_c"])
 
 
-def in_night(cfg: dict[str, Any], local_hour: float) -> bool:
-    start, end = cfg["night_from"], cfg["night_to"]
+def in_hours(start: int, end: int, local_hour: float) -> bool:
+    """start ≤ hour < end, across midnight when start > end; start == end is an empty window."""
     if start == end:
         return False
     return (start <= local_hour or local_hour < end) if start > end else (start <= local_hour < end)
+
+
+def in_night(cfg: dict[str, Any], local_hour: float) -> bool:
+    return in_hours(cfg["night_from"], cfg["night_to"], local_hour)
+
+
+def dhw_windows(cfg: dict[str, Any]) -> list[tuple[int, int]]:
+    """The hot-water charging windows that are switched on (from ≠ to)."""
+    pairs = [(cfg["dhw_win1_from"], cfg["dhw_win1_to"]), (cfg["dhw_win2_from"], cfg["dhw_win2_to"])]
+    return [(a, b) for a, b in pairs if a != b]
 
 
 def night_now(cfg: dict[str, Any], local_hour: float) -> bool:
@@ -654,6 +664,8 @@ class HeatingController:
             t_src, src_name = inp.t_bottom, "bufor (dół)"
         t_dhw = inp.t_dhw
         plan = DhwPlan(source_c=t_src)
+        if cfg["dhw_mode"] == "schedule":
+            return self._dhw_by_clock(inp, plan, t_src, src_name, boiler)
         if t_src is None or t_dhw is None:
             self.dhw_charging = False
             plan.urgent = True
@@ -696,6 +708,57 @@ class HeatingController:
         else:
             need = t_dhw + (cfg["dhw_off_diff_k"] if charging else cfg["dhw_on_diff_k"])
             plan.reason = f"{src_name} za chłodny ({t_src:.0f} °C, potrzeba ≥ {need:.0f} °C)"
+        return plan
+
+    def _dhw_by_clock(self, inp: ControlInput, plan: DhwPlan, t_src: float | None, src_name: str,
+                      boiler: bool) -> DhwPlan:
+        """Charging by the clock, for a tank without a (working) probe: only inside the hour windows and
+        only while the source is clearly warmer than the target — so the coil never cools the tank. With a
+        tank probe it also stops at the target, at the upper limit and when the source gets cooler."""
+        cfg = self.cfg
+        wins = dhw_windows(cfg)
+        hours = ", ".join(f"{a}–{b}" for a, b in wins) or "brak okien"
+        t_dhw, target, cap = inp.t_dhw, cfg["dhw_target_c"], cfg["dhw_max_c"]
+        if t_src is None:
+            self.dhw_charging = False
+            plan.urgent = True
+            plan.reason = f"brak odczytu sondy {'kotła' if boiler else 'bufora'}"
+            return plan
+        if t_dhw is not None and t_dhw >= cap:
+            self.dhw_charging = False
+            plan.urgent = True
+            plan.reason = f"CWU {t_dhw:.0f} °C — górny limit {cap:.0f} °C"
+            return plan
+        if t_dhw is not None and t_src < t_dhw:
+            self.dhw_charging = False
+            plan.urgent = True
+            plan.reason = f"{src_name} ({t_src:.0f} °C) chłodniejszy niż CWU ({t_dhw:.0f} °C)"
+            return plan
+        limit = cap if cfg["dhw_dump"] else target
+        if self.hot and t_dhw is not None and t_src - t_dhw >= cfg["dhw_off_diff_k"] and t_dhw < limit:
+            # a hot boiler needs the tank as a heat sink at any hour — but only where the tank's probe can stop it
+            self.dhw_charging = True
+            plan.want = plan.force = True
+            plan.dump = t_dhw >= target
+            plan.reason = ("zrzut ciepła do CWU — kocioł gorący" if cfg["dhw_dump"]
+                           else "kocioł gorący — CWU dogrzewana do zadanej")
+            return plan
+        if not any(in_hours(a, b, inp.local_hour) for a, b in wins):
+            self.dhw_charging = False
+            plan.reason = f"CWU według godzin ({hours}) — poza oknem ładowania"
+            return plan
+        charging = self.dhw_charging or inp.dhw_pump_on is True
+        diff = cfg["dhw_off_diff_k"] if charging else cfg["dhw_on_diff_k"]
+        need = (target if t_dhw is None else t_dhw) + diff
+        keep = t_src >= need and (t_dhw is None or t_dhw < target)
+        self.dhw_charging = keep
+        plan.want = keep
+        if keep:
+            plan.reason = f"ładowanie CWU według godzin ({hours}): {src_name} {t_src:.0f} °C"
+        elif t_dhw is not None and t_dhw >= target:
+            plan.reason = f"CWU naładowana ({t_dhw:.0f} °C)"
+        else:
+            plan.reason = f"{src_name} za chłodny na ładowanie CWU ({t_src:.0f} °C, potrzeba ≥ {need:.0f} °C)"
         return plan
 
     def _dhw_auto(self, inp: ControlInput, plan: DhwPlan) -> tuple[str, str] | None:

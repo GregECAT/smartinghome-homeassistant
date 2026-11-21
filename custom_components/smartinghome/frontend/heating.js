@@ -1454,9 +1454,17 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     </div></div>`;
 
     const hasDhwPump = !!((c.entities || {}).dhw_pump_switch);
-    html += `<div class="card" style="margin-top:14px"><h3>Pompa ładująca CWU <small>sterowanie różnicowe: pompa pracuje tylko wtedy, gdy źródło jest cieplejsze od wody w zasobniku</small></h3>
+    const byClock = c.dhw_mode === "schedule";
+    html += `<div class="card" style="margin-top:14px"><h3>Pompa ładująca CWU <small>${byClock
+      ? "według godzin: pompa pracuje w wybranych oknach, gdy źródło jest wyraźnie cieplejsze od zadanej CWU"
+      : "sterowanie różnicowe: pompa pracuje tylko wtedy, gdy źródło jest cieplejsze od wody w zasobniku"}</small></h3>
       ${hasDhwPump ? "" : `<div class="hint" style="margin-top:0">Wybierz przekaźnik pompy w sekcji „Czujniki” (Pompa CWU — przekaźnik). Bez niego te ustawienia nic nie przełączają.</div>`}
       <div class="grid2">
+      <label class="f">Sterowanie pompą CWU${sel("dhw_mode", d.dhw_modes || { auto: "Według sondy CWU", schedule: "Według godzin" }, c.dhw_mode || "auto")}<span class="h">„Według godzin” działa też bez sondy CWU: ładuje tylko wtedy, gdy źródło ma co najmniej zadaną CWU + różnicę startu</span></label>
+      ${field("dhw_win1_from", "Okno 1 — od (godz.)", "", c.dhw_win1_from, 'min="0" max="23"')}
+      ${field("dhw_win1_to", "Okno 1 — do (godz.)", "takie samo „od” i „do” wyłącza okno", c.dhw_win1_to, 'min="0" max="23"')}
+      ${field("dhw_win2_from", "Okno 2 — od (godz.)", "", c.dhw_win2_from, 'min="0" max="23"')}
+      ${field("dhw_win2_to", "Okno 2 — do (godz.)", "", c.dhw_win2_to, 'min="0" max="23"')}
       <label class="f">Skąd grzana jest CWU${sel("dhw_source", d.dhw_sources || {}, c.dhw_source)}<span class="h">z CWU porównywana jest sonda góry bufora albo wyjścia kotła</span></label>
       ${field("dhw_on_diff_k", "Start, gdy źródło cieplejsze o (K)", "", c.dhw_on_diff_k, 'min="2" max="15" step="0.5"')}
       ${field("dhw_off_diff_k", "Stop, gdy różnica spadnie poniżej (K)", "poniżej 0 K pompa staje od razu", c.dhw_off_diff_k, 'min="0.5" max="14" step="0.5"')}
@@ -1615,9 +1623,11 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const nums = ["buffer_l", "buffer_max_c", "buffer_min_c", "buffer_full_c", "dhw_l", "dhw_cold_c", "dhw_target_c",
       "room_target_c", "warn_c", "alarm_c", "efficiency", "laddomat_on_c", "wood_kwh_per_kg", "valve_run_s", "curve_slope", "curve_shift",
       "supply_min_c", "supply_max_c", "heating_limit_c", "room_gain", "room_night_c", "night_from", "night_to",
-      "light_lead_h", "burn_hours", "wood_price_kg", "dhw_on_diff_k", "dhw_off_diff_k", "dhw_hyst_k", "dhw_max_c"];
+      "light_lead_h", "burn_hours", "wood_price_kg", "dhw_on_diff_k", "dhw_off_diff_k", "dhw_hyst_k", "dhw_max_c",
+      "dhw_win1_from", "dhw_win1_to", "dhw_win2_from", "dhw_win2_to"];
     const checks = ["enabled", "notify", "valve_invert", "safety_dump", "room_correction", "night_enabled", "advisor_notify", "dhw_dump"];
-    const selects = ["profile", "emitters", "mode", "valve_type", "valve_cover", "valve_open_switch", "valve_close_switch", "weather_entity", "dhw_source"];
+    const selects = ["profile", "emitters", "mode", "valve_type", "valve_cover", "valve_open_switch", "valve_close_switch", "weather_entity",
+      "dhw_source", "dhw_mode"];
     for (const el of form.elements) {
       if (!el.name) continue;
       if (checks.includes(el.name)) c[el.name] = el.checked;

@@ -116,6 +116,12 @@ DHW_SOURCES = {
     "boiler_out": "Prosto z kotła",
 }
 
+# how the hot-water pump decides: by the tank probe (differential), or by the clock (no tank probe needed)
+DHW_MODES = {
+    "auto": "Według sondy CWU",
+    "schedule": "Według godzin",
+}
+
 DEFAULTS: dict[str, Any] = {
     "enabled": False,
     "profile": "atmos_dc",
@@ -173,6 +179,11 @@ DEFAULTS: dict[str, Any] = {
     "dhw_hyst_k": 5.0,          # recharge once the tank fell this far below dhw_target_c
     "dhw_dump": False,          # boiler too hot → tank up to dhw_max_c (needs a thermostatic mixer)
     "dhw_max_c": 80.0,
+    "dhw_mode": "auto",         # "schedule": charge in the hour windows below, also without a tank probe
+    "dhw_win1_from": 5,
+    "dhw_win1_to": 6,
+    "dhw_win2_from": 17,
+    "dhw_win2_to": 18,          # from == to → the window is off
     # advisor (phase 4)
     "weather_entity": "",
     "light_lead_h": 1.0,        # from lighting to the buffer taking heat
@@ -331,6 +342,9 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     out["dhw_hyst_k"] = _num(raw.get("dhw_hyst_k"), 5.0, 1.0, 20.0)
     out["dhw_dump"] = bool(raw.get("dhw_dump", False))
     out["dhw_max_c"] = _num(raw.get("dhw_max_c"), max(80.0, out["dhw_target_c"]), out["dhw_target_c"], 90.0)
+    out["dhw_mode"] = raw.get("dhw_mode") if raw.get("dhw_mode") in DHW_MODES else "auto"
+    for k in ("dhw_win1_from", "dhw_win1_to", "dhw_win2_from", "dhw_win2_to"):
+        out[k] = int(_num(raw.get(k), DEFAULTS[k], 0, 23))
     # advisor
     out["light_lead_h"] = _num(raw.get("light_lead_h"), 1.0, 0.0, 6.0)
     out["burn_hours"] = _num(raw.get("burn_hours"), 4.0, 1.0, 12.0)
