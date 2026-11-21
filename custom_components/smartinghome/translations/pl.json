@@ -284,7 +284,10 @@
     },
     "number": {
       "heating_room_target": {
-        "name": "Temperatura pokojowa zadana"
+        "name": "Temperatura zadana w domu — dzień"
+      },
+      "heating_room_night": {
+        "name": "Temperatura zadana w domu — noc"
       },
       "heating_curve_shift": {
         "name": "Przesunięcie krzywej grzewczej"

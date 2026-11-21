@@ -470,7 +470,10 @@
         "name": "Export Limit"
       },
       "heating_room_target": {
-        "name": "Room target temperature"
+        "name": "House target temperature — day"
+      },
+      "heating_room_night": {
+        "name": "House target temperature — night"
       },
       "heating_curve_shift": {
         "name": "Heating curve shift"

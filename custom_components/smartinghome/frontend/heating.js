@@ -18,7 +18,7 @@ const CHART_SERIES = [
   ["buffer_bottom", "Bufor dół", "#00d4ff"],
   ["dhw", "CWU", "#a78bfa"],
   ["heating_supply", "Zasilanie CO", "#2ecc71"],
-  ["room", "Pokój", "#e0e6ed"],
+  ["room", "Dom", "#e0e6ed"],
 ];
 const LEVEL_CLASS = { critical: "err", warning: "warn", info: "" };
 const LEVEL_ICON = { critical: "🔴", warning: "🟠", info: "🔵" };
@@ -44,7 +44,7 @@ const ROLE_HINTS = {
   dhw: "tuleja ~2/3 wysokości zasobnika",
   heating_supply: "≥ 0,5 m za zaworem mieszającym i pompą",
   heating_return: "opcjonalnie — ΔT grzejników",
-  room: "np. Shelly H&T w pokoju referencyjnym",
+  room: "np. Shelly H&T w miejscu odniesienia — według niego moduł grzeje dom",
   room_humidity: "opcjonalnie",
   outdoor: "opcjonalnie — czujnik lub pogoda",
   pump_switch: "opcjonalnie — przekaźnik Shelly 1PM",
@@ -281,7 +281,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     if (this._view === "overview") {
       if (Date.now() - this._chartTs > CHART_REFRESH_MS) this._loadChart();
       const focused = this.shadowRoot.activeElement;
-      if (focused && focused.tagName === "INPUT") return;   // typing the wood weight — refresh later
+      if (focused && (focused.tagName === "INPUT" || focused.tagName === "SELECT")) return;   // typing the wood weight / choosing an hour
       this._renderBody();
     } else if (!this._draft) {
       this._renderBody();
@@ -393,6 +393,21 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         .ctl .v { font-size:22px; font-weight:700; font-variant-numeric:tabular-nums; margin-top:4px; }
         .ctl .v small { font-size:12px; color:#8899aa; font-weight:500; margin-left:3px; }
         .ctl .s { font-size:11px; color:#8899aa; margin-top:2px; line-height:1.4; }
+        .sched { margin-top:14px; padding:12px; border:1px solid rgba(255,255,255,0.08); border-radius:12px; background:rgba(255,255,255,0.02); }
+        .sched .sh { font-size:11px; color:#8899aa; text-transform:uppercase; letter-spacing:.05em; }
+        .sched .sh span { text-transform:none; letter-spacing:0; color:#64748b; margin-left:6px; }
+        .sched .slots { display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; align-items:center; }
+        .sched .slot { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,0.08); min-width:0; }
+        .sched .slot.on { border-color:rgba(247,183,49,0.55); background:rgba(247,183,49,0.08); }
+        .sched .slot.off { opacity:.5; }
+        .sched .slot .k { font-size:12px; color:#cbd5e1; }
+        .sched .slot b { font-size:18px; font-variant-numeric:tabular-nums; }
+        .sched .slot b small { font-size:11px; color:#8899aa; font-weight:500; margin-left:2px; }
+        .sched .pm { display:inline-flex; gap:4px; }
+        .sched .hrs { display:inline-flex; align-items:center; gap:4px; font-size:12px; color:#8899aa; }
+        .sched .hsel { background:#0f172a; color:#e0e6ed; border:1px solid rgba(255,255,255,0.15); border-radius:8px; padding:4px 6px; font-size:13px; }
+        .sched .tgl { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#cbd5e1; cursor:pointer; }
+        .sched .s { font-size:11px; color:#8899aa; margin-top:8px; line-height:1.4; }
         .btns { display:flex; gap:6px; flex-wrap:wrap; margin-top:12px; align-items:center; }
         .btn.sm { padding:5px 9px; font-size:12px; }
         .btn.warn { border-color:rgba(231,76,60,0.4); color:#fca5a5; }
@@ -571,7 +586,11 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     this._measure();
     root.getElementById("body").addEventListener("click", (e) => {
       const b = e.target.closest("[data-act]");
-      if (b && !b.disabled) this._onAction(b.dataset.act, b.dataset);
+      if (b && !b.disabled && b.tagName !== "SELECT") this._onAction(b.dataset.act, b.dataset);
+    });
+    root.getElementById("body").addEventListener("change", (e) => {
+      const t = e.target;
+      if (t.tagName === "SELECT" && t.dataset.act) { t.blur(); this._onAction(t.dataset.act, { ...t.dataset, value: t.value }); }
     });
     root.getElementById("body").addEventListener("input", (e) => {
       if (e.target.id === "loadkg") this._loadKg = e.target.value;
@@ -625,7 +644,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const narrow = this.clientWidth > 0 && this.clientWidth < 700;
     this._patch("heroChart", narrow ? this._chartSvg(600, 300, true) : this._chartSvg(1200, 200, true));
     const focused = this.shadowRoot.activeElement;
-    if (!(focused && focused.tagName === "INPUT")) this._patch("rest", this._restHtml(st));   // typing the wood weight
+    if (!(focused && (focused.tagName === "INPUT" || focused.tagName === "SELECT"))) this._patch("rest", this._restHtml(st));   // typing the wood weight / an hour
   }
 
   _patch(id, html) {
@@ -743,15 +762,17 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     }
     const room = probes.room || {};
     const cfg = this._data.config;
+    const ctlNight = !!(st.control || {}).night;
+    const ctlT = (st.control || {}).room_target ?? cfg.room_target_c;
     if ((cfg.floors || 1) >= 2) {
       const rows = (st.floors || []).map((f) => `${f.ref ? "◉ " : ""}${esc(f.name)}: <b style="color:#e0e6ed">${f.temp_c != null ? `${num(f.temp_c)} °C` : "—"}</b>${f.humidity != null ? ` · ${num(f.humidity, 0)}%` : ""}`);
       out.push(`<div class="card kpi"><div class="lbl">Dom — średnio</div>
         <div class="val">${num(st.house_c)}<small>°C</small></div>
-        <div class="note">${rows.join("<br>")}<br>zadana ${num(cfg.room_target_c)} °C${cfg.floor_areas && cfg.floor_areas.some((a) => a) ? " · średnia ważona powierzchnią" : ""}</div></div>`);
+        <div class="note">${rows.join("<br>")}<br>zadana ${num(ctlT)} °C${ctlNight ? " (noc)" : ""}${cfg.floor_areas && cfg.floor_areas.some((a) => a) ? " · średnia ważona powierzchnią" : ""}</div></div>`);
     } else if (room.value != null || st.humidity != null) {
-      out.push(`<div class="card kpi"><div class="lbl">Pokój</div>
+      out.push(`<div class="card kpi"><div class="lbl">Dom</div>
         <div class="val">${num(room.value)}<small>°C</small></div>
-        <div class="note">zadana ${num(this._data.config.room_target_c)} °C${st.humidity != null ? ` · wilgotność ${num(st.humidity, 0)}%` : ""}</div></div>`);
+        <div class="note">zadana ${num(ctlT)} °C${ctlNight ? " (noc)" : ""}${st.humidity != null ? ` · wilgotność ${num(st.humidity, 0)}%` : ""}</div></div>`);
     }
     return out.join("");
   }
@@ -884,7 +905,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const room = v("room");
     const radC = coOn ? supC : "#334155";
     const heatTxt = ctl.dump ? "zrzut ciepła" : coOn ? "grzanie" : ctl.heating_needed ? "zapotrzebowanie" : "bez grzania";
-    const target = num(ctl.room_target ?? c.room_target_c);
+    const target = num(ctl.room_target ?? c.room_target_c) + (ctl.night ? "° noc" : "°");
     s += `<path d="M780 160L895 62L1010 160V340H780Z" fill="rgba(255,255,255,.035)" stroke="#475569" stroke-width="2" stroke-linejoin="round"/>`;
     if ((c.floors || 1) >= 2) {
       const fl = st.floors || [];
@@ -908,11 +929,11 @@ class SmartingHomeHeatingPanel extends HTMLElement {
           <rect x="948" y="${cy - 10}" width="46" height="26" rx="4" fill="#0f172a" stroke="${radC}" stroke-width="1.5"/>
           ${[0, 1, 2, 3].map((k) => `<rect x="${953 + k * 10}" y="${cy - 6}" width="5" height="18" rx="2" fill="${radC}" opacity="${coOn ? 0.9 : 0.5}"/>`).join("")}`;
       }
-      s += `<text x="895" y="362" text-anchor="middle" class="t-s">${st.house_c != null ? `średnio <tspan style="fill:#e0e6ed;font-weight:700">${num(st.house_c)}°</tspan> · ` : ""}zadana ${target}° · ${heatTxt}</text>`;
+      s += `<text x="895" y="362" text-anchor="middle" class="t-s">${st.house_c != null ? `średnio <tspan style="fill:#e0e6ed;font-weight:700">${num(st.house_c)}°</tspan> · ` : ""}zadana ${target} · ${heatTxt}</text>`;
     } else {
       s += `<text x="895" y="132" text-anchor="middle" class="t-s">Dom</text>
         <text x="895" y="206" text-anchor="middle" class="t-big" style="fill:#e0e6ed">${room != null ? `${num(room)}°` : "—"}</text>
-        <text x="895" y="230" text-anchor="middle" class="t-s">zadana ${target}°${st.humidity != null ? ` · ${num(st.humidity, 0)}%` : ""}</text>
+        <text x="895" y="230" text-anchor="middle" class="t-s">zadana ${target}${st.humidity != null ? ` · ${num(st.humidity, 0)}%` : ""}</text>
         ${coOn ? `<rect x="846" y="246" width="98" height="54" rx="8" fill="${radC}" opacity=".35" filter="url(#hgGlow)"/>` : ""}
         <rect x="850" y="250" width="90" height="46" rx="6" fill="#0f172a" stroke="${radC}" stroke-width="2"/>
         ${[0, 1, 2, 3, 4, 5, 6].map((i) => `<rect x="${857 + i * 11.5}" y="255" width="7" height="36" rx="3" fill="${radC}" opacity="${coOn ? 0.9 : 0.5}"/>`).join("")}
@@ -947,7 +968,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const c = (this._data && this._data.config) || {};
     const n = Number(c.floors) || 1;
     const names = c.floor_names || [];
-    const out = CHART_SERIES.map(([r, name, col]) => [r, r === "room" && n >= 2 ? `Pokój ref. (${names[c.room_floor || 0] || ""})` : name, col]);
+    const out = CHART_SERIES.map(([r, name, col]) => [r, r === "room" && n >= 2 ? `Dom — ${names[c.room_floor || 0] || ""} (czujnik odniesienia)` : name, col]);
     if (n >= 2) {
       const colors = ["#f472b6", "#fde68a", "#94a3b8"];
       for (let i = 0; i < n; i++) out.push([`floor${i}_temp`, names[i] || `Kondygnacja ${i + 1}`, colors[i]]);
@@ -1019,7 +1040,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       <div class="seg modes">${modeBtns}</div>`;
     if (ctl.dump) html += `<div class="banner err" style="margin-top:12px">⚠️ <b>Zrzut ciepła do domu</b> — kocioł przegrzany: zawór otwarty, pompa CO włączona.</div>`;
     if (ctl.limiter) html += `<div class="banner warn" style="margin-top:12px">Ogranicznik: zasilanie powyżej ${num(c.supply_max_c, 0)} °C — zawór jest przymykany.</div>`;
-    const corr = ctl.room_corr ? ` ${ctl.room_corr > 0 ? "+" : ""}${num(ctl.room_corr)} K pokój` : "";
+    const corr = ctl.room_corr ? ` ${ctl.room_corr > 0 ? "+" : ""}${num(ctl.room_corr)} K korekta z domu` : "";
+    const hrs = (h) => `${String(Number(h) || 0).padStart(2, "0")}:00`;
+    const dayNight = ctl.night ? `🌙 noc, do ${hrs(c.night_to)}` : c.night_enabled ? `☀️ dzień, do ${hrs(c.night_from)}` : "☀️ dzień — bez obniżenia nocnego";
     html += `<div class="ctl">
       <div><div class="lbl">Zasilanie zadane</div><div class="v">${num(ctl.supply_target)}<small>°C</small></div>
         <div class="s">krzywa ${num(ctl.curve_c)} °C${corr}${ctl.note ? `<br>${esc(ctl.note)}` : ""}</div></div>
@@ -1027,9 +1050,10 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         <div class="s">${ctl.heating_needed ? "dom grzany" : c.mode === "auto" ? "bez zapotrzebowania" : ""}</div></div>
       <div><div class="lbl">Na zewnątrz</div><div class="v">${num(ctl.t_out)}<small>°C</small></div>
         <div class="s">${ctl.t_out_source ? `z: ${esc(ctl.t_out_source)}` : "brak danych"}${ctl.t_out_damped != null ? ` · średnio ${num(ctl.t_out_damped)} °C` : ""}</div></div>
-      <div><div class="lbl">Pokój zadana</div><div class="v">${num(ctl.room_target)}<small>°C</small></div>
-        <div class="s">${ctl.night ? "obniżenie nocne" : ""}${admin ? ` <button class="btn sm" data-act="room" data-delta="-0.5">−</button> <button class="btn sm" data-act="room" data-delta="0.5">+</button>` : ""}</div></div>
+      <div><div class="lbl">Zadana w domu</div><div class="v">${num(ctl.room_target)}<small>°C</small></div>
+        <div class="s">${dayNight}</div></div>
     </div>`;
+    html += this._scheduleHtml(st, ctl, c, admin, hrs);
     if (v.configured) {
       const pos = v.position ?? 0;
       html += `<div style="margin-top:14px; font-size:12px; color:#a0aec0">Zawór mieszający: <b style="color:#e0e6ed">${num(pos, 0)}%</b>
@@ -1136,6 +1160,27 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     return `<div class="logl">${log.map((e) => `<div><span>${fmtTime(e.ts)}</span>${esc(e.text)}</div>`).join("")}</div>`;
   }
 
+  // the house targets: day and night, with the night hours — one place to set what the heating aims for
+  _scheduleHtml(st, ctl, c, admin, hrs) {
+    const ref = (c.floors || 1) >= 2 ? ((st.floors || []).find((f) => f.ref) || {}).name : "";
+    const now = ((st.probes || {}).room || {}).value;
+    const pm = (act) => (admin ? `<span class="pm"><button class="btn sm" data-act="${act}" data-delta="-0.5" aria-label="mniej">−</button><button class="btn sm" data-act="${act}" data-delta="0.5" aria-label="więcej">+</button></span>` : "");
+    const hourSel = (key) => `<select class="hsel" data-act="nighthour" data-key="${key}" ${admin && c.night_enabled ? "" : "disabled"} aria-label="${key === "night_from" ? "noc od" : "noc do"}">${
+      Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${Number(c[key]) === h ? "selected" : ""}>${hrs(h)}</option>`).join("")}</select>`;
+    const nightOn = !!c.night_enabled;
+    return `<div class="sched">
+      <div class="sh">Temperatura zadana w domu <span>według czujnika odniesienia${ref ? ` (${esc(ref)})` : ""}${now != null ? ` · teraz ${num(now)} °C` : ""}</span></div>
+      <div class="slots">
+        <div class="slot ${ctl.night ? "" : "on"}"><span class="k">☀️ Dzień</span><b>${num(c.room_target_c)}<small>°C</small></b>${pm("room")}</div>
+        <div class="slot ${ctl.night ? "on" : ""} ${nightOn ? "" : "off"}"><span class="k">🌙 Noc</span><b>${num(c.room_night_c)}<small>°C</small></b>${nightOn ? pm("night") : ""}
+          <span class="hrs">${hourSel("night_from")}<span>–</span>${hourSel("night_to")}</span></div>
+        <label class="tgl"><input type="checkbox" data-act="nighton" ${nightOn ? "checked" : ""} ${admin ? "" : "disabled"}> obniżenie nocne</label>
+      </div>
+      ${nightOn ? `<div class="s">W nocy krzywa grzewcza i włączanie grzania liczą się od ${num(Math.min(c.room_night_c, c.room_target_c))} °C, od ${hrs(c.night_to)} znów od ${num(c.room_target_c)} °C.
+        Koniec nocy ustaw z zapasem — dom potrzebuje czasu, żeby się dogrzać.</div>` : ""}
+    </div>`;
+  }
+
   async _onAction(act, ds) {
     this._msg = ""; this._msgErr = false;
     try {
@@ -1144,7 +1189,21 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       } else if (act === "room") {
         const cur = Number(this._data.config.room_target_c) || 21;
         const next = Math.min(Math.max(Math.round((cur + Number(ds.delta)) * 2) / 2, 10), 28);
+        if (next === cur) return;
         this._data = await this._hass.callWS({ type: "smartinghome/heating/save", config: { room_target_c: next } });
+      } else if (act === "night") {
+        const c = this._data.config;
+        const day = Number(c.room_target_c) || 21;
+        const cur = Number(c.room_night_c) || day - 2;
+        const next = Math.min(Math.max(Math.round((cur + Number(ds.delta)) * 2) / 2, 10), day);   // never warmer than the day
+        if (next === cur) return;
+        this._data = await this._hass.callWS({ type: "smartinghome/heating/save", config: { room_night_c: next } });
+      } else if (act === "nighton") {
+        const on = !this._data.config.night_enabled;
+        this._data = await this._hass.callWS({ type: "smartinghome/heating/save", config: { night_enabled: on } });
+      } else if (act === "nighthour") {
+        const h = Math.min(Math.max(parseInt(ds.value, 10) || 0, 0), 23);
+        this._data = await this._hass.callWS({ type: "smartinghome/heating/save", config: { [ds.key === "night_to" ? "night_to" : "night_from"]: h } });
       } else if (act === "cmd") {
         const msg = { type: "smartinghome/heating/command", action: ds.cmd };
         if (ds.seconds) msg.seconds = Number(ds.seconds);
@@ -1298,8 +1357,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const floorNames = c.floor_names || ["Parter", "1. piętro", "Poddasze"];
     const floorOpts = Object.fromEntries(floorNames.slice(0, nFloors).map((n, i) => [String(i), n]));
     html += `<div class="card" style="margin-top:14px"><h3>Dom — kondygnacje <small>temperatura domu piętro po piętrze</small></h3><div class="grid2">
-      <label class="f">Liczba kondygnacji${sel("floors", { 1: "1 — cały dom jak jeden pokój", 2: "2", 3: "3 (najwyższa pod dachem)" }, String(nFloors))}</label>
-      ${nFloors >= 2 ? `<label class="f">Pokój referencyjny jest na${sel("room_floor", floorOpts, String(c.room_floor || 0))}<span class="h">liczy się jako temperatura tej kondygnacji, gdy nie ma ona własnego czujnika</span></label>` : ""}
+      <label class="f">Liczba kondygnacji${sel("floors", { 1: "1 — cały dom jako jedna strefa", 2: "2", 3: "3 (najwyższa pod dachem)" }, String(nFloors))}</label>
+      ${nFloors >= 2 ? `<label class="f">Czujnik odniesienia jest na${sel("room_floor", floorOpts, String(c.room_floor || 0))}<span class="h">liczy się jako temperatura tej kondygnacji, gdy nie ma ona własnego czujnika</span></label>` : ""}
     </div>`;
     if (nFloors >= 2) {
       html += `<div class="grid2 floorsg" style="margin-top:12px">${floorNames.slice(0, nFloors).map((n, i) => `
@@ -1308,7 +1367,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       </div>
       <div class="hint" id="floorw">${this._floorWeightsHtml(c)}</div>
       <div class="hint">Czujniki kondygnacji wybierasz niżej, w sekcji „Czujniki”. Średnia domu jest ważona powierzchnią (bez powierzchni — zwykła średnia)
-        i to ona trafia do modelu strat ciepła doradcy. Korekta krzywej grzewczej dalej działa według pokoju referencyjnego.</div>`;
+        i to ona trafia do modelu strat ciepła doradcy. Grzanie (krzywa, korekta, dzień i noc) działa według czujnika odniesienia.</div>`;
     }
     html += `</div>`;
 
@@ -1337,7 +1396,6 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       ${field("dhw_l", "Pojemność zasobnika CWU (L)", "", c.dhw_l, 'min="0" step="10"')}
       ${field("dhw_cold_c", "Woda zimna (°C)", "", c.dhw_cold_c, 'min="0" max="25"')}
       ${field("dhw_target_c", "CWU zadana (°C)", "", c.dhw_target_c, 'min="30" max="80"')}
-      ${field("room_target_c", "Pokój — temperatura zadana (°C)", "", c.room_target_c, 'min="10" max="28" step="0.5"')}
     </div></div>`;
 
     html += `<div class="card" style="margin-top:14px"><h3>Kocioł i drewno</h3><div class="grid2">
@@ -1399,7 +1457,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         "tylko z termostatycznym zaworem mieszającym na wyjściu ciepłej wody — inaczej grozi poparzenie. Bez tej opcji gorący kocioł dogrzewa CWU tylko do zadanej.")}</div>
     </div></div>`;
 
-    html += `<div class="card" style="margin-top:14px"><h3>Krzywa grzewcza <small>zasilanie = pokój + nachylenie × (pokój − zewnątrz) + przesunięcie</small></h3>
+    html += `<div class="card" style="margin-top:14px"><h3>Krzywa grzewcza <small>zasilanie = zadana w domu + nachylenie × (zadana w domu − zewnątrz) + przesunięcie</small></h3>
       <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr)); gap:14px">
       <div class="grid2">
       ${field("curve_slope", "Nachylenie", "", c.curve_slope, 'min="0.2" max="3" step="0.05"', `domyślnie ${num(emit.curve_slope, 1)}`)}
@@ -1407,11 +1465,13 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       ${field("supply_min_c", "Zasilanie min. (°C)", "", c.supply_min_c, 'min="15" max="60"')}
       ${field("supply_max_c", "Zasilanie maks. (°C)", "powyżej + 3 K zawór jest zamykany", c.supply_max_c, 'min="30" max="85"', `domyślnie ${num(emit.supply_max_c, 0)}`)}
       ${field("heating_limit_c", "Granica grzania (°C)", "średnia temperatura zewnętrzna", c.heating_limit_c, 'min="5" max="25" step="0.5"')}
-      ${field("room_gain", "Korekta pokojowa (K/K)", d.features && d.features.auto ? "0 = bez korekty" : "funkcja PRO", c.room_gain, 'min="0" max="8" step="0.5"')}
-      ${field("night_setback_k", "Obniżenie nocne (K)", "", c.night_setback_k, 'min="0" max="6" step="0.5"')}
+      ${field("room_target_c", "Temperatura zadana w domu — dzień (°C)", "według czujnika odniesienia", c.room_target_c, 'min="10" max="28" step="0.5"')}
+      ${field("room_night_c", "Temperatura zadana w domu — noc (°C)", "nie wyżej niż w dzień", c.room_night_c, 'min="10" max="28" step="0.5"')}
       ${field("night_from", "Noc od (godz.)", "", c.night_from, 'min="0" max="23"')}
-      ${field("night_to", "Noc do (godz.)", "", c.night_to, 'min="0" max="23"')}
-      <div>${chk("room_correction", "Korekta według czujnika w pokoju", c.room_correction, d.features && d.features.auto ? "" : "wymaga licencji PRO")}</div>
+      ${field("night_to", "Noc do (godz.)", "dom dogrzewa się od tej godziny", c.night_to, 'min="0" max="23"')}
+      <div>${chk("night_enabled", "Obniżenie nocne", c.night_enabled)}</div>
+      ${field("room_gain", "Korekta od temperatury w domu (K/K)", d.features && d.features.auto ? "0 = bez korekty" : "funkcja PRO", c.room_gain, 'min="0" max="8" step="0.5"')}
+      <div>${chk("room_correction", "Korekta według czujnika odniesienia", c.room_correction, d.features && d.features.auto ? "" : "wymaga licencji PRO")}</div>
       </div>
       <div id="curvebox">${this._curveSvg(c)}</div></div></div>`;
 
@@ -1438,7 +1498,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     for (let t = -20; t <= 20; t += 1) dpath += `${t === -20 ? "M" : "L"}${x(t).toFixed(1)} ${y(f(t)).toFixed(1)} `;
     svg += `<path d="${dpath}" fill="none" stroke="#f7b731" stroke-width="2"/>`;
     for (const t of [-20, -10, 0, 10]) svg += `<circle cx="${x(t)}" cy="${y(f(t))}" r="3" fill="#f7b731"/><text x="${x(t) + 5}" y="${y(f(t)) - 6}" style="fill:#e0e6ed">${f(t).toFixed(0)}°</text>`;
-    return svg + `</svg><div class="hint">Zasilanie przy temperaturze zewnętrznej (pokój ${room} °C). Korekta pokojowa i limit z bufora działają na bieżąco.</div>`;
+    return svg + `</svg><div class="hint">Zasilanie przy temperaturze zewnętrznej (zadana w domu ${room} °C). Korekta od temperatury w domu i limit z bufora działają na bieżąco.</div>`;
   }
 
   _guardHtml() {
@@ -1545,9 +1605,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const c = this._draft;
     const nums = ["buffer_l", "buffer_max_c", "buffer_min_c", "buffer_full_c", "dhw_l", "dhw_cold_c", "dhw_target_c",
       "room_target_c", "warn_c", "alarm_c", "efficiency", "laddomat_on_c", "wood_kwh_per_kg", "valve_run_s", "curve_slope", "curve_shift",
-      "supply_min_c", "supply_max_c", "heating_limit_c", "room_gain", "night_setback_k", "night_from", "night_to",
+      "supply_min_c", "supply_max_c", "heating_limit_c", "room_gain", "room_night_c", "night_from", "night_to",
       "light_lead_h", "burn_hours", "wood_price_kg", "dhw_on_diff_k", "dhw_off_diff_k", "dhw_hyst_k", "dhw_max_c"];
-    const checks = ["enabled", "notify", "valve_invert", "safety_dump", "room_correction", "advisor_notify", "dhw_dump"];
+    const checks = ["enabled", "notify", "valve_invert", "safety_dump", "room_correction", "night_enabled", "advisor_notify", "dhw_dump"];
     const selects = ["profile", "emitters", "mode", "valve_type", "valve_cover", "valve_open_switch", "valve_close_switch", "weather_entity", "dhw_source"];
     for (const el of form.elements) {
       if (!el.name) continue;

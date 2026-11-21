@@ -19,10 +19,10 @@ podpowiada, **do której rozpalić** i **ile drewna załadować**, żeby nie prz
 | Temperatury, energia bufora i CWU, „bufor przyjmie jeszcze X kg drewna” | ✅ | ✅ |
 | Stan kotła, sesje palenia, wykres 24 h | ✅ | ✅ |
 | **Wszystkie alarmy bezpieczeństwa** (przegrzanie, awaria sondy, zanik prądu w trakcie palenia…) | ✅ | ✅ |
-| Sterowanie zaworem i pompą CO: krzywa pogodowa, tryby, obniżenie nocne, zrzut ciepła | ✅ | ✅ |
+| Sterowanie zaworem i pompą CO: krzywa pogodowa, tryby, temperatura dzienna i nocna, zrzut ciepła | ✅ | ✅ |
 | Pompa ładująca CWU: sterowanie różnicowe, dogrzanie CWU przy gorącym kotle | ✅ | ✅ |
 | Skrypt bezpieczeństwa na Shelly pompy | ✅ | ✅ |
-| Korekta krzywej według czujnika w pokoju | | ✅ |
+| Korekta krzywej według czujnika odniesienia w domu | | ✅ |
 | Doradca: model strat domu, „bufor wystarczy do”, „rozpal do”, „załaduj X kg”, kalibracja ważeniem, koszt sezonu | | ✅ |
 
 ## Sprzęt (przykładowy zestaw)
@@ -33,7 +33,7 @@ podpowiada, **do której rozpalić** i **ile drewna załadować**, żeby nie prz
 | Shelly 2PM Gen3 w trybie **Cover** + siłownik 3-punktowy 230 V (np. ESBE ARA661, 120 s) na zaworze 3-drogowym (np. ESBE VRG132) | zawór mieszający obiegu grzejników |
 | Shelly 1PM Mini Gen3 (opcjonalnie) | przekaźnik pompy ładującej CWU (z pomiarem mocy) |
 | Przełącznik modułowy 1-0-2 na każdą pompę (opcjonalnie) | AUTO–0–RĘKA: pompa ruszy ręcznie nawet bez Shelly |
-| Shelly H&T (lub inny czujnik) | temperatura i wilgotność w pokoju referencyjnym |
+| Shelly H&T (lub inny czujnik) | czujnik odniesienia: temperatura i wilgotność w domu — według niego moduł grzeje |
 | Encja pogody w HA (np. Met.no) | temperatura zewnętrzna i prognoza godzinowa (doradca) |
 
 Działają też inne urządzenia: dowolne czujniki °C w HA, siłownik jako encja `cover` albo dwa
@@ -79,9 +79,25 @@ z wodą (np. ~20 °C i ~60 °C), a różnice wpisz jako korekty w panelu.
    (z bufora czy z kotła); progi startowe zwykle nie wymagają zmian.
    Przełącz tryb na **Ręczne** i sprawdź kierunek: „Cieplej 5 s” musi podnosić temperaturę zasilania
    (jeśli nie — zaznacz „Odwróć kierunek”). Potem **Kalibruj zawór** (dojazd do pełnego zamknięcia).
-5. Ustaw krzywą grzewczą (podgląd na wykresie), granicę grzania i ewentualne obniżenie nocne, potem tryb **Automatyczne**.
+5. Ustaw krzywą grzewczą (podgląd na wykresie), granicę grzania, temperaturę zadaną w domu na dzień i ewentualnie na noc, potem tryb **Automatyczne**.
 6. (Shelly) **Skrypt bezpieczeństwa → Sprawdź → Zainstaluj.**
 7. Wykonaj testy odbiorowe (niżej).
+
+## Temperatura zadana w domu — dzień i noc
+
+Karta **Sterowanie** ma blok „Temperatura zadana w domu”: **☀️ Dzień** i **🌙 Noc** z przyciskami −/+,
+godziny nocy (od – do) i przełącznik **obniżenie nocne**. Obowiązująca teraz wartość jest podświetlona,
+a kafel „Zadana w domu” pokazuje ją z porą („noc, do 05:00”). Te same pola są w Ustawieniach → „Krzywa grzewcza”.
+
+- Temperatura jest mierzona **czujnikiem odniesienia** (Ustawienia → „Czujniki”; przy kilku kondygnacjach —
+  „Czujnik odniesienia jest na”). Według niej liczą się krzywa grzewcza, korekta (PRO) i decyzja, czy grzać.
+- Noc to osobna, **bezwzględna** temperatura (np. dzień 22 °C, noc 20 °C) — zmiana dziennej jej nie przesuwa.
+  Nocna nigdy nie jest wyższa od dziennej. Wyłączenie obniżenia zapamiętuje ustawioną wartość.
+- Okno nocy może przechodzić przez północ (np. 22:00–05:00). **Koniec nocy ustaw z zapasem** — o tej godzinie
+  dom zaczyna się dogrzewać, przy grzejnikach zwykle 1–2 h przed wstaniem.
+- O początku i końcu nocy moduł zapisuje wpis w dzienniku („🌙 Noc: zadana w domu 20,0 °C…”).
+- Doradca liczy „bufor wystarczy do” i zapotrzebowanie na 24 h z rozkładem dzień / noc.
+- Ustawienia sprzed v1.87 („Obniżenie nocne (K)”) przechodzą same: noc = dzień − obniżenie.
 
 ## Tryby
 
@@ -89,7 +105,7 @@ z wodą (np. ~20 °C i ~60 °C), a różnice wpisz jako korekty w panelu.
 |---|---|---|---|
 | Wyłączone | nic | nic (również bez zrzutu ciepła — tylko pomiary i alarmy) | nic |
 | Ręczne | przyciski w panelu | przyciski w panelu | przyciski w panelu |
-| Automatyczne | krzywa pogodowa (+ korekta pokojowa PRO), limit: góra bufora − 2 K | pracuje, gdy jest zapotrzebowanie (średnia temp. zewnętrzna < granicy grzania, ciepło w buforze, pokój niewychłodzony nadmiernie); min. 5 min pracy / postoju | ładowanie różnicowe (niżej); raz w tygodniu 30 s przepłukania |
+| Automatyczne | krzywa pogodowa (+ korekta od temperatury w domu, PRO), limit: góra bufora − 2 K | pracuje, gdy jest zapotrzebowanie (średnia temp. zewnętrzna < granicy grzania, ciepło w buforze, w domu poniżej zadanej + 1 K); min. 5 min pracy / postoju | ładowanie różnicowe (niżej); raz w tygodniu 30 s przepłukania |
 | Lato | zamknięty | stoi; raz w tygodniu 60 s przepłukania | jak w trybie automatycznym |
 
 We wszystkich trybach poza „Wyłączone” działa bezpieczeństwo — z tymi samymi progami co skrypt na Shelly,
@@ -142,7 +158,7 @@ przełącznik AUTO–0–RĘKA w skrzynce działa niezależnie od panelu.
 | Pompa CO / pompa CWU nie pobiera prądu (przekaźnik włączony, moc < 3 W przez 2 min) | ostrzeżenie |
 | Zasilanie CO za gorące (ogranicznik) | ostrzeżenie |
 | Wyłącznik awaryjny blokuje zabezpieczenie (zabezpieczenie chce włączyć zablokowany element) | ostrzeżenie; krytyczny, gdy kocioł gorący |
-| Czas rozpalić (zimno w pokoju, bufor < 15 %), wilgotność | informacja |
+| Czas rozpalić (w domu 1,5 K poniżej obowiązującej zadanej, bufor < 15 %), wilgotność | informacja |
 
 Alarmy trafiają kanałami z panelu Smarting HOME (Awarie → powiadomienia). Krytyczne zawsze tworzą
 też powiadomienie w Home Assistant — niezależnie od ustawień i licencji.
@@ -181,11 +197,11 @@ gdy wyjście z kotła osiągnie próg włączenia (Ustawienia → „Kocioł i d
 Atmos: 75 °C), i jako stojącą 3 K poniżej progu. Wcześniej, w trakcie rozpalania, schemat pokazuje „od 75°”.
 
 **Dom piętro po piętrze** (Ustawienia → „Dom — kondygnacje”): do 3 kondygnacji (np. parter, 1. piętro,
-poddasze) z nazwą, powierzchnią i własnym czujnikiem temperatury / wilgotności. Kondygnacja z pokojem
-referencyjnym bierze jego odczyt, dopóki nie ma własnego czujnika. Na schemacie dom dzieli się na piętra
+poddasze) z nazwą, powierzchnią i własnym czujnikiem temperatury / wilgotności. Kondygnacja z czujnikiem
+odniesienia bierze jego odczyt, dopóki nie ma własnego czujnika. Na schemacie dom dzieli się na piętra
 (najwyższe pod dachem), a **średnia domu** — ważona powierzchnią, bez powierzchni zwykła — trafia do
 encji „Dom — średnia temperatura” i do modelu strat ciepła doradcy (straty zależą od całego domu, nie
-jednego pokoju). Korekta krzywej grzewczej dalej działa według pokoju referencyjnego.
+jednego pomieszczenia). Grzanie (krzywa, korekta, dzień i noc) działa według czujnika odniesienia.
 Po wpisaniu powierzchni wszystkich kondygnacji karta pokazuje sumę i udział każdej w średniej (np. 105 /
 105 / 40 m² → 42% / 42% / 16%). Kondygnacja bez odczytu jest pomijana, a udziały pozostałych rosną
 proporcjonalnie; gdy brakuje którejś powierzchni, kondygnacje liczą się po równo.
@@ -207,7 +223,7 @@ energia CWU · bufor wystarczy na (h) · energia ostatniego palenia · zadana te
 położenie zaworu · (PRO) bufor wystarczy do, rozpal do, zalecany załadunek, zapotrzebowanie 24 h,
 straty budynku · binarne: kocioł pracuje, przegrzanie, awaria czujnika, bufor pełny, zrzut ciepła,
 pompa CWU pracuje ·
-**select** tryb ogrzewania · **number** temperatura pokojowa zadana, przesunięcie krzywej.
+**select** tryb ogrzewania · **number** temperatura zadana w domu — dzień, temperatura zadana w domu — noc, przesunięcie krzywej.
 
 ## Grzałka z nadwyżki PV a CWU
 

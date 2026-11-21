@@ -95,9 +95,15 @@ def in_night(cfg: dict[str, Any], local_hour: float) -> bool:
     return (start <= local_hour or local_hour < end) if start > end else (start <= local_hour < end)
 
 
+def night_now(cfg: dict[str, Any], local_hour: float) -> bool:
+    """The night (setback) target is in force."""
+    return bool(cfg.get("night_enabled")) and in_night(cfg, local_hour)
+
+
 def room_target_now(cfg: dict[str, Any], local_hour: float) -> float:
-    setback = cfg["night_setback_k"] if in_night(cfg, local_hour) else 0.0
-    return cfg["room_target_c"] - setback
+    """The house target in force: day, or the night one (never above the day target)."""
+    day = cfg["room_target_c"]
+    return min(cfg["room_night_c"], day) if night_now(cfg, local_hour) else day
 
 
 class Ema:
@@ -338,6 +344,7 @@ class DhwPlan:
 class ControlOutput:
     mode: str
     room_target: float
+    night: bool = False              # the night (setback) target is in force
     supply_target: float | None = None
     curve_c: float | None = None
     room_corr: float = 0.0
@@ -368,6 +375,7 @@ class HeatingController:
         self.out_damped = Ema(OUT_DAMPED_TAU_S)
         self.room_i = 0.0
         self._room_ts: float | None = None
+        self._night: bool | None = None
         self.needed = False
         self.hot = False
         self.dumping = False
@@ -460,7 +468,12 @@ class HeatingController:
         cfg, now = self.cfg, inp.now
         mode = cfg["mode"]
         room_target = room_target_now(cfg, inp.local_hour)
-        out = ControlOutput(mode=mode, room_target=room_target)
+        night = night_now(cfg, inp.local_hour)
+        out = ControlOutput(mode=mode, room_target=room_target, night=night)
+        if self._night is not None and night != self._night and mode == "auto":
+            out.log.append(f"🌙 Noc: zadana w domu {room_target:.1f} °C (do {cfg['night_to']}:00)" if night
+                           else f"☀️ Dzień: zadana w domu {room_target:.1f} °C")
+        self._night = night
         out.t_out = self.out_fast.add(inp.t_out, now)
         out.t_out_damped = self.out_damped.add(inp.t_out, now)
 
@@ -684,7 +697,7 @@ class HeatingController:
         if inp.t_top is not None and inp.t_top < room_target + 5.0:
             return f"bufor za zimny ({inp.t_top:.0f} °C)"
         if inp.t_room is not None:
-            return f"w pokoju ciepło ({inp.t_room:.1f} °C)"
+            return f"w domu ciepło ({inp.t_room:.1f} °C)"
         return "brak zapotrzebowania"
 
     def manual_valve(self, direction: str, seconds: float, now: float) -> ValveCommand | None:

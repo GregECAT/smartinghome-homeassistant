@@ -261,6 +261,11 @@ class HeatingManager:
         async with self._lock:
             await self._run_tick()
 
+    def _target_at(self, ts: float) -> float:
+        """The house target at a moment (day / night schedule) — for the advisor's forecast."""
+        local = dt_util.as_local(dt_util.utc_from_timestamp(ts))
+        return hc.room_target_now(self.cfg, local.hour + local.minute / 60.0)
+
     def _valve_configured(self) -> bool:
         c = self.cfg
         if c["valve_type"] == "cover":
@@ -326,6 +331,7 @@ class HeatingManager:
             for line in out.log:
                 self._log(line, now)
             self.model.external = out.alarms
+            self.model.room_target = out.room_target
             raised, cleared = self.model.evaluate_alarms(now)
             if out.valve:
                 await self._exec_valve(out.valve, now)
@@ -360,7 +366,7 @@ class HeatingManager:
                 buf["kwh_per_kg"], buf["wood_max_kg"] = learned, round(buf["space_kwh"] / learned, 1)
             if advisor_on:
                 if now - self._advice_ts >= ADVISOR_EVERY_S or not self.advice or self.advice.get("locked"):
-                    self.advice = adv.advise(cfg, status, self.building, now, out.room_target, self.forecast,
+                    self.advice = adv.advise(cfg, status, self.building, now, self._target_at, self.forecast,
                                              t_out, per_kg)
                     self.advice["learned_per_kg"] = learned
                     self.advice["forecast_hours"] = len(self.forecast)
@@ -371,7 +377,7 @@ class HeatingManager:
             valve = self.ctrl.valve
             self.control = {
                 "mode": cfg["mode"], "mode_label": hm.MODES.get(cfg["mode"], cfg["mode"]),
-                "room_target": round(out.room_target, 1), "night": out.room_target < cfg["room_target_c"],
+                "room_target": round(out.room_target, 1), "night": out.night,
                 "supply_target": out.supply_target, "curve_c": out.curve_c, "room_corr": out.room_corr,
                 "room_licensed": self.has(FEATURE_HEATING_AUTO),
                 "t_out": None if out.t_out is None else round(out.t_out, 1),
@@ -1019,6 +1025,8 @@ BINARY_SENSORS: tuple[dict[str, Any], ...] = (
 NUMBERS: tuple[dict[str, Any], ...] = (
     {"key": "heating_room_target", "cfg": "room_target_c", "min": 10.0, "max": 28.0, "step": 0.5,
      "unit": UnitOfTemperature.CELSIUS, "icon": "mdi:home-thermometer"},
+    {"key": "heating_room_night", "cfg": "room_night_c", "min": 10.0, "max": 28.0, "step": 0.5,
+     "unit": UnitOfTemperature.CELSIUS, "icon": "mdi:home-thermometer-outline"},
     {"key": "heating_curve_shift", "cfg": "curve_shift", "min": -15.0, "max": 15.0, "step": 0.5,
      "unit": UnitOfTemperature.CELSIUS, "icon": "mdi:chart-bell-curve"},
 )

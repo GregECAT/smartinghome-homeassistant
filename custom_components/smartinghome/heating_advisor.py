@@ -26,6 +26,7 @@ wood really gives — learned from weighed loads when there are any.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from statistics import median
 from typing import Any
 
@@ -151,7 +152,15 @@ def temp_at(forecast: list[tuple[float, float]], ts: float, fallback: float | No
     return forecast[-1][1]
 
 
-def depletion(energy_kwh: float, now: float, building: BuildingModel, room_target: float,
+Target = float | Callable[[float], float]
+
+
+def _target(room_target: Target, ts: float) -> float:
+    """The house target at a moment: a fixed value, or the day / night schedule."""
+    return float(room_target(ts)) if callable(room_target) else float(room_target)
+
+
+def depletion(energy_kwh: float, now: float, building: BuildingModel, room_target: Target,
               forecast: list[tuple[float, float]], t_out_now: float | None) -> tuple[float | None, float | None]:
     """(timestamp when the useful heat runs out or None beyond the horizon, demand of the next 24 h in kWh)."""
     if building.ua is None:
@@ -165,7 +174,7 @@ def depletion(energy_kwh: float, now: float, building: BuildingModel, room_targe
         t_out = temp_at(forecast, t + step / 2, t_out_now)
         if t_out is None:
             return None, None
-        kw = building.demand_kw(room_target, t_out) or 0.0
+        kw = building.demand_kw(_target(room_target, t + step / 2), t_out) or 0.0
         kwh = kw * step / 3600.0
         if t - now < 24 * 3600:
             demand_24 += kwh
@@ -197,7 +206,7 @@ def learned_kwh_per_kg(sessions: list[dict[str, Any]]) -> float | None:
 
 
 def advise(cfg: dict[str, Any], status: dict[str, Any], building: BuildingModel, now: float,
-           room_target: float, forecast: list[tuple[float, float]], t_out_now: float | None,
+           room_target: Target, forecast: list[tuple[float, float]], t_out_now: float | None,
            per_kg: float) -> dict[str, Any]:
     """Advice for the panel / sensors. status = HeatingModel.status()."""
     buf = status.get("buffer") or {}
@@ -214,7 +223,7 @@ def advise(cfg: dict[str, Any], status: dict[str, Any], building: BuildingModel,
         out["basis"] = "model"
         out["demand_24h_kwh"] = demand_24
         t_now = temp_at(forecast, now, t_out_now)
-        out["demand_kw"] = None if t_now is None else round(building.demand_kw(room_target, t_now) or 0.0, 2)
+        out["demand_kw"] = None if t_now is None else round(building.demand_kw(_target(room_target, now), t_now) or 0.0, 2)
         out["empty_at"] = empty_at
     elif status.get("runtime_h") is not None:
         out["basis"] = "trend"
@@ -229,8 +238,9 @@ def advise(cfg: dict[str, Any], status: dict[str, Any], building: BuildingModel,
     burn_kw = out["demand_kw"] if out["demand_kw"] is not None else 0.0
     if out["basis"] == "model" and forecast:
         hours = int(cfg["burn_hours"])
-        temps = [temp_at(forecast, now + h * 3600 + 1800, t_out_now) for h in range(hours)]
-        burn = sum(building.demand_kw(room_target, t) or 0.0 for t in temps if t is not None)
+        moments = [now + h * 3600 + 1800 for h in range(hours)]
+        burn = sum(building.demand_kw(_target(room_target, ts), t) or 0.0
+                   for ts in moments if (t := temp_at(forecast, ts, t_out_now)) is not None)
     else:
         burn = burn_kw * cfg["burn_hours"]
     out["fill_kwh"] = round(room + burn, 1)

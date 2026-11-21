@@ -63,9 +63,9 @@ ROLES: dict[str, tuple[str, str]] = {
     "dhw": ("Zasobnik CWU", "temperature"),
     "heating_supply": ("Zasilanie CO (za zaworem)", "temperature"),
     "heating_return": ("Powrót z grzejników", "temperature"),
-    "room": ("Pokój referencyjny — temperatura", "temperature"),
-    "room_humidity": ("Pokój referencyjny — wilgotność", "humidity"),
-    # one sensor per storey (optional; the reference room already counts for its own storey)
+    "room": ("Czujnik odniesienia — temperatura", "temperature"),
+    "room_humidity": ("Czujnik odniesienia — wilgotność", "humidity"),
+    # one sensor per storey (optional; the reference sensor already counts for its own storey)
     "floor0_temp": ("Kondygnacja 1 — temperatura", "temperature"),
     "floor0_humidity": ("Kondygnacja 1 — wilgotność", "humidity"),
     "floor1_temp": ("Kondygnacja 2 — temperatura", "temperature"),
@@ -161,7 +161,9 @@ DEFAULTS: dict[str, Any] = {
     "heating_limit_c": 16.0,    # no space heating above this (damped outdoor temperature)
     "room_correction": True,
     "room_gain": 2.0,           # K of supply per K of room error
-    "night_setback_k": 0.0,
+    "night_enabled": False,     # a lower house temperature at night
+    "room_night_c": 19.0,       # the night (setback) target, °C
+    "night_setback_k": 0.0,     # derived: day − night while enabled (the older settings stored only this)
     "night_from": 22,
     "night_to": 5,
     # hot-water charging pump (differential: source probe vs the tank)
@@ -310,7 +312,16 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     out["heating_limit_c"] = _num(raw.get("heating_limit_c"), 16.0, 5.0, 25.0)
     out["room_correction"] = raw.get("room_correction", True) is not False
     out["room_gain"] = _num(raw.get("room_gain"), 2.0, 0.0, 8.0)
-    out["night_setback_k"] = _num(raw.get("night_setback_k"), 0.0, 0.0, 6.0)
+    # day and night targets of the house. Settings before v1.87 kept only the setback in K.
+    day = out["room_target_c"]
+    if _f(raw.get("room_night_c")) is None:
+        legacy = _num(raw.get("night_setback_k"), 0.0, 0.0, 6.0)
+        out["night_enabled"] = legacy > 0 if raw.get("night_enabled") is None else raw.get("night_enabled") is True
+        out["room_night_c"] = _num(day - (legacy if legacy > 0 else 2.0), day - 2.0, 10.0, 28.0)
+    else:
+        out["night_enabled"] = raw.get("night_enabled") is True
+        out["room_night_c"] = _num(raw.get("room_night_c"), day - 2.0, 10.0, 28.0)
+    out["night_setback_k"] = round(max(day - out["room_night_c"], 0.0), 1) if out["night_enabled"] else 0.0
     out["night_from"] = int(_num(raw.get("night_from"), 22, 0, 23))
     out["night_to"] = int(_num(raw.get("night_to"), 5, 0, 23))
     # hot-water charging pump
@@ -602,6 +613,7 @@ class HeatingModel:
         self.dhw_pump_on: bool | None = None
         self.dhw_pump_w: float | None = None
         self.laddomat_on: bool | None = None
+        self.room_target: float | None = None   # the target in force now (day / night), set by the controller loop
         self.state = "unknown"
         self.state_since: float | None = None
         self.session: dict[str, Any] | None = None
@@ -873,12 +885,13 @@ class HeatingModel:
                 "przełącznika AUTO–0–RĘKA (jeśli jest)."))
 
         room = self.t("room")
+        target = self.room_target if self.room_target is not None else cfg["room_target_c"]
         if (room is not None and self.buffer and self.buffer.get("charge_pct") is not None
                 and self.state not in FIRE_STATES
-                and room <= cfg["room_target_c"] - 1.5 and self.buffer["charge_pct"] < 15):
+                and room <= target - 1.5 and self.buffer["charge_pct"] < 15):
             out.append(AlarmSpec(
                 "heating_light_fire", "info", "Czas rozpalić w kotle",
-                f"W pokoju {room:.1f} °C (zadana {cfg['room_target_c']:.1f} °C), bufor naładowany "
+                f"W domu {room:.1f} °C (zadana {target:.1f} °C), bufor naładowany "
                 f"w {self.buffer['charge_pct']:.0f}%.",
                 f"Bufor przyjmie ok. {self.buffer['wood_max_kg']:.0f} kg drewna.", hold_s=1800))
 
