@@ -11,6 +11,7 @@
 
 const REFRESH_MS = 10 * 1000;
 const CHART_REFRESH_MS = 5 * 60 * 1000;
+const EDIT_HOLD_MS = 60 * 1000;          // a field left focused holds the cards back this long at most
 const CHART_HOURS = 24;
 const CHART_SERIES = [
   ["boiler_out", "Kocioł", "#e74c3c"],
@@ -280,9 +281,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     }
     if (this._view === "overview") {
       if (Date.now() - this._chartTs > CHART_REFRESH_MS) this._loadChart();
-      const focused = this.shadowRoot.activeElement;
-      if (focused && (focused.tagName === "INPUT" || focused.tagName === "SELECT")) return;   // typing the wood weight / choosing an hour
-      this._renderBody();
+      this._renderBody();          // the boiler room stays live; only the cards wait while someone edits
     } else if (!this._draft) {
       this._renderBody();
     } else {
@@ -593,8 +592,10 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       if (t.tagName === "SELECT" && t.dataset.act) { t.blur(); this._onAction(t.dataset.act, { ...t.dataset, value: t.value }); }
     });
     root.getElementById("body").addEventListener("input", (e) => {
+      this._touched = Date.now();
       if (e.target.id === "loadkg") this._loadKg = e.target.value;
     });
+    root.getElementById("body").addEventListener("focusin", () => { this._touched = Date.now(); });
   }
 
   _renderBody() {
@@ -643,8 +644,16 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     if (this._patch("heroMain", this._heroSvg(st))) this._phase(this.shadowRoot.getElementById("heroMain"));
     const narrow = this.clientWidth > 0 && this.clientWidth < 700;
     this._patch("heroChart", narrow ? this._chartSvg(600, 300, true) : this._chartSvg(1200, 200, true));
-    const focused = this.shadowRoot.activeElement;
-    if (!(focused && (focused.tagName === "INPUT" || focused.tagName === "SELECT"))) this._patch("rest", this._restHtml(st));   // typing the wood weight / an hour
+    if (!this._editing()) this._patch("rest", this._restHtml(st));
+  }
+
+  // Someone is typing the wood weight or choosing an hour: the cards below the hero wait, so the
+  // field is not replaced under the finger. A checkbox keeps the focus after a click — that is not
+  // editing — and a field left focused (a wall tablet) holds the cards back for a minute at most.
+  _editing() {
+    const f = this.shadowRoot.activeElement;
+    if (!f || !(f.tagName === "SELECT" || (f.tagName === "INPUT" && f.type !== "checkbox"))) return false;
+    return Date.now() - (this._touched || 0) < EDIT_HOLD_MS;
   }
 
   _patch(id, html) {
