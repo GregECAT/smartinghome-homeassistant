@@ -194,6 +194,12 @@ moduł nic do niego nie wysyła; gdy wróci, dostaje stan pompy. W trybie „Wy�
 przełączany. Stan wentylatora (i moc, jeśli wybierzesz encję mocy) widać na schemacie kotłowni
 i w karcie „Sterowanie”.
 
+**Nagrzewnica w nocy.** Gdy w nocy nagrzewnica nie jest potrzebna (np. w garażu), zaznacz w ustawieniach
+sterowania **„Nagrzewnica wyłączona w nocy”** i podaj godziny (domyślnie **23–7**). O pierwszej godzinie moduł
+od razu wyłącza wentylator i do końca nocy nie włącza go razem z pompą CO. Od drugiej godziny wentylator
+znów chodzi z pompą: jeśli pompa pracuje już dłużej niż 2 minuty, rusza od razu. Wyjątkiem jest **zrzut ciepła**
+z przegrzanego kotła: wtedy wentylator pracuje także w nocy, bo nadmiar ciepła trzeba odebrać.
+
 **Przy montażu, serwisie albo gdy w instalacji nie ma wody** przełącz tryb na **Wyłączone** albo zablokuj
 pompę (pozycja 0). Inaczej, dopóki sondy nie czytają, pompa CO pracuje (także na sucho).
 W trybie „Wyłączone” panel informuje, że zabezpieczenie pompy CO nie działa.

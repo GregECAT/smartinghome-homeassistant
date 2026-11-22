@@ -115,15 +115,22 @@ def dhw_windows(cfg: dict[str, Any]) -> list[tuple[int, int]]:
 
 
 def fan_follow(mode: str, pump_on: bool | None, pump_for_s: float, fan_on: bool | None,
-               dump: bool = False) -> tuple[str | None, float]:
+               dump: bool = False, quiet: bool = False) -> tuple[str | None, float]:
     """A unit heater's fan on the CH circuit (behind the CH pump) follows the pump — whatever switched the pump:
     the module, HAND, the Shelly's own guard script — FAN_DELAY_S late both ways: on once the pump has run that
     long (the coil is warm by then, no cold draught), off once it has stood that long (the coil still holds hot
     water). During a heat dump (the boiler too hot) it starts at once: the water is hot and every radiator,
-    the heater too, has to take heat now. pump_for_s: how long the pump has been in its present state.
+    the heater too, has to take heat now. In the quiet hours (quiet=True: the heater is not wanted at night)
+    the fan is switched off at once and stays off whatever the pump does — a heat dump aside, which is safety;
+    once they end the fan follows the pump again (a pump that has run long enough → the fan starts at once).
+    pump_for_s: how long the pump has been in its present state.
     → (command, seconds left before the fan follows). No command: mode off (measurements only), the pump's state
     unknown, the fan's socket offline, the fan already right, or the delay still running."""
-    if mode == "off" or pump_on is None or fan_on is None or pump_on == fan_on:
+    if mode == "off" or fan_on is None:
+        return None, 0.0
+    if quiet and not (dump and pump_on):
+        return ("off" if fan_on else None), 0.0
+    if pump_on is None or pump_on == fan_on:
         return None, 0.0
     if dump and pump_on:
         return "on", 0.0

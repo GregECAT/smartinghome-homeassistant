@@ -990,6 +990,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         <g class="${fOn ? "spin" : ""}">${[0, 90, 180, 270].map(blade).join("")}</g>
         <circle cx="1110" cy="446" r="3" fill="#cbd5e1"/>
         <text x="1110" y="486" text-anchor="middle" class="${fOff ? "t-lock" : "t-s"}">${fOff ? "poza siecią"
+          : fan.quiet && !fOn ? `noc — do ${fan.quiet_to}:00`
           : fan.wait_s > 0 ? (fan.wait_to === "on" ? `rusza za ${mmss(fan.wait_s)}` : `stop za ${mmss(fan.wait_s)}`)
           : fOn ? `wentylator${pw(fan.power_w)}` : "stoi"}</text>`;
     }
@@ -1126,9 +1127,11 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       html += `<div style="margin-top:6px; font-size:12px; color:#a0aec0">${esc(fan.name || "Nagrzewnica")} — wentylator:
         ${fan.online === false ? '<span class="pill hot">gniazdko poza siecią</span>' : pill(fan.on)}${fan.on && fan.power_w >= 1 ? ` · ${num(fan.power_w, 0)} W` : ""}
         ${fan.wait_s > 0 ? `<span class="pill">${fan.wait_to === "on" ? "rusza" : "wyłączy się"} za ${mmss(fan.wait_s)}</span>` : ""}
+        ${fan.quiet && !fan.dump ? `<span class="pill">🌙 noc — do ${fan.quiet_to}:00</span>` : ""}
         <span class="muted">· ${fan.follows ? (c.mode === "off" ? "w trybie Wyłączone moduł go nie przełącza"
           : fan.dump ? "zrzut ciepła z kotła — pracuje od razu, bez czekania"
-          : `rusza ${num((fan.delay_s || 120) / 60, 0)} min po starcie pompy CO (nagrzewnica już ciepła), przy zrzucie ciepła od razu; gaśnie ${num((fan.delay_s || 120) / 60, 0)} min po zatrzymaniu pompy`) : "przypisz przekaźnik pompy CO"}</span></div>`;
+          : fan.quiet ? `w nocy (${fan.quiet_from}–${fan.quiet_to}) nie rusza z pompą CO; przy zrzucie ciepła z kotła i tak pracuje`
+          : `rusza ${num((fan.delay_s || 120) / 60, 0)} min po starcie pompy CO (nagrzewnica już ciepła), przy zrzucie ciepła od razu; gaśnie ${num((fan.delay_s || 120) / 60, 0)} min po zatrzymaniu pompy${fan.quiet_enabled ? `; w nocy ${fan.quiet_from}–${fan.quiet_to} wyłączona` : ""}`) : "przypisz przekaźnik pompy CO"}</span></div>`;
     }
     const lkC = ctl.lockout || {};
     const lockItems = [["pump", pump.configured], ["dhw_pump", dpump.configured], ["valve", v.configured]].filter(([, ok]) => ok);
@@ -1509,6 +1512,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         : `<div class="hint">Zrzut ciepła do domu jest wyłączony przy podłogówce (wylewka nie ma własnego zabezpieczenia). Przy przegrzaniu pompa CO i tak zostanie włączona.</div>`}</div>
       <label class="f">Nagrzewnica za pompą CO — nazwa<input name="fan_name" type="text" maxlength="24" value="${esc(c.fan_name || "Nagrzewnica")}" ${dis}>
         <span class="h">np. Garaż. Wentylator wybierasz w sekcji „Czujniki” (Nagrzewnica — wentylator): rusza 2 min po starcie pompy CO i gaśnie 2 min po jej zatrzymaniu, a gdy jego gniazdko jest poza siecią, moduł go pomija</span></label>
+      <div>${chk("fan_quiet", "Nagrzewnica wyłączona w nocy", c.fan_quiet, "w tych godzinach wentylator jest wyłączony i nie rusza z pompą CO; przy zrzucie ciepła z kotła i tak pracuje")}</div>
+      ${field("fan_quiet_from", "Nagrzewnica — noc od (godz.)", "o tej godzinie wentylator się wyłącza", c.fan_quiet_from ?? 23, 'min="0" max="23"')}
+      ${field("fan_quiet_to", "Nagrzewnica — noc do (godz.)", "od tej godziny znów chodzi razem z pompą CO", c.fan_quiet_to ?? 7, 'min="0" max="23"')}
     </div></div>`;
 
     const hasDhwPump = !!((c.entities || {}).dhw_pump_switch);
@@ -1682,8 +1688,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       "room_target_c", "warn_c", "alarm_c", "efficiency", "laddomat_on_c", "wood_kwh_per_kg", "valve_run_s", "curve_slope", "curve_shift",
       "supply_min_c", "supply_max_c", "heating_limit_c", "room_gain", "room_night_c", "night_from", "night_to",
       "light_lead_h", "burn_hours", "wood_price_kg", "dhw_on_diff_k", "dhw_off_diff_k", "dhw_hyst_k", "dhw_max_c",
-      "dhw_win1_from", "dhw_win1_to", "dhw_win2_from", "dhw_win2_to"];
-    const checks = ["enabled", "notify", "valve_invert", "safety_dump", "room_correction", "night_enabled", "advisor_notify", "dhw_dump"];
+      "dhw_win1_from", "dhw_win1_to", "dhw_win2_from", "dhw_win2_to", "fan_quiet_from", "fan_quiet_to"];
+    const checks = ["enabled", "notify", "valve_invert", "safety_dump", "room_correction", "night_enabled", "advisor_notify", "dhw_dump",
+      "fan_quiet"];
     const selects = ["profile", "emitters", "mode", "valve_type", "valve_cover", "valve_open_switch", "valve_close_switch", "weather_entity",
       "dhw_source", "dhw_mode"];
     for (const el of form.elements) {

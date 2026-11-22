@@ -69,3 +69,36 @@ def test_fan_starts_at_once_during_a_heat_dump():
     assert hc.fan_follow("auto", False, 5.0, True, dump=True) == (None, 115.0)   # pump off: the usual run-on
     assert hc.fan_follow("off", True, 5.0, False, dump=True) == (None, 0.0)
     assert hc.fan_follow("auto", True, 5.0, None, dump=True) == (None, 0.0)      # socket offline
+
+
+def test_fan_off_at_night_whatever_the_pump_does():
+    assert hc.fan_follow("auto", True, LATE, True, quiet=True) == ("off", 0.0)       # 23:00: off at once
+    assert hc.fan_follow("auto", True, LATE, False, quiet=True) == (None, 0.0)       # the pump runs: the fan stays off
+    assert hc.fan_follow("auto", True, 5.0, False, quiet=True) == (None, 0.0)        # no countdown at night
+    assert hc.fan_follow("manual", True, LATE, True, quiet=True) == ("off", 0.0)
+    assert hc.fan_follow("auto", None, LATE, True, quiet=True) == ("off", 0.0)       # the pump's Shelly offline
+    assert hc.fan_follow("auto", True, LATE, None, quiet=True) == (None, 0.0)        # socket offline
+    assert hc.fan_follow("off", True, LATE, True, quiet=True) == (None, 0.0)         # "Wyłączone" = hands off
+
+
+def test_heat_dump_runs_the_fan_at_night_too():
+    assert hc.fan_follow("auto", True, 5.0, False, dump=True, quiet=True) == ("on", 0.0)
+    assert hc.fan_follow("auto", True, 5.0, True, dump=True, quiet=True) == (None, 0.0)
+    assert hc.fan_follow("auto", False, 5.0, True, dump=True, quiet=True) == ("off", 0.0)   # dump over: off, no run-on
+
+
+def test_fan_follows_again_in_the_morning():
+    assert hc.fan_follow("auto", True, 7200.0, False, quiet=False) == ("on", 0.0)     # 07:00, pump on since 05:00
+    assert hc.fan_follow("auto", True, 30.0, False, quiet=False) == (None, 90.0)
+    assert hc.in_hours(23, 7, 23.0) and hc.in_hours(23, 7, 3.5) and hc.in_hours(23, 7, 6.99)
+    assert not hc.in_hours(23, 7, 7.0) and not hc.in_hours(23, 7, 22.99)
+
+
+def test_fan_quiet_settings():
+    cfg = hm.normalize({})
+    assert cfg["fan_quiet"] is False and (cfg["fan_quiet_from"], cfg["fan_quiet_to"]) == (23, 7)
+    cfg = hm.normalize({"fan_quiet": True, "fan_quiet_from": "22", "fan_quiet_to": 99})
+    assert cfg["fan_quiet"] is True and cfg["fan_quiet_from"] == 22 and cfg["fan_quiet_to"] == 23
+    assert hm.normalize({"fan_quiet": "yes"})["fan_quiet"] is False
+    saved = hm.to_settings({"fan_quiet": True, "fan_quiet_from": 23, "fan_quiet_to": 7})
+    assert (saved["fan_quiet"], saved["fan_quiet_from"], saved["fan_quiet_to"]) == (True, 23, 7)
