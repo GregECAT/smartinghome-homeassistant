@@ -113,6 +113,8 @@ VALVE_TYPES = {
 MAX_FLOORS = 3
 FLOOR_NAMES = ("Parter", "1. piętro", "Poddasze")
 FAN_NAME = "Nagrzewnica"
+# probe correction (K): a probe strapped to a pipe can read 10 K low until its mounting is fixed
+OFFSET_MAX_K = 15.0
 
 # where the hot-water tank's coil takes its heat from: the probe compared with the tank
 DHW_SOURCES = {
@@ -279,7 +281,7 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     # one position at a time; a lock wins over HAND
     out["force_on"] = {el: hand.get(el) is True and not out["lockout"][el] for el in FORCE_ELEMENTS}
     offs = raw.get("offsets") if isinstance(raw.get("offsets"), dict) else {}
-    out["offsets"] = {role: _num(offs.get(role), 0.0, -5.0, 5.0) for role in TEMP_ROLES}
+    out["offsets"] = {role: _num(offs.get(role), 0.0, -OFFSET_MAX_K, OFFSET_MAX_K) for role in TEMP_ROLES}
 
     out["buffer_l"] = _num(raw.get("buffer_l"), DEFAULTS["buffer_l"], 0.0, 20000.0)
     out["dhw_l"] = _num(raw.get("dhw_l"), DEFAULTS["dhw_l"], 0.0, 5000.0)

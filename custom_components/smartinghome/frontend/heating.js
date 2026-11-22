@@ -1448,6 +1448,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       html += this._probeRow(role, meta, c, dis);
     }
     html += `<div class="hint">Korekta: różnica względem termometru referencyjnego (np. wszystkie sondy w jednym naczyniu z wodą przed montażem).
+      Korekta większa niż ±3 K zwykle znaczy, że sonda leży na rurze bez docisku i otuliny — popraw montaż, a korektę traktuj jako tymczasową (zakres ±15 K).
       Odczyty −127 °C i nagłe 85,0 °C (reset sondy DS18B20) są odrzucane.</div></div>`;
 
     html += `<div class="card" style="margin-top:14px"><h3>Bufor i CWU</h3><div class="grid2">
@@ -1624,7 +1625,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       <div class="name"><b>${esc(meta.label)}</b><span>${esc(ROLE_HINTS[role] || "")}</span></div>
       <select name="ent_${role}" ${dis}>${options.join("")}</select>
       <div class="live" id="live_${role}">${this._liveText(role, current)}</div>
-      <div class="off">${hasOffset ? `<input name="off_${role}" type="number" step="0.1" min="-5" max="5" value="${off}" title="Korekta (K)" ${dis}>` : ""}</div>
+      <div class="off">${hasOffset ? `<input name="off_${role}" type="number" step="0.1" min="-15" max="15" value="${off}" title="Korekta (K)" ${dis}>` : ""}</div>
     </div>`;
   }
 

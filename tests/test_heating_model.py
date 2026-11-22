@@ -40,11 +40,11 @@ def _feed(model, t0, seconds, fn, step=10):
 # ── configuration ────────────────────────────────────────────────────────────
 
 def test_normalize_defaults_and_clamps():
-    c = hm.normalize({"buffer_l": "abc", "warn_c": 200, "offsets": {"buffer_top": 9}, "profile": "nope"})
+    c = hm.normalize({"buffer_l": "abc", "warn_c": 200, "offsets": {"buffer_top": 99}, "profile": "nope"})
     assert c["buffer_l"] == 1000.0
     assert c["profile"] == "atmos_dc"
     assert c["warn_c"] == 94.0 and c["alarm_c"] > c["warn_c"]
-    assert c["offsets"]["buffer_top"] == 5.0
+    assert c["offsets"]["buffer_top"] == 15.0
     assert c["buffer_min_c"] == 40.0 and c["supply_max_c"] == 75.0
     floor = hm.normalize({"emitters": "floor"})
     assert floor["buffer_min_c"] == 30.0 and floor["supply_max_c"] == 45.0
@@ -321,3 +321,9 @@ def test_to_settings_keeps_profile_defaults_empty():
     assert norm["warn_c"] == 88.0 and norm["supply_max_c"] == 75.0 and norm["safety_dump"] is True
     floor = hm.normalize({**stored, "emitters": "floor"})
     assert floor["supply_max_c"] == 45.0 and floor["safety_dump"] is False and floor["curve_slope"] == 0.5
+
+
+def test_probe_offset_allows_a_pipe_strapped_probe_up_to_15_k():
+    assert hm.normalize({"offsets": {"boiler_out": 10}})["offsets"]["boiler_out"] == 10.0
+    assert hm.normalize({"offsets": {"boiler_out": 25}})["offsets"]["boiler_out"] == hm.OFFSET_MAX_K == 15.0
+    assert hm.normalize({"offsets": {"buffer_top": -20}})["offsets"]["buffer_top"] == -15.0
