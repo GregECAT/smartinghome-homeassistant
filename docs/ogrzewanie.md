@@ -182,7 +182,8 @@ zawsze, gdy pracuje pompa CO, ale grzeje dopiero wtedy, gdy kręci się jej went
 (przekaźnik) wentylatora w sekcji „Czujniki” jako **Nagrzewnica — wentylator**, a w ustawieniach sterowania
 nadaj jej nazwę, np. „Garaż”. Moduł włącza wentylator **2 minuty po starcie pompy CO**, gdy nagrzewnica
 jest już ciepła i nie dmucha zimnym powietrzem. Wyłącza go **2 minuty po zatrzymaniu pompy**, bo woda
-w nagrzewnicy jest jeszcze gorąca. Liczy się stan samej pompy, czyli to, czy ją włączył moduł, pozycja RĘKA,
+w nagrzewnicy jest jeszcze gorąca. Przy **zrzucie ciepła** (kocioł przegrzany) wentylator rusza **od razu**
+razem z pompą, bo woda jest gorąca, a nadmiar ciepła trzeba odebrać jak najszybciej. Liczy się stan samej pompy, czyli to, czy ją włączył moduł, pozycja RĘKA,
 zrzut ciepła czy skrypt bezpieczeństwa na Shelly. Wentylator przełączony ręcznie moduł zaraz ustawi z powrotem
 tak jak pompę, chyba że pompa zmieniła stan mniej niż 2 minuty temu. Gdy gniazdko jest poza siecią,
 moduł nic do niego nie wysyła; gdy wróci, dostaje stan pompy. W trybie „Wyłączone” wentylator nie jest

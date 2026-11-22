@@ -343,7 +343,7 @@ class HeatingManager:
                 await self._exec_pump(out.pump, now)
             if out.dhw_pump:
                 await self._exec_pump(out.dhw_pump, now, dhw=True)
-            fan = await self._sync_fan(now)
+            fan = await self._sync_fan(now, dump=out.dump)
             # the forecast only after the actuators — and never longer than a few seconds
             await self._fetch_forecast(now, entity, advisor_on)
 
@@ -596,7 +596,7 @@ class HeatingManager:
         self._save_soon()
         return True
 
-    async def _sync_fan(self, now: float) -> dict[str, Any]:
+    async def _sync_fan(self, now: float, dump: bool = False) -> dict[str, Any]:
         """The unit heater's fan follows the CH pump FAN_DELAY_S late, on and off (hc.fan_follow); the delay
         runs from the pump entity's last state change. A socket that refused a command is tried again after
         FAN_RETRY_S, not every tick; an offline socket is left alone until it is back."""
@@ -609,11 +609,11 @@ class HeatingManager:
         fan_on = hm.switch_state(fst.state if fst is not None else None)
         pump_on = hm.switch_state(pst.state if pst is not None else None)
         pump_for = now - pst.last_changed.timestamp() if pst is not None else 0.0
-        want, wait = hc.fan_follow(self.cfg["mode"], pump_on, pump_for, fan_on)
+        want, wait = hc.fan_follow(self.cfg["mode"], pump_on, pump_for, fan_on, dump)
         info: dict[str, Any] = {"configured": True, "name": self.cfg["fan_name"], "on": fan_on,
                                 "online": fan_on is not None, "follows": bool(pump), "power_w": self.model.fan_w,
                                 "delay_s": round(hc.FAN_DELAY_S), "wait_s": round(wait),
-                                "wait_to": ("on" if pump_on else "off") if wait > 0 else None}
+                                "wait_to": ("on" if pump_on else "off") if wait > 0 else None, "dump": dump}
         if want is None or time.monotonic() < self._fan_retry:
             return info
         name = f"{self.cfg['fan_name']} — wentylator"
@@ -627,7 +627,8 @@ class HeatingManager:
             return info
         self._fan_retry, self._fan_failed = 0.0, False
         mins = f"{hc.FAN_DELAY_S / 60:.0f} min"
-        what = f"włączony — pompa CO pracuje od {mins}" if want == "on" else f"wyłączony — pompa CO stoi od {mins}"
+        what = ("włączony od razu — zrzut ciepła z kotła" if want == "on" and dump
+                else f"włączony — pompa CO pracuje od {mins}" if want == "on" else f"wyłączony — pompa CO stoi od {mins}")
         self._log(f"{name} {what}", now)
         info["on"] = want == "on"
         return info

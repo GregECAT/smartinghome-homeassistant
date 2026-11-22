@@ -1127,7 +1127,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         ${fan.online === false ? '<span class="pill hot">gniazdko poza siecią</span>' : pill(fan.on)}${fan.on && fan.power_w >= 1 ? ` · ${num(fan.power_w, 0)} W` : ""}
         ${fan.wait_s > 0 ? `<span class="pill">${fan.wait_to === "on" ? "rusza" : "wyłączy się"} za ${mmss(fan.wait_s)}</span>` : ""}
         <span class="muted">· ${fan.follows ? (c.mode === "off" ? "w trybie Wyłączone moduł go nie przełącza"
-          : `rusza ${num((fan.delay_s || 120) / 60, 0)} min po starcie pompy CO (nagrzewnica już ciepła) i gaśnie ${num((fan.delay_s || 120) / 60, 0)} min po jej zatrzymaniu`) : "przypisz przekaźnik pompy CO"}</span></div>`;
+          : fan.dump ? "zrzut ciepła z kotła — pracuje od razu, bez czekania"
+          : `rusza ${num((fan.delay_s || 120) / 60, 0)} min po starcie pompy CO (nagrzewnica już ciepła), przy zrzucie ciepła od razu; gaśnie ${num((fan.delay_s || 120) / 60, 0)} min po zatrzymaniu pompy`) : "przypisz przekaźnik pompy CO"}</span></div>`;
     }
     const lkC = ctl.lockout || {};
     const lockItems = [["pump", pump.configured], ["dhw_pump", dpump.configured], ["valve", v.configured]].filter(([, ok]) => ok);

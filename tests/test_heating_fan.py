@@ -61,3 +61,11 @@ def test_fan_state_in_the_model_status():
     assert m.status(1000.0)["fan"] == {"on": True, "power_w": 48.5}
     m.update({"fan_switch": "unavailable", "fan_power": "unavailable"}, 1010.0)
     assert m.status(1010.0)["fan"] == {"on": None, "power_w": None}
+
+
+def test_fan_starts_at_once_during_a_heat_dump():
+    assert hc.fan_follow("auto", True, 5.0, False, dump=True) == ("on", 0.0)      # no 2 min wait
+    assert hc.fan_follow("auto", True, 5.0, True, dump=True) == (None, 0.0)
+    assert hc.fan_follow("auto", False, 5.0, True, dump=True) == (None, 115.0)   # pump off: the usual run-on
+    assert hc.fan_follow("off", True, 5.0, False, dump=True) == (None, 0.0)
+    assert hc.fan_follow("auto", True, 5.0, None, dump=True) == (None, 0.0)      # socket offline
