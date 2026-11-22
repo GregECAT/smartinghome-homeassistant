@@ -64,7 +64,7 @@ RETRY_SAFETY_S = 30.0
 # pump
 PUMP_MIN_ON_S = 300.0
 PUMP_MIN_OFF_S = 300.0
-VALVE_PARK_AFTER_S = 600.0   # the CH pump off this long → close the mixing valve (no gravity flow to the radiators)
+VALVE_PARK_AFTER_S = 120.0   # the CH pump off this long → close the mixing valve (no gravity flow to the radiators)
 EXERCISE_EVERY_S = 7 * 86400
 EXERCISE_S = 60.0
 PUMP_RETRY_S = 60.0

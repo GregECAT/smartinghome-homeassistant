@@ -368,7 +368,8 @@ def _warm_house(now, **kw):
     return _inp(now, t_room=26.0, pump_on=False, **kw)
 
 
-def test_valve_closes_after_the_pump_stood_ten_minutes():
+def test_valve_closes_after_the_pump_stood_two_minutes():
+    assert hc.VALVE_PARK_AFTER_S == 120.0        # 10 min let the supply climb 49 → 62 °C by gravity (bobrek, 22.11)
     ctrl = hc.HeatingController(_cfg(room_target_c=22))
     ctrl.valve.known, ctrl.valve.position = True, 100.0
     ctrl.pump.last_on = 1000.0

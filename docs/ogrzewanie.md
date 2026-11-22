@@ -132,7 +132,7 @@ a kafel „Zadana w domu” pokazuje ją z porą („noc, do 05:00”). Te same 
 |---|---|---|---|
 | Wyłączone | nic | nic (również bez zrzutu ciepła — tylko pomiary i alarmy) | nic |
 | Ręczne | przyciski w panelu | przyciski w panelu | przyciski w panelu |
-| Automatyczne | krzywa pogodowa (+ korekta od temperatury w domu, PRO), limit: góra bufora − 2 K; gdy pompa CO stoi ≥ 10 min — zamknięty (bez przepływu grawitacyjnego do grzejników) | pracuje, gdy jest zapotrzebowanie (średnia temp. zewnętrzna < granicy grzania, ciepło w buforze, w domu poniżej zadanej + 0,5 K; wyłącza przy zadanej + 1 K); min. 5 min pracy / postoju | ładowanie różnicowe albo według godzin (niżej); raz w tygodniu 30 s przepłukania |
+| Automatyczne | krzywa pogodowa (+ korekta od temperatury w domu, PRO), limit: góra bufora − 2 K; gdy pompa CO stoi ≥ 2 min — zamknięty (bez przepływu grawitacyjnego do grzejników) | pracuje, gdy jest zapotrzebowanie (średnia temp. zewnętrzna < granicy grzania, ciepło w buforze, w domu poniżej zadanej + 0,5 K; wyłącza przy zadanej + 1 K); min. 5 min pracy / postoju | ładowanie różnicowe albo według godzin (niżej); raz w tygodniu 30 s przepłukania |
 | Lato | zamknięty | stoi; raz w tygodniu 60 s przepłukania | jak w trybie automatycznym |
 
 We wszystkich trybach poza „Wyłączone” działa bezpieczeństwo — z tymi samymi progami co skrypt na Shelly,
@@ -162,10 +162,11 @@ zasobnik nie ma sondy albo jej odczyty są niepewne. Wtedy:
 Ręcznie pompę CWU włączasz przełącznikiem **RĘKA** w karcie Sterowanie, który działa niezależnie od godzin.
 Pozycja **AUTO** wraca do harmonogramu.
 
-**Zawór przy postoju pompy CO.** Gdy pompa CO stoi co najmniej 10 minut (np. w domu jest ciepło albo trwa
+**Zawór przy postoju pompy CO.** Gdy pompa CO stoi co najmniej 2 minuty (np. w domu jest ciepło albo trwa
 obniżenie nocne), moduł zamyka zawór mieszający do końca. Otwarty zawór pozwala gorącej wodzie z bufora
 płynąć grawitacyjnie do grzejników także bez pompy. W jednej z pierwszych nocy było to ok. 17 kWh, czyli
-ok. 5 kg drewna, poza kontrolą. Po ponownym starcie pompy zawór otwiera się krokami, a nie od razu na 100 %.
+ok. 5 kg drewna, poza kontrolą. Już po 10 minutach postoju zasilanie podskoczyło z 49 do 62 °C, dlatego
+zawór zamyka się szybko. Po ponownym starcie pompy zawór otwiera się krokami, a nie od razu na 100 %.
 Jeśli grupa pompowa ma hamulec grawitacyjny (zawór zwrotny), zamykanie zaworu dodatkowo zabezpiecza.
 
 **Przy montażu, serwisie albo gdy w instalacji nie ma wody** przełącz tryb na **Wyłączone** albo zablokuj
