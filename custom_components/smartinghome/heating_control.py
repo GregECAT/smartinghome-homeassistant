@@ -65,6 +65,7 @@ RETRY_SAFETY_S = 30.0
 PUMP_MIN_ON_S = 300.0
 PUMP_MIN_OFF_S = 300.0
 VALVE_PARK_AFTER_S = 120.0   # the CH pump off this long → close the mixing valve (no gravity flow to the radiators)
+FAN_DELAY_S = 120.0          # a unit heater's fan follows the CH pump this late, on and off (warm coil, no cold draught)
 EXERCISE_EVERY_S = 7 * 86400
 EXERCISE_S = 60.0
 PUMP_RETRY_S = 60.0
@@ -112,13 +113,19 @@ def dhw_windows(cfg: dict[str, Any]) -> list[tuple[int, int]]:
     return [(a, b) for a, b in pairs if a != b]
 
 
-def fan_follow(mode: str, pump_on: bool | None, fan_on: bool | None) -> str | None:
-    """A unit heater's fan on the CH circuit (behind the CH pump) runs exactly when the pump runs — whatever
-    switched the pump: the module, HAND, the Shelly's own guard script. None = leave it alone: mode off
-    (measurements only), the pump's state unknown, the fan's socket offline, or the fan already right."""
+def fan_follow(mode: str, pump_on: bool | None, pump_for_s: float, fan_on: bool | None) -> tuple[str | None, float]:
+    """A unit heater's fan on the CH circuit (behind the CH pump) follows the pump — whatever switched the pump:
+    the module, HAND, the Shelly's own guard script — FAN_DELAY_S late both ways: on once the pump has run that
+    long (the coil is warm by then, no cold draught), off once it has stood that long (the coil still holds hot
+    water). pump_for_s: how long the pump has been in its present state.
+    → (command, seconds left before the fan follows). No command: mode off (measurements only), the pump's state
+    unknown, the fan's socket offline, the fan already right, or the delay still running."""
     if mode == "off" or pump_on is None or fan_on is None or pump_on == fan_on:
-        return None
-    return "on" if pump_on else "off"
+        return None, 0.0
+    left = FAN_DELAY_S - max(pump_for_s, 0.0)
+    if left > 0:
+        return None, left
+    return ("on" if pump_on else "off"), 0.0
 
 
 def night_now(cfg: dict[str, Any], local_hour: float) -> bool:

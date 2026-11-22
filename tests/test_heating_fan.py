@@ -17,19 +17,29 @@ hm = importlib.import_module("smartinghome_pure.heating_model")
 hc = importlib.import_module("smartinghome_pure.heating_control")
 
 
-def test_fan_follows_the_pump():
-    assert hc.fan_follow("auto", True, False) == "on"
-    assert hc.fan_follow("auto", False, True) == "off"
-    assert hc.fan_follow("manual", True, False) == "on"        # the pump on HAND / manual: the fan too
-    assert hc.fan_follow("summer", False, True) == "off"
+LATE = hc.FAN_DELAY_S + 1
+
+
+def test_fan_follows_the_pump_two_minutes_late():
+    assert hc.FAN_DELAY_S == 120.0
+    assert hc.fan_follow("auto", True, LATE, False) == ("on", 0.0)
+    assert hc.fan_follow("auto", False, LATE, True) == ("off", 0.0)
+    assert hc.fan_follow("manual", True, LATE, False) == ("on", 0.0)    # the pump on HAND / manual: the fan too
+    assert hc.fan_follow("summer", False, LATE, True) == ("off", 0.0)
+
+
+def test_fan_waits_for_a_warm_coil_and_runs_on_after_the_pump_stops():
+    assert hc.fan_follow("auto", True, 30.0, False) == (None, 90.0)     # cold coil: starts 2 min after the pump
+    assert hc.fan_follow("auto", False, 100.0, True) == (None, 20.0)    # coil still hot: runs on 2 min
+    assert hc.fan_follow("auto", True, -5.0, False) == (None, hc.FAN_DELAY_S)   # clock skew counts as just now
 
 
 def test_fan_left_alone_when_right_offline_unknown_or_mode_off():
-    assert hc.fan_follow("auto", True, True) is None
-    assert hc.fan_follow("auto", False, False) is None
-    assert hc.fan_follow("auto", True, None) is None           # socket offline: nothing sent until it is back
-    assert hc.fan_follow("auto", None, False) is None          # the pump's state unknown (Shelly offline)
-    assert hc.fan_follow("off", True, False) is None           # "Wyłączone" = measurements only
+    assert hc.fan_follow("auto", True, LATE, True) == (None, 0.0)
+    assert hc.fan_follow("auto", False, 5.0, False) == (None, 0.0)      # already right: no countdown either
+    assert hc.fan_follow("auto", True, LATE, None) == (None, 0.0)       # socket offline: nothing until it is back
+    assert hc.fan_follow("auto", None, LATE, False) == (None, 0.0)      # the pump's state unknown (Shelly offline)
+    assert hc.fan_follow("off", True, LATE, False) == (None, 0.0)       # "Wyłączone" = measurements only
 
 
 def test_fan_roles_and_name_in_settings():

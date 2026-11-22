@@ -56,11 +56,12 @@ const ROLE_HINTS = {
   floor0_humidity: "opcjonalnie", floor1_humidity: "opcjonalnie", floor2_humidity: "opcjonalnie",
   dhw_pump_switch: "opcjonalnie — przekaźnik pompy ładującej CWU (np. Shelly 1PM Mini)",
   dhw_pump_power: "opcjonalnie — moc pompy CWU (wykrywa awarię pompy)",
-  fan_switch: "opcjonalnie — gniazdko wentylatora nagrzewnicy na obiegu CO za pompą (np. garaż): włącza się i wyłącza razem z pompą CO",
+  fan_switch: "opcjonalnie — gniazdko wentylatora nagrzewnicy na obiegu CO za pompą (np. garaż): rusza 2 min po starcie pompy CO, gaśnie 2 min po jej zatrzymaniu",
   fan_power: "opcjonalnie — moc wentylatora z gniazdka",
 };
 
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const mmss = (sec) => { const t = Math.max(Math.round(Number(sec) || 0), 0); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`; };
 const num = (v, d = 1) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toLocaleString("pl-PL", { minimumFractionDigits: d, maximumFractionDigits: d }));
 const fmtTime = (ts) => (ts ? new Date(ts * 1000).toLocaleString("pl-PL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
 const hhmm = (ts) => (ts ? new Date(ts * 1000).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" }) : "—");
@@ -970,7 +971,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         <rect x="1088" y="424" width="44" height="44" rx="6" fill="#0f172a" stroke="${fc}" stroke-width="1.5"/>
         <g class="${fOn ? "spin" : ""}">${[0, 90, 180, 270].map(blade).join("")}</g>
         <circle cx="1110" cy="446" r="3" fill="#cbd5e1"/>
-        <text x="1110" y="486" text-anchor="middle" class="${fOff ? "t-lock" : "t-s"}">${fOff ? "poza siecią" : fOn ? `wentylator${pw(fan.power_w)}` : "stoi"}</text>`;
+        <text x="1110" y="486" text-anchor="middle" class="${fOff ? "t-lock" : "t-s"}">${fOff ? "poza siecią"
+          : fan.wait_s > 0 ? (fan.wait_to === "on" ? `rusza za ${mmss(fan.wait_s)}` : `stop za ${mmss(fan.wait_s)}`)
+          : fOn ? `wentylator${pw(fan.power_w)}` : "stoi"}</text>`;
     }
 
     // hot-water pump and tank
@@ -1104,7 +1107,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     if (fan.configured) {
       html += `<div style="margin-top:6px; font-size:12px; color:#a0aec0">${esc(fan.name || "Nagrzewnica")} — wentylator:
         ${fan.online === false ? '<span class="pill hot">gniazdko poza siecią</span>' : pill(fan.on)}${fan.on && fan.power_w >= 1 ? ` · ${num(fan.power_w, 0)} W` : ""}
-        <span class="muted">· ${fan.follows ? (c.mode === "off" ? "w trybie Wyłączone moduł go nie przełącza" : "włącza się i wyłącza razem z pompą CO") : "przypisz przekaźnik pompy CO"}</span></div>`;
+        ${fan.wait_s > 0 ? `<span class="pill">${fan.wait_to === "on" ? "rusza" : "wyłączy się"} za ${mmss(fan.wait_s)}</span>` : ""}
+        <span class="muted">· ${fan.follows ? (c.mode === "off" ? "w trybie Wyłączone moduł go nie przełącza"
+          : `rusza ${num((fan.delay_s || 120) / 60, 0)} min po starcie pompy CO (nagrzewnica już ciepła) i gaśnie ${num((fan.delay_s || 120) / 60, 0)} min po jej zatrzymaniu`) : "przypisz przekaźnik pompy CO"}</span></div>`;
     }
     const lkC = ctl.lockout || {};
     const lockItems = [["pump", pump.configured], ["dhw_pump", dpump.configured], ["valve", v.configured]].filter(([, ok]) => ok);
@@ -1476,7 +1481,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         ? chk("safety_dump", "Zrzut ciepła do domu przy przegrzaniu kotła", c.safety_dump, "kocioł gorący → zawór otwarty do grzejników, pompa CO włączona")
         : `<div class="hint">Zrzut ciepła do domu jest wyłączony przy podłogówce (wylewka nie ma własnego zabezpieczenia). Przy przegrzaniu pompa CO i tak zostanie włączona.</div>`}</div>
       <label class="f">Nagrzewnica za pompą CO — nazwa<input name="fan_name" type="text" maxlength="24" value="${esc(c.fan_name || "Nagrzewnica")}" ${dis}>
-        <span class="h">np. Garaż. Wentylator wybierasz w sekcji „Czujniki” (Nagrzewnica — wentylator): pracuje zawsze razem z pompą CO, a gdy jego gniazdko jest poza siecią, moduł go pomija</span></label>
+        <span class="h">np. Garaż. Wentylator wybierasz w sekcji „Czujniki” (Nagrzewnica — wentylator): rusza 2 min po starcie pompy CO i gaśnie 2 min po jej zatrzymaniu, a gdy jego gniazdko jest poza siecią, moduł go pomija</span></label>
     </div></div>`;
 
     const hasDhwPump = !!((c.entities || {}).dhw_pump_switch);
