@@ -1130,8 +1130,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         ${fan.quiet && !fan.dump ? `<span class="pill">🌙 noc — do ${fan.quiet_to}:00</span>` : ""}
         <span class="muted">· ${fan.follows ? (c.mode === "off" ? "w trybie Wyłączone moduł go nie przełącza"
           : fan.dump ? "zrzut ciepła z kotła — pracuje od razu, bez czekania"
-          : fan.quiet ? `w nocy (${fan.quiet_from}–${fan.quiet_to}) nie rusza z pompą CO; przy zrzucie ciepła z kotła i tak pracuje`
-          : `rusza ${num((fan.delay_s || 120) / 60, 0)} min po starcie pompy CO (nagrzewnica już ciepła), przy zrzucie ciepła od razu; gaśnie ${num((fan.delay_s || 120) / 60, 0)} min po zatrzymaniu pompy${fan.quiet_enabled ? `; w nocy ${fan.quiet_from}–${fan.quiet_to} wyłączona` : ""}`) : "przypisz przekaźnik pompy CO"}</span></div>`;
+          : fan.quiet ? "w nocy nie rusza z pompą CO; przy zrzucie ciepła z kotła i tak pracuje"
+          : `rusza ${num((fan.delay_s || 120) / 60, 0)} min po starcie pompy CO (nagrzewnica już ciepła), przy zrzucie ciepła od razu; gaśnie ${num((fan.delay_s || 120) / 60, 0)} min po zatrzymaniu pompy`) : "przypisz przekaźnik pompy CO"}</span></div>`;
+      html += this._fanQuietHtml(fan, c, admin, hrs);
     }
     const lkC = ctl.lockout || {};
     const lockItems = [["pump", pump.configured], ["dhw_pump", dpump.configured], ["valve", v.configured]].filter(([, ok]) => ok);
@@ -1241,6 +1242,25 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     </div>`;
   }
 
+  // the unit heater's quiet hours: its fan stays off at night (set here like the house's night hours)
+  _fanQuietHtml(fan, c, admin, hrs) {
+    const on = !!c.fan_quiet;
+    const name = fan.name || c.fan_name || "Nagrzewnica";
+    const hourSel = (key, def) => `<select class="hsel" data-act="fanquiethour" data-key="${key}" ${admin && on ? "" : "disabled"} aria-label="${key === "fan_quiet_from" ? "cisza od" : "cisza do"}">${
+      Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${Number(c[key] ?? def) === h ? "selected" : ""}>${hrs(h)}</option>`).join("")}</select>`;
+    const from = c.fan_quiet_from ?? 23, to = c.fan_quiet_to ?? 7;
+    return `<div class="sched">
+      <div class="sh">${esc(name)} — cisza nocna wentylatora <span>w tych godzinach wentylator nie rusza z pompą CO</span></div>
+      <div class="slots">
+        <div class="slot ${fan.quiet ? "on" : ""} ${on ? "" : "off"}"><span class="k">🌙 Wyłączony</span>
+          <span class="hrs">${hourSel("fan_quiet_from", 23)}<span>–</span>${hourSel("fan_quiet_to", 7)}</span></div>
+        <label class="tgl"><input type="checkbox" data-act="fanquieton" ${on ? "checked" : ""} ${admin ? "" : "disabled"}> wyłączaj w nocy</label>
+      </div>
+      ${on ? `<div class="s">O ${hrs(from)} wentylator się wyłącza, od ${hrs(to)} znów chodzi razem z pompą CO.
+        Przy zrzucie ciepła z przegrzanego kotła pracuje także w nocy.</div>` : ""}
+    </div>`;
+  }
+
   async _onAction(act, ds) {
     this._msg = ""; this._msgErr = false;
     try {
@@ -1264,6 +1284,12 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       } else if (act === "nighthour") {
         const h = Math.min(Math.max(parseInt(ds.value, 10) || 0, 0), 23);
         this._data = await this._hass.callWS({ type: "smartinghome/heating/save", config: { [ds.key === "night_to" ? "night_to" : "night_from"]: h } });
+      } else if (act === "fanquieton") {
+        const on = !this._data.config.fan_quiet;
+        this._data = await this._hass.callWS({ type: "smartinghome/heating/save", config: { fan_quiet: on } });
+      } else if (act === "fanquiethour") {
+        const h = Math.min(Math.max(parseInt(ds.value, 10) || 0, 0), 23);
+        this._data = await this._hass.callWS({ type: "smartinghome/heating/save", config: { [ds.key === "fan_quiet_to" ? "fan_quiet_to" : "fan_quiet_from"]: h } });
       } else if (act === "valveto") {
         const el = this.shadowRoot.getElementById("vto");
         const percent = Math.min(Math.max(Number(el && el.value) || 0, 0), 100);
