@@ -112,6 +112,15 @@ def dhw_windows(cfg: dict[str, Any]) -> list[tuple[int, int]]:
     return [(a, b) for a, b in pairs if a != b]
 
 
+def fan_follow(mode: str, pump_on: bool | None, fan_on: bool | None) -> str | None:
+    """A unit heater's fan on the CH circuit (behind the CH pump) runs exactly when the pump runs — whatever
+    switched the pump: the module, HAND, the Shelly's own guard script. None = leave it alone: mode off
+    (measurements only), the pump's state unknown, the fan's socket offline, or the fan already right."""
+    if mode == "off" or pump_on is None or fan_on is None or pump_on == fan_on:
+        return None
+    return "on" if pump_on else "off"
+
+
 def night_now(cfg: dict[str, Any], local_hour: float) -> bool:
     """The night (setback) target is in force."""
     return bool(cfg.get("night_enabled")) and in_night(cfg, local_hour)

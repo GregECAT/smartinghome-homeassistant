@@ -82,6 +82,7 @@ PROBE_FORCE_S = 60.0          # like the Shelly guard: a boiler / buffer probe l
 MAXTIME_TTL_S = 3600.0
 SAVE_DELAY_S = 10.0
 ADVISOR_EVERY_S = 60
+FAN_RETRY_S = 60.0            # the heater fan's socket refused a command: try again after this long
 GUARD_RETRY_S = 60.0          # a locked / unlocked CH pump whose Shelly did not answer: try the guard again
 LOG_LEN = 100
 SOURCE = "Kotłownia"
@@ -139,6 +140,8 @@ class HeatingManager:
         self._guard_retry = 0.0
         self._guard_busy = False
         self._guard_checked = False
+        self._fan_retry = 0.0            # monotonic time before which a refused heater-fan command is not repeated
+        self._fan_failed = False         # a refusal is logged once, until the socket takes a command again
 
     @property
     def enabled(self) -> bool:
@@ -340,6 +343,7 @@ class HeatingManager:
                 await self._exec_pump(out.pump, now)
             if out.dhw_pump:
                 await self._exec_pump(out.dhw_pump, now, dhw=True)
+            fan = await self._sync_fan(now)
             # the forecast only after the actuators — and never longer than a few seconds
             await self._fetch_forecast(now, entity, advisor_on)
 
@@ -397,6 +401,7 @@ class HeatingManager:
                 "dhw_pump": {"configured": dhw_pump_configured, "on": dhw_pump_on, "want": out.dhw.want,
                              "reason": out.dhw.reason, "dump": out.dhw.dump,
                              "source_c": None if out.dhw.source_c is None else round(out.dhw.source_c, 1)},
+                "fan": fan,
             }
             self.snapshot = {**status, "control": self.control, "advice": self.advice,
                              "log": list(self.log)[-30:], "valve_moves": list(valve.moves)[-15:]}
@@ -590,6 +595,37 @@ class HeatingManager:
         self._log(f"{name} {'włączona' if state == 'on' else 'wyłączona'} — {reason}", now)
         self._save_soon()
         return True
+
+    async def _sync_fan(self, now: float) -> dict[str, Any]:
+        """The unit heater's fan follows the CH pump (hc.fan_follow). Both states are read fresh, so a pump
+        switched in this very tick is followed now, not a tick later. A socket that refused a command is
+        tried again after FAN_RETRY_S, not every tick; an offline socket is left alone until it is back."""
+        ents = self.cfg["entities"]
+        fan, pump = ents["fan_switch"], ents["pump_switch"]
+        if not fan:
+            return {"configured": False}
+        fst = self.hass.states.get(fan)
+        pst = self.hass.states.get(pump) if pump else None
+        fan_on = hm.switch_state(fst.state if fst is not None else None)
+        pump_on = hm.switch_state(pst.state if pst is not None else None)
+        info: dict[str, Any] = {"configured": True, "name": self.cfg["fan_name"], "on": fan_on,
+                                "online": fan_on is not None, "follows": bool(pump), "power_w": self.model.fan_w}
+        want = hc.fan_follow(self.cfg["mode"], pump_on, fan_on)
+        if want is None or time.monotonic() < self._fan_retry:
+            return info
+        name = f"{self.cfg['fan_name']} — wentylator"
+        try:
+            await self.hass.services.async_call("homeassistant", f"turn_{want}", {"entity_id": fan}, blocking=True)
+        except Exception as err:  # noqa: BLE001 — retried from the tick
+            self._fan_retry = time.monotonic() + FAN_RETRY_S
+            if not self._fan_failed:
+                self._fan_failed = True
+                self._log(f"⚠️ {name} nie przyjął polecenia ({want}): {err}", now)
+            return info
+        self._fan_retry, self._fan_failed = 0.0, False
+        self._log(f"{name} {'włączony — pracuje pompa CO' if want == 'on' else 'wyłączony — pompa CO stoi'}", now)
+        info["on"] = want == "on"
+        return info
 
     async def _guard_sync(self, now: float | None = None) -> bool:
         """Bring the guard script on the CH pump's Shelly to the state the emergency switch asks for.

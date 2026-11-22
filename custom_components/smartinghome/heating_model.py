@@ -77,6 +77,9 @@ ROLES: dict[str, tuple[str, str]] = {
     "pump_power": ("Pompa CO — moc", "power"),
     "dhw_pump_switch": ("Pompa CWU — przekaźnik", "switch"),
     "dhw_pump_power": ("Pompa CWU — moc", "power"),
+    # e.g. a unit heater in the garage hung on the CH circuit behind the pump: its fan runs with the pump
+    "fan_switch": ("Nagrzewnica — wentylator (pracuje razem z pompą CO)", "switch"),
+    "fan_power": ("Nagrzewnica — moc wentylatora", "power"),
 }
 TEMP_ROLES = tuple(r for r, (_, kind) in ROLES.items() if kind == "temperature")
 PROBE_ROLES = ("boiler_out", "buffer_top", "buffer_bottom", "dhw", "heating_supply", "heating_return")
@@ -109,6 +112,7 @@ VALVE_TYPES = {
 }
 MAX_FLOORS = 3
 FLOOR_NAMES = ("Parter", "1. piętro", "Poddasze")
+FAN_NAME = "Nagrzewnica"
 
 # where the hot-water tank's coil takes its heat from: the probe compared with the tank
 DHW_SOURCES = {
@@ -146,6 +150,7 @@ DEFAULTS: dict[str, Any] = {
     "floor_areas": [None, None, None],   # m² (empty → equal weights)
     "floor_view_only": [False, False, False],   # shown, but left out of the house mean (e.g. a radiator head)
     "room_floor": 0,            # the storey of the reference room (index)
+    "fan_name": FAN_NAME,       # the unit heater whose fan follows the CH pump (shown in the panel)
     "warn_c": None,             # None → profile
     "alarm_c": None,
     "laddomat_on_c": None,      # None → profile; the boiler's own thermostat starts the Laddomat pump here
@@ -293,6 +298,7 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     names = raw.get("floor_names") if isinstance(raw.get("floor_names"), list) else []
     out["floor_names"] = [(str(names[i]).strip()[:24] if i < len(names) and str(names[i] or "").strip() else FLOOR_NAMES[i])
                           for i in range(MAX_FLOORS)]
+    out["fan_name"] = str(raw.get("fan_name") or "").strip()[:24] or FAN_NAME
     areas = raw.get("floor_areas") if isinstance(raw.get("floor_areas"), list) else []
     out["floor_areas"] = [None] * MAX_FLOORS
     for i in range(MAX_FLOORS):
@@ -633,6 +639,8 @@ class HeatingModel:
         self.pump_w: float | None = None
         self.dhw_pump_on: bool | None = None
         self.dhw_pump_w: float | None = None
+        self.fan_on: bool | None = None
+        self.fan_w: float | None = None
         self.laddomat_on: bool | None = None
         self.room_target: float | None = None   # the target in force now (day / night), set by the controller loop
         self.state = "unknown"
@@ -689,6 +697,8 @@ class HeatingModel:
         self.pump_w = _f(raw.get("pump_power"))
         self.dhw_pump_on = switch_state(raw.get("dhw_pump_switch"))
         self.dhw_pump_w = _f(raw.get("dhw_pump_power"))
+        self.fan_on = switch_state(raw.get("fan_switch"))
+        self.fan_w = _f(raw.get("fan_power"))
         self.grid_outage = raw.get("grid_outage") is True
 
         self.buffer = buffer_state(cfg, self.t("buffer_top"), self.t("buffer_bottom"))
@@ -988,6 +998,7 @@ class HeatingModel:
             "house_c": self.house_c,
             "pump": {"on": self.pump_on, "power_w": self.pump_w},
             "dhw_pump": {"on": self.dhw_pump_on, "power_w": self.dhw_pump_w},
+            "fan": {"on": self.fan_on, "power_w": self.fan_w},
             "laddomat": {"on": self.laddomat_on, "on_c": self.cfg["laddomat_on_c"]},
             "boiler": {
                 "state": self.state, "label": STATE_LABELS.get(self.state, self.state),

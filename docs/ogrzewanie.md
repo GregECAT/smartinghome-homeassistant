@@ -32,6 +32,7 @@ podpowiada, **do której rozpalić** i **ile drewna załadować**, żeby nie prz
 | Shelly 1PM Gen3 + **Shelly Plus Add-on** + do 5× DS18B20 | sondy temperatury; przekaźnik steruje pompą CO (z pomiarem mocy) |
 | Shelly 2PM Gen3 w trybie **Cover** + siłownik 3-punktowy 230 V (np. ESBE ARA661, 120 s) na zaworze 3-drogowym (np. ESBE VRG132) | zawór mieszający obiegu grzejników |
 | Shelly 1PM Mini Gen3 (opcjonalnie) | przekaźnik pompy ładującej CWU (z pomiarem mocy) |
+| Gniazdko Wi-Fi (opcjonalnie) | wentylator nagrzewnicy na obiegu CO za pompą (np. garaż): pracuje razem z pompą CO |
 | Przełącznik modułowy 1-0-2 na każdą pompę (opcjonalnie) | AUTO–0–RĘKA: pompa ruszy ręcznie nawet bez Shelly |
 | Shelly H&T (lub inny czujnik) | czujnik odniesienia: temperatura i wilgotność w domu — według niego moduł grzeje |
 | Encja pogody w HA (np. Met.no) | temperatura zewnętrzna i prognoza godzinowa (doradca) |
@@ -168,6 +169,15 @@ płynąć grawitacyjnie do grzejników także bez pompy. W jednej z pierwszych n
 ok. 5 kg drewna, poza kontrolą. Już po 10 minutach postoju zasilanie podskoczyło z 49 do 62 °C, dlatego
 zawór zamyka się szybko. Po ponownym starcie pompy zawór otwiera się krokami, a nie od razu na 100 %.
 Jeśli grupa pompowa ma hamulec grawitacyjny (zawór zwrotny), zamykanie zaworu dodatkowo zabezpiecza.
+
+**Nagrzewnica za pompą CO (np. garaż).** Nagrzewnica wpięta w obieg CO za pompą dostaje gorącą wodę
+zawsze, gdy pracuje pompa CO, ale grzeje dopiero wtedy, gdy kręci się jej wentylator. Wybierz gniazdko
+(przekaźnik) wentylatora w sekcji „Czujniki” jako **Nagrzewnica — wentylator**, a w ustawieniach sterowania
+nadaj jej nazwę, np. „Garaż”. Moduł włącza i wyłącza wentylator razem z pompą CO. Liczy się stan samej
+pompy, czyli to, czy ją włączył moduł, pozycja RĘKA, zrzut ciepła czy skrypt bezpieczeństwa na Shelly. Gdy gniazdko jest poza siecią,
+moduł nic do niego nie wysyła; gdy wróci, dostaje stan pompy. W trybie „Wyłączone” wentylator nie jest
+przełączany. Stan wentylatora (i moc, jeśli wybierzesz encję mocy) widać na schemacie kotłowni
+i w karcie „Sterowanie”.
 
 **Przy montażu, serwisie albo gdy w instalacji nie ma wody** przełącz tryb na **Wyłączone** albo zablokuj
 pompę (pozycja 0). Inaczej, dopóki sondy nie czytają, pompa CO pracuje (także na sucho).

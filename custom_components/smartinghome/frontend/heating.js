@@ -56,6 +56,8 @@ const ROLE_HINTS = {
   floor0_humidity: "opcjonalnie", floor1_humidity: "opcjonalnie", floor2_humidity: "opcjonalnie",
   dhw_pump_switch: "opcjonalnie — przekaźnik pompy ładującej CWU (np. Shelly 1PM Mini)",
   dhw_pump_power: "opcjonalnie — moc pompy CWU (wykrywa awarię pompy)",
+  fan_switch: "opcjonalnie — gniazdko wentylatora nagrzewnicy na obiegu CO za pompą (np. garaż): włącza się i wyłącza razem z pompą CO",
+  fan_power: "opcjonalnie — moc wentylatora z gniazdka",
 };
 
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -956,6 +958,21 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         ${ctl.t_out_damped != null ? `<text x="1110" y="114" text-anchor="middle" class="t-s">średnio ${num(ctl.t_out_damped)}°</text>` : ""}`;
     }
 
+    // a unit heater on the CH circuit (e.g. the garage): its fan runs with the CH pump
+    const fan = ctl.fan || {};
+    if (fan.configured) {
+      const fOn = fan.on === true, fOff = fan.online === false;
+      const fc = fOn ? supC : "#475569";
+      const blade = (a) => `<path d="M1110 446q-4-13 0-17q4 4 0 17Z" transform="rotate(${a} 1110 446)" fill="${fOn ? "#2ecc71" : "#64748b"}"/>`;
+      s += `<text x="1110" y="380" text-anchor="middle" class="t-s">${esc(fan.name || "Nagrzewnica")}</text>
+        <path d="M1040 424L1110 392L1180 424V494H1040Z" fill="rgba(255,255,255,.035)" stroke="#475569" stroke-width="2" stroke-linejoin="round"/>
+        ${fOn ? `<rect x="1084" y="420" width="52" height="52" rx="8" fill="${fc}" opacity=".3" filter="url(#hgGlow)"/>` : ""}
+        <rect x="1088" y="424" width="44" height="44" rx="6" fill="#0f172a" stroke="${fc}" stroke-width="1.5"/>
+        <g class="${fOn ? "spin" : ""}">${[0, 90, 180, 270].map(blade).join("")}</g>
+        <circle cx="1110" cy="446" r="3" fill="#cbd5e1"/>
+        <text x="1110" y="486" text-anchor="middle" class="${fOff ? "t-lock" : "t-s"}">${fOff ? "poza siecią" : fOn ? `wentylator${pw(fan.power_w)}` : "stoi"}</text>`;
+    }
+
     // hot-water pump and tank
     s += pumpSym(540, 260, dhwOn) + `<text x="562" y="256" class="t-s">pompa CWU</text>
       <text x="562" y="271" class="${dp.configured && (lk.dhw_pump || (ctl.force_on || {}).dhw_pump) ? "t-lock" : `t-s ${dp.configured ? "" : "dim"}`}">${dp.configured ? (lk.dhw_pump ? "🔒 zablokowana" : (ctl.force_on || {}).dhw_pump ? `✋ RĘKA${dhwOn ? pw((st.dhw_pump || {}).power_w) : ""}` : dhwOn ? `ładuje${pw((st.dhw_pump || {}).power_w)}` : "stoi") : "nieprzypisana"}</text>
@@ -1082,6 +1099,12 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       html += `<div style="margin-top:6px; font-size:12px; color:#a0aec0">Pompa CWU: ${pill(dpump.on)}
         ${dpump.dump ? '<span class="pill hot">zrzut ciepła do CWU</span>' : ""}
         ${dpump.reason && c.mode !== "off" ? `<span class="muted">· ${auto || dpump.dump ? "" : "w trybie Auto: "}${esc(dpump.reason)}</span>` : ""}</div>`;
+    }
+    const fan = ctl.fan || {};
+    if (fan.configured) {
+      html += `<div style="margin-top:6px; font-size:12px; color:#a0aec0">${esc(fan.name || "Nagrzewnica")} — wentylator:
+        ${fan.online === false ? '<span class="pill hot">gniazdko poza siecią</span>' : pill(fan.on)}${fan.on && fan.power_w >= 1 ? ` · ${num(fan.power_w, 0)} W` : ""}
+        <span class="muted">· ${fan.follows ? (c.mode === "off" ? "w trybie Wyłączone moduł go nie przełącza" : "włącza się i wyłącza razem z pompą CO") : "przypisz przekaźnik pompy CO"}</span></div>`;
     }
     const lkC = ctl.lockout || {};
     const lockItems = [["pump", pump.configured], ["dhw_pump", dpump.configured], ["valve", v.configured]].filter(([, ok]) => ok);
@@ -1452,6 +1475,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       ${c.emitters === "radiators"
         ? chk("safety_dump", "Zrzut ciepła do domu przy przegrzaniu kotła", c.safety_dump, "kocioł gorący → zawór otwarty do grzejników, pompa CO włączona")
         : `<div class="hint">Zrzut ciepła do domu jest wyłączony przy podłogówce (wylewka nie ma własnego zabezpieczenia). Przy przegrzaniu pompa CO i tak zostanie włączona.</div>`}</div>
+      <label class="f">Nagrzewnica za pompą CO — nazwa<input name="fan_name" type="text" maxlength="24" value="${esc(c.fan_name || "Nagrzewnica")}" ${dis}>
+        <span class="h">np. Garaż. Wentylator wybierasz w sekcji „Czujniki” (Nagrzewnica — wentylator): pracuje zawsze razem z pompą CO, a gdy jego gniazdko jest poza siecią, moduł go pomija</span></label>
     </div></div>`;
 
     const hasDhwPump = !!((c.entities || {}).dhw_pump_switch);
@@ -1637,6 +1662,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       else if (el.name.startsWith("off_")) { c.offsets = c.offsets || {}; c.offsets[el.name.slice(4)] = el.value === "" ? 0 : parseFloat(el.value); }
       else if (el.name === "probe_top_h" || el.name === "probe_bottom_h") c[el.name] = el.value === "" ? null : parseFloat(el.value) / 100;
       else if (el.name === "floors" || el.name === "room_floor") c[el.name] = parseInt(el.value, 10) || 0;
+      else if (el.name === "fan_name") c.fan_name = el.value;
       else if (el.name.startsWith("floor_name_")) {
         c.floor_names = [...(c.floor_names || ["Parter", "1. piętro", "Poddasze"])];
         c.floor_names[Number(el.name.slice(11))] = el.value;
