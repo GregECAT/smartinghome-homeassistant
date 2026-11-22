@@ -157,8 +157,12 @@ zasobnik nie ma sondy albo jej odczyty są niepewne. Wtedy:
   Bez sondy CWU moduł nie zna temperatury zasobnika, a ten warunek gwarantuje, że wężownica go nie wychłodzi,
 - przy braku sondy góry bufora źródłem jest dół bufora,
 - jeśli sonda CWU jest przypisana i działa, pompa staje też przy zadanej CWU i przy górnym limicie,
-- „zrzut ciepła do CWU” przy gorącym kotle działa tylko z sondą CWU, bo bez niej nic nie ograniczałoby
-  temperatury w zasobniku.
+- „zrzut ciepła do CWU” (opcja w karcie Pompa ładująca CWU) działa też bez sondy CWU: gdy kocioł jest
+  gorący (ten sam warunek, który włącza zrzut ciepła do domu), pompa CWU pracuje o każdej porze, aż kocioł
+  przestanie być gorący. Bez sondy moduł nie pilnuje górnego limitu CWU, więc woda w zasobniku może dojść do
+  temperatury bufora (ok. 90 °C). Dlatego ta opcja wymaga termostatycznego zaworu mieszającego na wyjściu
+  ciepłej wody. Bez tej opcji i bez sondy gorący kocioł nie dogrzewa CWU, bo nic nie zatrzymałoby jej
+  przy zadanej.
 
 Ręcznie pompę CWU włączasz przełącznikiem **RĘKA** w karcie Sterowanie, który działa niezależnie od godzin.
 Pozycja **AUTO** wraca do harmonogramu.

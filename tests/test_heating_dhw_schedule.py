@@ -84,3 +84,28 @@ def test_window_across_midnight_and_an_empty_window():
 def test_manual_mode_leaves_the_pump_to_its_switch():
     out = hc.HeatingController(_cfg(mode="manual")).step(_inp(100.0, 5.5))
     assert out.dhw.want and out.dhw_pump is None
+
+
+def _hot(ctrl):
+    ctrl.hot = True                       # the boiler's hot state (the same one that starts the heat dump)
+    return ctrl
+
+
+def test_hot_boiler_dumps_into_a_tank_without_probe_when_dhw_dump_is_on():
+    for mode in ("schedule", "auto"):
+        ctrl = _hot(hc.HeatingController(_cfg(dhw_mode=mode, dhw_dump=True)))
+        plan = ctrl._dhw_plan(_inp(1000.0, 14.0, t_top=92.0, t_dhw=None))        # 14:00 — outside the windows
+        assert plan.want and plan.force and plan.dump
+        assert "bez sondy CWU" in plan.reason
+
+
+def test_no_blind_dump_without_the_option_or_when_the_boiler_is_not_hot():
+    ctrl = _hot(hc.HeatingController(_cfg(dhw_dump=False)))
+    assert not ctrl._dhw_plan(_inp(1000.0, 14.0, t_top=92.0, t_dhw=None)).want   # nothing would stop it at 55 °C
+    ctrl = hc.HeatingController(_cfg(dhw_dump=True))
+    assert not ctrl._dhw_plan(_inp(1000.0, 14.0, t_top=85.0, t_dhw=None)).want   # not hot: the clock rules
+
+
+def test_with_a_tank_probe_the_limit_still_applies():
+    ctrl = _hot(hc.HeatingController(_cfg(dhw_dump=True, dhw_max_c=80)))
+    assert not ctrl._dhw_plan(_inp(1000.0, 14.0, t_top=92.0, t_dhw=81.0)).want

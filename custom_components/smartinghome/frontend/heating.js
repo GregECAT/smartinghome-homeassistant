@@ -1528,7 +1528,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       ${field("dhw_hyst_k", "Ponowne ładowanie po spadku o (K)", `od zadanej CWU (${num(c.dhw_target_c, 0)} °C, sekcja „Bufor i CWU”)`, c.dhw_hyst_k, 'min="1" max="20" step="0.5"')}
       ${field("dhw_max_c", "CWU — górny limit (°C)", "nigdy powyżej, także przy zrzucie ciepła", c.dhw_max_c, 'min="40" max="90"')}
       <div>${chk("dhw_dump", "Zrzut ciepła do CWU przy przegrzaniu kotła (do górnego limitu)", c.dhw_dump,
-        "tylko z termostatycznym zaworem mieszającym na wyjściu ciepłej wody — inaczej grozi poparzenie. Bez tej opcji gorący kocioł dogrzewa CWU tylko do zadanej.")}</div>
+        "tylko z termostatycznym zaworem mieszającym na wyjściu ciepłej wody — inaczej grozi poparzenie. Bez tej opcji gorący kocioł dogrzewa CWU tylko do zadanej. Bez sondy CWU zasobnik przyjmuje nadwyżkę przez cały czas, gdy kocioł jest gorący (do temperatury bufora, ok. 90 °C).")}</div>
     </div></div>`;
 
     html += `<div class="card" style="margin-top:14px"><h3>Krzywa grzewcza <small>zasilanie = zadana w domu + nachylenie × (zadana w domu − zewnątrz) + przesunięcie</small></h3>

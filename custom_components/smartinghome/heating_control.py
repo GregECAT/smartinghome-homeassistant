@@ -697,6 +697,8 @@ class HeatingController:
             t_src, src_name = inp.t_bottom, "bufor (dół)"
         t_dhw = inp.t_dhw
         plan = DhwPlan(source_c=t_src)
+        if t_dhw is None and t_src is not None and self.hot and cfg["dhw_dump"]:
+            return self._dhw_blind_dump(plan, t_src, src_name)
         if cfg["dhw_mode"] == "schedule":
             return self._dhw_by_clock(inp, plan, t_src, src_name, boiler)
         if t_src is None or t_dhw is None:
@@ -741,6 +743,15 @@ class HeatingController:
         else:
             need = t_dhw + (cfg["dhw_off_diff_k"] if charging else cfg["dhw_on_diff_k"])
             plan.reason = f"{src_name} za chłodny ({t_src:.0f} °C, potrzeba ≥ {need:.0f} °C)"
+        return plan
+
+    def _dhw_blind_dump(self, plan: DhwPlan, t_src: float, src_name: str) -> DhwPlan:
+        """A hot boiler, no tank probe, dhw_dump on: the tank takes the surplus at any hour. It cannot get hotter
+        than the source and the charge ends with the boiler's hot state; dhw_max_c cannot be held without the
+        probe — the thermostatic mixer on the hot-water outlet is the limit (which dhw_dump asks for anyway)."""
+        self.dhw_charging = True
+        plan.want = plan.force = plan.dump = True
+        plan.reason = f"zrzut ciepła do CWU — kocioł gorący ({src_name} {t_src:.0f} °C, bez sondy CWU)"
         return plan
 
     def _dhw_by_clock(self, inp: ControlInput, plan: DhwPlan, t_src: float | None, src_name: str,
