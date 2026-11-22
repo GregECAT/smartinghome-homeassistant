@@ -597,6 +597,11 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     root.getElementById("body").addEventListener("input", (e) => {
       this._touched = Date.now();
       if (e.target.id === "loadkg") this._loadKg = e.target.value;
+      if (e.target.id === "vto") {
+        this._vto = Number(e.target.value);
+        const out = this.shadowRoot.getElementById("vtoval");
+        if (out) out.textContent = `${this._vto} %`;
+      }
     });
     root.getElementById("body").addEventListener("focusin", () => { this._touched = Date.now(); });
   }
@@ -653,6 +658,19 @@ class SmartingHomeHeatingPanel extends HTMLElement {
   // Someone is typing the wood weight or choosing an hour: the cards below the hero wait, so the
   // field is not replaced under the finger. A checkbox keeps the focus after a click — that is not
   // editing — and a field left focused (a wall tablet) holds the cards back for a minute at most.
+  // manual mode: a slider that drives the valve to a chosen opening (timed from the position estimate)
+  _valveToHtml(v) {
+    const pos = Math.round(v.position ?? 0);
+    const want = this._vto ?? Math.round(pos / 5) * 5;
+    return `<div class="vto" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;font-size:12px;color:#a0aec0">
+      <span>Otwarcie zaworu:</span>
+      <input type="range" id="vto" min="0" max="100" step="5" value="${want}" style="flex:1;min-width:140px" ${v.busy ? "disabled" : ""}>
+      <b id="vtoval" style="color:#e0e6ed;min-width:44px;text-align:right">${want} %</b>
+      <button class="btn sm" data-act="valveto" ${v.busy ? "disabled" : ""}>Ustaw</button>
+      <span class="muted" style="flex-basis:100%">teraz ${v.known ? "" : "~"}${pos} %${v.busy ? " · zawór w ruchu" : ""} · 0 % = zamknięty (bez ciepła z bufora), 100 % = pełne otwarcie</span>
+    </div>`;
+  }
+
   _editing() {
     const f = this.shadowRoot.activeElement;
     if (!f || !(f.tagName === "SELECT" || (f.tagName === "INPUT" && f.type !== "checkbox"))) return false;
@@ -1137,6 +1155,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
           <button class="btn sm" data-act="cmd" data-cmd="valve_open" data-seconds="5">Cieplej 5 s ▶</button>
           <button class="btn sm" data-act="cmd" data-cmd="valve_stop">■ Stop</button>` : ""}
         ${v.configured ? `<button class="btn sm" data-act="cmd" data-cmd="valve_home" title="Dojazd do pełnego zamknięcia (ok. ${num(c.valve_run_s, 0)} s)">Kalibruj zawór</button>` : ""}
+      </div>${v.configured && manual ? this._valveToHtml(v) : ""}<div class="btns">
         ${pump.configured && manual ? `<button class="btn sm" data-act="cmd" data-cmd="pump_on">Pompa CO ON</button><button class="btn sm" data-act="cmd" data-cmd="pump_off">Pompa CO OFF</button>` : ""}
         ${dpump.configured && manual ? `<button class="btn sm" data-act="cmd" data-cmd="dhw_pump_on">Pompa CWU ON</button><button class="btn sm" data-act="cmd" data-cmd="dhw_pump_off">Pompa CWU OFF</button>` : ""}
       </div>${manual ? "" : '<div class="hint">Przyciski zaworu i pomp działają w trybie „Ręczne”.</div>'}`;
@@ -1241,6 +1260,12 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       } else if (act === "nighthour") {
         const h = Math.min(Math.max(parseInt(ds.value, 10) || 0, 0), 23);
         this._data = await this._hass.callWS({ type: "smartinghome/heating/save", config: { [ds.key === "night_to" ? "night_to" : "night_from"]: h } });
+      } else if (act === "valveto") {
+        const el = this.shadowRoot.getElementById("vto");
+        const percent = Math.min(Math.max(Number(el && el.value) || 0, 0), 100);
+        this._data = await this._hass.callWS({ type: "smartinghome/heating/command", action: "valve_to", percent });
+        this._vto = null;
+        this._msg = `Zawór: ustawiam ${num(percent, 0)} % otwarcia.`;
       } else if (act === "cmd") {
         const msg = { type: "smartinghome/heating/command", action: ds.cmd };
         if (ds.seconds) msg.seconds = Number(ds.seconds);

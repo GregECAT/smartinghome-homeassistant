@@ -132,7 +132,7 @@ a kafel „Zadana w domu” pokazuje ją z porą („noc, do 05:00”). Te same 
 | Tryb | Zawór | Pompa CO | Pompa CWU |
 |---|---|---|---|
 | Wyłączone | nic | nic (również bez zrzutu ciepła — tylko pomiary i alarmy) | nic |
-| Ręczne | przyciski w panelu | przyciski w panelu | przyciski w panelu |
+| Ręczne | przyciski w panelu albo suwak „Otwarcie zaworu” (0–100 %) | przyciski w panelu | przyciski w panelu |
 | Automatyczne | krzywa pogodowa (+ korekta od temperatury w domu, PRO), limit: góra bufora − 2 K; gdy pompa CO stoi ≥ 2 min — zamknięty (bez przepływu grawitacyjnego do grzejników) | pracuje, gdy jest zapotrzebowanie (średnia temp. zewnętrzna < granicy grzania, ciepło w buforze, w domu poniżej zadanej + 0,5 K; wyłącza przy zadanej + 1 K); min. 5 min pracy / postoju | ładowanie różnicowe albo według godzin (niżej); raz w tygodniu 30 s przepłukania |
 | Lato | zamknięty | stoi; raz w tygodniu 60 s przepłukania | jak w trybie automatycznym |
 
@@ -169,6 +169,13 @@ płynąć grawitacyjnie do grzejników także bez pompy. W jednej z pierwszych n
 ok. 5 kg drewna, poza kontrolą. Już po 10 minutach postoju zasilanie podskoczyło z 49 do 62 °C, dlatego
 zawór zamyka się szybko. Po ponownym starcie pompy zawór otwiera się krokami, a nie od razu na 100 %.
 Jeśli grupa pompowa ma hamulec grawitacyjny (zawór zwrotny), zamykanie zaworu dodatkowo zabezpiecza.
+
+**Zawór w trybie Ręczne.** Suwak „Otwarcie zaworu” ustawia zawór na wybrany procent (krok 5 %). Moduł
+liczy czas ruchu z szacowanego położenia: z 0 na 40 % przy siłowniku 127 s to ok. 51 s otwierania. Przy 0 %
+i 100 % siłownik dojeżdża do krańcówki z zapasem, więc położenie jest znów pewne. Gdy położenie nie jest
+znane, pierwszy ruch to kalibracja (pełne zamknięcie), a potem ustawiasz suwak jeszcze raz. W trybie Ręczne
+zawór stoi tam, gdzie go ustawisz, także przy wyłączonej pompie. Zamykanie przy postoju pompy działa tylko
+w trybie Automatyczne.
 
 **Nagrzewnica za pompą CO (np. garaż).** Nagrzewnica wpięta w obieg CO za pompą dostaje gorącą wodę
 zawsze, gdy pracuje pompa CO, ale grzeje dopiero wtedy, gdy kręci się jej wentylator. Wybierz gniazdko

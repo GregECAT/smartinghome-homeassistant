@@ -824,3 +824,28 @@ class HeatingController:
             return None
         return ValveCommand(direction, round(_clamp(seconds, 1.0, self.valve.run_s + OVERRUN_S), 1),
                             "ręcznie z panelu", "manual")
+
+    def manual_valve_to(self, target: float, now: float) -> ValveCommand | None:
+        """Manual mode: drive the valve to target % open, timed from the position estimate. 0 % and 100 % get
+        the overrun, so the estimate is re-anchored in the end stop; an unknown position is homed first.
+        None: still moving, or already there (within 1 %)."""
+        v = self.valve
+        if now < v.busy_until:
+            return None
+        if not v.known:
+            return v.home()
+        target = _clamp(float(target), 0.0, 100.0)
+        if target <= 0.0 or target >= 100.0:
+            direction = "close" if target <= 0.0 else "open"
+            if v.at_end(direction):
+                return None
+            room = v.position if direction == "close" else 100.0 - v.position
+            seconds = room / 100.0 * v.run_s + OVERRUN_S
+        else:
+            delta = target - v.position
+            if abs(delta) < 1.0:
+                return None
+            direction = "open" if delta > 0 else "close"
+            seconds = abs(delta) / 100.0 * v.run_s
+        return ValveCommand(direction, round(_clamp(seconds, 1.0, v.run_s + OVERRUN_S), 1),
+                            f"ręcznie z panelu — na {target:.0f} %", "manual")

@@ -715,7 +715,7 @@ class HeatingManager:
         now = time.time()
         mode = self.cfg["mode"]
         async with self._lock:
-            if action in ("valve_open", "valve_close") or action == "valve_home":
+            if action in ("valve_open", "valve_close", "valve_to") or action == "valve_home":
                 if self.cfg["lockout"]["valve"]:
                     raise ValueError("Siłownik zaworu jest zablokowany wyłącznikiem awaryjnym")
             if action in ("valve_open", "valve_close"):
@@ -727,6 +727,21 @@ class HeatingManager:
                                              float(data.get("seconds") or 5.0), now)
                 if cmd is None:
                     raise ValueError("Zawór jest w ruchu — poczekaj na koniec poprzedniego polecenia")
+                if not await self._exec_valve(cmd, now):
+                    raise ValueError("Siłownik nie przyjął polecenia")
+            elif action == "valve_to":
+                if mode != "manual":
+                    raise ValueError("Ręczne sterowanie zaworem działa w trybie „Ręczne”")
+                if not self._valve_configured():
+                    raise ValueError("Nie skonfigurowano siłownika zaworu")
+                target = hm._f(data.get("percent"))
+                if target is None or not 0.0 <= target <= 100.0:
+                    raise ValueError("Podaj otwarcie zaworu 0–100 %")
+                if now < self.ctrl.valve.busy_until:
+                    raise ValueError("Zawór jest w ruchu — poczekaj na koniec poprzedniego polecenia")
+                cmd = self.ctrl.manual_valve_to(target, now)
+                if cmd is None:
+                    raise ValueError(f"Zawór już jest na ok. {self.ctrl.valve.position:.0f} %")
                 if not await self._exec_valve(cmd, now):
                     raise ValueError("Siłownik nie przyjął polecenia")
             elif action == "valve_stop":
@@ -1262,6 +1277,7 @@ async def ws_heating_save(hass: HomeAssistant, connection, msg: dict[str, Any]) 
     vol.Optional("kg"): vol.Coerce(float),
     vol.Optional("element"): vol.In(list(hm.LOCK_ELEMENTS)),
     vol.Optional("position"): vol.In(["auto", "off", "on"]),
+    vol.Optional("percent"): vol.All(vol.Coerce(float), vol.Range(min=0, max=100)),
 })
 @websocket_api.async_response
 async def ws_heating_command(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
