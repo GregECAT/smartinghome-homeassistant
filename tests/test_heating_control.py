@@ -359,3 +359,43 @@ def test_failed_actuator_is_not_hammered():
     ctrl.valve.failed(100.0)                              # the actuator didn't take it
     assert ctrl.step(_inp(130.0)).valve is None
     assert ctrl.step(_inp(100.0 + hc.RETRY_S + 1)).valve.kind == "home"
+
+
+# ── valve parked while the CH pump stands ────────────────────────────────────
+
+def _warm_house(now, **kw):
+    # warm inside: no heating needed, the pump stays off
+    return _inp(now, t_room=26.0, pump_on=False, **kw)
+
+
+def test_valve_closes_after_the_pump_stood_ten_minutes():
+    ctrl = hc.HeatingController(_cfg(room_target_c=22))
+    ctrl.valve.known, ctrl.valve.position = True, 100.0
+    ctrl.pump.last_on = 1000.0
+    assert ctrl.step(_warm_house(1000.0 + hc.VALVE_PARK_AFTER_S - 30)).valve is None
+    out = ctrl.step(_warm_house(1000.0 + hc.VALVE_PARK_AFTER_S + 1))
+    assert out.valve.direction == "close" and out.valve.kind == "park"
+    assert out.valve.seconds == ctrl.valve.run_s + hc.OVERRUN_S           # from 100 %: the whole stroke
+    assert "bez przepływu grawitacyjnego" in out.valve.reason
+    ctrl.valve.apply(out.valve, 1000.0 + hc.VALVE_PARK_AFTER_S + 1)
+    assert ctrl.valve.at_end("close")
+    assert ctrl.step(_warm_house(5000.0)).valve is None                     # parked once, not every tick
+
+
+def test_valve_not_parked_while_the_pump_runs_or_in_manual():
+    ctrl = hc.HeatingController(_cfg(room_target_c=22))
+    ctrl.valve.known, ctrl.valve.position = True, 60.0
+    out = ctrl.step(_inp(5000.0, t_room=26.0, pump_on=True))              # running (minimum run time)
+    assert out.valve is None or out.valve.kind != "park"
+    manual = hc.HeatingController(_cfg(mode="manual", room_target_c=22))
+    manual.valve.known, manual.valve.position = True, 60.0
+    assert manual.step(_warm_house(5000.0)).valve is None
+
+
+def test_after_parking_heating_opens_the_valve_step_by_step():
+    ctrl = hc.HeatingController(_cfg(room_target_c=22))
+    ctrl.valve.known, ctrl.valve.position = True, 0.0
+    ctrl.valve.over_close_s = hc.OVERRUN_S
+    out = ctrl.step(_inp(5000.0, t_room=20.0, t_supply=30.0, pump_on=True))
+    assert out.valve.direction == "open" and out.valve.kind == "auto"
+    assert out.valve.seconds <= hc.MAX_PULSE_S                              # a pulse, not the full stroke

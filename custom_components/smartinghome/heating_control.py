@@ -64,6 +64,7 @@ RETRY_SAFETY_S = 30.0
 # pump
 PUMP_MIN_ON_S = 300.0
 PUMP_MIN_OFF_S = 300.0
+VALVE_PARK_AFTER_S = 600.0   # the CH pump off this long → close the mixing valve (no gravity flow to the radiators)
 EXERCISE_EVERY_S = 7 * 86400
 EXERCISE_S = 60.0
 PUMP_RETRY_S = 60.0
@@ -148,7 +149,7 @@ class ValveCommand:
     direction: str      # "open" (hotter supply) / "close"
     seconds: float
     reason: str
-    kind: str = "auto"  # auto / home / safety / manual
+    kind: str = "auto"  # auto / home / safety / manual / park (closed while the CH pump stands)
 
 
 @dataclass
@@ -648,6 +649,15 @@ class HeatingController:
                 out.valve = self.valve.step(now, out.supply_target, inp.t_supply)
             elif not self.valve.known and now >= self.valve.busy_until and now >= self.valve.retry_at:
                 out.valve = self.valve.home()
+            elif (inp.pump_configured and inp.pump_on is False and now - self.pump.last_on >= VALVE_PARK_AFTER_S
+                  and not self.valve.at_end("close")):
+                # A standing pump with an open valve still lets the buffer's hot water rise into the radiators by
+                # gravity (bobrek, night 21–22.11.2026: ~17 kWh without the pump, the night setback lost). Closed,
+                # the valve also opens step by step when heating resumes instead of sending the buffer's top
+                # straight to cold radiators.
+                out.valve = self.valve.force("close", "pompa CO stoi — zawór zamknięty (bez przepływu grawitacyjnego)", now)
+                if out.valve:
+                    out.valve.kind = "park"        # logged once, an ordinary retry if the actuator doesn't follow
         self.last = out
         return out
 
