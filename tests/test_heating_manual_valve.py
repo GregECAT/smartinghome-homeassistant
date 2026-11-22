@@ -59,3 +59,15 @@ def test_nothing_while_moving_or_already_there():
 def test_unknown_position_is_homed_first():
     cmd = _ctrl(50.0, known=False).manual_valve_to(40, 1000.0)
     assert cmd.kind == "home" and cmd.direction == "close"
+
+
+def test_a_full_close_counts_as_done_despite_float_rounding():
+    ctrl = _ctrl(20.0)                                                  # 20 % of 127 s, as on bobrek
+    cmd = ctrl.manual_valve_to(0, 1000.0)
+    ctrl.valve.apply(cmd, 1000.0)
+    assert ctrl.valve.at_end("close")                                   # no second 15 s drive
+    ctrl = _ctrl(48.85)                                                 # the 12:31 park on bobrek: 77.04 s → 77.0 s
+    cmd = ctrl.valve.force("close", "park", 1000.0)
+    ctrl.valve.apply(cmd, 1000.0)
+    assert ctrl.valve.at_end("close")
+    assert ctrl.valve.force("close", "park", 2000.0) is None

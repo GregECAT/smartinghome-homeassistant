@@ -52,6 +52,7 @@ MIN_PULSE_S = 2.0
 MAX_PULSE_S = 15.0
 SETTLE_S = 60.0       # after a pulse: transport delay + the probe in its pocket
 OVERRUN_S = 15.0      # drive allowed past the estimated end stop before "saturated"
+END_SLACK_S = 0.5     # rounding slack when judging that the overrun is done
 MAX_RUN_PER_H = 900.0
 HOME_EXTRA_S = 10.0
 VALVE_EVERY_S = 20.0
@@ -248,9 +249,11 @@ class ValveController:
                             "kalibracja położenia — dojazd do pełnego zamknięcia", "home")
 
     def at_end(self, direction: str) -> bool:
+        # a full-stroke move books its overrun as 14.999… s (float), not 15 — without the slack the same
+        # end got a second 15 s drive on the next tick
         if direction == "open":
-            return self.position >= 100.0 and self.over_open_s >= OVERRUN_S
-        return self.position <= 0.0 and self.over_close_s >= OVERRUN_S
+            return self.position >= 100.0 and self.over_open_s >= OVERRUN_S - END_SLACK_S
+        return self.position <= 0.0 and self.over_close_s >= OVERRUN_S - END_SLACK_S
 
     def step(self, now: float, target: float | None, actual: float | None) -> ValveCommand | None:
         if (now < self.busy_until or now < self.settle_until or now < self.retry_at
