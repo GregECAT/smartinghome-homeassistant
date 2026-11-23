@@ -145,10 +145,40 @@ def night_now(cfg: dict[str, Any], local_hour: float) -> bool:
     return bool(cfg.get("night_enabled")) and in_night(cfg, local_hour)
 
 
-def room_target_now(cfg: dict[str, Any], local_hour: float) -> float:
-    """The house target in force: day, or the night one (never above the day target)."""
+def setback_now(cfg: dict[str, Any], local_hour: float, weekday: int | None = None) -> dict[str, Any] | None:
+    """The setback period in force (nobody at home — e.g. 7–15 on workdays), the lowest one where several overlap;
+    None outside them. weekday: Monday = 0 (None: every day). A period across midnight belongs to the day it
+    started on (Friday 22–6 holds Saturday morning too)."""
+    best: dict[str, Any] | None = None
+    for i, p in enumerate(cfg.get("setbacks") or []):
+        if not p.get("on") or not in_hours(p["from"], p["to"], local_hour):
+            continue
+        if weekday is not None:
+            started = (weekday - 1) % 7 if p["from"] > p["to"] and local_hour < p["to"] else weekday
+            if started not in (p.get("days") or []):
+                continue
+        if best is None or p["temp_c"] < best["temp_c"]:
+            best = {**p, "index": i}
+    return best
+
+
+def target_phase(cfg: dict[str, Any], local_hour: float,
+                 weekday: int | None = None) -> tuple[float, str, dict[str, Any] | None]:
+    """(the house target in force, "day" / "night" / "setback", the setback period when that is it). The lowest
+    target that applies wins — the night or a setback period — never above the day target."""
     day = cfg["room_target_c"]
-    return min(cfg["room_night_c"], day) if night_now(cfg, local_hour) else day
+    target, phase = day, "day"
+    if night_now(cfg, local_hour) and cfg["room_night_c"] < target:
+        target, phase = cfg["room_night_c"], "night"
+    sb = setback_now(cfg, local_hour, weekday)
+    if sb is not None and sb["temp_c"] < target:
+        return sb["temp_c"], "setback", sb
+    return target, phase, None
+
+
+def room_target_now(cfg: dict[str, Any], local_hour: float, weekday: int | None = None) -> float:
+    """The house target in force: day, the night one or a setback period (never above the day target)."""
+    return target_phase(cfg, local_hour, weekday)[0]
 
 
 class Ema:
@@ -377,6 +407,7 @@ class ControlInput:
     dhw_pump_on: bool | None = None
     dhw_pump_configured: bool = False
     firing: bool | None = None       # a fire in the boiler (model state ignition … burnout, or an open session)
+    weekday: int | None = None       # local day of the week, Monday = 0 (setback periods); None: every day
 
 
 @dataclass
@@ -394,6 +425,7 @@ class ControlOutput:
     mode: str
     room_target: float
     night: bool = False              # the night (setback) target is in force
+    setback: dict[str, Any] | None = None   # the daytime setback period in force (from, to, temp_c, index)
     supply_target: float | None = None
     curve_c: float | None = None
     room_corr: float = 0.0
@@ -424,7 +456,7 @@ class HeatingController:
         self.out_damped = Ema(OUT_DAMPED_TAU_S)
         self.room_i = 0.0
         self._room_ts: float | None = None
-        self._night: bool | None = None
+        self._phase: str | None = None           # "day" / "night" / "setback:<index>" — logged when it changes
         self._target: float | None = None       # the house target the room memory was built for
         self.needed = False
         self.hot = False
@@ -517,13 +549,21 @@ class HeatingController:
     def _step(self, inp: ControlInput) -> ControlOutput:
         cfg, now = self.cfg, inp.now
         mode = cfg["mode"]
-        room_target = room_target_now(cfg, inp.local_hour)
-        night = night_now(cfg, inp.local_hour)
-        out = ControlOutput(mode=mode, room_target=room_target, night=night)
-        if self._night is not None and night != self._night and mode == "auto":
-            out.log.append(f"🌙 Noc: zadana w domu {room_target:.1f} °C (do {cfg['night_to']}:00)" if night
-                           else f"☀️ Dzień: zadana w domu {room_target:.1f} °C")
-        self._night = night
+        room_target, phase, sb = target_phase(cfg, inp.local_hour, inp.weekday)
+        night = phase == "night"
+        out = ControlOutput(mode=mode, room_target=room_target, night=night,
+                            setback=None if sb is None else {"index": sb["index"], "from": sb["from"],
+                                                             "to": sb["to"], "temp_c": sb["temp_c"]})
+        key = f"setback:{sb['index']}" if sb is not None else phase
+        if self._phase is not None and key != self._phase and mode == "auto":
+            if night:
+                out.log.append(f"🌙 Noc: zadana w domu {room_target:.1f} °C (do {cfg['night_to']}:00)")
+            elif sb is not None:
+                out.log.append(f"🏠 Obniżenie {sb['from']}–{sb['to']}: zadana w domu {room_target:.1f} °C "
+                               f"(do {sb['to']}:00)")
+            else:
+                out.log.append(f"☀️ Dzień: zadana w domu {room_target:.1f} °C")
+        self._phase = key
         out.t_out = self.out_fast.add(inp.t_out, now)
         out.t_out_damped = self.out_damped.add(inp.t_out, now)
 

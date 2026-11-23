@@ -19,7 +19,7 @@ podpowiada, **do której rozpalić** i **ile drewna załadować**, żeby nie prz
 | Temperatury, energia bufora i CWU, „bufor przyjmie jeszcze X kg drewna” | ✅ | ✅ |
 | Stan kotła, sesje palenia, wykres 24 h | ✅ | ✅ |
 | **Wszystkie alarmy bezpieczeństwa** (przegrzanie, awaria sondy, zanik prądu w trakcie palenia…) | ✅ | ✅ |
-| Sterowanie zaworem i pompą CO: krzywa pogodowa, tryby, temperatura dzienna i nocna, zrzut ciepła | ✅ | ✅ |
+| Sterowanie zaworem i pompą CO: krzywa pogodowa, tryby, temperatura dzienna i nocna, obniżenia w ciągu dnia, zrzut ciepła | ✅ | ✅ |
 | Pompa ładująca CWU: sterowanie różnicowe, dogrzanie CWU przy gorącym kotle | ✅ | ✅ |
 | Skrypt bezpieczeństwa na Shelly pompy | ✅ | ✅ |
 | Korekta krzywej według czujnika odniesienia w domu | | ✅ |
@@ -137,6 +137,24 @@ a kafel „Zadana w domu” pokazuje ją z porą („noc, do 05:00”). Te same 
   także wtedy, gdy pompa stoi.
 - Doradca liczy „bufor wystarczy do” i zapotrzebowanie na 24 h z rozkładem dzień / noc.
 - Ustawienia sprzed v1.87 („Obniżenie nocne (K)”) przechodzą same: noc = dzień − obniżenie.
+
+### Obniżenie w ciągu dnia
+
+Pod nocą jest przycisk **„+ Dodaj obniżenie w ciągu dnia”** — niższa temperatura w wybrane godziny i dni,
+na przykład **7:00–15:00 od poniedziałku do piątku, gdy nikogo nie ma w domu**. Każde obniżenie ma własną
+temperaturę (−/+), godziny od – do, dni tygodnia (Pn … Nd) i przełącznik „włączone”; zmiany zapisują się od razu.
+Można dodać do czterech.
+
+- W tych godzinach krzywa grzewcza i włączanie grzania liczą się od temperatury obniżenia: pompa CO staje,
+  gdy w domu jest cieplej niż obniżenie + 1 K, a bufor zostaje na później.
+- **Koniec ustaw z zapasem, przed powrotem domowników** — o tej godzinie dom zaczyna się dogrzewać
+  (przy grzejnikach zwykle 1–2 h). Przykład: wracacie o 16:00 → obniżenie 7–14 albo 7–15.
+- Gdy nakładają się noc i obniżenie albo dwa obniżenia, obowiązuje **niższa** temperatura. Obniżenie nigdy
+  nie podnosi temperatury ponad dzienną — takie panel oznacza jako „bez skutku”.
+- Obniżenie, które przechodzi przez północ (np. 22–6), liczy się do dnia, w którym się zaczęło: zaznaczony piątek
+  obejmuje też sobotni ranek.
+- Obowiązujące obniżenie jest podświetlone, kafel „Zadana w domu” pokazuje „obniżenie, do 15:00”, a dziennik
+  — „🏠 Obniżenie 7–15: zadana w domu 22,0 °C”. Doradca liczy zapotrzebowanie z obniżeniami (według dni tygodnia).
 
 ## Tryby
 
@@ -327,6 +345,13 @@ też powiadomienie w Home Assistant — niezależnie od ustawień i licencji.
   podzielone przez ciepło z kilograma drewna. Zważ 2–3 załadunki i wpisz je w panelu — doradca nauczy się,
   ile naprawdę daje Twoje drewno w Twoim kotle.
 - **Sezon:** palenia, godziny, ciepło i drewno miesiąc po miesiącu, z kosztem przy podanej cenie drewna.
+- **Drewno spalone w paleniu** (tabela paleń, sezon) to bilans ciepła: o ile więcej ciepła mają na koniec
+  bufor i CWU niż na początku, plus to, co w tym czasie wziął dom (jego straty ciepła razem z temperaturą
+  na zewnątrz). Dzieli się to przez ciepło z kilograma drewna. Samo „ile przybyło w buforze” zaniżało wynik
+  2–3 razy przy długich paleniach, w których bufor pełny zostaje dociążany kolejnymi załadunkami.
+  Straty domu biorą się z modelu domu, a zanim on się nauczy — z tempa rozładowania bufora w godzinach
+  bez palenia (wystarczą ok. 2 h takich danych przy co najmniej 5 K różnicy dom – zewnątrz). Palenia
+  zarejestrowane wcześniej, i te bez tych danych, liczą tylko bufor i CWU (panel pisze wtedy „bufor i CWU”).
 
 ## Skrypt bezpieczeństwa na Shelly
 

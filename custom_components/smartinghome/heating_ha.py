@@ -267,7 +267,7 @@ class HeatingManager:
     def _target_at(self, ts: float) -> float:
         """The house target at a moment (day / night schedule) — for the advisor's forecast."""
         local = dt_util.as_local(dt_util.utc_from_timestamp(ts))
-        return hc.room_target_now(self.cfg, local.hour + local.minute / 60.0)
+        return hc.room_target_now(self.cfg, local.hour + local.minute / 60.0, local.weekday())
 
     def _valve_configured(self) -> bool:
         c = self.cfg
@@ -319,7 +319,7 @@ class HeatingManager:
             dhw_pump_configured = bool(cfg["entities"]["dhw_pump_switch"])
             local = dt_util.now()
             out = self.ctrl.step(hc.ControlInput(
-                now=now, local_hour=local.hour + local.minute / 60.0,
+                now=now, local_hour=local.hour + local.minute / 60.0, weekday=local.weekday(),
                 t_supply=self.model.t("heating_supply"), t_top=self.model.t("buffer_top"),
                 t_bottom=self.model.t("buffer_bottom"),
                 t_boiler=self.model.t("boiler_out"), t_room=self.model.t("room"), t_out=t_out,
@@ -360,11 +360,20 @@ class HeatingManager:
                                   firing or dhw_charging, pump_on if cfg["entities"]["pump_switch"] else None)
             dt = 0.0 if self._last_tick is None else min(max(now - self._last_tick, 0.0), 60.0)
             self._last_tick = now
-            if self.model.session is not None and t_out is not None:
-                kw = self.building.demand_kw(out.room_target, t_out)
-                if kw is not None:
-                    self.model.session["house_kwh"] = round(float(self.model.session.get("house_kwh") or 0.0)
-                                                            + kw * dt / 3600.0, 2)
+            # the house's draw from the buffer's discharge without a fire — until the hourly model is fitted it is
+            # what books the house's share of a fire (the heat the wood really gave, not only what the tanks kept)
+            t_house = self.model.house_temp()
+            if (not firing and not dhw_charging and self.model.discharge_kw is not None
+                    and t_house is not None and t_out is not None):
+                self.building.observe_draw(self.model.discharge_kw, t_house - t_out, dt)
+            if self.model.session is not None:
+                s = self.model.session
+                kw = self.building.house_kw(t_house if t_house is not None else out.room_target, t_out)
+                if kw is None:          # nothing to go by yet: booked once there is (at that moment's draw)
+                    s["house_gap_s"] = round(float(s.get("house_gap_s") or 0.0) + dt, 1)
+                else:
+                    gap = float(s.pop("house_gap_s", 0.0) or 0.0)
+                    s["house_kwh"] = round(float(s.get("house_kwh") or 0.0) + kw * (dt + gap) / 3600.0, 2)
 
             status = self.model.status(now)
             learned = adv.learned_kwh_per_kg(self.model.sessions)
@@ -385,7 +394,7 @@ class HeatingManager:
             valve = self.ctrl.valve
             self.control = {
                 "mode": cfg["mode"], "mode_label": hm.MODES.get(cfg["mode"], cfg["mode"]),
-                "room_target": round(out.room_target, 1), "night": out.night,
+                "room_target": round(out.room_target, 1), "night": out.night, "setback": out.setback,
                 "supply_target": out.supply_target, "curve_c": out.curve_c, "room_corr": out.room_corr,
                 "room_licensed": self.has(FEATURE_HEATING_AUTO),
                 "t_out": None if out.t_out is None else round(out.t_out, 1),
@@ -1158,7 +1167,7 @@ class HeatingSensor(_HeatingEntity, SensorEntity):
         if self._path[0] == "last_session":
             last = snap.get("last_session") or {}
             return {k: last.get(k) for k in ("start", "end", "duration_h", "max_c", "wood_est_kg", "wood_kg",
-                                             "overheat")}
+                                             "heat_kwh", "house_kwh", "overheat")}
         if self._path == ("runtime_h",):
             return {"discharge_kw": snap.get("discharge_kw")}
         if self._path[0] == "control":

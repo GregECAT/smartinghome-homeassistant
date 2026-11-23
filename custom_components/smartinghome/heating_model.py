@@ -190,6 +190,7 @@ DEFAULTS: dict[str, Any] = {
     "night_setback_k": 0.0,     # derived: day − night while enabled (the older settings stored only this)
     "night_from": 22,
     "night_to": 5,
+    "setbacks": [],             # daytime setbacks (nobody at home): [{on, from, to, temp_c, days (Monday = 0)}]
     # hot-water charging pump (differential: source probe vs the tank)
     "dhw_source": "buffer_top",
     "dhw_on_diff_k": 5.0,       # start when the source is this much warmer than the tank …
@@ -233,6 +234,7 @@ BURNOUT_END_C = 60.0     # burn-out ends below this (an insulated boiler can sit
 SESSION_END_C = 45.0
 NO_FLOW_AFTER_S = 2400   # "heat not reaching the buffer" only after the fire has run this long
 MAX_SESSIONS = 400       # a whole heating season
+MAX_SETBACKS = 4         # daytime setback periods of the house target
 
 # probes
 PROBE_FAULT_S = 120      # unavailable / invalid this long → probe fault
@@ -380,6 +382,7 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     out["night_setback_k"] = round(max(day - out["room_night_c"], 0.0), 1) if out["night_enabled"] else 0.0
     out["night_from"] = int(_num(raw.get("night_from"), 22, 0, 23))
     out["night_to"] = int(_num(raw.get("night_to"), 5, 0, 23))
+    out["setbacks"] = _setbacks(raw.get("setbacks"), day)
     # hot-water charging pump
     out["dhw_source"] = raw.get("dhw_source") if raw.get("dhw_source") in DHW_SOURCES else "buffer_top"
     out["dhw_on_diff_k"] = _num(raw.get("dhw_on_diff_k"), 5.0, 2.0, 15.0)
@@ -402,6 +405,27 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
 
 OPTIONAL_DEFAULTS = ("buffer_min_c", "warn_c", "alarm_c", "efficiency", "curve_slope", "supply_max_c",
                      "laddomat_on_c")
+
+
+def _setbacks(raw: Any, day: float) -> list[dict[str, Any]]:
+    """Setback periods (nobody at home, e.g. 7–15 on workdays): hours, a lower house target and the weekdays
+    (Monday = 0) on which the period starts. At most MAX_SETBACKS; a period without days never applies."""
+    out: list[dict[str, Any]] = []
+    for p in raw if isinstance(raw, list) else []:
+        if not isinstance(p, dict):
+            continue
+        days = p.get("days")
+        if isinstance(days, list):
+            days = sorted({int(d) for d in days
+                           if isinstance(d, (int, float)) and not isinstance(d, bool) and 0 <= d <= 6})
+        else:
+            days = list(range(7))
+        out.append({"on": p.get("on", True) is not False,
+                    "from": int(_num(p.get("from"), 7, 0, 23)), "to": int(_num(p.get("to"), 15, 0, 23)),
+                    "temp_c": _num(p.get("temp_c"), day - 2.0, 10.0, 28.0), "days": days})
+        if len(out) >= MAX_SETBACKS:
+            break
+    return out
 
 
 def to_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
@@ -584,6 +608,22 @@ def floors_state(cfg: dict[str, Any], temps: list[float | None], hums: list[floa
     return out, round(mean, 1)
 
 
+def session_heat(s: dict[str, Any], energy_now: float | None) -> float | None:
+    """The heat the wood gave in one fire: what the tanks (buffer + hot water) hold more at the end than at the
+    start, plus what the house took meanwhile (house_kwh, from the house's heat loss) — the energy balance.
+    The highest charge minus the start (stored_kwh) alone misses the house, and every reload after the buffer
+    had been full once (bobrek 22.11.2026: a 24 h fire booked 52 kWh / 16 kg, really ~150 kWh / ~50 kg).
+    Never below stored_kwh (the fire gave at least that); None without the house's share or a buffer reading."""
+    start_e, house = s.get("stored_start_kwh"), s.get("house_kwh")
+    if start_e is None or energy_now is None or house is None:
+        return None
+    heat = float(energy_now) - float(start_e) + float(house)
+    stored = s.get("stored_kwh")
+    if stored is None and s.get("stored_max_kwh") is not None:
+        stored = float(s["stored_max_kwh"]) - float(start_e)
+    return round(max(heat, float(stored or 0.0), 0.0), 1)
+
+
 def monthly_summary(sessions: list[dict[str, Any]], utc_offset_s: float = 0.0,
                     price_kg: float | None = None) -> list[dict[str, Any]]:
     """Fires per calendar month (local time): count, hours, heat stored, wood (weighed where known)."""
@@ -595,11 +635,13 @@ def monthly_summary(sessions: list[dict[str, Any]], utc_offset_s: float = 0.0,
         if start is None:
             continue
         key = _time.strftime("%Y-%m", _time.gmtime(start + utc_offset_s))
-        m = months.setdefault(key, {"month": key, "fires": 0, "hours": 0.0, "stored_kwh": 0.0,
+        m = months.setdefault(key, {"month": key, "fires": 0, "hours": 0.0, "stored_kwh": 0.0, "heat_kwh": 0.0,
                                     "wood_kg": 0.0, "weighed": 0, "overheats": 0})
         m["fires"] += 1
         m["hours"] += float(s.get("duration_h") or 0.0)
         m["stored_kwh"] += float(s.get("stored_kwh") or 0.0)
+        heat = _f(s.get("heat_kwh"))
+        m["heat_kwh"] += heat if heat is not None else float(s.get("stored_kwh") or 0.0)
         kg = _f(s.get("wood_kg"))
         if kg is not None:
             m["weighed"] += 1
@@ -612,6 +654,7 @@ def monthly_summary(sessions: list[dict[str, Any]], utc_offset_s: float = 0.0,
         m = months[key]
         m["hours"] = round(m["hours"], 1)
         m["stored_kwh"] = round(m["stored_kwh"], 0)
+        m["heat_kwh"] = round(m["heat_kwh"], 0)
         m["wood_kg"] = round(m["wood_kg"], 0)
         m["cost"] = round(m["wood_kg"] * price_kg, 0) if price_kg else None
         out.append(m)
@@ -908,8 +951,11 @@ class HeatingModel:
             s["duration_h"] = round((now - float(s["start"])) / 3600.0, 2)
             start_e, max_e = s.get("stored_start_kwh"), s.get("stored_max_kwh")
             s["stored_kwh"] = round(max_e - start_e, 1) if start_e is not None and max_e is not None else None
+            s["stored_end_kwh"] = energy
+            s["heat_kwh"] = session_heat(s, energy)
             per_kg = self.cfg["wood_kwh_per_kg"] * self.cfg["efficiency"]
-            s["wood_est_kg"] = round(s["stored_kwh"] / per_kg, 1) if s.get("stored_kwh") and per_kg else None
+            heat = s["heat_kwh"] if s["heat_kwh"] is not None else s.get("stored_kwh")
+            s["wood_est_kg"] = round(heat / per_kg, 1) if heat and per_kg else None
             self.sessions.append(s)
             self.sessions = self.sessions[-MAX_SESSIONS:]
             self.session = None
@@ -1147,6 +1193,7 @@ class HeatingModel:
                        "stored_kwh": (round(s["stored_max_kwh"] - s["stored_start_kwh"], 1)
                                       if s.get("stored_max_kwh") is not None and s.get("stored_start_kwh") is not None
                                       else None)}
+            session["heat_kwh"] = session_heat(session, self._stored_kwh())
         sps = self._boiler_trend.slope_per_s()
         f_kmin = self._flue_trend_k_min() if probes["flue_gas"]["value"] is not None else None
         off_s = self.dhw_pump_off_s(now)

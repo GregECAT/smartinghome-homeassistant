@@ -37,6 +37,11 @@ UA_MIN_KW_K, UA_MAX_KW_K = 0.02, 2.0
 HORIZON_H = 96
 MARGIN_K = 3.0                 # don't plan the buffer to its very maximum
 WATER_KWH_PER_M3K = 1.14
+# the house's draw before the hourly model is fitted: the buffer's discharge without a fire (pump cycling and
+# all) per K of room − outdoor, averaged over about half a day of such hours
+DRAW_TAU_S = 12 * 3600
+DRAW_MIN_OBS_S = 2 * 3600
+DRAW_MIN_DT_K = 5.0
 
 
 class BuildingModel:
@@ -46,14 +51,44 @@ class BuildingModel:
         self.base: float = 0.0              # kW
         self.r2: float | None = None
         self._acc: dict[str, Any] | None = None
+        self.draw_ua: float | None = None   # kW/K, from the buffer's discharge (observe_draw)
+        self.draw_obs_s: float = 0.0
 
     def dump(self) -> dict[str, Any]:
-        return {"samples": self.samples[-MAX_SAMPLES:]}
+        return {"samples": self.samples[-MAX_SAMPLES:],
+                "draw": {"ua": self.draw_ua, "obs_s": round(self.draw_obs_s)}}
 
     def restore(self, data: dict[str, Any] | None) -> None:
         if isinstance(data, dict):
             self.samples = [s for s in (data.get("samples") or []) if isinstance(s, dict)][-MAX_SAMPLES:]
             self.fit()
+            draw = data.get("draw") if isinstance(data.get("draw"), dict) else {}
+            ua = draw.get("ua")
+            if isinstance(ua, (int, float)) and not isinstance(ua, bool) and 0 <= ua <= UA_MAX_KW_K:
+                self.draw_ua = float(ua)
+                obs = draw.get("obs_s")
+                self.draw_obs_s = float(obs) if isinstance(obs, (int, float)) and obs > 0 else 0.0
+
+    def observe_draw(self, kw: float | None, dt_k: float | None, dt_s: float) -> None:
+        """The buffer's measured discharge without a fire (heating_model.discharge_kw: the last hour's trend, the
+        CH pump cycling or not) against room − outdoor. Kept as a running ratio — enough to book the house's
+        share of a fire long before the hourly model below has its 24 clean hours (bobrek fires ~20 h a day)."""
+        if kw is None or kw < -0.2 or dt_k is None or dt_k < DRAW_MIN_DT_K or dt_s <= 0:
+            return                  # (a buffer gaining heat without a fire — a PV heater — is no draw)
+        r = _clamp(max(kw, 0.0) / dt_k, 0.0, UA_MAX_KW_K)
+        w = min(dt_s / DRAW_TAU_S, 1.0)
+        self.draw_ua = r if self.draw_ua is None else self.draw_ua + (r - self.draw_ua) * w
+        self.draw_obs_s += dt_s
+
+    def house_kw(self, t_room: float | None, t_out: float | None) -> float | None:
+        """What the house takes now: the fitted model, else the discharge ratio once it has seen two hours."""
+        if t_room is None or t_out is None:
+            return None
+        if self.ua is not None:
+            return max(self.ua * (t_room - t_out) + self.base, 0.0)
+        if self.draw_ua is not None and self.draw_obs_s >= DRAW_MIN_OBS_S:
+            return max(self.draw_ua * (t_room - t_out), 0.0)
+        return None
 
     def add(self, now: float, total_kwh: float | None, t_room: float | None, t_out: float | None,
             firing: bool, pump_on: bool | None) -> None:
@@ -122,7 +157,9 @@ class BuildingModel:
 
     def status(self) -> dict[str, Any]:
         return {"ua_w_k": None if self.ua is None else round(self.ua * 1000.0),
-                "base_kw": round(self.base, 2), "r2": self.r2, "samples": len(self.samples)}
+                "base_kw": round(self.base, 2), "r2": self.r2, "samples": len(self.samples),
+                "draw_w_k": None if self.draw_ua is None else round(self.draw_ua * 1000.0),
+                "draw_h": round(self.draw_obs_s / 3600.0, 1)}
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
@@ -189,13 +226,15 @@ def depletion(energy_kwh: float, now: float, building: BuildingModel, room_targe
 
 
 def learned_kwh_per_kg(sessions: list[dict[str, Any]]) -> float | None:
-    """Median heat per kg of the last weighed loads (stored + the house's draw during the fire)."""
+    """Median heat per kg of the last weighed loads (the fire's energy balance: tanks + the house's draw)."""
     vals = []
     for s in reversed(sessions):
         kg = s.get("wood_kg")
         if not kg or kg < 3:
             continue
-        heat = (s.get("stored_kwh") or 0.0) + (s.get("house_kwh") or 0.0)
+        heat = s.get("heat_kwh")
+        if heat is None:            # fires booked before v1.100: the highest charge + the house, as then
+            heat = (s.get("stored_kwh") or 0.0) + (s.get("house_kwh") or 0.0)
         if heat > 0:
             vals.append(heat / kg)
         if len(vals) >= 5:

@@ -413,6 +413,11 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         .sched .hsel { background:#0f172a; color:#e0e6ed; border:1px solid rgba(255,255,255,0.15); border-radius:8px; padding:4px 6px; font-size:13px; }
         .sched .tgl { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#cbd5e1; cursor:pointer; }
         .sched .s { font-size:11px; color:#8899aa; margin-top:8px; line-height:1.4; }
+        .sched .slots.sb { margin-top:8px; }
+        .sched .days { display:inline-flex; flex-wrap:wrap; gap:3px; }
+        .sched .day { background:#0f172a; color:#8899aa; border:1px solid rgba(255,255,255,0.15); border-radius:7px; padding:3px 6px; font-size:12px; cursor:pointer; }
+        .sched .day.on { color:#0f172a; background:#f7b731; border-color:#f7b731; font-weight:600; }
+        .sched .day:disabled { cursor:default; }
         .btns { display:flex; gap:6px; flex-wrap:wrap; margin-top:12px; align-items:center; }
         .btn.sm { padding:5px 9px; font-size:12px; }
         .btn.warn { border-color:rgba(231,76,60,0.4); color:#fca5a5; }
@@ -964,7 +969,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const room = v("room");
     const radC = coOn ? supC : "#334155";
     const heatTxt = ctl.dump ? "zrzut ciepła" : coOn ? "grzanie" : ctl.heating_needed ? "zapotrzebowanie" : "bez grzania";
-    const target = num(ctl.room_target ?? c.room_target_c) + (ctl.night ? "° noc" : "°");
+    const target = num(ctl.room_target ?? c.room_target_c) + (ctl.night ? "° noc" : ctl.setback ? "° obn." : "°");
     s += `<path d="M780 160L895 62L1010 160V340H780Z" fill="rgba(255,255,255,.035)" stroke="#475569" stroke-width="2" stroke-linejoin="round"/>`;
     if ((c.floors || 1) >= 2) {
       const fl = st.floors || [];
@@ -1126,7 +1131,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     if (ctl.limiter) html += `<div class="banner warn" style="margin-top:12px">Ogranicznik: zasilanie powyżej ${num(c.supply_max_c, 0)} °C — zawór jest przymykany.</div>`;
     const corr = ctl.room_corr ? ` ${ctl.room_corr > 0 ? "+" : ""}${num(ctl.room_corr)} K korekta z domu` : "";
     const hrs = (h) => `${String(Number(h) || 0).padStart(2, "0")}:00`;
-    const dayNight = ctl.night ? `🌙 noc, do ${hrs(c.night_to)}` : c.night_enabled ? `☀️ dzień, do ${hrs(c.night_from)}` : "☀️ dzień — bez obniżenia nocnego";
+    const dayNight = ctl.setback ? `🏠 obniżenie, do ${hrs(ctl.setback.to)}` : ctl.night ? `🌙 noc, do ${hrs(c.night_to)}`
+      : c.night_enabled ? `☀️ dzień, do ${hrs(c.night_from)}` : "☀️ dzień — bez obniżenia nocnego";
     html += `<div class="ctl">
       <div><div class="lbl">Zasilanie zadane</div><div class="v">${num(ctl.supply_target)}<small>°C</small></div>
         <div class="s">krzywa ${num(ctl.curve_c)} °C${corr}${ctl.note ? `<br>${esc(ctl.note)}` : ""}</div></div>
@@ -1224,7 +1230,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         <div class="s">${a.demand_kw != null ? `teraz ${num(a.demand_kw, 2)} kW` : ""}</div></div>
     </div>
     <div class="hint">Model domu: ${b.ua_w_k != null ? `<b>${num(b.ua_w_k, 0)} W/K</b> strat (R² ${b.r2 != null ? num(b.r2, 2) : "—"}, ${b.samples} h danych)`
-      : `uczy się — ${b.samples || 0} z min. 24 godzin bez palenia${d.weather_entities && d.weather_entities.length ? "" : "; brak encji pogody w HA"}`}.
+      : `uczy się — ${b.samples || 0} z min. 24 godzin bez palenia${d.weather_entities && d.weather_entities.length ? "" : "; brak encji pogody w HA"}`}${
+      b.ua_w_k == null && b.draw_w_k != null ? `; do liczenia drewna: pobór domu ok. <b>${num(b.draw_w_k, 0)} W/K</b> z rozładowania bufora (${num(b.draw_h, 0)} h danych)` : ""}.
       ${a.forecast_hours ? `Prognoza: ${a.forecast_hours} h.` : ""}</div>`;
     if (d.admin) {
       html += `<div class="inline"><input id="loadkg" type="number" min="0.5" max="200" step="0.5" placeholder="kg" value="${esc(this._loadKg || "")}">
@@ -1240,10 +1247,10 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     if (!rows.length) return html + `<div class="muted" style="font-size:12px">Brak paleń w historii.</div>`;
     const price = this._data.config.wood_price_kg;
     const name = (m) => new Date(`${m}-01T12:00:00`).toLocaleDateString("pl-PL", { month: "long", year: "numeric" });
-    html += `<div style="overflow-x:auto"><table><thead><tr><th>Miesiąc</th><th>Palenia</th><th>Godziny</th><th>Do bufora</th><th>Drewno</th>${price ? "<th>Koszt</th>" : ""}</tr></thead><tbody>`;
+    html += `<div style="overflow-x:auto"><table><thead><tr><th>Miesiąc</th><th>Palenia</th><th>Godziny</th><th>Ciepło z drewna</th><th>Drewno</th>${price ? "<th>Koszt</th>" : ""}</tr></thead><tbody>`;
     for (const m of rows) {
       html += `<tr><td>${esc(name(m.month))}</td><td>${m.fires}${m.overheats ? ` <span class="pill hot">⚠ ${m.overheats}</span>` : ""}</td><td>${num(m.hours, 0)}</td>
-        <td>${num(m.stored_kwh, 0)} kWh</td><td>~${num(m.wood_kg, 0)} kg${m.weighed ? ` <span class="muted">(${m.weighed} ważone)</span>` : ""}</td>
+        <td>${num(m.heat_kwh ?? m.stored_kwh, 0)} kWh</td><td>~${num(m.wood_kg, 0)} kg${m.weighed ? ` <span class="muted">(${m.weighed} ważone)</span>` : ""}</td>
         ${price ? `<td>${m.cost != null ? `${num(m.cost, 0)} zł` : "—"}</td>` : ""}</tr>`;
     }
     html += `</tbody></table></div>`;
@@ -1275,7 +1282,37 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       </div>
       ${nightOn ? `<div class="s">W nocy krzywa grzewcza i włączanie grzania liczą się od ${num(Math.min(c.room_night_c, c.room_target_c))} °C, od ${hrs(c.night_to)} znów od ${num(c.room_target_c)} °C.
         Koniec nocy ustaw z zapasem — dom potrzebuje czasu, żeby się dogrzać.</div>` : ""}
+      ${this._setbacksHtml(ctl, c, admin, hrs)}
     </div>`;
+  }
+
+  // setback periods of the house target in the day (nobody at home, e.g. 7–15 on workdays) — saved at once
+  _setbacksHtml(ctl, c, admin, hrs) {
+    const list = c.setbacks || [];
+    const active = ctl.setback ? ctl.setback.index : -1;
+    const day = Number(c.room_target_c);
+    const DAYS = ["Pn", "Wt", "Śr", "Cz", "Pt", "So", "Nd"];
+    const hourSel = (i, key, val) => `<select class="hsel" data-act="sbhour" data-i="${i}" data-key="${key}" ${admin ? "" : "disabled"} aria-label="obniżenie ${key === "from" ? "od" : "do"}">${
+      Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${Number(val) === h ? "selected" : ""}>${hrs(h)}</option>`).join("")}</select>`;
+    const rows = list.map((p, i) => {
+      const days = p.days || [];
+      const idle = p.on && !(Number(p.temp_c) < day) ? ` <span class="muted">nie niżej niż w dzień — bez skutku</span>` : "";
+      return `<div class="slots sb">
+        <div class="slot ${i === active ? "on" : ""} ${p.on ? "" : "off"}"><span class="k">🏠 Obniżenie</span><b>${num(p.temp_c)}<small>°C</small></b>${admin
+          ? `<span class="pm"><button class="btn sm" data-act="sbtemp" data-i="${i}" data-delta="-0.5" aria-label="mniej">−</button><button class="btn sm" data-act="sbtemp" data-i="${i}" data-delta="0.5" aria-label="więcej">+</button></span>` : ""}
+          <span class="hrs">${hourSel(i, "from", p.from)}<span>–</span>${hourSel(i, "to", p.to)}</span>
+          <span class="days">${DAYS.map((d, k) => `<button class="day ${days.includes(k) ? "on" : ""}" data-act="sbday" data-i="${i}" data-d="${k}" aria-pressed="${days.includes(k)}" ${admin ? "" : "disabled"}>${d}</button>`).join("")}</span>${idle}</div>
+        <label class="tgl"><input type="checkbox" data-act="sbon" data-i="${i}" ${p.on ? "checked" : ""} ${admin ? "" : "disabled"}> włączone</label>
+        ${admin ? `<button class="btn sm" data-act="sbdel" data-i="${i}">Usuń</button>` : ""}
+      </div>`;
+    }).join("");
+    const add = admin && list.length < 4
+      ? `<div class="slots sb"><button class="btn sm" data-act="sbadd">+ Dodaj obniżenie w ciągu dnia</button></div>` : "";
+    const note = list.length
+      ? `<div class="s">W tych godzinach dom grzany jest do niższej temperatury — na przykład gdy nikogo nie ma. Koniec ustaw z zapasem, przed powrotem domowników:
+        dom potrzebuje czasu, żeby się dogrzać. Gdy nakładają się noc i obniżenie, obowiązuje niższa temperatura. Obniżenie, które trwa po północy, liczy się do dnia, w którym się zaczęło.</div>`
+      : admin ? `<div class="s">Obniżenie w ciągu dnia: niższa temperatura w wybrane dni i godziny, na przykład gdy nikogo nie ma w domu.</div>` : "";
+    return rows + add + note;
   }
 
   // the unit heater's quiet hours: its fan stays off at night (set here like the house's night hours)
@@ -1320,6 +1357,31 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       } else if (act === "nighthour") {
         const h = Math.min(Math.max(parseInt(ds.value, 10) || 0, 0), 23);
         this._data = await this._hass.callWS({ type: "smartinghome/heating/save", config: { [ds.key === "night_to" ? "night_to" : "night_from"]: h } });
+      } else if (act.startsWith("sb")) {
+        const c = this._data.config;
+        const day = Number(c.room_target_c) || 21;
+        const list = (c.setbacks || []).map((p) => ({ ...p, days: [...(p.days || [])] }));
+        if (act === "sbadd") {
+          if (list.length >= 4) return;
+          list.push({ on: true, from: 7, to: 15, temp_c: Math.max(Math.round((day - 2) * 2) / 2, 10), days: [0, 1, 2, 3, 4] });
+        } else {
+          const i = Number(ds.i);
+          const p = list[i];
+          if (!p) return;
+          if (act === "sbdel") list.splice(i, 1);
+          else if (act === "sbon") p.on = !p.on;
+          else if (act === "sbhour") p[ds.key === "to" ? "to" : "from"] = Math.min(Math.max(parseInt(ds.value, 10) || 0, 0), 23);
+          else if (act === "sbtemp") {
+            const cur = Number(p.temp_c) || day - 2;
+            const next = Math.min(Math.max(Math.round((cur + Number(ds.delta)) * 2) / 2, 10), day);   // never warmer than the day
+            if (next === cur) return;
+            p.temp_c = next;
+          } else if (act === "sbday") {
+            const d = Number(ds.d);
+            p.days = p.days.includes(d) ? p.days.filter((x) => x !== d) : [...p.days, d].sort((a, b) => a - b);
+          } else return;
+        }
+        this._data = await this._hass.callWS({ type: "smartinghome/heating/save", config: { setbacks: list } });
       } else if (act === "fanquieton") {
         const on = !this._data.config.fan_quiet;
         this._data = await this._hass.callWS({ type: "smartinghome/heating/save", config: { fan_quiet: on } });
@@ -1442,19 +1504,24 @@ class SmartingHomeHeatingPanel extends HTMLElement {
 
   _sessionsHtml(st) {
     const rows = [];
+    const heat = (x) => (x.heat_kwh != null
+      ? `${num(x.heat_kwh, 0)} kWh${x.house_kwh ? ` <span class="muted">(dom ${num(x.house_kwh, 0)})</span>` : ""}`
+      : `${num(x.stored_kwh)} kWh <span class="muted">(bufor i CWU)</span>`);
     const s = st.session;
     if (s) {
       rows.push(`<tr class="open"><td>${fmtTime(s.start)}</td><td>trwa · ${fmtHours(s.duration_h)}</td><td>${num(s.max_c, 0)} °C</td>
-        <td>${num(s.stored_kwh)} kWh</td><td>—</td><td>${s.overheat ? "⚠ przegrzanie" : ""}</td></tr>`);
+        <td>${heat(s)}</td><td>—</td><td>${s.overheat ? "⚠ przegrzanie" : ""}</td></tr>`);
     }
     for (const x of (this._data.sessions || []).slice().reverse()) {
       rows.push(`<tr><td>${fmtTime(x.start)}</td><td>${fmtHours(x.duration_h)}</td><td>${num(x.max_c, 0)} °C</td>
-        <td>${num(x.stored_kwh)} kWh</td><td>${x.wood_est_kg != null ? `~${num(x.wood_est_kg, 0)} kg` : "—"}</td>
+        <td>${heat(x)}</td><td>${x.wood_kg != null ? `${num(x.wood_kg, 1)} kg <span class="muted">ważone</span>` : x.wood_est_kg != null ? `~${num(x.wood_est_kg, 0)} kg` : "—"}</td>
         <td>${x.overheat ? "⚠ przegrzanie" : ""}</td></tr>`);
     }
     if (!rows.length) return `<div class="muted" style="font-size:12px">Jeszcze nie zarejestrowano palenia. Sesja zaczyna się, gdy temperatura kotła rośnie, a kończy, gdy kocioł wygaśnie.</div>`;
-    return `<div style="overflow-x:auto"><table><thead><tr><th>Start</th><th>Czas</th><th>Maks.</th><th>Do bufora i CWU</th><th>Drewno (szac.)</th><th></th></tr></thead>
-      <tbody>${rows.join("")}</tbody></table></div>`;
+    return `<div style="overflow-x:auto"><table><thead><tr><th>Start</th><th>Czas</th><th>Maks.</th><th>Ciepło z drewna</th><th>Drewno</th><th></th></tr></thead>
+      <tbody>${rows.join("")}</tbody></table></div>
+      <div class="hint">Ciepło z drewna = to, co przybyło w buforze i CWU, plus to, co w czasie palenia wziął dom (z jego strat ciepła).
+        Bez danych o domu (palenia sprzed v1.100.0 albo zanim moduł poznał dom) liczy się tylko bufor i CWU — wtedy drewna wychodzi za mało.</div>`;
   }
 
   // ── settings ──────────────────────────────────────────────────────────────
@@ -1614,7 +1681,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       ${field("room_night_c", "Temperatura zadana w domu — noc (°C)", "nie wyżej niż w dzień", c.room_night_c, 'min="10" max="28" step="0.5"')}
       ${field("night_from", "Noc od (godz.)", "", c.night_from, 'min="0" max="23"')}
       ${field("night_to", "Noc do (godz.)", "dom dogrzewa się od tej godziny", c.night_to, 'min="0" max="23"')}
-      <div>${chk("night_enabled", "Obniżenie nocne", c.night_enabled)}</div>
+      <div>${chk("night_enabled", "Obniżenie nocne", c.night_enabled, "obniżenia w ciągu dnia (np. gdy nikogo nie ma) ustawisz w Przeglądzie, w karcie Sterowanie")}</div>
       ${field("room_gain", "Korekta od temperatury w domu (K/K)", d.features && d.features.auto ? "0 = bez korekty" : "funkcja PRO", c.room_gain, 'min="0" max="8" step="0.5"')}
       <div>${chk("room_correction", "Korekta według czujnika odniesienia", c.room_correction, d.features && d.features.auto ? "" : "wymaga licencji PRO")}</div>
       </div>
