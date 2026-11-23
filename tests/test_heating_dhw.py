@@ -203,7 +203,7 @@ def test_dhw_pump_fault_alarm_and_status():
         model.update(raw, t)
         model.evaluate_alarms(t)
     assert [a.id for a in model.active_alarms()] == ["heating_dhw_pump_fault"]
-    assert model.status(170)["dhw_pump"] == {"on": True, "power_w": 0.2}
+    assert model.status(170)["dhw_pump"] == {"on": True, "power_w": 0.2, "off_min": None}
     model.update({**raw, "dhw_pump_power": "28"}, 180)
     model.evaluate_alarms(180)
     assert not model.active_alarms()

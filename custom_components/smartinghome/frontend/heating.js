@@ -18,6 +18,7 @@ const CHART_SERIES = [
   ["buffer_top", "Bufor góra", "#f7b731"],
   ["buffer_bottom", "Bufor dół", "#00d4ff"],
   ["dhw", "CWU", "#a78bfa"],
+  ["dhw_coil_supply", "Wężownica CWU (zasilanie)", "#14b8a6"],
   ["heating_supply", "Zasilanie CO", "#2ecc71"],
   ["room", "Dom", "#e0e6ed"],
 ];
@@ -40,9 +41,11 @@ const KIND_FILTERS = {
 };
 const ROLE_HINTS = {
   boiler_out: "wyjście z kotła na wejściu do Laddomatu",
+  flue_gas: "opcjonalnie — czujnik w czopuchu (termopara / PT100 z przetwornikiem, 0–500 °C, encja w °C): rozpalenie i wygaśnięcie widać od razu",
   buffer_top: "tuleja ~80–90 % wysokości bufora",
   buffer_bottom: "tuleja ~15–20 % wysokości bufora",
   dhw: "tuleja ~2/3 wysokości zasobnika",
+  dhw_coil_supply: "opcjonalnie — na rurze zasilania wężownicy tuż przy zasobniku, pod otuliną: ciepła przy stojącej pompie = krążenie grawitacyjne",
   heating_supply: "≥ 0,5 m za zaworem mieszającym i pompą",
   heating_return: "opcjonalnie — ΔT grzejników",
   room: "np. Shelly H&T w miejscu odniesienia — według niego moduł grzeje dom",
@@ -761,14 +764,15 @@ class SmartingHomeHeatingPanel extends HTMLElement {
   }
 
   _kpis(st) {
-    const b = st.boiler || {}, buf = st.buffer, dhw = st.dhw, probes = st.probes || {};
+    const b = st.boiler || {}, buf = st.buffer, dhw = st.dhw, probes = st.probes || {}, coil = st.dhw_coil || {};
     const out = [];
     const trend = b.trend_k_min;
     const arrow = trend == null ? "" : trend > 0.2 ? " ↑" : trend < -0.2 ? " ↓" : " →";
     const bCls = b.state === "overheat" ? "bad" : (b.temp_c != null && b.temp_c >= (this._data.config.warn_c || 88)) ? "warn" : "";
     out.push(`<div class="card kpi ${bCls}"><div class="lbl">Kocioł</div>
       <div class="val" style="color:${STATE_COLOR[b.state] || "#e0e6ed"}">${num(b.temp_c)}<small>°C${arrow}</small></div>
-      <div class="note"><b style="color:${STATE_COLOR[b.state] || "#e0e6ed"}">${esc(b.label || "—")}</b>${trend != null ? ` · ${num(trend, 2)} K/min` : ""}${b.since ? `<br>od ${fmtTime(b.since)}` : ""}</div></div>`);
+      <div class="note"><b style="color:${STATE_COLOR[b.state] || "#e0e6ed"}">${esc(b.label || "—")}</b>${trend != null ? ` · ${num(trend, 2)} K/min` : ""}${b.since ? `<br>od ${fmtTime(b.since)}` : ""}${
+        b.flue_c != null ? `<br>spaliny <b style="color:#e0e6ed">${num(b.flue_c, 0)} °C</b>${b.flue_trend_k_min != null ? ` · ${num(b.flue_trend_k_min, 1)} K/min` : ""}` : ""}</div></div>`);
     if (buf) {
       const pct = buf.charge_pct ?? 0;
       out.push(`<div class="card kpi ${pct >= 95 ? "warn" : ""}"><div class="lbl">Bufor</div>
@@ -788,7 +792,11 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     if (dhw) {
       out.push(`<div class="card kpi"><div class="lbl">CWU</div>
         <div class="val">${num(dhw.temp_c)}<small>°C</small></div>
-        <div class="note">${num(dhw.energy_kwh)} kWh · ${num(dhw.charge_pct, 0)}% do ${num(this._data.config.dhw_target_c, 0)} °C</div></div>`);
+        <div class="note">${num(dhw.energy_kwh)} kWh · ${num(dhw.charge_pct, 0)}% do ${num(this._data.config.dhw_target_c, 0)} °C${this._coilNote(st)}</div></div>`);
+    } else if (coil.temp_c != null) {
+      out.push(`<div class="card kpi"><div class="lbl">Wężownica CWU — zasilanie</div>
+        <div class="val">${num(coil.temp_c)}<small>°C</small></div>
+        <div class="note">${this._coilNote(st).replace(/^<br>/, "")}</div></div>`);
     }
     const room = probes.room || {};
     const cfg = this._data.config;
@@ -807,6 +815,15 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     return out.join("");
   }
 
+  // the coil's supply pipe at the tank: its reading, how long the CWU pump has stood, gravity flow
+  _coilNote(st) {
+    const coil = st.dhw_coil || {}, off = (st.dhw_pump || {}).off_min;
+    if (coil.temp_c == null) return "";
+    const stood = off != null ? ` · pompa stoi ${fmtHours(off / 60)}` : "";
+    const g = coil.gravity ? ` · <b style="color:#f7b731">krążenie grawitacyjne</b>` : coil.suspected ? " · ciepła mimo stojącej pompy" : "";
+    return `<br>wężownica ${num(coil.temp_c)} °C${stood}${g}`;
+  }
+
   // ── hero: the whole boiler room on one screen ─────────────────────────────
   // viewBox 1200 × 520. Pipes are drawn in the direction of flow: the dashes of a running
   // circuit move that way. Re-rendering keeps the animations in phase (_phase).
@@ -816,6 +833,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const lbl = (r) => { const x = v(r); return x == null ? (p[r] && p[r].status !== "missing" ? "⚠" : "—") : `${num(x)}°`; };
     const tb = v("boiler_out"), top = v("buffer_top"), bot = v("buffer_bottom"), dhwT = v("dhw");
     const sup = v("heating_supply"), ret = v("heating_return");
+    const flue = v("flue_gas"), coilT = v("dhw_coil_supply"), coilG = st.dhw_coil || {};
+    const ents = c.entities || {};
     const fire = !!b.firing, over = b.state === "overheat";
     const lad = st.laddomat || {}, ladOn = lad.on === true;   // started by the boiler's thermostat, not by fire
     const sc = STATE_COLOR[b.state] || "#64748b";
@@ -889,6 +908,16 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         <path d="M66 380H156" stroke="#ffd166" stroke-width="3" stroke-linecap="round" opacity=".7"/>`;
     } else {
       s += `<path d="M70 372H150" stroke="#334155" stroke-width="3" stroke-linecap="round"/>`;
+    }
+
+    // flue pipe (a sensor in the flue: the fire seen at once)
+    if (ents.flue_gas) {
+      const fc = flue == null ? "#334155" : flue >= 100 ? "#e67e22" : flue >= 60 ? "#c0846a" : "#475569";
+      const ft = b.flue_trend_k_min;
+      s += `<rect x="141" y="88" width="18" height="62" rx="3" fill="url(#hgSteel)" stroke="${fc}" stroke-width="2"/>
+        ${flue != null && flue >= 100 ? `<rect x="137" y="84" width="26" height="40" rx="6" fill="${fc}" opacity=".35" filter="url(#hgGlow)"/>` : ""}
+        <text x="150" y="60" text-anchor="middle" class="t-s">spaliny</text>
+        <text x="150" y="80" text-anchor="middle" class="t-s2" style="fill:${flue == null ? "#64748b" : fc === "#475569" ? "#94a3b8" : fc}">${flue == null ? lbl("flue_gas") : `${num(flue, 0)}°`}${ft != null && flue != null ? (ft > 1 ? " ↑" : ft < -1 ? " ↓" : "") : ""}</text>`;
     }
 
     // Laddomat: its pump is started by the boiler's own thermostat (Atmos ≈ 75 °C), inferred from the outlet
@@ -1001,6 +1030,13 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       <text x="700" y="345" text-anchor="middle" class="t-h2">CWU ${num(c.dhw_l, 0)} L</text>
       <rect x="640" y="355" width="120" height="150" rx="26" fill="${tempColor(dhwT)}" opacity=".85" stroke="#64748b" stroke-width="2"/>
       <rect x="640" y="355" width="120" height="150" rx="26" fill="url(#hgShine)"/>`;
+    if (ents.dhw_coil_supply) {
+      const cc = coilT == null ? "#64748b" : tempColor(coilT);
+      s += `<circle cx="612" cy="390" r="5" fill="${cc}" stroke="#0f172a" stroke-width="1.5"/>
+        <text x="604" y="380" text-anchor="middle" class="t-s2" style="fill:${cc}">${lbl("dhw_coil_supply")}</text>
+        ${coilG.gravity ? `<text x="596" y="414" text-anchor="middle" class="t-lock">⚠ grawitacja</text>`
+          : coilG.suspected ? `<text x="596" y="414" text-anchor="middle" class="t-s">ciepła bez pompy</text>` : ""}`;
+    }
     s += `<path class="pc" d="${coil}" style="stroke-width:9"/><path class="pp" d="${coil}" stroke="${dhwOn ? feedC : "#475569"}" style="stroke-width:5"/>${dhwOn ? `<path class="pf" d="${coil}"/>` : ""}`;
     s += `<text x="776" y="412" class="t-big2" style="fill:#e0e6ed">${lbl("dhw")}</text>`;
     if (dhw) {
@@ -1478,7 +1514,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     }
     html += `<div class="hint">Korekta: różnica względem termometru referencyjnego (np. wszystkie sondy w jednym naczyniu z wodą przed montażem).
       Korekta większa niż ±3 K zwykle znaczy, że sonda leży na rurze bez docisku i otuliny — popraw montaż, a korektę traktuj jako tymczasową (zakres ±15 K).
-      Odczyty −127 °C i nagłe 85,0 °C (reset sondy DS18B20) są odrzucane.</div></div>`;
+      Odczyty −127 °C i nagłe 85,0 °C (reset sondy DS18B20) są odrzucane. Czujnik spalin ma własny zakres (do 500 °C), a 85 °C jest dla niego zwykłym odczytem.</div></div>`;
 
     html += `<div class="card" style="margin-top:14px"><h3>Bufor i CWU</h3><div class="grid2">
       ${field("buffer_l", "Pojemność bufora (L)", "", c.buffer_l, 'min="0" step="50"')}
@@ -1669,7 +1705,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     if (!st) return `<span class="bad">brak encji</span>`;
     const v = parseFloat(st.state);
     if (!Number.isFinite(v)) return `<span class="bad">${esc(st.state)}</span>`;
-    if (v <= -55 || v >= 125) return `<span class="bad">${esc(st.state)} ⚠</span>`;
+    const [lo, hi] = role === "flue_gas" ? [-20, 500] : [-55, 125];
+    if (v <= lo || v >= hi) return `<span class="bad">${esc(st.state)} ⚠</span>`;
     return `${esc(st.state)} ${esc(unitOf(st))}`;
   }
 

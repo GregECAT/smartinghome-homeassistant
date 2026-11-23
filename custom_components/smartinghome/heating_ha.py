@@ -338,6 +338,7 @@ class HeatingManager:
                 self._log(line, now)
             self.model.external = out.alarms
             self.model.room_target = out.room_target
+            self.model.dump_active = bool(out.dump or out.dhw.force)
             raised, cleared = self.model.evaluate_alarms(now)
             if out.valve:
                 await self._exec_valve(out.valve, now)

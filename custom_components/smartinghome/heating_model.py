@@ -16,15 +16,17 @@ Wi-Fi or HA. Here we measure, explain and warn:
 
 - probe filter for DS18B20 probes (Shelly Plus Add-on): −127 = no reading,
   85.0 = power-on reset value (also a real boiler temperature, so it is accepted
-  only when it fits the trend), single-sample jumps are dropped,
+  only when it fits the trend), single-sample jumps are dropped; the flue-gas
+  sensor (thermocouple / PT100 with a transmitter) gets a wide range of its own,
 - buffer and hot-water tank energy from two / one probes (layered linear profile),
   room left in the buffer and the wood load it can still take without overheating,
 - boiler state from the outlet temperature and its trend (cold → ignition →
-  burning → burn-out → idle, overheat), each fire is a session,
+  burning → burn-out → idle, overheat), each fire is a session; with a flue-gas
+  sensor the fire starts and ends by the flue (the water lags by an hour or more),
 - how long the buffer lasts at the current draw,
 - alarms with hold times and hysteresis (overheat, buffer full, heat not reaching
   the buffer, probe fault, CH / hot-water pump not drawing power, room cold with an
-  empty buffer).
+  empty buffer, heat flowing into the hot-water coil by gravity).
 
 Settings "heating" (settings.json): see DEFAULTS / normalize().
 """
@@ -58,9 +60,13 @@ PROFILES: dict[str, dict[str, Any]] = {
 # role → (label, kind). Temperatures are DS18B20 / any °C sensor.
 ROLES: dict[str, tuple[str, str]] = {
     "boiler_out": ("Kocioł — wyjście (przy Laddomacie)", "temperature"),
+    # a thermocouple / PT100 + transmitter in the flue pipe (0–500 °C, not a DS18B20): fire on / off at once
+    "flue_gas": ("Spaliny", "temperature"),
     "buffer_top": ("Bufor — góra", "temperature"),
     "buffer_bottom": ("Bufor — dół", "temperature"),
     "dhw": ("Zasobnik CWU", "temperature"),
+    # the pipe feeding the tank's coil, right at the tank: warm with the pump stopped = gravity flow
+    "dhw_coil_supply": ("Zasilanie wężownicy CWU (przy zasobniku)", "temperature"),
     "heating_supply": ("Zasilanie CO (za zaworem)", "temperature"),
     "heating_return": ("Powrót z grzejników", "temperature"),
     "room": ("Czujnik odniesienia — temperatura", "temperature"),
@@ -82,7 +88,8 @@ ROLES: dict[str, tuple[str, str]] = {
     "fan_power": ("Nagrzewnica — moc wentylatora", "power"),
 }
 TEMP_ROLES = tuple(r for r, (_, kind) in ROLES.items() if kind == "temperature")
-PROBE_ROLES = ("boiler_out", "buffer_top", "buffer_bottom", "dhw", "heating_supply", "heating_return")
+PROBE_ROLES = ("boiler_out", "buffer_top", "buffer_bottom", "dhw", "heating_supply", "heating_return",
+               "flue_gas", "dhw_coil_supply")
 
 # safety_dump: overheating heat goes into the house through the mixing valve — fine for radiators,
 # never for a floor (screed, no overtemperature cut-out of its own)
@@ -235,6 +242,26 @@ JUMP_K = 10.0            # single-sample jump bigger than this is dropped …
 JUMP_CONFIRM = 3         # … unless the next samples confirm it
 JUMP_HOLD_S = 60.0       # … or it holds this long (a Shelly reports only changes)
 DS_RESET_C = 85.0
+
+# flue gas: a thermocouple or PT100 + 0–10 V transmitter (e.g. 0–400 °C), not a DS18B20 — its own range, no 85 °C
+# reset value, and it moves tens of K a minute at ignition
+FLUE_MIN_C = -20.0
+FLUE_MAX_C = 500.0
+FLUE_JUMP_K = 80.0
+FLUE_FIRE_C = 100.0       # flue above this and rising = combustion: ignition / burning
+FLUE_HOT_STEADY_C = 120.0  # … or steadily this hot (a fire already burning when the module first sees it)
+FLUE_END_C = 80.0         # flue below this (not rising) ends the fire …
+FLUE_END_HOLD_S = 900     # … once it stays there this long (the exhaust fan pausing at the boiler thermostat isn't the end)
+FLUE_RISING_K_MIN = 2.0   # K/min over the trend window (the flue moves ~10× faster than the water)
+FLUE_FALLING_K_MIN = -1.0
+
+# gravity flow into the hot-water coil: the coil's supply pipe at the tank stays warm with the pump stopped
+DHW_GRAVITY_OFF_S = 3600  # the pump stood this long — a pipe without flow has cooled down by then
+DHW_GRAVITY_SRC_C = 50.0  # the source (buffer top / boiler) is hot enough to drive a gravity flow
+DHW_GRAVITY_COIL_C = 35.0  # the pipe well above the room it runs through
+DHW_GRAVITY_TANK_K = 3.0  # with a tank probe: the pipe warmer than the tank — that heat comes from the source
+DHW_GRAVITY_NEAR_K = 15.0  # without one: the pipe within this of the source
+DHW_GRAVITY_HOLD_S = 1200
 
 # buffer discharge (runtime estimate)
 RUNTIME_WINDOW_S = 3600
@@ -408,6 +435,11 @@ class Probe:
     bad_since: float | None = None   # first moment without a valid reading
     _pending: list[float] = field(default_factory=list)
     _pending_since: float | None = None
+    # the sensor's valid range and filter (DS18B20 by default; see probe_for)
+    lo_c: float = -55.0
+    hi_c: float = 125.0
+    ds18b20: bool = True             # 85.0 may be the power-on reset value
+    jump_k: float = JUMP_K
 
     @property
     def fault(self) -> bool:
@@ -426,14 +458,15 @@ class Probe:
         if v is None:
             self._mark_bad("unavailable", now)
             return
-        if v <= -55.0 or v >= 125.0:          # −127 = DS18B20 not answering
+        if v <= self.lo_c or v >= self.hi_c:  # −127 = DS18B20 not answering
             self._mark_bad("invalid", now)
             return
-        if abs(v - DS_RESET_C) < 0.01 and (self.value is None or abs(self.value - offset - DS_RESET_C) > 3.0):
+        if (self.ds18b20 and abs(v - DS_RESET_C) < 0.01
+                and (self.value is None or abs(self.value - offset - DS_RESET_C) > 3.0)):
             # 85.0 right after a power glitch of the probe: only plausible next to a reading close to it
             self._mark_bad("invalid", now)
             return
-        if self.value is not None and abs(v + offset - self.value) > JUMP_K:
+        if self.value is not None and abs(v + offset - self.value) > self.jump_k:
             # the same HA state read again is not a new sample: count changed values, or the time it holds
             if not self._pending or self._pending[-1] != v:
                 self._pending.append(v)
@@ -452,6 +485,13 @@ class Probe:
             self.bad_since = now
         self._pending.clear()
         self._pending_since = None
+
+
+def probe_for(role: str) -> Probe:
+    """The filter that fits the sensor behind a role: the flue sensor reads far beyond a DS18B20's range."""
+    if role == "flue_gas":
+        return Probe(lo_c=FLUE_MIN_C, hi_c=FLUE_MAX_C, ds18b20=False, jump_k=FLUE_JUMP_K)
+    return Probe()
 
 
 # ── tanks ────────────────────────────────────────────────────────────────────
@@ -640,7 +680,7 @@ class HeatingModel:
 
     def __init__(self, cfg: dict[str, Any] | None = None) -> None:
         self.cfg = normalize(cfg)
-        self.probes: dict[str, Probe] = {role: Probe() for role in TEMP_ROLES}
+        self.probes: dict[str, Probe] = {role: probe_for(role) for role in TEMP_ROLES}
         self.humidity: float | None = None
         self.floor_humidity: list[float | None] = [None] * MAX_FLOORS
         self.floors: list[dict[str, Any]] = []
@@ -662,10 +702,14 @@ class HeatingModel:
         self.runtime_h: float | None = None
         self.discharge_kw: float | None = None
         self._boiler_trend = Trend(TREND_WINDOW_S)
+        self._flue_trend = Trend(TREND_WINDOW_S)
+        self._flue_low_since: float | None = None   # flue below FLUE_END_C (not rising) since
         self._top_trend = Trend(1200)
         self._buffer_trend = Trend(RUNTIME_WINDOW_S)
         self._pump_low_since: float | None = None
         self._dhw_pump_low_since: float | None = None
+        self._dhw_pump_off_since: float | None = None
+        self.dump_active = False                    # a heat dump in progress (set by the controller loop)
         self._alarms: dict[str, _AlarmTrack] = {}
         self.updated: float | None = None
         self.first_update: float | None = None
@@ -707,6 +751,11 @@ class HeatingModel:
         self.pump_w = _f(raw.get("pump_power"))
         self.dhw_pump_on = switch_state(raw.get("dhw_pump_switch"))
         self.dhw_pump_w = _f(raw.get("dhw_pump_power"))
+        # how long the hot-water pump has stood: a relay briefly unavailable (Wi-Fi) keeps the clock running
+        if self.dhw_pump_on is True or raw.get("dhw_pump_switch") is None:
+            self._dhw_pump_off_since = None
+        elif self.dhw_pump_on is False and self._dhw_pump_off_since is None:
+            self._dhw_pump_off_since = now
         self.fan_on = switch_state(raw.get("fan_switch"))
         self.fan_w = _f(raw.get("fan_power"))
         self.grid_outage = raw.get("grid_outage") is True
@@ -743,7 +792,21 @@ class HeatingModel:
         if state != self.state:
             self.state, self.state_since = state, now
 
+    def _flue_trend_k_min(self) -> float | None:
+        sps = self._flue_trend.slope_per_s()
+        return None if sps is None else sps * 60.0
+
     def _update_boiler(self, now: float) -> None:
+        f = self.t("flue_gas")
+        f_kmin = None
+        if f is not None:
+            self._flue_trend.add(now, f)
+            f_kmin = self._flue_trend_k_min()
+        if f is not None and f < FLUE_END_C and not (f_kmin is not None and f_kmin >= FLUE_RISING_K_MIN):
+            if self._flue_low_since is None:
+                self._flue_low_since = now
+        else:
+            self._flue_low_since = None
         t = self.t("boiler_out")
         if t is None:
             if self.probes["boiler_out"].status == "missing" or self.probes["boiler_out"].bad_for(now) > PROBE_FAULT_S:
@@ -753,40 +816,74 @@ class HeatingModel:
         trend.add(now, t)
         sps = trend.slope_per_s()
         k_min = None if sps is None else sps * 60.0
-        rising = k_min is not None and k_min >= RISING_K_MIN
-        falling = k_min is not None and k_min <= FALLING_K_MIN
         prev = self.state
         # an open session is a fire even when a probe outage turned the state into "unknown"
         fire_before = prev in FIRE_STATES or self.session is not None
-        peak = max(float((self.session or {}).get("max_c") or t), t)
+        state = self._water_state(t, k_min, prev, fire_before)
+        if f is not None and state != "overheat":
+            state = self._flue_state(t, k_min, f, f_kmin, prev, fire_before, state, now)
+        self._set_state(state, now)
+        self._track_session(t, now, f)
 
+    def _water_state(self, t: float, k_min: float | None, prev: str, fire_before: bool) -> str:
+        """The boiler's state from its outlet water and the trend — all there is without a flue sensor."""
+        rising = k_min is not None and k_min >= RISING_K_MIN
+        falling = k_min is not None and k_min <= FALLING_K_MIN
+        peak = max(float((self.session or {}).get("max_c") or t), t)
         if t >= self.cfg["alarm_c"] or (prev == "overheat" and t >= self.cfg["alarm_c"] - 2.0):
-            state = "overheat"
-        elif t >= WORK_C:
+            return "overheat"
+        if t >= WORK_C:
             if not fire_before:
                 # a warm boiler that only holds its heat is not a fire: rising, or clearly hot
                 hot_steady = k_min is not None and not falling and t >= WORK_C + 10.0
-                state = "burning" if rising or hot_steady else "idle"
-            elif falling and t <= peak - BURNOUT_DROP_K:
-                state = "burnout"
-            elif prev == "burnout" and not rising:
-                state = "burnout"
-            else:
-                state = "burning"
-        elif rising:
-            state = "ignition"
-        elif prev == "ignition" and not falling and t > SESSION_END_C:
-            state = "ignition"                    # slow start — keep waiting
-        elif (prev in ("burning", "burnout", "overheat") or (fire_before and prev == "unknown")) and t >= BURNOUT_END_C:
-            state = "burnout"
-        elif t >= COLD_C:
-            state = "idle"
-        else:
-            state = "cold"
-        self._set_state(state, now)
-        self._track_session(t, now)
+                return "burning" if rising or hot_steady else "idle"
+            if falling and t <= peak - BURNOUT_DROP_K:
+                return "burnout"
+            if prev == "burnout" and not rising:
+                return "burnout"
+            return "burning"
+        if rising:
+            return "ignition"
+        if prev == "ignition" and not falling and t > SESSION_END_C:
+            return "ignition"                    # slow start — keep waiting
+        if (prev in ("burning", "burnout", "overheat") or (fire_before and prev == "unknown")) and t >= BURNOUT_END_C:
+            return "burnout"
+        return "idle" if t >= COLD_C else "cold"
 
-    def _track_session(self, t: float, now: float) -> None:
+    def _flue_state(self, t: float, k_min: float | None, f: float, f_kmin: float | None, prev: str,
+                    fire_before: bool, water: str, now: float) -> str:
+        """With a flue sensor the fire starts and ends by the flue: it is hot within minutes of lighting and cold
+        soon after the last embers, while the water in an insulated boiler lags by an hour or more both ways.
+        In between: burn-out once the flue falls below FLUE_FIRE_C, otherwise burning ↔ burn-out by the water;
+        the end needs the flue cold for FLUE_END_HOLD_S (the exhaust fan pausing at the boiler thermostat drops
+        the flue for a while too). A fire the flue has not shown (a session from before the sensor, a sensor
+        reading low by mistake) is judged by the water alone."""
+        f_rising = f_kmin is not None and f_kmin >= FLUE_RISING_K_MIN
+        f_falling = f_kmin is not None and f_kmin <= FLUE_FALLING_K_MIN
+        flue_fire = f >= FLUE_FIRE_C and (f_rising or (f_kmin is not None and not f_falling and f >= FLUE_HOT_STEADY_C))
+        warm = "burning" if t >= WORK_C else "ignition"
+        rest = "idle" if t >= COLD_C else "cold"
+        if not fire_before:
+            if flue_fire:
+                return warm
+            # the water alone starts a fire only when it clearly shows one (a flue sensor stuck low); a warm
+            # boiler that holds its heat, or water warming by itself, is not a fire while the flue stays cold
+            water_rising = k_min is not None and k_min >= RISING_K_MIN
+            return "burning" if t >= WORK_C and water_rising else rest
+        seen = f >= FLUE_FIRE_C or float((self.session or {}).get("flue_max_c") or 0.0) >= FLUE_FIRE_C
+        if not seen:
+            return water
+        if self._flue_low_since is not None and now - self._flue_low_since >= FLUE_END_HOLD_S:
+            return rest                          # the flue went cold: the fire is over, however warm the water
+        if flue_fire:
+            return warm                          # combustion — also picking up again after a reload
+        if f < FLUE_FIRE_C and (f_falling or (prev == "burnout" and not f_rising)):
+            return "burnout"                     # the flame dies down (an insulated boiler's water barely shows it)
+        if water in FIRE_STATES:
+            return water
+        return "burnout"                         # the water would end the fire, the flue hasn't gone cold yet
+
+    def _track_session(self, t: float, now: float, flue: float | None = None) -> None:
         fire = self.state in FIRE_STATES
         energy = self._stored_kwh()
         if fire and self.session is None:
@@ -798,6 +895,8 @@ class HeatingModel:
             return
         s = self.session
         s["max_c"] = round(max(float(s.get("max_c") or t), t), 1)
+        if flue is not None:
+            s["flue_max_c"] = round(max(float(s.get("flue_max_c") or flue), flue), 0)
         if self.state == "overheat":
             s["overheat"] = True
         if energy is not None:
@@ -849,6 +948,38 @@ class HeatingModel:
         self.discharge_kw = round(kw, 2)
         if kw >= RUNTIME_MIN_KW:
             self.runtime_h = round(self.buffer["energy_kwh"] / kw, 1)
+
+    # gravity flow into the hot-water coil
+    def dhw_pump_off_s(self, now: float) -> float | None:
+        """How long the hot-water pump has stood (None: running, or no relay assigned)."""
+        if self.dhw_pump_on is True or self._dhw_pump_off_since is None:
+            return None
+        return now - self._dhw_pump_off_since
+
+    def _dhw_gravity(self, now: float, was: bool) -> tuple[float, float, str, float | None, float] | None:
+        """The coil's supply pipe at the tank stays warm although the pump has stood for an hour and no heat dump
+        runs: hot water rises from the buffer (or the boiler) into the coil on its own. A pipe without flow cools
+        to the room it runs through; conduction from the tank itself can't make it warmer than the tank, so with
+        a tank probe the pipe must be warmer than the tank, without one within DHW_GRAVITY_NEAR_K of the source.
+        → (coil, source, source name, tank, pump off s)."""
+        coil = self.t("dhw_coil_supply")
+        off_s = self.dhw_pump_off_s(now)
+        if coil is None or off_s is None or off_s < DHW_GRAVITY_OFF_S or self.dump_active:
+            return None
+        if self.cfg["dhw_source"] == "boiler_out":
+            src, name = self.t("boiler_out"), "kocioł"
+        else:
+            src, name = self.t("buffer_top"), "góra bufora"
+            if src is None and self.t("buffer_bottom") is not None:
+                src, name = self.t("buffer_bottom"), "dół bufora"   # never warmer than the top: only later
+        if src is None:
+            return None
+        tank = self.t("dhw")
+        ref = tank + DHW_GRAVITY_TANK_K if tank is not None else src - DHW_GRAVITY_NEAR_K
+        h = 2.0 if was else 0.0
+        if src >= DHW_GRAVITY_SRC_C - h and coil >= DHW_GRAVITY_COIL_C - h and coil >= ref - h:
+            return coil, src, name, tank, off_s
+        return None
 
     # alarms
     def _conditions(self, now: float) -> list[AlarmSpec]:
@@ -903,6 +1034,9 @@ class HeatingModel:
             if any(role in ("boiler_out", "buffer_top") for role in faulty):
                 action += (" Dopóki kocioł lub góra bufora nie mają odczytu, w trybach Auto, Ręczne i Lato pompa CO "
                            "pracuje awaryjnie. Przy montażu albo bez wody w instalacji przełącz tryb na „Wyłączone”.")
+            if "flue_gas" in faulty:
+                action += (" Czujnik spalin: sprawdź zasilanie przetwornika i przewód czujnika; do jego powrotu "
+                           "palenie rozpoznaje temperatura wody w kotle.")
             out.append(AlarmSpec(
                 "heating_probe_fault", "critical" if hot else "warning", "Brak odczytu czujnika temperatury",
                 f"Bez poprawnego odczytu: {names}.", action))
@@ -924,6 +1058,20 @@ class HeatingModel:
                 f"Przekaźnik pompy CWU jest włączony, a moc wynosi {self.dhw_pump_w:.0f} W.",
                 "Sprawdź zasilanie i bezpiecznik pompy, przewód za przekaźnikiem i położenie "
                 "przełącznika AUTO–0–RĘKA (jeśli jest)."))
+
+        gravity = self._dhw_gravity(now, "heating_dhw_gravity" in active)
+        if gravity:
+            coil, src, src_name, tank, off_s = gravity
+            out.append(AlarmSpec(
+                "heating_dhw_gravity", "warning", "Ciepło płynie do CWU grawitacyjnie",
+                f"Pompa CWU stoi od {off_s / 60:.0f} min, a zasilanie wężownicy przy zasobniku ma {coil:.0f} °C "
+                f"({src_name} {src:.0f} °C" + (f", zasobnik {tank:.0f} °C)." if tank is not None else ").")
+                + " Bez przepływu ta rura stygnie do temperatury otoczenia — gorąca woda krąży sama, bez pompy.",
+                "Zamontuj zawór zwrotny (grawitacyjny, z klapką) na zasilaniu wężownicy CWU albo zrób syfon termiczny "
+                "(pętla rury w dół przy buforze). Bez tego bufor stale oddaje ciepło do zasobnika, a sterowanie CWU "
+                "(godziny, „tylko przy paleniu”) nie działa. Jeśli przełącznik pompy CWU w skrzynce stoi na RĘKA, "
+                "pompa pracuje mimo wyłączonego przekaźnika — to nie grawitacja.",
+                hold_s=DHW_GRAVITY_HOLD_S))
 
         room = self.t("room")
         target = self.room_target if self.room_target is not None else cfg["room_target_c"]
@@ -1000,6 +1148,9 @@ class HeatingModel:
                                       if s.get("stored_max_kwh") is not None and s.get("stored_start_kwh") is not None
                                       else None)}
         sps = self._boiler_trend.slope_per_s()
+        f_kmin = self._flue_trend_k_min() if probes["flue_gas"]["value"] is not None else None
+        off_s = self.dhw_pump_off_s(now)
+        gravity = self._alarms.get("heating_dhw_gravity")
         return {
             "updated": self.updated,
             "probes": probes,
@@ -1007,13 +1158,19 @@ class HeatingModel:
             "floors": self.floors,
             "house_c": self.house_c,
             "pump": {"on": self.pump_on, "power_w": self.pump_w},
-            "dhw_pump": {"on": self.dhw_pump_on, "power_w": self.dhw_pump_w},
+            "dhw_pump": {"on": self.dhw_pump_on, "power_w": self.dhw_pump_w,
+                         "off_min": None if off_s is None else round(off_s / 60.0)},
+            # gravity: the alarm active; suspected: its condition holds, still within the hold time
+            "dhw_coil": {"temp_c": probes["dhw_coil_supply"]["value"],
+                         "gravity": bool(gravity and gravity.active), "suspected": gravity is not None},
             "fan": {"on": self.fan_on, "power_w": self.fan_w},
             "laddomat": {"on": self.laddomat_on, "on_c": self.cfg["laddomat_on_c"]},
             "boiler": {
                 "state": self.state, "label": STATE_LABELS.get(self.state, self.state),
                 "since": self.state_since, "temp_c": probes["boiler_out"]["value"],
                 "trend_k_min": None if sps is None else round(sps * 60.0, 2),
+                "flue_c": probes["flue_gas"]["value"],
+                "flue_trend_k_min": None if f_kmin is None else round(f_kmin, 1),
                 "firing": self.state in FIRE_STATES,
             },
             "buffer": self.buffer,

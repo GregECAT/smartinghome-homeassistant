@@ -32,6 +32,7 @@ podpowiada, **do której rozpalić** i **ile drewna załadować**, żeby nie prz
 | Shelly 1PM Gen3 + **Shelly Plus Add-on** + do 5× DS18B20 | sondy temperatury; przekaźnik steruje pompą CO (z pomiarem mocy) |
 | Shelly 2PM Gen3 w trybie **Cover** + siłownik 3-punktowy 230 V (np. ESBE ARA661, 120 s) na zaworze 3-drogowym (np. ESBE VRG132) | zawór mieszający obiegu grzejników |
 | Shelly 1PM Mini Gen3 (opcjonalnie) | przekaźnik pompy ładującej CWU (z pomiarem mocy) |
+| Czujnik spalin (opcjonalnie): PT100 / termopara do 400–500 °C + przetwornik 0–10 V na wejście ANALOG IN Shelly Plus Add-on | rozpalenie i wygaśnięcie widać od razu, nie dopiero po temperaturze wody |
 | Gniazdko Wi-Fi (opcjonalnie) | wentylator nagrzewnicy na obiegu CO za pompą (np. garaż): rusza 2 min po pompie CO, gaśnie 2 min po niej |
 | Przełącznik modułowy 1-0-2 na każdą pompę (opcjonalnie) | AUTO–0–RĘKA: pompa ruszy ręcznie nawet bez Shelly |
 | Shelly H&T (lub inny czujnik) | czujnik odniesienia: temperatura i wilgotność w domu — według niego moduł grzeje |
@@ -50,6 +51,14 @@ czas impulsu odmierza sam Shelly, więc restart HA w trakcie impulsu nie zostawi
 | Bufor — dół | tuleja ~15–20 % wysokości | energia bufora, ładowanie |
 | Zasobnik CWU | tuleja ~2/3 wysokości | temperatura i energia CWU, sterowanie pompą CWU, limit grzałki z nadwyżki PV |
 | Zasilanie CO | ≥ 0,5 m za zaworem i pompą | sprzężenie zwrotne zaworu |
+| Spaliny (opcjonalnie) | czopuch, ~20–30 cm za kotłem, czujnik w osi przewodu | początek i koniec palenia (niżej: „Palenie według spalin”) |
+| Zasilanie wężownicy CWU (opcjonalnie) | rura zasilania wężownicy tuż przy zasobniku, pod otuliną | wykrywa krążenie grawitacyjne do CWU przy stojącej pompie |
+
+Czujnik spalin nie jest sondą DS18B20: ma własny zakres (−20…500 °C), a odczyt 85 °C jest dla niego
+zwykłą temperaturą. Encja w HA musi podawać °C — przelicz sygnał przetwornika w ustawieniach wejścia
+analogowego Shelly (np. przetwornik 0–400 °C na 0–10 V: 0–100 % × 4 = °C). Pozostałe sondy (także zasobnik CWU
+i wężownica, które stoją w domu, daleko od kotłowni) to zwykłe DS18B20 — przy długim przewodzie najlepiej
+na osobnym Shelly z Add-onem przy zasobniku.
 
 Wskazówki montażowe: tuleje 150 mm pasują do zbiorników; na rury DN25–32 lepsze są tuleje
 50–60 mm. Sondę wsuń do dna z pastą termoprzewodzącą i uszczelnij wylot. Przewód PVC nie może
@@ -72,6 +81,8 @@ Moduł działa też bez części sond. Nieprzypisaną sondę po prostu pomija, a
 | Kocioł — wyjście | krzywa grzewcza, zawór, pompa CO według domu, CWU z bufora | stanu kotła i sesji palenia, alarmów przegrzania kotła, wymuszenia pompy przy gorącym kotle |
 | Bufor — góra | CWU ładowana według **dołu** bufora (zaczyna trochę później); dół pilnuje też progu przegrzania bufora; zapas ciepła liczony z samego dołu (szacunek, zaniżony) | alarmu „bufor pełny”, limitu zasilania od góry bufora |
 | Bufor — dół | zapas ciepła liczony z samej góry (szacunek) | dokładnego zapasu ciepła |
+| Spaliny | palenie rozpoznawane po temperaturze wody w kotle | szybkiego wykrycia rozpalenia i końca palenia |
+| Zasilanie wężownicy CWU | wszystko | alarmu „Ciepło płynie do CWU grawitacyjnie” |
 
 Bezpieczeństwa kotła nie zapewnia Home Assistant, tylko termostat kotła, zawór termiczny (TZB)
 i Laddomat. Bez sondy kotła moduł nie pomoże przy przegrzaniu, więc taki układ traktuj jako
@@ -172,8 +183,8 @@ Pozycja **AUTO** wraca do harmonogramu.
 Opcja **Ładuj CWU tylko przy paleniu w kotle** (karta Pompa ładująca CWU) działa w obu sposobach sterowania,
 według sondy i według godzin. Gdy w kotle się nie pali, pompa CWU stoi, także w oknach godzinowych, a ciepło
 z bufora zostaje dla domu. Duży zasobnik i tak wytrzymuje dobę lub dwie między paleniami. Palenie trwa od
-rozpalania do końca wygasania, czyli do spadku kotła poniżej 60 °C. Ładowanie przerwane końcem palenia
-zatrzymuje się od razu.
+rozpalania do końca wygasania, czyli do spadku kotła poniżej 60 °C, a z czujnikiem spalin do chwili, gdy
+spaliny przez 15 minut są chłodniejsze niż 80 °C. Ładowanie przerwane końcem palenia zatrzymuje się od razu.
 
 - **Zrzut ciepła z gorącego kotła działa zawsze**, bo jest zabezpieczeniem.
 - Gdy stan kotła jest nieznany (brak odczytu sondy kotła), moduł nie ładuje CWU.
@@ -181,6 +192,49 @@ zatrzymuje się od razu.
 - W trybie według godzin ładowanie wymaga, by okno wypadło w czasie palenia. Jeśli palisz o różnych porach,
   ciepło do CWU trafia głównie ze zrzutu przy gorącym kotle. Pewniejsze jest sterowanie według sondy CWU:
   pompa ładuje wtedy zasobnik w trakcie każdego palenia, aż do zadanej.
+
+### Krążenie grawitacyjne do CWU
+
+Gorąca woda z bufora potrafi sama, bez pompy, wznosić się do wężownicy zasobnika. Bufor oddaje wtedy ciepło do
+CWU przez całą dobę, a ustawienia pompy CWU (godziny, „tylko przy paleniu”) nic nie dają. Z samych sond bufora
+i zasobnika tego nie widać, bo w trakcie palenia i tak wszystko jest gorące. Pokazuje to dopiero czujnik
+**Zasilanie wężownicy CWU (przy zasobniku)**: rura bez przepływu stygnie do temperatury otoczenia.
+
+Moduł podnosi ostrzeżenie **„Ciepło płynie do CWU grawitacyjnie”**, gdy jednocześnie:
+- pompa CWU stoi co najmniej **60 min** (krótki zanik Wi-Fi przekaźnika nie zeruje tego czasu, praca pompy — tak),
+- nie trwa zrzut ciepła (do domu ani do CWU),
+- źródło wężownicy (góra bufora albo kocioł, zależnie od ustawienia „skąd grzana jest wężownica”; bez sondy
+  góry bufora jej dół) ma co najmniej **50 °C**,
+- rura przy zasobniku ma co najmniej **35 °C** i jest **cieplejsza od zasobnika o ≥ 3 K** — ciepło przewodzone
+  z samego zasobnika nie ogrzeje jej ponad zasobnik, więc to ciepło musi płynąć ze źródła. Bez sondy zasobnika
+  rura musi mieć temperaturę najwyżej 15 K niższą od źródła,
+- i tak jest przez **20 minut**.
+
+Alarm znika przy 2 K histerezie albo gdy pompa ruszy. Rozwiązanie: **zawór zwrotny** (grawitacyjny, z klapką)
+na zasilaniu wężownicy albo **syfon termiczny** (pętla rury w dół przy buforze). Uwaga: pompa w pozycji RĘKA
+fizycznego przełącznika w skrzynce pracuje mimo wyłączonego przekaźnika — wtedy alarm nie oznacza grawitacji.
+Na schemacie odczyt rury jest na zasilaniu wężownicy przy zasobniku (z napisem „⚠ grawitacja”, gdy alarm trwa),
+a karta CWU pokazuje, od kiedy pompa stoi.
+
+### Palenie według spalin
+
+Bez czujnika spalin moduł rozpoznaje palenie po temperaturze wody na wyjściu z kotła. Woda reaguje jednak
+z opóźnieniem: od rozpalenia do 70 °C mija nawet półtorej godziny, a ocieplony kocioł po wygaśnięciu trzyma
+50–70 °C przez wiele godzin, więc palenie kończyło się dopiero po spadku kotła poniżej 60 °C.
+
+Z czujnikiem **Spaliny**:
+- **rozpalanie / praca** — spaliny ≥ **100 °C** i rosną (≥ 2 K/min w oknie 10 min) albo stoją na ≥ 120 °C;
+  dopóki woda w kotle ma mniej niż 65 °C, stan to „rozpalanie”, potem „praca”. Woda, która sama się ociepla
+  (np. od bufora), przy zimnych spalinach nie jest już paleniem;
+- **wygasanie** — spaliny spadają (≤ −1 K/min) poniżej 100 °C; w trakcie palenia przejście praca ↔ wygasanie
+  pilnuje też temperatura wody, jak dotąd. Ponowny wzrost spalin ponad 100 °C (dołożone drewno) to znów praca;
+- **koniec palenia** — spaliny poniżej **80 °C** i nie rosną przez **15 min** (krótka przerwa wentylatora
+  wyciągowego przy termostacie kotła nie kończy palenia), niezależnie od tego, jak ciepła jest woda;
+- przegrzanie nadal liczy się z temperatury wody.
+
+Gdy czujnik spalin nie ma odczytu, moduł wraca do reguł według wody. Jeśli czujnik czyta, ale za nisko (np. źle
+przeliczony sygnał), wyraźne palenie widoczne w wodzie (≥ 65 °C i szybki wzrost) i tak otworzy sesję, a skończy ją
+temperatura wody. Odczyt spalin i jego trend są w karcie kotła i na schemacie (czopuch nad kotłem).
 
 **Zawór przy postoju pompy CO.** Gdy pompa CO stoi co najmniej 2 minuty (np. w domu jest ciepło albo trwa
 obniżenie nocne), moduł zamyka zawór mieszający do końca. Otwarty zawór pozwala gorącej wodzie z bufora
@@ -250,7 +304,8 @@ przełącznik AUTO–0–RĘKA w skrzynce działa niezależnie od panelu.
 | Kocioł gorący (≥ próg ostrzeżenia, 88 °C) | ostrzeżenie |
 | Bufor pełny (góra ≥ 88 °C) | ostrzeżenie |
 | Ciepło nie płynie do bufora (kocioł ≥ 85 °C, góra bufora o 15 K niżej i nie rośnie od 20 min) | ostrzeżenie |
-| Brak odczytu czujnika (−127 °C, nagłe 85,0 °C, niedostępny > 2 min; skok > 10 K przyjmowany po 3 nowych odczytach lub 60 s) | ostrzeżenie; krytyczny w trakcie palenia |
+| Brak odczytu czujnika (−127 °C, nagłe 85,0 °C, niedostępny > 2 min; skok > 10 K przyjmowany po 3 nowych odczytach lub 60 s; czujnik spalin: poza −20…500 °C, skok > 80 K) | ostrzeżenie; krytyczny w trakcie palenia (sonda kotła / góry bufora) |
+| Ciepło płynie do CWU grawitacyjnie (pompa CWU stoi ≥ 60 min, a rura wężownicy przy zasobniku zostaje ciepła — szczegóły wyżej) | ostrzeżenie (po 20 min) |
 | Zanik prądu w trakcie palenia (falownik widzi 0 V w sieci) | krytyczny |
 | Pompa CO / pompa CWU nie pobiera prądu (przekaźnik włączony, moc < 3 W przez 2 min) | ostrzeżenie |
 | Zasilanie CO za gorące (ogranicznik) | ostrzeżenie |
@@ -288,6 +343,10 @@ Pierwszy ekran panelu to cała kotłownia na żywo, bez przewijania: pasek stanu
 pali się w trakcie palenia, w rurach płynie woda, gdy pracuje pompa Laddomatu, pompa CO albo pompa
 CWU, wirniki pomp się kręcą, a bufor ma kolory warstw od dołu do góry. Karty ze sterowaniem,
 doradcą, paleniami i dziennikiem są niżej, po przewinięciu.
+
+Czujnik spalin, gdy jest przypisany, widać jako czopuch nad kotłem z temperaturą i strzałką trendu, a rurę
+zasilania wężownicy CWU — jako punkt na zasilaniu wężownicy tuż przy zasobniku (na wykresie doby jako
+„Wężownica CWU”).
 
 Pompą Laddomatu steruje termostat kotła, więc moduł jej nie widzi: schemat pokazuje ją jako pracującą,
 gdy wyjście z kotła osiągnie próg włączenia (Ustawienia → „Kocioł i drewno” → „Pompa Laddomatu rusza od”;
@@ -342,3 +401,8 @@ Ogrzewanie pokazuje tę temperaturę, autopilot nie włącza grzałki, a włącz
 6. Pompa CWU w trybie Ręczne: „Pompa CWU ON” → moc > 3 W, CWU rośnie, góra bufora spada. W trybie
    Automatyczne przy buforze cieplejszym od CWU o ≥ 5 K i CWU ≤ zadana − 5 K pompa rusza, przy CWU = zadana staje.
 7. Raz w roku: test TZB według instrukcji producenta — woda płynie do odpływu.
+8. Czujnik spalin: przy rozpalaniu odczyt rośnie w ciągu kilku minut, a stan kotła zmienia się na
+   „rozpalanie” zanim woda w kotle zacznie rosnąć; po wygaśnięciu palenie kończy się ok. 15 min po spadku
+   spalin poniżej 80 °C.
+9. Rura wężownicy CWU: wieczorem, przy gorącym buforze, pompa CWU w pozycji 0 na ≥ 1 h. Rura stygnie do
+   temperatury otoczenia — brak krążenia; zostaje cieplejsza od zasobnika — krążenie grawitacyjne (alarm).
