@@ -1562,6 +1562,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       ${field("dhw_max_c", "CWU — górny limit (°C)", "nigdy powyżej, także przy zrzucie ciepła", c.dhw_max_c, 'min="40" max="90"')}
       <div>${chk("dhw_dump", "Zrzut ciepła do CWU przy przegrzaniu kotła (do górnego limitu)", c.dhw_dump,
         "tylko z termostatycznym zaworem mieszającym na wyjściu ciepłej wody — inaczej grozi poparzenie. Bez tej opcji gorący kocioł dogrzewa CWU tylko do zadanej. Bez sondy CWU zasobnik przyjmuje nadwyżkę przez cały czas, gdy kocioł jest gorący (do temperatury bufora, ok. 90 °C).")}</div>
+      <div>${chk("dhw_fire_only", "Ładuj CWU tylko przy paleniu w kotle", c.dhw_fire_only,
+        "gdy w kotle się nie pali, pompa CWU stoi (także w oknach godzinowych), a ciepło z bufora zostaje dla domu. Zrzut ciepła z gorącego kotła działa zawsze. Raz w tygodniu pompa rusza na 30 s przeciw zastaniu.")}</div>
     </div></div>`;
 
     html += `<div class="card" style="margin-top:14px"><h3>Krzywa grzewcza <small>zasilanie = zadana w domu + nachylenie × (zadana w domu − zewnątrz) + przesunięcie</small></h3>
@@ -1716,10 +1718,12 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       "light_lead_h", "burn_hours", "wood_price_kg", "dhw_on_diff_k", "dhw_off_diff_k", "dhw_hyst_k", "dhw_max_c",
       "dhw_win1_from", "dhw_win1_to", "dhw_win2_from", "dhw_win2_to", "fan_quiet_from", "fan_quiet_to"];
     const checks = ["enabled", "notify", "valve_invert", "safety_dump", "room_correction", "night_enabled", "advisor_notify", "dhw_dump",
-      "fan_quiet"];
+      "dhw_fire_only", "fan_quiet"];
     const selects = ["profile", "emitters", "mode", "valve_type", "valve_cover", "valve_open_switch", "valve_close_switch", "weather_entity",
       "dhw_source", "dhw_mode"];
-    for (const el of form.elements) {
+    // not `for … of form.elements`: HA 2026.10 patches HTMLFormElement.elements with an object whose iterator throws
+    // "Method not implemented" — the whole save died there silently (bobrek, 23.11.2026)
+    for (const el of form.querySelectorAll("input[name], select[name], textarea[name]")) {
       if (!el.name) continue;
       if (checks.includes(el.name)) c[el.name] = el.checked;
       else if (selects.includes(el.name)) c[el.name] = el.value;
@@ -1762,8 +1766,15 @@ class SmartingHomeHeatingPanel extends HTMLElement {
   }
 
   async _save() {
-    this._collect();
-    const cfg = { ...this._draft };
+    const btn = this.shadowRoot.getElementById("save");
+    let cfg;
+    try {
+      this._collect();
+      cfg = { ...this._draft };
+    } catch (e) {
+      this._saveFailed(e);
+      return;
+    }
     // fields left at the profile / emitter default are stored empty, so a later change of the
     // boiler profile or the emitters brings its own defaults
     const d = this._data.config;
@@ -1775,18 +1786,34 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     }
     if (cfg.safety_dump === emit.safety_dump) cfg.safety_dump = null;
     for (const k of ["tzb_c", "min_return_c"]) delete cfg[k];
+    if (btn) { btn.disabled = true; btn.textContent = "Zapisywanie…"; }
     try {
       this._data = await this._hass.callWS({ type: "smartinghome/heating/save", config: cfg });
       this._draft = null;
       this._saveMsg = cfg.enabled ? "✓ Zapisano — odczyty liczone od teraz" : "✓ Zapisano — moduł wyłączony (panel zniknie z menu)";
       this._chartTs = 0;
     } catch (e) {
-      this._saveMsg = "";
-      this._error = "";
-      alert(`Nie zapisano: ${e.message || e.code || e}`);
+      this._saveFailed(e);
       return;
     }
     this._renderBody();
+    this._toast(cfg.enabled ? "Ustawienia ogrzewania zapisane" : "Ustawienia zapisane — moduł ogrzewania wyłączony");
+  }
+
+  // the button sits at the bottom of a long form: confirm with HA's own toast as well, visible wherever the page is
+  _toast(message) {
+    this.dispatchEvent(new CustomEvent("hass-notification", { detail: { message }, bubbles: true, composed: true }));
+  }
+
+  _saveFailed(e) {
+    console.error("[SH] Ogrzewanie — zapis ustawień:", e);
+    const btn = this.shadowRoot.getElementById("save");
+    if (btn) { btn.disabled = false; btn.textContent = "💾 Zapisz"; }
+    this._saveMsg = "";
+    this._error = "";
+    const msg = `Nie zapisano: ${(e && (e.message || e.code)) || e}`;
+    this._toast(msg);
+    alert(msg);
   }
 }
 

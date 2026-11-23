@@ -331,6 +331,8 @@ class HeatingManager:
                                 for r in ("boiler_out", "buffer_top")),
                 room_licensed=self.has(FEATURE_HEATING_AUTO),
                 t_dhw=self.model.t("dhw"), dhw_pump_on=dhw_pump_on, dhw_pump_configured=dhw_pump_configured,
+                firing=(True if self.model.state in hm.FIRE_STATES or self.model.session is not None
+                        else None if self.model.state == "unknown" else False),
             ))
             for line in out.log:
                 self._log(line, now)

@@ -189,6 +189,7 @@ DEFAULTS: dict[str, Any] = {
     "dhw_off_diff_k": 2.0,      # … stop below this (else the tank heats the source back)
     "dhw_hyst_k": 5.0,          # recharge once the tank fell this far below dhw_target_c
     "dhw_dump": False,          # boiler too hot → tank up to dhw_max_c (needs a thermostatic mixer)
+    "dhw_fire_only": False,     # charge the tank only while there is a fire in the boiler (the heat dump always)
     "dhw_max_c": 80.0,
     "dhw_mode": "auto",         # "schedule": charge in the hour windows below, also without a tank probe
     "dhw_win1_from": 5,
@@ -358,6 +359,7 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     out["dhw_off_diff_k"] = _num(raw.get("dhw_off_diff_k"), 2.0, 0.5, out["dhw_on_diff_k"] - 1.0)
     out["dhw_hyst_k"] = _num(raw.get("dhw_hyst_k"), 5.0, 1.0, 20.0)
     out["dhw_dump"] = bool(raw.get("dhw_dump", False))
+    out["dhw_fire_only"] = bool(raw.get("dhw_fire_only", False))
     out["dhw_max_c"] = _num(raw.get("dhw_max_c"), max(80.0, out["dhw_target_c"]), out["dhw_target_c"], 90.0)
     out["dhw_mode"] = raw.get("dhw_mode") if raw.get("dhw_mode") in DHW_MODES else "auto"
     for k in ("dhw_win1_from", "dhw_win1_to", "dhw_win2_from", "dhw_win2_to"):

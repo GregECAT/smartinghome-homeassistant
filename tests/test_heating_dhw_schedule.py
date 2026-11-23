@@ -109,3 +109,50 @@ def test_no_blind_dump_without_the_option_or_when_the_boiler_is_not_hot():
 def test_with_a_tank_probe_the_limit_still_applies():
     ctrl = _hot(hc.HeatingController(_cfg(dhw_dump=True, dhw_max_c=80)))
     assert not ctrl._dhw_plan(_inp(1000.0, 14.0, t_top=92.0, t_dhw=81.0)).want
+
+
+# ── dhw_fire_only: no fire in the boiler → the tank is not charged at all ───────────────────────────────────────────
+
+def test_fire_only_is_off_by_default_and_stored():
+    assert hm.normalize({})["dhw_fire_only"] is False
+    assert hm.to_settings({"dhw_fire_only": True})["dhw_fire_only"] is True
+
+
+def test_fire_only_holds_the_window_without_a_fire():
+    ctrl = hc.HeatingController(_cfg(dhw_fire_only=True))
+    out = ctrl.step(_inp(100.0, 5.5, firing=False))
+    assert not out.dhw.want and out.dhw.urgent
+    assert out.dhw.reason == "CWU ładowana tylko przy paleniu — w kotle się nie pali"
+    assert out.dhw_pump is None                                   # already off: nothing to switch
+
+
+def test_fire_only_charges_in_the_window_during_a_fire():
+    out = hc.HeatingController(_cfg(dhw_fire_only=True)).step(_inp(100.0, 5.5, firing=True))
+    assert out.dhw.want and out.dhw_pump == ("on", "ładowanie CWU według godzin (5–6, 17–18): bufor 80 °C")
+
+
+def test_fire_only_stops_a_running_charge_when_the_fire_ends():
+    ctrl = hc.HeatingController(_cfg(dhw_fire_only=True))
+    assert ctrl.step(_inp(100.0, 17.1, firing=True)).dhw.want
+    ctrl.dhw_pump.note(True, 100.0)
+    out = ctrl.step(_inp(160.0, 17.2, firing=False, dhw_pump_on=True))     # 1 min later: no minimum run time
+    assert out.dhw_pump and out.dhw_pump[0] == "off"
+
+
+def test_fire_only_with_a_tank_probe_and_an_unknown_boiler():
+    ctrl = hc.HeatingController(_cfg(dhw_mode="auto", dhw_fire_only=True))
+    assert ctrl.step(_inp(100.0, 12.0, t_dhw=40.0, firing=True)).dhw.want
+    plan = hc.HeatingController(_cfg(dhw_mode="auto", dhw_fire_only=True))._dhw_plan(
+        _inp(100.0, 12.0, t_dhw=40.0, firing=None))
+    assert not plan.want and plan.reason.endswith("stan kotła nieznany")
+
+
+def test_fire_only_never_holds_back_the_hot_boiler_dump():
+    ctrl = _hot(hc.HeatingController(_cfg(dhw_dump=True, dhw_fire_only=True)))
+    plan = ctrl._dhw_plan(_inp(1000.0, 14.0, t_top=92.0, t_dhw=None, firing=False))
+    assert plan.want and plan.force and plan.dump
+
+
+def test_without_fire_only_the_window_ignores_the_fire():
+    out = hc.HeatingController(_cfg()).step(_inp(100.0, 5.5, firing=False))
+    assert out.dhw.want

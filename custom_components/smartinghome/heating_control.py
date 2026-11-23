@@ -376,6 +376,7 @@ class ControlInput:
     t_dhw: float | None = None
     dhw_pump_on: bool | None = None
     dhw_pump_configured: bool = False
+    firing: bool | None = None       # a fire in the boiler (model state ignition … burnout, or an open session)
 
 
 @dataclass
@@ -693,7 +694,19 @@ class HeatingController:
 
     # ── hot-water charging pump ─────────────────────────────────────────────
     def _dhw_plan(self, inp: ControlInput) -> DhwPlan:
-        """What the hot-water pump should do (computed in every mode, acted on in all but "off")."""
+        """What the hot-water pump should do (computed in every mode, acted on in all but "off").
+        dhw_fire_only: without a fire in the boiler the tank is not charged at all — the heat stays in the buffer
+        for the house (a 500 L tank lasts a day or two; bobrek 22.11.2026: the 05–06 window took ~20 kWh out of a
+        cooling buffer just before lighting). The hot-boiler dump (force) is safety and is never held back."""
+        plan = self._dhw_rule(inp)
+        if self.cfg.get("dhw_fire_only") and not inp.firing and not plan.force:
+            self.dhw_charging = False
+            why = "stan kotła nieznany" if inp.firing is None else "w kotle się nie pali"
+            return DhwPlan(urgent=True, source_c=plan.source_c,
+                           reason=f"CWU ładowana tylko przy paleniu — {why}")
+        return plan
+
+    def _dhw_rule(self, inp: ControlInput) -> DhwPlan:
         cfg = self.cfg
         boiler = cfg["dhw_source"] == "boiler_out"
         src_name = "kocioł" if boiler else "bufor"

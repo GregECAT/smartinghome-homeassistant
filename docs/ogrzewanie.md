@@ -167,6 +167,21 @@ zasobnik nie ma sondy albo jej odczyty są niepewne. Wtedy:
 Ręcznie pompę CWU włączasz przełącznikiem **RĘKA** w karcie Sterowanie, który działa niezależnie od godzin.
 Pozycja **AUTO** wraca do harmonogramu.
 
+### CWU tylko przy paleniu
+
+Opcja **Ładuj CWU tylko przy paleniu w kotle** (karta Pompa ładująca CWU) działa w obu sposobach sterowania,
+według sondy i według godzin. Gdy w kotle się nie pali, pompa CWU stoi, także w oknach godzinowych, a ciepło
+z bufora zostaje dla domu. Duży zasobnik i tak wytrzymuje dobę lub dwie między paleniami. Palenie trwa od
+rozpalania do końca wygasania, czyli do spadku kotła poniżej 60 °C. Ładowanie przerwane końcem palenia
+zatrzymuje się od razu.
+
+- **Zrzut ciepła z gorącego kotła działa zawsze**, bo jest zabezpieczeniem.
+- Gdy stan kotła jest nieznany (brak odczytu sondy kotła), moduł nie ładuje CWU.
+- Przepłukanie pompy CWU (30 s raz w tygodniu) zostaje.
+- W trybie według godzin ładowanie wymaga, by okno wypadło w czasie palenia. Jeśli palisz o różnych porach,
+  ciepło do CWU trafia głównie ze zrzutu przy gorącym kotle. Pewniejsze jest sterowanie według sondy CWU:
+  pompa ładuje wtedy zasobnik w trakcie każdego palenia, aż do zadanej.
+
 **Zawór przy postoju pompy CO.** Gdy pompa CO stoi co najmniej 2 minuty (np. w domu jest ciepło albo trwa
 obniżenie nocne), moduł zamyka zawór mieszający do końca. Otwarty zawór pozwala gorącej wodzie z bufora
 płynąć grawitacyjnie do grzejników także bez pompy. W jednej z pierwszych nocy było to ok. 17 kWh, czyli
