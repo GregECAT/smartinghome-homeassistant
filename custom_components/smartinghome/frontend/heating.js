@@ -522,6 +522,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         .flame.f2 { animation-duration:0.55s; } .flame.f3 { animation-duration:0.8s; } .flame.low { opacity:0.55; }
         .hotpulse { animation:hp 1.2s ease-in-out infinite alternate; animation-delay:var(--ph-pulse,0ms); }
         .bub { fill:rgba(255,255,255,0.65); animation:bub 3s linear infinite; }
+        .smoke { fill:#94a3b8; opacity:0; transform-box:fill-box; transform-origin:center; animation:smoke 3.6s ease-out infinite; }
+        .smoke.low { fill:#64748b; }
         .draw { stroke-dasharray:1; stroke-dashoffset:1; animation:draw 1.6s ease-out forwards; }
         .endp { opacity:0; animation:fadein 0.5s ease-out forwards; }
         @keyframes flow { to { stroke-dashoffset:-18; } }
@@ -530,10 +532,12 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         @keyframes hp { from { stroke-opacity:0.35; } to { stroke-opacity:1; } }
         @keyframes bub { 0% { transform:translateY(0); opacity:0; } 15% { opacity:0.7; } 100% { transform:translateY(-330px); opacity:0; } }
         @keyframes draw { to { stroke-dashoffset:0; } }
+        @keyframes smoke { 0% { transform:translate(0,0) scale(.5); opacity:0; } 20% { opacity:.45; } 100% { transform:translate(12px,-34px) scale(1.7); opacity:0; } }
         @keyframes fadein { to { opacity:1; } }
         @keyframes alarmp { from { box-shadow:0 0 0 rgba(231,76,60,0); } to { box-shadow:0 0 18px rgba(231,76,60,0.35); } }
         @media (prefers-reduced-motion: reduce) {
           .pf, .spin, .flame, .bub, .hotpulse, .alarm.err { animation:none; }
+          .smoke { animation:none; opacity:.3; }
           .draw { stroke-dasharray:none; animation:none; } .endp { opacity:1; animation:none; }
         }
         @media (max-width:700px), (max-height:520px) {
@@ -859,9 +863,10 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const supC = tempColor(sup ?? top), retC = tempColor(ret ?? (sup != null ? sup - 10 : bot));
     const feedC = tempColor(fromBoiler ? tb : top);
     const pos = Math.round(valve.position ?? 0);
-    const feed = fromBoiler ? "M190 160H210V30H540V100a10 10 0 0 1 0 20V390H640" : "M495 175H540V390H640";
-    const coilBack = fromBoiler ? "M640 464H560V512H215V390H190" : "M640 464H560V445H495";
-    const coil = "M640 392H728q14 0 14 12t-14 12H662q-14 0-14 12t14 12H728q14 0 14 12t-14 12H640";
+    // the hot-water coil sits in the lower part of the tank (as in the real one); its supply enters at y 430
+    const feed = fromBoiler ? "M190 160H210V30H540V100a10 10 0 0 1 0 20V430H640" : "M495 175H540V430H640";
+    const coilBack = fromBoiler ? "M640 478H560V512H215V390H190" : "M640 478H560V445H495";
+    const coil = "M640 430H730q8 0 8 8t-8 8H664q-8 0-8 8t8 8H730q8 0 8 8t-8 8H640";
 
     let s = `<svg viewBox="0 0 1200 520" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Kotłownia na żywo">
       <defs>
@@ -915,14 +920,31 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       s += `<path d="M70 372H150" stroke="#334155" stroke-width="3" stroke-linecap="round"/>`;
     }
 
-    // flue pipe (a sensor in the flue: the fire seen at once)
-    if (ents.flue_gas) {
-      const fc = flue == null ? "#334155" : flue >= 100 ? "#e67e22" : flue >= 60 ? "#c0846a" : "#475569";
+    // flue pipe and chimney above the boiler: smoke while there is a fire; with a flue-gas sensor its reading
+    // next to the pipe (the fire seen at once)
+    {
+      const hasFlue = !!ents.flue_gas;
+      const fc = !hasFlue || flue == null ? "#475569" : flue >= 100 ? "#e67e22" : flue >= 60 ? "#c0846a" : "#64748b";
       const ft = b.flue_trend_k_min;
-      s += `<rect x="141" y="88" width="18" height="62" rx="3" fill="url(#hgSteel)" stroke="${fc}" stroke-width="2"/>
-        ${flue != null && flue >= 100 ? `<rect x="137" y="84" width="26" height="40" rx="6" fill="${fc}" opacity=".35" filter="url(#hgGlow)"/>` : ""}
-        <text x="150" y="60" text-anchor="middle" class="t-s">spaliny</text>
-        <text x="150" y="80" text-anchor="middle" class="t-s2" style="fill:${flue == null ? "#64748b" : fc === "#475569" ? "#94a3b8" : fc}">${flue == null ? lbl("flue_gas") : `${num(flue, 0)}°`}${ft != null && flue != null ? (ft > 1 ? " ↑" : ft < -1 ? " ↓" : "") : ""}</text>`;
+      const low = b.state === "burnout" ? " low" : "";
+      s += `${hasFlue && flue != null && flue >= 100 ? `<rect x="140" y="100" width="32" height="56" rx="8" fill="${fc}" opacity=".35" filter="url(#hgGlow)"/>` : ""}
+        <rect x="148" y="112" width="16" height="38" fill="url(#hgSteel)" stroke="${fc}" stroke-width="2"/>
+        <rect x="141" y="46" width="30" height="66" rx="2" fill="#1e293b" stroke="#475569" stroke-width="1.5"/>
+        <path d="M141 62H171M141 79H171M141 96H171M156 46V62M149 62V79M163 62V79M156 79V96M149 96V112M163 96V112" stroke="#334155" stroke-width="1"/>
+        <rect x="137" y="40" width="38" height="7" rx="2" fill="#334155" stroke="#475569" stroke-width="1.5"/>`;
+      if (fire) {
+        s += [0, -1.2, -2.4].map((dl) =>
+          `<circle cx="156" cy="32" r="6" class="smoke${low}" style="animation-delay:${dl}s"/>`).join("");
+      }
+      if (hasFlue) {
+        const tc = flue == null ? "#64748b" : fc === "#64748b" ? "#94a3b8" : fc;
+        s += `<path d="M134 90L151 127" stroke="#475569" stroke-width="1"/>
+          <circle cx="156" cy="131" r="4.5" fill="${tc}" stroke="#0f172a" stroke-width="1.5"/>
+          <rect x="64" y="56" width="70" height="46" rx="9" fill="#0f172a" stroke="${tc}" stroke-width="1.5"/>
+          <text x="99" y="73" text-anchor="middle" class="t-s">spaliny</text>
+          <text x="99" y="93" text-anchor="middle" class="t-m" style="fill:${tc}">${flue == null ? lbl("flue_gas") : `${num(flue, 0)}°`}${
+            ft != null && flue != null ? (ft > 1 ? " ↑" : ft < -1 ? " ↓" : "") : ""}</text>`;
+      }
     }
 
     // Laddomat: its pump is started by the boiler's own thermostat (Atmos ≈ 75 °C), inferred from the outlet
@@ -1037,16 +1059,17 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       <rect x="640" y="355" width="120" height="150" rx="26" fill="url(#hgShine)"/>`;
     if (ents.dhw_coil_supply) {
       const cc = coilT == null ? "#64748b" : tempColor(coilT);
-      s += `<circle cx="612" cy="390" r="5" fill="${cc}" stroke="#0f172a" stroke-width="1.5"/>
-        <text x="604" y="380" text-anchor="middle" class="t-s2" style="fill:${cc}">${lbl("dhw_coil_supply")}</text>
-        ${coilG.gravity ? `<text x="596" y="414" text-anchor="middle" class="t-lock">⚠ grawitacja</text>`
-          : coilG.suspected ? `<text x="596" y="414" text-anchor="middle" class="t-s">ciepła bez pompy</text>` : ""}`;
+      s += `<circle cx="616" cy="430" r="5" fill="${cc}" stroke="#0f172a" stroke-width="1.5"/>
+        <text x="600" y="404" text-anchor="middle" class="t-s">zasilanie</text>
+        <text x="600" y="421" text-anchor="middle" class="t-s2" style="fill:${cc}">${lbl("dhw_coil_supply")}</text>
+        ${coilG.gravity ? `<text x="603" y="459" text-anchor="middle" class="t-lock">⚠ grawitacja</text>`
+          : coilG.suspected ? `<text x="603" y="459" text-anchor="middle" class="t-s">bez pompy</text>` : ""}`;
     }
-    s += `<path class="pc" d="${coil}" style="stroke-width:9"/><path class="pp" d="${coil}" stroke="${dhwOn ? feedC : "#475569"}" style="stroke-width:5"/>${dhwOn ? `<path class="pf" d="${coil}"/>` : ""}`;
-    s += `<text x="776" y="412" class="t-big2" style="fill:#e0e6ed">${lbl("dhw")}</text>`;
+    s += `<path class="pc" d="${coil}" style="stroke-width:8"/><path class="pp" d="${coil}" stroke="${dhwOn ? feedC : "#475569"}" style="stroke-width:4.5"/>${dhwOn ? `<path class="pf" d="${coil}"/>` : ""}`;
+    s += `<text x="700" y="398" text-anchor="middle" class="t-in t-big2">${lbl("dhw")}</text>`;
     if (dhw) {
-      s += `<text x="776" y="434" class="t-s">${num(dhw.charge_pct, 0)}% · ${num(dhw.energy_kwh)} kWh</text>
-        <text x="776" y="452" class="t-s">do ${num(c.dhw_target_c, 0)}°</text>`;
+      s += `<text x="700" y="417" text-anchor="middle" class="t-in t-s2">${num(dhw.charge_pct, 0)}% · ${num(dhw.energy_kwh)} kWh</text>
+        <text x="776" y="440" class="t-s">zadana ${num(c.dhw_target_c, 0)}°</text>`;
     }
     return s + `</svg>`;
   }

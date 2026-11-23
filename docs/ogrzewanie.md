@@ -252,7 +252,7 @@ Z czujnikiem **Spaliny**:
 
 Gdy czujnik spalin nie ma odczytu, moduł wraca do reguł według wody. Jeśli czujnik czyta, ale za nisko (np. źle
 przeliczony sygnał), wyraźne palenie widoczne w wodzie (≥ 65 °C i szybki wzrost) i tak otworzy sesję, a skończy ją
-temperatura wody. Odczyt spalin i jego trend są w karcie kotła i na schemacie (czopuch nad kotłem).
+temperatura wody. Odczyt spalin i jego trend są w karcie kotła i na schemacie (czopuch i komin nad kotłem).
 
 **Zawór przy postoju pompy CO.** Gdy pompa CO stoi co najmniej 2 minuty (np. w domu jest ciepło albo trwa
 obniżenie nocne), moduł zamyka zawór mieszający do końca. Otwarty zawór pozwala gorącej wodzie z bufora
@@ -369,9 +369,11 @@ pali się w trakcie palenia, w rurach płynie woda, gdy pracuje pompa Laddomatu,
 CWU, wirniki pomp się kręcą, a bufor ma kolory warstw od dołu do góry. Karty ze sterowaniem,
 doradcą, paleniami i dziennikiem są niżej, po przewinięciu.
 
-Czujnik spalin, gdy jest przypisany, widać jako czopuch nad kotłem z temperaturą i strzałką trendu, a rurę
-zasilania wężownicy CWU — jako punkt na zasilaniu wężownicy tuż przy zasobniku (na wykresie doby jako
-„Wężownica CWU”).
+Nad kotłem stoi komin, z którego w trakcie palenia unosi się dym. Czujnik spalin, gdy jest przypisany, ma
+punkt na czopuchu i ramkę „spaliny” z temperaturą i strzałką trendu. Zasobnik CWU ma wężownicę w dolnej części,
+jak prawdziwy zasobnik, a temperaturę wody (z procentem naładowania i kWh) w górnej. Rura zasilania wężownicy,
+gdy ma czujnik, pokazuje „zasilanie” z temperaturą w punkcie tuż przy wejściu do zasobnika (na wykresie doby
+jako „Wężownica CWU”).
 
 Pompą Laddomatu steruje termostat kotła, więc moduł jej nie widzi: schemat pokazuje ją jako pracującą,
 gdy wyjście z kotła osiągnie próg włączenia (Ustawienia → „Kocioł i drewno” → „Pompa Laddomatu rusza od”;
