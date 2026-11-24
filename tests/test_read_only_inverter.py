@@ -71,7 +71,11 @@ class _States:
 
     def get(self, entity_id):
         value = self._values.get(entity_id)
-        return value if value is None or isinstance(value, _State) else _State(value)
+        if value is None:
+            return None
+        state = value if isinstance(value, _State) else _State(value)
+        state.entity_id = entity_id
+        return state
 
 
 class _Services:
@@ -275,3 +279,107 @@ def test_deye_sensor_defaults_resolve_to_ha_solarman(monkeypatch):
     assert deye_ha.resolve_sensor(hass, "battery_soc", "sensor.my_soc", default) == "sensor.my_soc"
     grid = const.DEFAULT_SENSOR_MAP_DEYE["grid_power"]
     assert deye_ha.resolve_sensor(hass, "grid_power", grid, grid) == grid
+
+
+# ── Diagnostics download (read only) ──
+
+_ensure("homeassistant.helpers.device_registry", async_get=lambda hass: hass.device_registry)
+_ensure("homeassistant.helpers", device_registry=sys.modules["homeassistant.helpers.device_registry"])
+_ensure("homeassistant.config_entries", ConfigEntry=object)
+
+
+async def _integration(hass, domain):
+    return types.SimpleNamespace(version="26.11.0")
+
+
+_ensure("homeassistant.loader", async_get_integration=_integration)
+diagnostics = importlib.import_module("smartinghome_ro.diagnostics")
+
+
+def _diag_hass(old_param_names=False, program_flags=0x0021):
+    hass = _deye_hass()
+    regs = {0x0080: 40, 0x0081: 0, 0x0082: 1, 0x008D: 1, 0x008E: 2, 0x008F: 12000, 0x0090: 0, 0x0091: 1,
+            0x0092: 0x00FF, 0x0093: 0}
+    for n, start in enumerate((0, 600, 1300, 1500, 2200, 2300)):
+        regs.update({0x0094 + n: start, 0x009A + n: 5000, 0x00A0 + n: 4900, 0x00A6 + n: 50,
+                     0x00AC + n: program_flags if n == 0 else 0})
+    calls = hass.services.calls
+
+    async def async_call(domain, service, data=None, blocking=False, return_response=False, **_kw):
+        calls.append((domain, service, dict(data or {})))
+        if (domain, service) != ("solarman", "read_holding_registers"):
+            return None
+        if old_param_names and "address" in data:
+            raise ValueError("extra keys not allowed @ data['address']")
+        start = data.get("address", data.get("register"))
+        count = data.get("count", data.get("quantity"))
+        return {a: regs.get(a, 0) for a in range(start, start + count)}
+
+    hass.services.async_call = async_call
+    hass.services.has_service = lambda domain, service: domain == "solarman"
+    hass.config_entries = types.SimpleNamespace(async_get_entry=lambda ce_id: types.SimpleNamespace(
+        options={"host": "192.168.1.50", "lookup_file": "deye_p3.yaml", "mod": 0, "port": 8899}))
+    hass.device_registry = types.SimpleNamespace(async_get=lambda device_id: types.SimpleNamespace(
+        manufacturer="Deye", model="SG0*LP3", sw_version=None))
+    hass.states._values.update({
+        "sensor.inverter_device": _State("LV 3-Phase Hybrid Inverter", {
+            "Serial Number": "2312345678", "Control Board Firmware Version": "0x1234",
+            "Communication Board Firmware Version": "0x5678", "Modbus Address": 1}),
+        "sensor.inverter_load_power": "1500", "sensor.inverter_grid_power": "-1500",
+        "sensor.inverter_battery_power": "-3000", "sensor.inverter_pv_power": "6000",
+    })
+    for eid, key in (("sensor.inverter_device", "device_sensor"), ("sensor.inverter_load_power", "load_power_sensor"),
+                     ("sensor.inverter_grid_power", "grid_power_sensor"),
+                     ("sensor.inverter_battery_power", "battery_power_sensor")):
+        hass.registry.entities[eid] = _solarman(eid, key)
+    return hass
+
+
+def _patch_diag(monkeypatch):
+    _fixed_now(monkeypatch, 14)
+    monkeypatch.setattr(deye_ha.dt_util, "utcnow", lambda: datetime(2026, 11, 24, 13, 0), raising=False)
+    monkeypatch.setattr(sys.modules["homeassistant.helpers.device_registry"], "async_get",
+                        lambda hass: hass.device_registry)
+    monkeypatch.setattr(sys.modules["homeassistant.loader"], "async_get_integration", _integration)
+
+
+def test_deye_diagnostics_reads_registers_and_writes_nothing(monkeypatch):
+    _patch_diag(monkeypatch)
+    hass = _diag_hass()
+    out = asyncio.run(deye_ha.async_diagnostics(hass))
+    assert out["ha_solarman_version"] == "26.11.0" and out["inverters_with_time_of_use"] == 1
+    assert "host" not in out["ha_solarman_options"] and out["ha_solarman_options"]["lookup_file"] == "deye_p3.yaml"
+    assert "Serial Number" not in out["inverter"] and "Modbus Address" not in out["inverter"]
+    assert out["inverter"]["Control Board Firmware Version"] == "0x1234"
+    assert out["registers"]["raw"]["0x00AC"] == 0x21 and not out["registers"]["errors"]
+    assert out["registers"]["decoded"]["work_mode"] == "Zero Export To CT"
+    assert out["sign_check"]["grid"] == "+ pobór / − eksport"
+    text = " ".join(out["findings"])
+    assert "z maską" in text and "odwrotny niż oczekuje" in text
+    reads = [c for c in hass.services.calls if c[0] == "solarman"]
+    assert {c[1] for c in reads} == {"read_holding_registers"} and len(reads) == 3
+    assert [c for c in hass.services.calls if c[0] in _INVERTER_DOMAINS] == []
+
+
+def test_deye_diagnostics_falls_back_to_old_parameter_names(monkeypatch):
+    _patch_diag(monkeypatch)
+    out = asyncio.run(deye_ha.async_diagnostics(_diag_hass(old_param_names=True, program_flags=0x0001)))
+    assert not out["registers"]["errors"] and out["registers"]["raw"]["0x0092"] == 0x00FF
+    assert "tylko bitów ładowania" in " ".join(out["findings"])
+
+
+def test_config_entry_diagnostics_has_no_config_entry_secrets(monkeypatch):
+    _patch_diag(monkeypatch)
+    hass = _diag_hass()
+    em, _ = _manager(const.INVERTER_BRAND_DEYE, hass)
+    coordinator = types.SimpleNamespace(
+        _sensor_map={"battery_soc": "sensor.inverter_battery"},
+        _strategy_controller=types.SimpleNamespace(energy_manager=em),
+    )
+    entry = types.SimpleNamespace(entry_id="e1", data={
+        const.CONF_INVERTER_BRAND: const.INVERTER_BRAND_DEYE, "license_key": "SECRET", "gemini_api_key": "SECRET"})
+    hass.data = {const.DOMAIN: {"e1": {"coordinator": coordinator}}}
+    out = asyncio.run(diagnostics.async_get_config_entry_diagnostics(hass, entry))
+    assert out["inverter_brand"] == "deye" and out["inverter_control"]["read_only"]
+    assert out["deye"]["registers"]["decoded"]["programs"]
+    assert "SECRET" not in repr(out)

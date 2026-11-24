@@ -14,6 +14,7 @@ the user picked (default "Inverter"). Nothing here writes to the inverter.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime
 from typing import Any
@@ -23,6 +24,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
 
+from . import deye_diag as diag
 from . import deye_tou as tou
 
 SOLARMAN_PLATFORM = "solarman"
@@ -184,3 +186,138 @@ class DeyePreview:
         data = self.shadow.last.as_dict()
         data["last_change"] = self.last_change
         return data
+
+
+# ── Diagnostics (Settings → Devices & services → Smarting HOME → Download diagnostics) ──
+
+# ha-solarman keys whose state and age go into the diagnostics
+_DIAG_KEYS: tuple[str, ...] = (
+    "pv_power_sensor", "load_power_sensor", "grid_power_sensor", "battery_power_sensor",
+    "battery_sensor", "work_mode_select", "energy_pattern_select", "time_of_use_select",
+    "battery_grid_charging_switch", "battery_grid_charging_current_number",
+    "battery_low_soc_number", "export_surplus_switch", "export_surplus_power_number",
+) + tuple(
+    f"program_{n}_{field}" for n in range(1, tou.SLOT_COUNT + 1)
+    for field in ("time_time", "soc_number", "charging_select", "power_number")
+)
+_SECRET_WORDS = ("serial", "mac", "host", "address", "ip")
+_STALE_S = 300.0
+
+
+def _age_s(state: Any) -> float | None:
+    seen = getattr(state, "last_reported", None) or getattr(state, "last_updated", None)
+    return round((dt_util.utcnow() - seen).total_seconds(), 1) if seen else None
+
+
+def _no_secrets(data: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in data.items() if not any(w in str(k).lower() for w in _SECRET_WORDS)}
+
+
+async def _read_block(hass: HomeAssistant, device_id: str, address: int, count: int) -> dict[int, int]:
+    """FC03 read through ha-solarman (newer: address/count, older: register/quantity)."""
+    last_error: Exception | None = None
+    for data in (
+        {"device": device_id, "address": address, "count": count},
+        {"device": device_id, "register": address, "quantity": count},
+    ):
+        try:
+            response = await asyncio.wait_for(
+                hass.services.async_call(
+                    SOLARMAN_PLATFORM, "read_holding_registers", data, blocking=True, return_response=True,
+                ),
+                timeout=20,
+            )
+            return {int(k): int(v) for k, v in (response or {}).items()}
+        except Exception as err:  # noqa: BLE001 — try the older parameter names, then report
+            last_error = err
+    raise last_error or RuntimeError("read_holding_registers failed")
+
+
+async def async_diagnostics(hass: HomeAssistant) -> dict[str, Any]:
+    """Everything needed to judge a Deye install before any write exists. Writes nothing."""
+    from homeassistant.helpers import device_registry as dr
+    from homeassistant.loader import async_get_integration
+
+    _cache.pop(id(hass), None)
+    entities, inverters = solarman_entities(hass)
+    out: dict[str, Any] = {
+        "inverters_with_time_of_use": inverters,
+        "ha_solarman_entities_found": len(entities),
+    }
+    try:
+        out["ha_solarman_version"] = str((await async_get_integration(hass, SOLARMAN_PLATFORM)).version)
+    except Exception:  # noqa: BLE001 — not installed
+        out["ha_solarman_version"] = None
+    if not entities:
+        out["findings"] = ["Nie znaleziono encji ha-solarman (HACS: davidrapan/ha-solarman, profil deye_p3)."]
+        return out
+
+    registry = er.async_get(hass)
+    entry = next((registry.async_get(e) for e in entities.values() if registry.async_get(e)), None)
+    device_id = entry.device_id if entry else None
+    config_entry = hass.config_entries.async_get_entry(entry.config_entry_id) if entry else None
+    if config_entry is not None:
+        out["ha_solarman_options"] = _no_secrets(dict(config_entry.options))
+    device = dr.async_get(hass).async_get(device_id) if device_id else None
+    if device is not None:
+        out["device"] = {"manufacturer": device.manufacturer, "model": device.model, "sw_version": device.sw_version}
+    info = hass.states.get(entities.get("device_sensor", ""))
+    if info is not None:
+        out["inverter"] = {"type": info.state, **_no_secrets(dict(info.attributes))}
+
+    states: dict[str, Any] = {}
+    stale: dict[str, float] = {}
+    for key in _DIAG_KEYS:
+        state = hass.states.get(entities.get(key, ""))
+        if state is None:
+            continue
+        age = _age_s(state)
+        states[key] = {"entity_id": state.entity_id, "state": state.state, "age_s": age}
+        if key in ("pv_power_sensor", "battery_sensor") and age is not None and age > _STALE_S:
+            stale[state.entity_id] = age
+    out["states"] = states
+
+    table = read_table(hass, entities)
+    out["time_of_use_table"] = {
+        "valid": tou.slots_valid(table),
+        "slots": [
+            {"program": i + 1, "start": s.start, "soc": s.soc, "charging": s.charging}
+            for i, s in enumerate(table.slots)
+        ],
+        "problems": tou.problems_for(table, "charge_grid")[0],
+    }
+    out["clock_drift_s"] = table.clock_drift_s
+
+    def power(key: str) -> float | None:
+        return tou.parse_float(_state(hass, entities, key))
+
+    signs = diag.sign_check(
+        power("pv_power_sensor"), power("load_power_sensor"),
+        power("grid_power_sensor"), power("battery_power_sensor"),
+    )
+    out["sign_check"] = signs
+
+    registers: dict[str, Any] | None = None
+    if device_id and hass.services.has_service(SOLARMAN_PLATFORM, "read_holding_registers"):
+        raw: dict[int, int] = {}
+        errors: list[str] = []
+        for address, count in diag.REGISTER_BLOCKS:
+            try:
+                raw.update(await _read_block(hass, device_id, address, count))
+            except Exception as err:  # noqa: BLE001 — report, keep the rest
+                errors.append(f"0x{address:04X}+{count}: {err}")
+        registers = diag.decode_registers(raw)
+        out["registers"] = {
+            "raw": {f"0x{a:04X}": v for a, v in sorted(raw.items())},
+            "decoded": registers,
+            "errors": errors,
+        }
+    else:
+        out["registers"] = {"errors": ["Usługa solarman.read_holding_registers jest niedostępna."]}
+
+    out["findings"] = diag.findings(registers, signs, table.clock_drift_s, stale)
+    out["manual_checks"] = [
+        "Wersja firmware loggera: strona loggera http://<IP loggera>/ (zakładka status) — wpisz ją w zgłoszeniu.",
+        "Czy instalator ustawiał harmonogram w aplikacji Solarman / Deye Cloud i czy nadal tam coś zmienia.",
+    ]
+    return out

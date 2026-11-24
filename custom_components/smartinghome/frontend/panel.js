@@ -8047,7 +8047,8 @@ class SmartingHomePanel extends HTMLElement {
           <div style="padding:4px 8px;background:rgba(0,212,255,0.06);border-radius:4px;color:#94a3b8"><code style="color:#00d4ff">sensor.inverter_today_production</code> — PV dziś</div>
         </div>
         ${_warn('Deye: Smarting HOME <strong>tylko odczytuje dane</strong> i nie zmienia nastaw falownika. Zakładka Autopilot pokazuje podgląd — co zostałoby zapisane do harmonogramu Time of Use.')}
-        ${_warn('Moc sieci i baterii przypisz ręcznie i sprawdź znak: Smarting HOME oczekuje dla sieci <strong>+ eksport / − pobór</strong>.')}`);
+        ${_warn('Moc sieci i baterii przypisz ręcznie i sprawdź znak: Smarting HOME oczekuje dla sieci <strong>+ eksport / − pobór</strong>.')}
+        ${_warn('Znak i ustawienia harmonogramu sprawdza diagnostyka: Ustawienia → Urządzenia i usługi → Smarting HOME → ⋮ → <strong>Pobierz diagnostykę</strong> (najlepiej w dzień, gdy bateria się ładuje albo rozładowuje).')}`);
     } else if (brand === 'growatt') {
       sec2 = _sec('📦', '0,212,255', '2. Integracja Growatt — HACS', 'Połączenie z falownikiem Growatt',
         `<div style="font-size:11px;color:#94a3b8;line-height:1.6;margin-bottom:10px">
@@ -15774,6 +15775,7 @@ class SmartingHomePanel extends HTMLElement {
       }
       rows.push(`Zapisy do falownika, które wykonałby dziś: ${e(p.writes_today)}${p.over_budget ? ' ⚠️ ponad budżet zapisów' : ''}`);
       (p.problems || []).forEach(x => rows.push(`⚠️ ${e(x)}`));
+      rows.push('📋 Diagnostyka do testu sterowania: Ustawienia → Urządzenia i usługi → Smarting HOME → ⋮ → Pobierz diagnostykę (tylko odczyt, bez kluczy i numerów seryjnych).');
       html += `<div style="margin-top:8px;font-size:11px;font-weight:700;color:#00d4ff">Podgląd sterowania Deye — nic nie jest zapisywane</div>
         <div style="font-size:11px;color:#94a3b8;line-height:1.6">${rows.join('<br>')}</div>`;
     }

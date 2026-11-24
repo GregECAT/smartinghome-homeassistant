@@ -35,6 +35,25 @@ różni się od zegara Home Assistant o ponad 5 minut.
 Logika: `deye_tou.py` (bez zależności od Home Assistant, testy `tests/test_deye_tou.py`), odczyt encji:
 `deye_ha.py`.
 
+## Diagnostyka (przed testem sterowania)
+
+Ustawienia → Urządzenia i usługi → Smarting HOME → ⋮ → **Pobierz diagnostykę**. Plik JSON zawiera:
+
+- wersję Smarting HOME i ha-solarman, opcje ha-solarman (profil, `mod`), typ falownika i wersje firmware płyt,
+- tabelę Time of Use z encji i **surowe rejestry** 0x0080–0x0082, 0x008D–0x0091 i 0x0092–0x00B1 (trzy odczyty
+  FC03 przez `solarman.read_holding_registers` przy pobraniu pliku — nic nie jest zapisywane),
+- bity rejestrów programów 0x00AC–0x00B1: jeśli firmware używa bitów poza ładowaniem (tryb, sprzedaż), select
+  „Program N Charging” z ha-solarman wyzerowałby je przy zapisie,
+- **znak mocy sieci i baterii** z bilansu PV ± bateria ± sieć = zużycie (najlepiej pobrać w dzień, gdy bateria się
+  ładuje albo rozładowuje i jest wymiana z siecią),
+- dryf zegara falownika, wiek odczytów i wnioski po polsku (`findings`).
+
+Bez danych z konfiguracji Smarting HOME (klucz licencji, klucze AI), bez numerów seryjnych, adresów IP i MAC.
+Firmware loggera trzeba odczytać ręcznie ze strony loggera (`http://<IP loggera>/`).
+
+Logika: `deye_diag.py` (testy `tests/test_deye_diag.py`), zbieranie: `deye_ha.async_diagnostics`, platforma:
+`diagnostics.py`.
+
 ## Czego tu nie ma
 
 Zapisu do falownika. Zanim powstanie, potrzebny jest test na prawdziwym falowniku Deye (połączenie z loggerem,
