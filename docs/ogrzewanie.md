@@ -400,6 +400,11 @@ pali się w trakcie palenia, w rurach płynie woda, gdy pracuje pompa Laddomatu,
 CWU, wirniki pomp się kręcą, a bufor ma kolory warstw od dołu do góry. Karty ze sterowaniem,
 doradcą, paleniami i dziennikiem są niżej, po przewinięciu.
 
+**Kto co może zmienić:** temperatury w domu (dzień, noc, godziny nocy, obniżenia w ciągu dnia) i wpisy
+zważonego drewna — **każdy użytkownik Home Assistanta** z dostępem do panelu, bo w domu palą i ustawiają
+temperaturę wszyscy. Tryb pracy, ręczne sterowanie, przełączniki AUTO / 0 / RĘKA, czujniki, krzywa,
+progi alarmów i cała zakładka Ustawienia — tylko administrator.
+
 Bufor jest narysowany tak, jak zaleca się go podłączać: zasilanie wężownicy CWU wychodzi z samej góry (najgorętsza
 warstwa), zasilanie CO — trochę niżej, przez zawór mieszający i pompę CO; powrót z grzejników wchodzi na dół.
 Nad kotłem stoi komin, z którego w trakcie palenia unosi się dym. Czujnik spalin, gdy jest przypisany, ma

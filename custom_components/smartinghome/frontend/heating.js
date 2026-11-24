@@ -1209,7 +1209,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       <div><div class="lbl">Zadana w domu</div><div class="v">${num(ctl.room_target)}<small>°C</small></div>
         <div class="s">${dayNight}</div></div>
     </div>`;
-    html += this._scheduleHtml(st, ctl, c, admin, hrs);
+    html += this._scheduleHtml(st, ctl, c, true, hrs);   // the house temperatures: every HA user (everyone at home sets them)
     if (v.configured) {
       const pos = v.position ?? 0;
       html += `<div style="margin-top:14px; font-size:12px; color:#a0aec0">Zawór mieszający: <b style="color:#e0e6ed">${num(pos, 0)}%</b>

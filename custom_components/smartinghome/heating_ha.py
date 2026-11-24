@@ -1294,6 +1294,10 @@ def async_register_ws(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_heating_guard)
 
 
+# settings any HA user may change: the house temperatures (everyone at home lights the boiler and sets them)
+HOUSEHOLD_KEYS = frozenset({"room_target_c", "room_night_c", "night_enabled", "night_from", "night_to", "setbacks"})
+
+
 def _is_admin(connection: Any) -> bool:
     user = getattr(connection, "user", None)
     return bool(user and user.is_admin)
@@ -1320,16 +1324,21 @@ async def ws_heating_status(hass: HomeAssistant, connection, msg: dict[str, Any]
 })
 @websocket_api.async_response
 async def ws_heating_save(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
-    """Partial update of settings "heating" (admin only — alarm thresholds are safety settings)."""
-    if not _is_admin(connection):
-        connection.send_error(msg["id"], "unauthorized", "Ustawienia ogrzewania zmienia tylko administrator")
+    """Partial update of settings "heating". The house temperatures (day, night, setbacks) — any HA user: everyone
+    at home lights the boiler and sets the temperature; the rest (installation, control, alarm thresholds — safety
+    settings) — the administrator only."""
+    admin = _is_admin(connection)
+    # the emergency switches change only through their own command (with its confirmation in the panel)
+    updates = {k: v for k, v in msg["config"].items() if k not in ("lockout", "force_on")}
+    if not admin and (not updates or not set(updates) <= HOUSEHOLD_KEYS):
+        connection.send_error(msg["id"], "unauthorized", "Bez uprawnień administratora zmienisz tylko temperatury w domu "
+                                                         "(dzień, noc, obniżenia); resztę ustawień zmienia administrator")
         return
     manager = _manager_or_error(hass, connection, msg)
     if manager is None:
         return
-    # the emergency switches change only through their own command (with its confirmation in the panel)
-    await manager.async_save({k: v for k, v in msg["config"].items() if k not in ("lockout", "force_on")})
-    connection.send_result(msg["id"], manager.ws_payload(True))
+    await manager.async_save(updates)
+    connection.send_result(msg["id"], manager.ws_payload(admin))
 
 
 @websocket_api.websocket_command({
@@ -1356,7 +1365,7 @@ async def ws_heating_command(hass: HomeAssistant, connection, msg: dict[str, Any
     except ValueError as err:
         connection.send_error(msg["id"], "invalid", str(err))
         return
-    connection.send_result(msg["id"], payload)
+    connection.send_result(msg["id"], {**payload, "admin": _is_admin(connection)})
 
 
 @websocket_api.websocket_command({
