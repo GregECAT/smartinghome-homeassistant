@@ -175,6 +175,12 @@ więc Home Assistant nigdy nie działa wbrew niemu:
 - **kocioł gorący** (kocioł ≥ próg alarmu − 2 K, góra bufora ≥ „bufor pełny” + 4 K, albo kocioł ≥ ostrzeżenie
   i bufor pełny; koniec 3 K niżej) → **pompa CO włączona**, a przy grzejnikach także **zrzut ciepła**
   (zawór jedzie do pełnego otwarcia i ponawia to co 5 min); przy podłogówce zrzutu nie ma nigdy,
+- **zrzut według bufora** (Ustawienia → Kocioł i drewno, „Zrzut ciepła od góry bufora”, np. 93 °C): zamiast
+  reguły wyżej zrzut rusza tylko wtedy, gdy **kocioł się pali** (rozpalanie, praca, wygasanie) **i góra bufora**
+  ma ustawioną temperaturę; kończy się 3 K niżej albo gdy kocioł wygaśnie. Temperatura kotła zrzutu wtedy nie
+  włącza — przydaje się przy sondzie kotła przypiętej do rury, która przy paleniu zaniża o 10–15 K. Alarm
+  przegrzania kotła dalej powiadamia, a kocioł chronią jego termostat i zawór termiczny (działają bez prądu).
+  Gdy stan kotła jest nieznany (brak odczytu sondy kotła), gorący bufor i tak uruchamia zrzut,
 - **kocioł gorący** → pompa CWU dogrzewa zasobnik do zadanej (z opcją „zrzut ciepła do CWU” — do górnego
   limitu), o ile źródło jest cieplejsze od CWU,
 - **brak odczytu sondy kotła lub bufora** przez 60 s → pompa CO włączona (bez odczytu kotła moduł nie wie,

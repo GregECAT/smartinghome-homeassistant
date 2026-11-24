@@ -166,6 +166,9 @@ DEFAULTS: dict[str, Any] = {
     "warn_c": None,             # None → profile
     "alarm_c": None,
     "laddomat_on_c": None,      # None → profile; the boiler's own thermostat starts the Laddomat pump here
+    "dump_top_c": None,         # heat dump by the buffer: None → by the boiler and buffer together (boiler ≥ alarm − 2, or
+                                # ≥ warn with a full buffer, or top ≥ full + 4); a number → once the buffer's TOP is this hot,
+                                # the boiler probe only at the alarm (a strap-on probe reads low while firing)
     "efficiency": None,
     "wood_kwh_per_kg": WOOD_KWH_PER_KG,
     "notify": True,
@@ -352,6 +355,8 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     out["warn_c"] = _num(raw.get("warn_c"), profile["warn_c"], 70.0, 94.0)
     out["alarm_c"] = _num(raw.get("alarm_c"), profile["alarm_c"], out["warn_c"] + 1.0, 98.0)
     out["laddomat_on_c"] = _num(raw.get("laddomat_on_c"), profile["laddomat_on_c"], 40.0, 90.0)
+    top = _f(raw.get("dump_top_c"))
+    out["dump_top_c"] = None if top is None or top <= 0 else round(min(max(top, 80.0), 98.0), 1)
     out["efficiency"] = _num(raw.get("efficiency"), profile["efficiency"], 0.4, 0.95)
     out["wood_kwh_per_kg"] = _num(raw.get("wood_kwh_per_kg"), WOOD_KWH_PER_KG, 2.5, 5.2)
     out["tzb_c"] = profile["tzb_c"]

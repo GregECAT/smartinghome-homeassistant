@@ -90,11 +90,15 @@ def guard_config(cfg: dict[str, Any], pump: ShellyTarget | None, boiler: ShellyT
     """What the guard script on the pump's Shelly can do with this installation."""
     alarm_c = _num(cfg.get("alarm_c"), 92.0)
     full_c = _num(cfg.get("buffer_full_c"), 88.0)
+    dump_top = cfg.get("dump_top_c")
+    by_buffer = isinstance(dump_top, (int, float)) and not isinstance(dump_top, bool)
     out: dict[str, Any] = {
         "supported": False, "reason": "", "notes": [], "host": None,
         "pump_id": None, "boiler_id": None, "buffer_id": None,
-        "boiler_hot": round(alarm_c - 2.0, 1),
-        "buffer_hot": round(min(full_c + 4.0, 95.0), 1),
+        # the same rule as Home Assistant's (heating_control): with a dump by the buffer the boiler starts none
+        # (999 °C: never — the script still treats a lost boiler probe as a fault)
+        "boiler_hot": 999.0 if by_buffer else round(alarm_c - 2.0, 1),
+        "buffer_hot": round(float(dump_top) if by_buffer else min(full_c + 4.0, 95.0), 1),
         "fault_s": FAULT_S,
         "valve_host": None, "valve_id": None, "valve_open": "Cover.Open",
     }

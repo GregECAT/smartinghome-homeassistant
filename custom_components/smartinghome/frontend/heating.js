@@ -1766,6 +1766,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     html += `<div class="card" style="margin-top:14px"><h3>Kocioł i drewno</h3><div class="grid2">
       ${field("warn_c", "Ostrzeżenie — kocioł gorący (°C)", "", c.warn_c, 'min="70" max="94"', `profil: ${num(prof.warn_c, 0)}`)}
       ${field("alarm_c", "Alarm przegrzania (°C)", `zawór termiczny: ${num(prof.tzb_c, 0)} °C`, c.alarm_c, 'min="71" max="98"', `profil: ${num(prof.alarm_c, 0)}`)}
+      ${field("dump_top_c", "Zrzut ciepła od góry bufora (°C)", c.dump_top_c != null
+        ? `zrzut, gdy kocioł pali się, a góra bufora ma ${num(c.dump_top_c, 1)} °C (koniec 3 K niżej albo po wygaśnięciu); temperatura kotła zrzutu nie włącza — alarm przegrzania tylko powiadamia`
+        : "puste: zrzut według kotła i bufora (kocioł od alarmu − 2 K albo od ostrzeżenia przy pełnym buforze)", c.dump_top_c, 'min="80" max="98" step="0.5"', "według kotła")}
       ${field("efficiency", "Sprawność kotła (0–1)", "", c.efficiency, 'min="0.4" max="0.95" step="0.01"', `profil: ${num(prof.efficiency, 2)}`)}
       ${field("laddomat_on_c", "Pompa Laddomatu rusza od (°C)", "ustawienie termostatu kotła; tylko do schematu", c.laddomat_on_c, 'min="40" max="90"', `profil: ${num(prof.laddomat_on_c, 0)}`)}
       ${field("wood_kwh_per_kg", "Drewno (kWh/kg)", "sezonowane ~4,0; mokre mniej", c.wood_kwh_per_kg, 'min="2.5" max="5.2" step="0.1"')}
@@ -1986,7 +1989,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     if (!form || !this._draft) return;
     const c = this._draft;
     const nums = ["buffer_l", "buffer_max_c", "buffer_min_c", "buffer_full_c", "dhw_l", "dhw_cold_c", "dhw_target_c",
-      "room_target_c", "warn_c", "alarm_c", "efficiency", "laddomat_on_c", "wood_kwh_per_kg", "valve_run_s", "curve_slope", "curve_shift",
+      "room_target_c", "warn_c", "alarm_c", "dump_top_c", "efficiency", "laddomat_on_c", "wood_kwh_per_kg", "valve_run_s", "curve_slope", "curve_shift",
       "supply_min_c", "supply_max_c", "heating_limit_c", "room_gain", "room_hyst_k", "room_night_c", "night_from", "night_to",
       "light_lead_h", "burn_hours", "wood_price_kg", "dhw_on_diff_k", "dhw_off_diff_k", "dhw_hyst_k", "dhw_max_c",
       "dhw_win1_from", "dhw_win1_to", "dhw_win2_from", "dhw_win2_to", "fan_quiet_from", "fan_quiet_to"];

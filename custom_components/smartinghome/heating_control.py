@@ -540,13 +540,18 @@ class HeatingController:
         if hand.get("dhw_pump") and inp.dhw_pump_configured and not locks.get("dhw_pump"):
             out.dhw_pump = ("on", HAND_REASON) if inp.dhw_pump_on is False else None
         if blocked:
-            why = ("kocioł gorący" if self.hot else
+            why = (self._hot_why if self.hot else
                    "brak odczytu sondy kotła lub bufora" if inp.probe_fault else "ogranicznik zasilania")
             out.alarms.append(AlarmSpec(
                 "heating_lock_blocks_safety", "critical" if self.hot else "warning",
                 "Wyłącznik awaryjny blokuje zabezpieczenie",
                 f"Zabezpieczenie ({why}) chce włączyć: {', '.join(blocked)}, ale wyłącznik awaryjny w panelu to blokuje.",
                 "Gdy instalacja ma wodę, odblokuj w panelu: Sterowanie → Wyłączniki awaryjne."))
+
+    @property
+    def _hot_why(self) -> str:
+        """What made the heat dump: the buffer's top (dump_top_c) or the boiler."""
+        return "bufor pełny" if self.cfg.get("dump_top_c") is not None else "kocioł gorący"
 
     def _step(self, inp: ControlInput) -> ControlOutput:
         cfg, now = self.cfg, inp.now
@@ -623,26 +628,42 @@ class HeatingController:
         out.supply_target = round(target, 1)
 
         # safety states (computed in every mode, acted on in all but "off"). "Hot" is a superset of the
-        # Shelly guard's rule (heating_shelly.guard_config: boiler ≥ alarm − 2, buffer top ≥ full + 4,
-        # released 3 K lower), so Home Assistant never works against the script on the pump's Shelly.
+        # Shelly guard's rule (heating_shelly.guard_config: boiler ≥ alarm − 2, buffer top ≥ full + 4 — or, with
+        # dump_top_c, a fire and the top ≥ dump_top_c — the script, not knowing the fire, may start earlier, never
+        # later; released 3 K lower), so Home Assistant never works against the script on the pump's Shelly.
         # Without a top probe the bottom stands in: it is never warmer than the top, so it can only
         # trigger later than the top would — never a false alarm.
         tb = inp.t_boiler
         tt = inp.t_top if inp.t_top is not None else inp.t_bottom
-        boiler_hot = cfg["alarm_c"] - 2.0
-        buffer_hot = min(cfg["buffer_full_c"] + 4.0, 95.0)
-        pair = tb is not None and tt is not None and tb >= cfg["warn_c"] and tt >= cfg["buffer_full_c"]
-        hot_now = (inp.overheat or pair or (tb is not None and tb >= boiler_hot)
-                   or (tt is not None and tt >= buffer_hot))
-        if self.hot and not hot_now:
-            hot_now = ((tb is not None and tb >= boiler_hot - 3.0) or (tt is not None and tt >= buffer_hot - 3.0)
-                       or (tb is not None and tt is not None and tb >= cfg["warn_c"] - 3.0
-                           and tt >= cfg["buffer_full_c"] - 3.0))
+        dump_top = cfg.get("dump_top_c")
+        if dump_top is not None:
+            # by the buffer: a fire in the boiler and the top of the buffer this hot — the heat has nowhere to go. The
+            # boiler's temperature starts no dump (a strap-on probe reads low while firing, so "boiler ≥ alarm − 2"
+            # dumped at the boiler's normal working temperature — bobrek 24.11.2026); its overheat alarm still
+            # notifies, and the boiler's own thermal safety valve and thermostat act without power. Without a fire a
+            # hot buffer stays hot (nothing adds heat); a fire the module can't judge (no boiler reading) counts as one.
+            burning = inp.firing is not False
+            hot_now = burning and tt is not None and tt >= dump_top
+            if self.hot and not hot_now:
+                hot_now = burning and tt is not None and tt >= dump_top - 3.0
+        else:
+            boiler_hot = cfg["alarm_c"] - 2.0
+            buffer_hot = min(cfg["buffer_full_c"] + 4.0, 95.0)
+            pair = tb is not None and tt is not None and tb >= cfg["warn_c"] and tt >= cfg["buffer_full_c"]
+            hot_now = (inp.overheat or pair or (tb is not None and tb >= boiler_hot)
+                       or (tt is not None and tt >= buffer_hot))
+            if self.hot and not hot_now:
+                hot_now = ((tb is not None and tb >= boiler_hot - 3.0) or (tt is not None and tt >= buffer_hot - 3.0)
+                           or (tb is not None and tt is not None and tb >= cfg["warn_c"] - 3.0
+                               and tt >= cfg["buffer_full_c"] - 3.0))
         dump_now = bool(cfg["safety_dump"]) and hot_now
         if hot_now != self.hot and mode != "off":
-            out.log.append(("⚠️ Zrzut ciepła do domu: zawór otwarty, pompa CO włączona" if dump_now
-                            else "⚠️ Kocioł gorący — pompa CO wymuszona") if hot_now
-                           else "Kocioł poniżej progów — koniec wymuszenia pompy" + (" i zrzutu ciepła" if self.dumping else ""))
+            by_buffer = dump_top is not None
+            out.log.append(((f"⚠️ Zrzut ciepła do domu: zawór otwarty, pompa CO włączona"
+                             + (f" — kocioł pali się, góra bufora {tt:.1f} °C" if by_buffer and tt is not None else ""))
+                            if dump_now else f"⚠️ {self._hot_why.capitalize()} — pompa CO wymuszona") if hot_now
+                           else ("Bufor poniżej progu albo kocioł wygasł" if by_buffer else "Kocioł poniżej progów")
+                           + " — koniec wymuszenia pompy" + (" i zrzutu ciepła" if self.dumping else ""))
         self.hot = hot_now
         if not dump_now:
             self._dump_drive_ts = None
@@ -672,7 +693,7 @@ class HeatingController:
 
         # safety actions — they may only take heat away from the boiler
         force_pump = self.hot or inp.probe_fault
-        pump_reason = ("zrzut ciepła — kocioł gorący" if self.dumping else "kocioł gorący — odbiór ciepła"
+        pump_reason = (f"zrzut ciepła — {self._hot_why}" if self.dumping else f"{self._hot_why} — odbiór ciepła"
                        if self.hot else "brak odczytu sondy kotła/bufora")
         if inp.valve_configured:
             if self.dumping:
@@ -681,7 +702,7 @@ class HeatingController:
                 due = self._dump_drive_ts is None or now - self._dump_drive_ts >= DUMP_REDRIVE_S
                 if due and now >= self.valve.retry_at:
                     out.valve = ValveCommand("open", round(self.valve.run_s + OVERRUN_S, 1),
-                                             "zrzut ciepła — kocioł gorący", "safety")
+                                             f"zrzut ciepła — {self._hot_why}", "safety")
                     self._dump_drive_ts = now
             elif self.limiting:
                 out.valve = self.valve.force("close", "ogranicznik temperatury zasilania", now, MAX_PULSE_S)
@@ -792,8 +813,8 @@ class HeatingController:
             self.dhw_charging = True
             plan.want = plan.force = True
             plan.dump = t_dhw >= target
-            plan.reason = ("zrzut ciepła do CWU — kocioł gorący" if cfg["dhw_dump"]
-                           else "kocioł gorący — CWU dogrzewana do zadanej")
+            plan.reason = (f"zrzut ciepła do CWU — {self._hot_why}" if cfg["dhw_dump"]
+                           else f"{self._hot_why} — CWU dogrzewana do zadanej")
             return plan
         # a pump that already runs (after a restart, by hand) is judged as charging: no gap down to the hysteresis
         charging = self.dhw_charging or inp.dhw_pump_on is True
@@ -819,7 +840,7 @@ class HeatingController:
         probe — the thermostatic mixer on the hot-water outlet is the limit (which dhw_dump asks for anyway)."""
         self.dhw_charging = True
         plan.want = plan.force = plan.dump = True
-        plan.reason = f"zrzut ciepła do CWU — kocioł gorący ({src_name} {t_src:.0f} °C, bez sondy CWU)"
+        plan.reason = f"zrzut ciepła do CWU — {self._hot_why} ({src_name} {t_src:.0f} °C, bez sondy CWU)"
         return plan
 
     def _dhw_by_clock(self, inp: ControlInput, plan: DhwPlan, t_src: float | None, src_name: str,
@@ -852,8 +873,8 @@ class HeatingController:
             self.dhw_charging = True
             plan.want = plan.force = True
             plan.dump = t_dhw >= target
-            plan.reason = ("zrzut ciepła do CWU — kocioł gorący" if cfg["dhw_dump"]
-                           else "kocioł gorący — CWU dogrzewana do zadanej")
+            plan.reason = (f"zrzut ciepła do CWU — {self._hot_why}" if cfg["dhw_dump"]
+                           else f"{self._hot_why} — CWU dogrzewana do zadanej")
             return plan
         if not any(in_hours(a, b, inp.local_hour) for a, b in wins):
             self.dhw_charging = False

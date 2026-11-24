@@ -212,3 +212,8 @@ console.log(JSON.stringify(out));
     assert out["cooled"] == 0                    # back to normal: hands off, HA switches the pump off
     assert out["faultEarly"] == 0                # probe lost for 50 s: wait
     assert out["faultPump"] == 1                 # 60 s: pump on
+
+
+def test_guard_follows_a_dump_by_the_buffer_top():
+    g = hs.guard_config({**CFG, "dump_top_c": 93.0}, PUMP, BOILER, BUFFER, VALVE)
+    assert g["boiler_hot"] == 999.0 and g["buffer_hot"] == 93.0

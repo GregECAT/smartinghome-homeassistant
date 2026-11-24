@@ -400,3 +400,35 @@ def test_after_parking_heating_opens_the_valve_step_by_step():
     out = ctrl.step(_inp(5000.0, t_room=20.0, t_supply=30.0, pump_on=True))
     assert out.valve.direction == "open" and out.valve.kind == "auto"
     assert out.valve.seconds <= hc.MAX_PULSE_S                              # a pulse, not the full stroke
+
+
+# ── heat dump by the buffer's top (dump_top_c) — bobrek 24.11.2026 ───────────
+
+def test_dump_by_buffer_top_needs_a_fire_and_ignores_the_boiler():
+    ctrl = hc.HeatingController(_cfg(mode="auto", dump_top_c=93.0, alarm_c=79.0, warn_c=77.0))
+    # the boiler probe at its working temperature (and even at the alarm) starts nothing while the top is below 93
+    out = ctrl.step(_inp(100.0, t_boiler=80.0, t_top=86.3, overheat=True, firing=True))
+    assert out.dump is False and out.pump_forced == ""
+    out = ctrl.step(_inp(110.0, t_boiler=80.0, t_top=93.0, firing=True, pump_on=False))
+    assert out.dump is True and out.pump_forced == "dump"
+    assert any("góra bufora 93.0" in line for line in out.log)
+    assert out.pump == ("on", "zrzut ciepła — bufor pełny")
+    assert ctrl.step(_inp(120.0, t_top=90.5, firing=True)).dump is True          # held 3 K lower …
+    assert ctrl.step(_inp(130.0, t_top=89.9, firing=True)).dump is False         # … then released
+
+
+def test_dump_by_buffer_top_stops_when_the_fire_is_out():
+    ctrl = hc.HeatingController(_cfg(mode="auto", dump_top_c=93.0))
+    assert ctrl.step(_inp(100.0, t_top=94.0, firing=True)).dump is True
+    out = ctrl.step(_inp(110.0, t_top=94.0, firing=False))                     # nothing adds heat any more
+    assert out.dump is False and any("wygasł" in line for line in out.log)
+    assert ctrl.step(_inp(120.0, t_top=95.0, firing=False)).dump is False
+    assert ctrl.step(_inp(130.0, t_top=95.0, firing=None)).dump is True        # fire unknown: safety first
+
+
+def test_dump_top_setting_is_optional_and_clamped():
+    assert hm.normalize({})["dump_top_c"] is None
+    assert hm.normalize({"dump_top_c": 93})["dump_top_c"] == 93.0
+    assert hm.normalize({"dump_top_c": 120})["dump_top_c"] == 98.0
+    assert hm.normalize({"dump_top_c": ""})["dump_top_c"] is None
+    assert hm.to_settings({"dump_top_c": 93})["dump_top_c"] == 93.0
