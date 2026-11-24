@@ -83,6 +83,7 @@ ROOM_I_WRONG_K = 0.3
 # set, a band centred on the target (a mains-powered reference sensor that reports every 0.1 K)
 ROOM_ON_K = 0.5
 ROOM_OFF_K = 1.0
+ROOM_EPS_K = 0.001          # a reading equal to the band's edge counts as reaching it (float rounding)
 
 OUT_FAST_TAU_S = 900.0
 OUT_DAMPED_TAU_S = 6 * 3600.0
@@ -574,8 +575,12 @@ class HeatingController:
         cold = damped is None or damped < (limit + 1.0 if self.needed else limit)
         buffer_ok = inp.t_top is None or inp.t_top >= room_target + 5.0
         hyst = cfg.get("room_hyst_k")
-        on_k, off_k = (ROOM_ON_K, ROOM_OFF_K) if hyst is None else (-hyst / 2.0, hyst / 2.0)
-        room_ok = inp.t_room is None or inp.t_room < room_target + (off_k if self.needed else on_k)
+        if hyst is None:
+            room_ok = inp.t_room is None or inp.t_room < room_target + (ROOM_OFF_K if self.needed else ROOM_ON_K)
+        elif self.needed:               # the band around the target: stop at its top edge …
+            room_ok = inp.t_room is None or inp.t_room < room_target + hyst / 2.0 - ROOM_EPS_K
+        else:                           # … start AT its bottom edge (0.2 at 24: from 23.9, the sensor's 0.1 K steps)
+            room_ok = inp.t_room is None or inp.t_room <= room_target - hyst / 2.0 + ROOM_EPS_K
         self.needed = cold and buffer_ok and room_ok
         out.heating_needed = self.needed and mode == "auto"
 

@@ -84,7 +84,7 @@ const hystHint = (h, target) => {
   if (h == null || h === "" || !Number.isFinite(v) || v <= 0) return "puste: rusza poniżej zadanej + 0,5 K, staje przy zadanej + 1 K";
   const t = Number(target);
   return Number.isFinite(t)
-    ? `pasmo wokół zadanej: przy ${num(t, 1)} °C rusza poniżej ${num(t - v / 2, 2)} °C, staje przy ${num(t + v / 2, 2)} °C`
+    ? `pasmo wokół zadanej: przy ${num(t, 1)} °C rusza przy ${num(t - v / 2, 2)} °C i niżej, staje przy ${num(t + v / 2, 2)} °C`
     : `pasmo wokół zadanej: ± ${num(v / 2, 2)} K`;
 };
 const fmtTime = (ts) => (ts ? new Date(ts * 1000).toLocaleString("pl-PL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
