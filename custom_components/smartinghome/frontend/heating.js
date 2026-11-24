@@ -1050,10 +1050,13 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     }
 
     // outdoor
+    // the sensor's own reading in big when there is one (control goes by it), the forecast underneath for comparison
     if (ctl.t_out != null) {
-      s += `<text x="1110" y="58" text-anchor="middle" class="t-s">na zewnątrz</text>
-        <text x="1110" y="92" text-anchor="middle" class="t-big2">${num(ctl.t_out)}°</text>
-        ${ctl.t_out_damped != null ? `<text x="1110" y="114" text-anchor="middle" class="t-s">średnio ${num(ctl.t_out_damped)}°</text>` : ""}`;
+      const sensor = ctl.t_out_sensor != null;
+      s += `<text x="1110" y="58" text-anchor="middle" class="t-s">na zewnątrz${sensor ? " · czujnik" : ctl.t_out_source === "pogoda" ? " · prognoza" : ""}</text>
+        <text x="1110" y="92" text-anchor="middle" class="t-big2">${num(sensor ? ctl.t_out_sensor : ctl.t_out)}°</text>
+        ${ctl.t_out_damped != null ? `<text x="1110" y="114" text-anchor="middle" class="t-s">średnio ${num(ctl.t_out_damped)}°</text>` : ""}
+        ${sensor && ctl.t_out_weather != null ? `<text x="1110" y="132" text-anchor="middle" class="t-s">prognoza ${num(ctl.t_out_weather)}°</text>` : ""}`;
     }
 
     // a unit heater on the CH circuit (e.g. the garage): its fan runs with the CH pump
@@ -1193,8 +1196,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         <div class="s">krzywa ${num(ctl.curve_c)} °C${corr}${ctl.note ? `<br>${esc(ctl.note)}` : ""}</div></div>
       <div><div class="lbl">Zasilanie</div><div class="v">${num(supply)}<small>°C</small></div>
         <div class="s">${ctl.heating_needed ? "dom grzany" : c.mode === "auto" ? "bez zapotrzebowania" : ""}</div></div>
-      <div><div class="lbl">Na zewnątrz</div><div class="v">${num(ctl.t_out)}<small>°C</small></div>
-        <div class="s">${ctl.t_out_source ? `z: ${esc(ctl.t_out_source)}` : "brak danych"}${ctl.t_out_damped != null ? ` · średnio ${num(ctl.t_out_damped)} °C` : ""}</div></div>
+      <div><div class="lbl">Na zewnątrz</div><div class="v">${num(ctl.t_out_sensor != null ? ctl.t_out_sensor : ctl.t_out)}<small>°C</small></div>
+        <div class="s">${ctl.t_out_source ? `z: ${esc(ctl.t_out_source)}` : "brak danych"}${ctl.t_out_sensor != null && ctl.t_out_weather != null ? ` · prognoza ${num(ctl.t_out_weather)} °C` : ""}${ctl.t_out_damped != null ? ` · średnio ${num(ctl.t_out_damped)} °C` : ""}</div></div>
       <div><div class="lbl">Zadana w domu</div><div class="v">${num(ctl.room_target)}<small>°C</small></div>
         <div class="s">${dayNight}</div></div>
     </div>`;

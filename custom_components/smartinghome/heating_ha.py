@@ -400,6 +400,9 @@ class HeatingManager:
                 "t_out": None if out.t_out is None else round(out.t_out, 1),
                 "t_out_damped": None if out.t_out_damped is None else round(out.t_out_damped, 1),
                 "t_out_source": t_out_source if t_out is not None else None,
+                # both outdoor readings for the panel: the sensor (what control uses when there is one) and the forecast
+                "t_out_sensor": None if self.model.t("outdoor") is None else round(self.model.t("outdoor"), 1),
+                "t_out_weather": None if self._weather_now is None else round(self._weather_now, 1),
                 "heating_needed": out.heating_needed, "dump": out.dump, "limiter": out.limiter, "note": out.note,
                 "valve": {"configured": self._valve_configured(), "position": round(valve.position),
                           "known": valve.known, "saturated": valve.saturated, "busy": now < valve.busy_until,

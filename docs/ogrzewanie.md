@@ -37,6 +37,7 @@ podpowiada, **do której rozpalić** i **ile drewna załadować**, żeby nie prz
 | Przełącznik modułowy 1-0-2 na każdą pompę (opcjonalnie) | AUTO–0–RĘKA: pompa ruszy ręcznie nawet bez Shelly |
 | Shelly H&T (lub inny czujnik) | czujnik odniesienia: temperatura i wilgotność w domu — według niego moduł grzeje |
 | Encja pogody w HA (np. Met.no) | temperatura zewnętrzna i prognoza godzinowa (doradca) |
+| Czujnik zewnętrzny (opcjonalnie, np. na północnej ścianie, poza słońcem) | gdy jest, krzywa grzewcza i granica grzania liczą się według niego, a prognoza zostaje do porównania (schemat pokazuje obie) i jako zapas, gdy czujnik zniknie |
 
 Działają też inne urządzenia: dowolne czujniki °C w HA, siłownik jako encja `cover` albo dwa
 przekaźniki (otwórz / zamknij). Najdokładniejsze impulsy daje Shelly Gen2/Gen3 w trybie Cover:
