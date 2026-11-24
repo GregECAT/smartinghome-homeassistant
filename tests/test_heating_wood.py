@@ -159,3 +159,28 @@ def test_advice_counts_the_wood_still_in_the_firebox():
     # 9.3 kW: the buffer alone ~3.2 h, with the wood in the firebox ~8.2 h
     assert (only_buffer["empty_at"] / H) == pytest.approx(30.0 / 9.3, rel=0.03)
     assert (with_fire["empty_at"] / H) == pytest.approx(76.5 / 9.3, rel=0.03)
+
+
+# ── heating costs: the kind of wood and the price as bought → zł/kg ─────────
+
+def test_price_per_stacked_metre_of_hardwood():
+    c = hm.normalize({"wood_kind": "hard", "wood_price": 300, "wood_price_unit": "mp"})   # bobrek: 300 zł/mp, hard
+    assert c["wood_kg_per_unit"] == pytest.approx(700 * 0.65, abs=0.1)
+    assert c["wood_price_kg"] == pytest.approx(300 / 455.0, abs=0.001)
+    months = hm.monthly_summary([{"start": 1_795_000_000, "duration_h": 5, "stored_kwh": 40, "wood_kg": 45.5}],
+                                3600, price_kg=c["wood_price_kg"])
+    assert months[0]["cost"] == pytest.approx(30, abs=1)          # 45.5 kg ≈ 0.1 mp ≈ 30 zł
+
+
+def test_price_per_solid_metre_and_per_kg_and_kinds():
+    assert hm.normalize({"wood_kind": "soft", "wood_price": 240, "wood_price_unit": "m3"})["wood_price_kg"] \
+        == pytest.approx(0.5, abs=0.001)
+    assert hm.normalize({"wood_price": 0.7, "wood_price_unit": "kg"})["wood_price_kg"] == 0.7
+    c = hm.normalize({"wood_kind": "oak?", "wood_price_unit": "ton"})
+    assert c["wood_kind"] == "mixed" and c["wood_price_unit"] == "mp" and c["wood_price_kg"] is None
+
+
+def test_older_zl_per_kg_setting_still_counts():
+    assert hm.normalize({"wood_price_kg": 0.8})["wood_price_kg"] == 0.8
+    stored = hm.to_settings({"wood_kind": "hard", "wood_price": 300})
+    assert stored["wood_price"] == 300 and stored["wood_kind"] == "hard" and "wood_kg_per_unit" not in stored

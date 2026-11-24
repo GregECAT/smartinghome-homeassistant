@@ -214,7 +214,10 @@ DEFAULTS: dict[str, Any] = {
     "light_lead_h": 1.0,        # from lighting to the buffer taking heat
     "burn_hours": 4.0,
     "advisor_notify": True,
-    "wood_price_kg": None,      # zł/kg, season cost
+    "wood_price_kg": None,      # zł/kg, season cost (derived from wood_price / wood_price_unit when those are set)
+    "wood_kind": "mixed",       # soft / mixed / hard — how many kg a cubic metre of seasoned wood weighs
+    "wood_price": None,         # the price as bought …
+    "wood_price_unit": "mp",    # … per "mp" (metr przestrzenny, stacked split logs), "m3" (solid) or "kg"
 }
 
 STATE_LABELS = {
@@ -301,6 +304,22 @@ def switch_state(state: Any) -> bool | None:
 
 
 # ── configuration ────────────────────────────────────────────────────────────
+
+# seasoned firewood (~20 % moisture): kg per solid cubic metre; a stacked metre (metr przestrzenny, split logs
+# laid in a pile) holds about 0.65 of it in wood — the rest is air
+WOOD_KINDS = {
+    "hard": ("twarde (buk, dąb, grab, jesion)", 700.0),
+    "mixed": ("mieszane", 600.0),
+    "soft": ("miękkie (sosna, świerk, olcha, topola)", 480.0),
+}
+STACKED_SOLID = 0.65
+WOOD_PRICE_UNITS = {"mp": "zł / mp (metr przestrzenny)", "m3": "zł / m³ (lity)", "kg": "zł / kg"}
+
+
+def wood_kg_per_unit(kind: str, unit: str) -> float:
+    """kg of wood in one unit of the price: a stacked metre (mp), a solid cubic metre (m3) or a kg."""
+    density = WOOD_KINDS.get(kind, WOOD_KINDS["mixed"])[1]
+    return 1.0 if unit == "kg" else density if unit == "m3" else density * STACKED_SOLID
 
 def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     """Settings "heating" with defaults filled in and every number clamped to a sane range."""
@@ -409,8 +428,18 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     out["light_lead_h"] = _num(raw.get("light_lead_h"), 1.0, 0.0, 6.0)
     out["burn_hours"] = _num(raw.get("burn_hours"), 4.0, 1.0, 12.0)
     out["advisor_notify"] = raw.get("advisor_notify", True) is not False
-    price = _f(raw.get("wood_price_kg"))
-    out["wood_price_kg"] = None if price is None or price <= 0 else min(price, 10.0)
+    out["wood_kind"] = raw.get("wood_kind") if raw.get("wood_kind") in WOOD_KINDS else DEFAULTS["wood_kind"]
+    out["wood_price_unit"] = (raw.get("wood_price_unit") if raw.get("wood_price_unit") in WOOD_PRICE_UNITS
+                              else DEFAULTS["wood_price_unit"])
+    bought = _f(raw.get("wood_price"))
+    out["wood_price"] = None if bought is None or bought <= 0 else round(min(bought, 5000.0), 2)
+    per_unit = wood_kg_per_unit(out["wood_kind"], out["wood_price_unit"])
+    out["wood_kg_per_unit"] = round(per_unit, 1)          # shown in the panel next to the price
+    if out["wood_price"] is not None:
+        price = out["wood_price"] / per_unit               # the price as bought → zł/kg
+    else:
+        price = _f(raw.get("wood_price_kg"))               # older settings: zł/kg typed directly
+    out["wood_price_kg"] = None if price is None or price <= 0 else round(min(price, 10.0), 3)
     return out
 
 

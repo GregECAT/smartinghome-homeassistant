@@ -77,6 +77,8 @@ function fanDraw(hass, c, fan) {
   return { watts, known, drawing, missing: known && fan.on === true && !drawing && onFor >= 60 };
 }
 const mmss = (sec) => { const t = Math.max(Math.round(Number(sec) || 0), 0); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`; };
+const WOOD_KINDS = { hard: "twarde (buk, dąb, grab, jesion)", mixed: "mieszane", soft: "miękkie (sosna, świerk, olcha, topola)" };
+const WOOD_UNITS = { mp: "zł / mp (metr przestrzenny)", m3: "zł / m³ (lity)", kg: "zł / kg" };
 const num = (v, d = 1) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toLocaleString("pl-PL", { minimumFractionDigits: d, maximumFractionDigits: d }));
 // the CH pump is on HAND (the panel switch) — leaving it closes the mixing valve first
 const handC0 = (d) => !!(((d || {}).config || {}).force_on || {}).pump;
@@ -1392,12 +1394,39 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         <li>Na start wystarczą <b>2–3 palenia zważone w całości</b>; potem waż przy zmianie drewna (inny gatunek, wilgotność).</li>
       </ol></div>`;
 
+    // heating costs: the price as bought (per stacked or solid metre) turned into zł/kg by the kind of wood
+    const c = d.config || {}, price = c.wood_price_kg;
+    const months = d.monthly || [];
+    const thisMonth = months.length ? months[months.length - 1] : null;
+    const now = new Date();
+    const curKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const mNow = thisMonth && thisMonth.month === curKey ? thisMonth : null;
+    const season = months.reduce((acc, m) => acc + (m.cost || 0), 0);
+    const unitName = { mp: "mp", m3: "m³", kg: "kg" }[c.wood_price_unit || "mp"];
+    html += `<div class="card" style="margin-top:14px"><h3>💰 Koszty ogrzewania <small>drewno × cena</small></h3>`;
+    if (!price) {
+      html += `<div class="hint">Podaj <b>rodzaj drewna</b> i <b>cenę</b> (np. 300 zł za metr przestrzenny) w Ustawieniach → Doradca i koszty.</div>`;
+    } else {
+      html += `<div class="ctl">
+        <div><div class="lbl">Ten miesiąc</div><div class="v">${mNow && mNow.cost != null ? num(mNow.cost, 0) : "0"}<small>zł</small></div>
+          <div class="s">${mNow ? `~${num(mNow.wood_kg, 0)} kg · ${mNow.fires} paleń` : "bez paleń"}</div></div>
+        <div><div class="lbl">Średnio na dobę</div><div class="v">${mNow && mNow.cost != null ? num(mNow.cost / Math.max(now.getDate(), 1), 0) : "—"}<small>zł</small></div>
+          <div class="s">w tym miesiącu</div></div>
+        <div><div class="lbl">Sezon</div><div class="v">${num(season, 0)}<small>zł</small></div>
+          <div class="s">${months.length} ${months.length === 1 ? "miesiąc" : "mies."} z paleniami</div></div>
+        <div><div class="lbl">Cena</div><div class="v">${num(price, 2)}<small>zł/kg</small></div>
+          <div class="s">${c.wood_price != null ? `${num(c.wood_price, 0)} zł/${unitName}` : ""}${c.wood_price_unit !== "kg" ? ` · ${esc((WOOD_KINDS[c.wood_kind] || "").split(" (")[0])}, ok. ${num(c.wood_kg_per_unit, 0)} kg/${unitName}` : ""}</div></div>
+      </div>
+      <div class="hint">Palenia bez ważenia liczą się z ciepła oddanego do bufora i domu (szacunek); zważone — z wagi. Im więcej zważonych paleń, tym dokładniejszy koszt.</div>`;
+    }
+    html += `</div>`;
+
     // weighed fires
     const weighed = (d.sessions || []).filter((x) => x.wood_kg).slice(-10).reverse();
     html += `<div class="card" style="margin-top:14px"><h3>📒 Zważone palenia</h3>${weighed.length
-      ? `<table><tr><th>Palenie</th><th>Czas</th><th>Drewno</th><th>Ciepło</th></tr>${weighed.map((x) => `<tr><td>${esc(fmtTime(x.start))}</td>
+      ? `<table><tr><th>Palenie</th><th>Czas</th><th>Drewno</th><th>Ciepło</th>${price ? "<th>Koszt</th>" : ""}</tr>${weighed.map((x) => `<tr><td>${esc(fmtTime(x.start))}</td>
           <td>${x.duration_h != null ? `${num(x.duration_h, 1)} h` : "—"}</td><td><b>${num(x.wood_kg, 1)} kg</b>${Array.isArray(x.loads) && x.loads.length > 1 ? ` <span class="muted">(${x.loads.length} wpisy)</span>` : ""}</td>
-          <td>${x.heat_kwh != null ? `${num(x.heat_kwh, 0)} kWh` : x.stored_kwh != null ? `${num(x.stored_kwh, 0)} kWh w zbiornikach` : "—"}</td></tr>`).join("")}</table>`
+          <td>${x.heat_kwh != null ? `${num(x.heat_kwh, 0)} kWh` : x.stored_kwh != null ? `${num(x.stored_kwh, 0)} kWh w zbiornikach` : "—"}</td>${price ? `<td>${num(x.wood_kg * price, 0)} zł</td>` : ""}</tr>`).join("")}</table>`
       : `<div class="hint">Jeszcze żadnego. Pierwsze zważone palenie pojawi się tutaj.</div>`}</div>`;
     return html;
   }
@@ -1415,7 +1444,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         ${price ? `<td>${m.cost != null ? `${num(m.cost, 0)} zł` : "—"}</td>` : ""}</tr>`;
     }
     html += `</tbody></table></div>`;
-    if (!price) html += `<div class="hint">Podaj cenę drewna (zł/kg) w ustawieniach, a pojawi się koszt.</div>`;
+    if (!price) html += `<div class="hint">Podaj rodzaj i cenę drewna (np. 300 zł za metr przestrzenny) w Ustawieniach → Doradca i koszty, a pojawi się koszt.</div>`;
     return html;
   }
 
@@ -1863,11 +1892,16 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       </div>
       <div id="curvebox">${this._curveSvg(c)}</div></div></div>`;
 
+    // older settings kept only zł/kg: shown as such, so a save keeps the price
+    const priceUnit = c.wood_price == null && c.wood_price_kg ? "kg" : (c.wood_price_unit || "mp");
     html += `<div class="card" style="margin-top:14px"><h3>Doradca i koszty</h3><div class="grid2">
       <label class="f">Encja pogody (prognoza godzinowa)${sel("weather_entity", weather, c.weather_entity)}</label>
       ${field("light_lead_h", "Rozpalanie z wyprzedzeniem (h)", "zanim kocioł zacznie ładować bufor", c.light_lead_h, 'min="0" max="6" step="0.25"')}
       ${field("burn_hours", "Czas palenia jednego załadunku (h)", "", c.burn_hours, 'min="1" max="12" step="0.5"')}
-      ${field("wood_price_kg", "Cena drewna (zł/kg)", "np. 350 zł/mp ≈ 0,8 zł/kg", c.wood_price_kg, 'min="0" max="10" step="0.01"')}
+      <label class="f">Rodzaj drewna${sel("wood_kind", WOOD_KINDS, c.wood_kind || "mixed")}<span class="h">ile waży metr drewna sezonowanego — z tego cena za kg</span></label>
+      ${field("wood_price", "Cena drewna", c.wood_price_kg ? `= ${num(c.wood_price_kg, 2)} zł/kg${priceUnit !== "kg" ? ` (${num(c.wood_kg_per_unit, 0)} kg na ${priceUnit === "m3" ? "m³" : "mp"})` : ""}` : "np. 300 zł za metr przestrzenny",
+        c.wood_price ?? c.wood_price_kg, 'min="0" max="5000" step="0.01"')}
+      <label class="f">Cena za${sel("wood_price_unit", WOOD_UNITS, priceUnit)}<span class="h">mp: drewno ułożone w stos (ok. 0,65 m³ litego drewna)</span></label>
       <div>${chk("advisor_notify", "Powiadomienie „rozpal do…”", c.advisor_notify)}</div>
     </div></div>`;
     return html;
@@ -1995,12 +2029,12 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const nums = ["buffer_l", "buffer_max_c", "buffer_min_c", "buffer_full_c", "dhw_l", "dhw_cold_c", "dhw_target_c",
       "room_target_c", "warn_c", "alarm_c", "dump_top_c", "efficiency", "laddomat_on_c", "wood_kwh_per_kg", "valve_run_s", "curve_slope", "curve_shift",
       "supply_min_c", "supply_max_c", "heating_limit_c", "room_gain", "room_hyst_k", "room_night_c", "night_from", "night_to",
-      "light_lead_h", "burn_hours", "wood_price_kg", "dhw_on_diff_k", "dhw_off_diff_k", "dhw_hyst_k", "dhw_max_c",
+      "light_lead_h", "burn_hours", "wood_price", "dhw_on_diff_k", "dhw_off_diff_k", "dhw_hyst_k", "dhw_max_c",
       "dhw_win1_from", "dhw_win1_to", "dhw_win2_from", "dhw_win2_to", "fan_quiet_from", "fan_quiet_to"];
     const checks = ["enabled", "notify", "valve_invert", "safety_dump", "room_correction", "night_enabled", "advisor_notify", "dhw_dump",
       "dhw_fire_only", "fan_quiet"];
     const selects = ["profile", "emitters", "mode", "valve_type", "valve_cover", "valve_open_switch", "valve_close_switch", "weather_entity",
-      "dhw_source", "dhw_mode"];
+      "dhw_source", "dhw_mode", "wood_kind", "wood_price_unit"];
     // not `for … of form.elements`: HA 2026.10 patches HTMLFormElement.elements with an object whose iterator throws
     // "Method not implemented" — the whole save died there silently (bobrek, 23.11.2026)
     for (const el of form.querySelectorAll("input[name], select[name], textarea[name]")) {
@@ -2065,7 +2099,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       if (cfg[k] != null && def != null && Math.abs(cfg[k] - def) < 1e-6) cfg[k] = null;
     }
     if (cfg.safety_dump === emit.safety_dump) cfg.safety_dump = null;
-    for (const k of ["tzb_c", "min_return_c"]) delete cfg[k];
+    for (const k of ["tzb_c", "min_return_c", "wood_kg_per_unit"]) delete cfg[k];
+    // the price as bought is the source; zł/kg follows from it (an emptied price clears the cost)
+    cfg.wood_price_kg = null;
     if (btn) { btn.disabled = true; btn.textContent = "Zapisywanie…"; }
     try {
       this._data = await this._hass.callWS({ type: "smartinghome/heating/save", config: cfg });

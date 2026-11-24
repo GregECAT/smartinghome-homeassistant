@@ -366,6 +366,12 @@ też powiadomienie w Home Assistant — niezależnie od ustawień i licencji.
 - **Załaduj X kg:** miejsce w buforze (z marginesem 3 K) + miejsce w CWU + to, co dom zużyje w czasie palenia,
   podzielone przez ciepło z kilograma drewna (z ustawień: kWh/kg × sprawność).
 - **Sezon:** palenia, godziny, ciepło i drewno miesiąc po miesiącu, z kosztem przy podanej cenie drewna.
+- **Koszty** (Ustawienia → Doradca i koszty, widok w zakładce Drewno): rodzaj drewna — **twarde** (buk, dąb,
+  grab, jesion; ok. 700 kg/m³ lite), **mieszane** (ok. 600) albo **miękkie** (sosna, świerk, olcha, topola;
+  ok. 480) — i **cena tak, jak kupujesz**: za **mp** (metr przestrzenny, drewno ułożone w stos ≈ 0,65 m³
+  litego), za **m³** litego albo za kg. Moduł przelicza ją na zł/kg (np. twarde po 300 zł/mp ≈ 455 kg/mp
+  ≈ 0,66 zł/kg) i pokazuje koszt miesiąca, średnio na dobę, sezonu i każdego zważonego palenia. Palenia bez
+  ważenia liczą się z szacunku drewna.
 - **Drewno spalone w paleniu** (tabela paleń, sezon) to bilans ciepła: o ile więcej ciepła mają na koniec
   bufor i CWU niż na początku, plus to, co w tym czasie wziął dom (jego straty ciepła razem z temperaturą
   na zewnątrz). Dzieli się to przez ciepło z kilograma drewna. Samo „ile przybyło w buforze” zaniżało wynik
