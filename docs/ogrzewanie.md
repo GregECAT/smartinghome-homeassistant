@@ -350,8 +350,7 @@ też powiadomienie w Home Assistant — niezależnie od ustawień i licencji.
   godzina po godzinie → moment wyczerpania ciepła użytecznego, minus czas rozpalania. Powiadomienie
   „Rozpal w kotle do…” przychodzi 30 min wcześniej.
 - **Załaduj X kg:** miejsce w buforze (z marginesem 3 K) + miejsce w CWU + to, co dom zużyje w czasie palenia,
-  podzielone przez ciepło z kilograma drewna. Zważ 2–3 załadunki i wpisz je w panelu — doradca nauczy się,
-  ile naprawdę daje Twoje drewno w Twoim kotle.
+  podzielone przez ciepło z kilograma drewna (z ustawień: kWh/kg × sprawność).
 - **Sezon:** palenia, godziny, ciepło i drewno miesiąc po miesiącu, z kosztem przy podanej cenie drewna.
 - **Drewno spalone w paleniu** (tabela paleń, sezon) to bilans ciepła: o ile więcej ciepła mają na koniec
   bufor i CWU niż na początku, plus to, co w tym czasie wziął dom (jego straty ciepła razem z temperaturą
@@ -360,6 +359,30 @@ też powiadomienie w Home Assistant — niezależnie od ustawień i licencji.
   Straty domu biorą się z modelu domu, a zanim on się nauczy — z tempa rozładowania bufora w godzinach
   bez palenia (wystarczą ok. 2 h takich danych przy co najmniej 5 K różnicy dom – zewnątrz). Palenia
   zarejestrowane wcześniej, i te bez tych danych, liczą tylko bufor i CWU (panel pisze wtedy „bufor i CWU”).
+
+## Ważenie drewna (zakładka „Drewno”)
+
+Zważone palenia to jedyny pomiar, z którego moduł uczy się, **ile ciepła bierze dom**. Bez nich tylko zgaduje
+— a od tego zależy, na ile wystarczy palenie z buforem, do której rozpalić, ile drewna załadować oraz zużycie
+i koszt sezonu. Zakładka **Drewno** w panelu ma pole wagi, instrukcję i historię zważonych paleń; wpisywać
+mogą wszyscy użytkownicy HA (to dane, nie sterowanie).
+
+1. **Waż każdy załadunek przed włożeniem do kotła** — w koszu: wytaruj pusty kosz (albo odejmij jego wagę).
+2. **Wpisz od razu, przy kotle** — z telefonu.
+3. **Dokładka w trakcie palenia:** „Dodaj do bieżącego palenia” — wpisy jednego palenia się sumują.
+4. **Ważysz przed rozpaleniem:** „Rozpalam teraz” — moduł rozpoznaje rozpalenie po wodzie dopiero po 10–30 min;
+   wpis czeka na nie do 3 h (potem przepada z wpisem w dzienniku). Bez tego wpis trafiłby do poprzedniego palenia.
+5. **Zapomniany wpis po wygaśnięciu:** „Do ostatniego palenia” — do 12 h po jego końcu.
+6. **Waż całe palenie**, od rozpałki po ostatnią dokładkę; pomyłkę cofa „Cofnij ostatni wpis”.
+
+**Jak moduł z tego korzysta:** gdy zaczyna się kolejne palenie, poprzednie — jeśli ma zważone wszystkie
+załadunki — zamyka cykl: drewno dało *kg × kWh/kg* (z ustawień), zbiorniki zatrzymały różnicę stanu
+między jednym rozpaleniem a drugim, a resztę zużył dom w tych godzinach. To daje straty domu (W/K) **z historii**
+— także wtedy, gdy kocioł pali prawie całą dobę i godzin bez palenia jest za mało na model domu. Liczy się
+mediana z 5 ostatnich takich cykli (od 3 do 72 h). Na tej podstawie zakładka pokazuje **„Na ile wystarczy”**:
+ciepło w buforze **plus to, co zważone drewno w kotle jeszcze da** (kg × kWh/kg minus to, co to palenie już dało),
+rozłożone na zapotrzebowanie domu z prognozy pogody. Zanim jest pierwsze zważone palenie, pole pokazuje „—”
+i wyjaśnia, czego brakuje.
 
 ## Skrypt bezpieczeństwa na Shelly
 

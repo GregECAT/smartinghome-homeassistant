@@ -307,6 +307,9 @@ class HeatingManager:
                 raw[role] = st.state if st is not None else "unavailable"
             raw["grid_outage"] = self._grid_outage()
             self.model.update(raw, now)
+            for note in self.model.notes:       # weighed wood attached to a fire / dropped
+                self._log(note, now)
+            self.model.notes.clear()
             advisor_on = self.has(FEATURE_HEATING_ADVISOR)
             entity = self._read_weather_now()
             t_out = self.model.t("outdoor")
@@ -374,6 +377,16 @@ class HeatingManager:
                 else:
                     gap = float(s.pop("house_gap_s", 0.0) or 0.0)
                     s["house_kwh"] = round(float(s.get("house_kwh") or 0.0) + kw * (dt + gap) / 3600.0, 2)
+            # weighed fires: a new fire closes the previous fire's cycle — the house's draw from history (the wood
+            # at the kWh/kg from the settings, minus what the tanks kept, over the hours until this fire)
+            fire_now = self.model.session
+            if fire_now is not None and self.building.cycle_start != fire_now.get("start"):
+                note = self.building.close_cycle(self.model.sessions[-1] if self.model.sessions else None, fire_now,
+                                                 cfg["wood_kwh_per_kg"] * cfg["efficiency"])
+                if note:
+                    self._log(note, now)
+                self.building.open_cycle(float(fire_now["start"]))
+            self.building.cycle_add(None if t_house is None or t_out is None else t_house - t_out, dt)
 
             status = self.model.status(now)
             learned = adv.learned_kwh_per_kg(self.model.sessions)
@@ -381,10 +394,19 @@ class HeatingManager:
             if learned and status.get("buffer"):
                 buf = status["buffer"]
                 buf["kwh_per_kg"], buf["wood_max_kg"] = learned, round(buf["space_kwh"] / learned, 1)
+            # what the weighed wood of the fire burning now will still give: kg × kWh/kg − what it has given so far
+            fire_left = None
+            fs = status.get("session")
+            if fs and fs.get("wood_kg"):
+                given = fs.get("heat_kwh")
+                if given is None and fs.get("stored_start_kwh") is not None:
+                    stored = [x["energy_kwh"] for x in (status.get("buffer"), status.get("dhw")) if x]
+                    given = sum(stored) - float(fs["stored_start_kwh"]) if stored else None
+                fire_left = max(float(fs["wood_kg"]) * per_kg - float(given or 0.0), 0.0)
             if advisor_on:
                 if now - self._advice_ts >= ADVISOR_EVERY_S or not self.advice or self.advice.get("locked"):
                     self.advice = adv.advise(cfg, status, self.building, now, self._target_at, self.forecast,
-                                             t_out, per_kg)
+                                             t_out, per_kg, fire_left)
                     self.advice["learned_per_kg"] = learned
                     self.advice["forecast_hours"] = len(self.forecast)
                     self._advice_ts = now
@@ -807,10 +829,25 @@ class HeatingManager:
                 kg = hm._f(data.get("kg"))
                 if kg is None or not 0.5 <= kg <= 200:
                     raise ValueError("Podaj masę drewna w kg (0,5–200)")
-                session = self.model.log_load(kg, now)
-                if session is None:
-                    raise ValueError("Brak palenia, do którego można przypisać załadunek (do 12 h po wygaśnięciu)")
-                self._log(f"Załadunek: {kg:.1f} kg drewna (palenie od {_hhmm(session.get('start'))})", now)
+                booked = self.model.log_load(kg, now, data.get("target") or "auto")
+                if booked is None:
+                    raise ValueError("Kocioł nie pali, a ostatnie palenie skończyło się ponad 12 h temu — "
+                                     "wybierz „Rozpalam teraz”, wpis poczeka na rozpalenie")
+                where, fire = booked
+                if where == "next":
+                    self._log(f"Zważone przed rozpaleniem: {kg:.1f} kg — czeka na rozpalenie "
+                              f"(do {hm.PENDING_LOAD_S // 3600} h)", now)
+                else:
+                    self._log(f"Załadunek: {kg:.1f} kg drewna — {'bieżące' if where == 'current' else 'ostatnie'} "
+                              f"palenie od {_hhmm(fire.get('start'))}, razem {fire.get('wood_kg'):.1f} kg", now)
+                self._advice_ts = 0.0           # the advice counts the new wood at once
+                await self._save()
+            elif action == "undo_load":
+                undone = self.model.undo_load(now)
+                if undone is None:
+                    raise ValueError("Nie ma wpisu do cofnięcia")
+                self._log(f"Cofnięto wpis: {undone[0]:.1f} kg drewna", now)
+                self._advice_ts = 0.0
                 await self._save()
             else:
                 raise ValueError(f"Nieznane polecenie: {action}")
@@ -1300,13 +1337,15 @@ async def ws_heating_save(hass: HomeAssistant, connection, msg: dict[str, Any]) 
     vol.Required("action"): str,
     vol.Optional("seconds"): vol.Coerce(float),
     vol.Optional("kg"): vol.Coerce(float),
+    vol.Optional("target"): vol.In(["auto", "current", "last", "next"]),
     vol.Optional("element"): vol.In(list(hm.LOCK_ELEMENTS)),
     vol.Optional("position"): vol.In(["auto", "off", "on"]),
     vol.Optional("percent"): vol.All(vol.Coerce(float), vol.Range(min=0, max=100)),
 })
 @websocket_api.async_response
 async def ws_heating_command(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
-    if not _is_admin(connection):
+    # weighed wood is data, not control: anyone at the boiler with the panel open can book it
+    if not _is_admin(connection) and msg["action"] not in ("log_load", "undo_load"):
         connection.send_error(msg["id"], "unauthorized", "Kotłownią steruje tylko administrator")
         return
     manager = _manager_or_error(hass, connection, msg)

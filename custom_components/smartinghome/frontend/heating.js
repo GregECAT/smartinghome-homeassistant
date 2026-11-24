@@ -309,6 +309,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     if (this._view === "overview") {
       if (Date.now() - this._chartTs > CHART_REFRESH_MS) this._loadChart();
       this._renderBody();          // the boiler room stays live; only the cards wait while someone edits
+    } else if (this._view === "wood") {
+      if (!this._editing()) this._renderBody();
     } else if (!this._draft) {
       this._renderBody();
     } else {
@@ -588,6 +590,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
           <div class="hr">
             <div class="seg" id="views">
               <button data-view="overview" class="on">Przegląd</button>
+              <button data-view="wood">Drewno</button>
               <button data-view="settings">Ustawienia</button>
             </div>
             <button class="btn" id="refresh" title="Odśwież">⟳</button>
@@ -652,6 +655,11 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       this._skel = false;
       body.innerHTML = this._settingsHtml();
       this._bindSettings();
+      return;
+    }
+    if (this._view === "wood") {
+      this._skel = false;
+      body.innerHTML = this._woodHtml();
       return;
     }
     this._renderOverview();
@@ -1292,11 +1300,101 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       : `uczy się — ${b.samples || 0} z min. 24 godzin bez palenia${d.weather_entities && d.weather_entities.length ? "" : "; brak encji pogody w HA"}`}${
       b.ua_w_k == null && b.draw_w_k != null ? `; do liczenia drewna: pobór domu ok. <b>${num(b.draw_w_k, 0)} W/K</b> z rozładowania bufora (${num(b.draw_h, 0)} h danych)` : ""}.
       ${a.forecast_hours ? `Prognoza: ${a.forecast_hours} h.` : ""}</div>`;
-    if (d.admin) {
-      html += `<div class="inline"><input id="loadkg" type="number" min="0.5" max="200" step="0.5" placeholder="kg" value="${esc(this._loadKg || "")}">
-        <button class="btn sm" data-act="load">Zapisz zważony załadunek</button></div>
-        <div class="hint">Zważ 2–3 załadunki — doradca policzy, ile ciepła daje kilogram Twojego drewna w Twoim kotle.</div>`;
+    html += `<div class="inline"><button class="btn sm primary" data-act="view" data-view="wood">⚖️ Wpisz zważone drewno</button></div>
+      <div class="hint">Zważone załadunki — także dokładki w trakcie palenia — wpisujesz w zakładce <b>Drewno</b>.</div>`;
+    return html;
+  }
+
+  // ── wood: weighing every load and how long the heat lasts ─────────────────────
+  _woodHtml() {
+    const d = this._data, st = d.status || {}, a = st.advice || {}, w = st.wood || {};
+    const fire = st.session, last = st.last_session;
+    const loadsOf = (f) => (f && Array.isArray(f.loads) ? f.loads : []);
+    let html = this._msg ? `<div class="banner ${this._msgErr ? "err" : ""}">${esc(this._msg)}</div>` : "";
+
+    // how long the heat lasts: the buffer plus what the weighed wood in the firebox will still give
+    html += `<div class="card"><h3>⏱️ Na ile wystarczy <small>bufor + drewno, które jeszcze pali się w kotle</small></h3>`;
+    if (a.locked) {
+      html += `<div class="lock"><b>Funkcja PRO.</b> Doradca liczy, na ile wystarczy ciepło z bufora i z drewna w kotle,
+        i podpowiada, kiedy rozpalić. Ważenie drewna i zapis załadunków działają bez licencji.</div></div>`;
+    } else {
+      const basis = { model: "z modelu domu i prognozy pogody", history: "z historii zważonych paleń i prognozy pogody",
+        trend: "z odbioru ciepła w ostatniej godzinie" }[a.basis] || "";
+      const left = a.empty_at ? (a.empty_at - Date.now() / 1000) / 3600 : null;
+      html += `<div class="ctl">
+        <div><div class="lbl">Wystarczy do</div><div class="v" style="color:#f7b731">${a.empty_at ? hhmm(a.empty_at) : "—"}</div>
+          <div class="s">${left != null ? `za ok. ${num(Math.max(left, 0), 1)} h · ${esc(fmtTime(a.empty_at))}` : ""}<br>${esc(basis)}</div></div>
+        <div><div class="lbl">Bufor</div><div class="v">${num(a.buffer_kwh ?? (st.buffer || {}).energy_kwh, 1)}<small>kWh</small></div>
+          <div class="s">ciepło użytkowe w buforze</div></div>
+        <div><div class="lbl">Drewno w kotle</div><div class="v">${a.fire_left_kwh != null ? num(a.fire_left_kwh, 1) : "—"}<small>kWh</small></div>
+          <div class="s">${fire ? (fire.wood_kg ? `z ${num(fire.wood_kg, 1)} kg zważonych w tym paleniu` : "pali się — zważ załadunek, żeby je doliczyć") : "kocioł nie pali"}</div></div>
+        <div><div class="lbl">Dom bierze</div><div class="v">${a.demand_kw != null ? num(a.demand_kw, 2) : "—"}<small>kW</small></div>
+          <div class="s">${a.demand_24h_kwh != null ? `${num(a.demand_24h_kwh, 0)} kWh na dobę` : ""}</div></div>
+      </div>`;
+      if (!a.basis || a.basis === "trend") {
+        const b = a.building || {};
+        html += `<div class="banner warn" style="margin-top:12px">Moduł jeszcze nie wie, ile ciepła bierze dom, więc nie policzy, na ile wystarczy ${fire ? "palenie z buforem" : "bufor"}.
+          Wystarczy <b>jedno palenie zważone w całości</b> (od rozpałki po ostatnią dokładkę): gdy rozpalisz następny raz, moduł policzy z niego,
+          ile dom zużył — i od tej chwili pokaże czas tutaj, w doradcy i w liczeniu drewna.${b.cycles ? ` Zważone palenia w historii: ${b.cycles}.` : ""}</div>`;
+      } else if (a.basis === "history") {
+        const b = a.building || {};
+        html += `<div class="hint">Dom: ok. <b>${num(b.cycle_w_k, 0)} W/K</b> z ${b.cycles} zważon${b.cycles === 1 ? "ego palenia" : "ych paleń"} (kWh/kg z ustawień: ${num((d.config.wood_kwh_per_kg || 0) * (d.config.efficiency || 0), 2)}). Im więcej zważonych paleń, tym dokładniej.</div>`;
+      }
+      html += `</div>`;
     }
+
+    // booking a load
+    const pending = Array.isArray(w.pending) ? w.pending : [];
+    const lastOpen = !fire && last && w.last_open;
+    let state;
+    if (fire) {
+      state = `🔥 <b>Pali się od ${hhmm(fire.start)}</b> · zważone w tym paleniu: <b>${fire.wood_kg ? `${num(fire.wood_kg, 1)} kg` : "nic"}</b>${loadsOf(fire).length ? ` (${loadsOf(fire).length} ${loadsOf(fire).length === 1 ? "wpis" : "wpisy"})` : ""}`;
+    } else if (pending.length) {
+      state = `⏳ <b>Czeka na rozpalenie: ${num(w.pending_kg, 1)} kg</b> — trafi do palenia, które moduł rozpozna w ciągu ${w.pending_hold_h || 3} h`;
+    } else {
+      state = `Kocioł nie pali.${last ? ` Ostatnie palenie ${hhmm(last.start)}–${hhmm(last.end)}, zważone: ${last.wood_kg ? `<b>${num(last.wood_kg, 1)} kg</b>` : "nic"}.` : ""}`;
+    }
+    const buttons = fire
+      ? `<button class="btn primary" data-act="load" data-target="current">➕ Dodaj do bieżącego palenia</button>`
+      : `<button class="btn primary" data-act="load" data-target="next">🔥 Rozpalam teraz — do nowego palenia</button>
+         ${lastOpen ? `<button class="btn" data-act="load" data-target="last">Do ostatniego palenia (${hhmm(last.start)}–${hhmm(last.end)})</button>` : ""}`;
+    const entries = fire ? loadsOf(fire) : pending.length ? pending : lastOpen ? loadsOf(last) : [];
+    const canUndo = entries.length > 0 || pending.length > 0;
+    html += `<div class="card" style="margin-top:14px"><h3>⚖️ Wpisz zważone drewno <small>każdy załadunek, także dokładki w trakcie palenia</small></h3>
+      <div style="font-size:14px;line-height:1.6">${state}</div>
+      <div class="inline" style="flex-wrap:wrap;gap:10px;margin-top:12px">
+        <input id="loadkg" type="number" inputmode="decimal" min="0.5" max="200" step="0.1" placeholder="kg" value="${esc(this._loadKg || "")}"
+          style="width:120px;font-size:22px;font-weight:700;padding:8px 10px">
+        <span style="color:#a0aec0">kg</span>
+        ${buttons}
+        ${canUndo ? `<button class="btn sm" data-act="undoload">↶ Cofnij ostatni wpis</button>` : ""}
+      </div>
+      ${entries.length ? `<div class="hint" style="margin-top:10px">${entries.map((x) => `${hhmm(x.ts)} · <b>${num(x.kg, 1)} kg</b>`).join(" &nbsp;·&nbsp; ")}</div>` : ""}
+    </div>`;
+
+    // why and how
+    html += `<div class="card" style="margin-top:14px"><h3>❗ Dlaczego ważenie jest takie ważne</h3>
+      <div class="banner warn" style="font-size:14px">Bez wagi moduł tylko <b>zgaduje</b>, ile drewna spaliłeś i ile ciepła bierze dom.
+        Zważone palenia to jedyny pomiar, z którego się tego uczy — a od tego zależy wszystko, co liczy:
+        <b>na ile wystarczy palenie i bufor</b>, <b>do której rozpalić</b>, <b>ile drewna załadować</b>
+        (za dużo = przegrzany bufor i zrzut ciepła, za mało = zimny dom), zużycie i koszt sezonu.</div>
+      <ol style="margin:10px 0 0 18px;padding:0;line-height:1.7;font-size:14px">
+        <li><b>Waż każdy załadunek przed włożeniem do kotła</b> — w koszu: wytaruj pusty kosz (albo odejmij jego wagę), nałóż drewno, odczytaj kg.</li>
+        <li><b>Wpisz od razu, przy kotle</b> — z telefonu, w tej zakładce. Nie odkładaj na później: łatwo pomylić palenia.</li>
+        <li><b>Dokładasz w trakcie palenia?</b> Zważ i wpisz każdą dokładkę osobno („Dodaj do bieżącego palenia”) — sumują się.</li>
+        <li><b>Ważysz przed rozpaleniem?</b> Wybierz „Rozpalam teraz” — moduł rozpoznaje rozpalenie po 10–30 min, a wpis na nie poczeka.</li>
+        <li><b>Waż całe palenie</b>, od rozpałki po ostatnią dokładkę. Jeden pominięty załadunek psuje wynik — wtedy cofnij wpisy tego palenia.</li>
+        <li>Pomyłka? <b>„Cofnij ostatni wpis”</b> usuwa ostatnią pozycję.</li>
+        <li>Na start wystarczą <b>2–3 palenia zważone w całości</b>; potem waż przy zmianie drewna (inny gatunek, wilgotność).</li>
+      </ol></div>`;
+
+    // weighed fires
+    const weighed = (d.sessions || []).filter((x) => x.wood_kg).slice(-10).reverse();
+    html += `<div class="card" style="margin-top:14px"><h3>📒 Zważone palenia</h3>${weighed.length
+      ? `<table><tr><th>Palenie</th><th>Czas</th><th>Drewno</th><th>Ciepło</th></tr>${weighed.map((x) => `<tr><td>${esc(fmtTime(x.start))}</td>
+          <td>${x.duration_h != null ? `${num(x.duration_h, 1)} h` : "—"}</td><td><b>${num(x.wood_kg, 1)} kg</b>${Array.isArray(x.loads) && x.loads.length > 1 ? ` <span class="muted">(${x.loads.length} wpisy)</span>` : ""}</td>
+          <td>${x.heat_kwh != null ? `${num(x.heat_kwh, 0)} kWh` : x.stored_kwh != null ? `${num(x.stored_kwh, 0)} kWh w zbiornikach` : "—"}</td></tr>`).join("")}</table>`
+      : `<div class="hint">Jeszcze żadnego. Pierwsze zważone palenie pojawi się tutaj.</div>`}</div>`;
     return html;
   }
 
@@ -1457,12 +1555,23 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         const msg = { type: "smartinghome/heating/command", action: ds.cmd };
         if (ds.seconds) msg.seconds = Number(ds.seconds);
         this._data = await this._hass.callWS(msg);
+      } else if (act === "view") {
+        const b = this.shadowRoot.querySelector(`#views button[data-view="${ds.view}"]`);
+        if (b) b.click();
+        return;
       } else if (act === "load") {
         const el = this.shadowRoot.getElementById("loadkg");
-        const kg = parseFloat(el && el.value);
-        this._data = await this._hass.callWS({ type: "smartinghome/heating/command", action: "log_load", kg });
+        const kg = parseFloat(String((el && el.value) || "").replace(",", "."));
+        if (!Number.isFinite(kg) || kg < 0.5 || kg > 200) throw new Error("Wpisz masę drewna w kg (0,5–200).");
+        this._data = await this._hass.callWS({ type: "smartinghome/heating/command", action: "log_load", kg, target: ds.target || "auto" });
         this._loadKg = "";
-        this._msg = `Zapisano załadunek ${num(kg, 1)} kg.`;
+        this._msg = ds.target === "next"
+          ? `Zapisano ${num(kg, 1)} kg — wpis czeka na rozpalenie i sam trafi do nowego palenia.`
+          : `Zapisano ${num(kg, 1)} kg w ${ds.target === "last" ? "ostatnim" : "bieżącym"} paleniu.`;
+      } else if (act === "undoload") {
+        if (!confirm("Cofnąć ostatni wpis zważonego drewna?")) return;
+        this._data = await this._hass.callWS({ type: "smartinghome/heating/command", action: "undo_load" });
+        this._msg = "Cofnięto ostatni wpis.";
       } else if (act === "guard") {
         if (ds.guard === "remove" && !confirm("Usunąć skrypt bezpieczeństwa z Shelly pompy?")) return;
         this._guard = { loading: true };

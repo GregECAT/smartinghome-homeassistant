@@ -42,6 +42,12 @@ WATER_KWH_PER_M3K = 1.14
 DRAW_TAU_S = 12 * 3600
 DRAW_MIN_OBS_S = 2 * 3600
 DRAW_MIN_DT_K = 5.0
+# the house's draw from WEIGHED fires: one cycle = from a fire's start to the next fire's start; the wood gave
+# kg × kWh/kg (settings), the tanks kept the difference, the house took the rest — over whole cycles, so it needs
+# no hours without a fire (bobrek fires ~20 h a day). Takes precedence over the discharge ratio above.
+CYCLE_MIN_H, CYCLE_MAX_H = 3.0, 72.0
+CYCLE_MIN_KG = 3.0
+CYCLE_KEEP, CYCLE_MEDIAN_N = 20, 5
 
 
 class BuildingModel:
@@ -53,16 +59,25 @@ class BuildingModel:
         self._acc: dict[str, Any] | None = None
         self.draw_ua: float | None = None   # kW/K, from the buffer's discharge (observe_draw)
         self.draw_obs_s: float = 0.0
+        self.cycles: list[dict[str, float]] = []      # weighed fire cycles: {ts, kw, dt, h}
+        self._cyc: dict[str, float] | None = None     # the cycle being tracked: {start, s, k} (Σ ΔT·s)
 
     def dump(self) -> dict[str, Any]:
         return {"samples": self.samples[-MAX_SAMPLES:],
-                "draw": {"ua": self.draw_ua, "obs_s": round(self.draw_obs_s)}}
+                "draw": {"ua": self.draw_ua, "obs_s": round(self.draw_obs_s)},
+                "cycles": self.cycles[-CYCLE_KEEP:], "cycle": self._cyc}
 
     def restore(self, data: dict[str, Any] | None) -> None:
         if isinstance(data, dict):
             self.samples = [s for s in (data.get("samples") or []) if isinstance(s, dict)][-MAX_SAMPLES:]
             self.fit()
             draw = data.get("draw") if isinstance(data.get("draw"), dict) else {}
+            self.cycles = [c for c in (data.get("cycles") or [])
+                           if isinstance(c, dict) and isinstance(c.get("kw"), (int, float))
+                           and isinstance(c.get("dt"), (int, float)) and c["dt"] > 0][-CYCLE_KEEP:]
+            cyc = data.get("cycle")
+            if isinstance(cyc, dict) and all(isinstance(cyc.get(k), (int, float)) for k in ("start", "s", "k")):
+                self._cyc = {"start": float(cyc["start"]), "s": float(cyc["s"]), "k": float(cyc["k"])}
             ua = draw.get("ua")
             if isinstance(ua, (int, float)) and not isinstance(ua, bool) and 0 <= ua <= UA_MAX_KW_K:
                 self.draw_ua = float(ua)
@@ -80,12 +95,63 @@ class BuildingModel:
         self.draw_ua = r if self.draw_ua is None else self.draw_ua + (r - self.draw_ua) * w
         self.draw_obs_s += dt_s
 
+    # weighed fire cycles
+    @property
+    def cycle_start(self) -> float | None:
+        return None if self._cyc is None else self._cyc["start"]
+
+    def open_cycle(self, fire_start: float) -> None:
+        self._cyc = {"start": float(fire_start), "s": 0.0, "k": 0.0}
+
+    def cycle_add(self, dt_k: float | None, dt_s: float) -> None:
+        if self._cyc is not None and dt_k is not None and dt_s > 0:
+            self._cyc["s"] += dt_s
+            self._cyc["k"] += dt_k * dt_s
+
+    def close_cycle(self, prev: dict[str, Any] | None, new: dict[str, Any], per_kg: float) -> str | None:
+        """A new fire started: book the cycle of the previous one when all its wood was weighed (entries in
+        "loads"). Returns a log line, or None when the cycle can't be used."""
+        cyc = self._cyc
+        if cyc is None or prev is None or per_kg <= 0 or not prev.get("loads"):
+            return None
+        if abs(float(prev.get("start") or 0.0) - cyc["start"]) > 1.0:
+            return None                          # not the fire this cycle was tracked from
+        kg = float(prev.get("wood_kg") or 0.0)
+        e0, e1 = prev.get("stored_start_kwh"), new.get("stored_start_kwh")
+        hours = (float(new["start"]) - cyc["start"]) / 3600.0
+        if kg < CYCLE_MIN_KG or e0 is None or e1 is None or not CYCLE_MIN_H <= hours <= CYCLE_MAX_H:
+            return None
+        if cyc["s"] < hours * 3600.0 * 0.5:
+            return None                          # too little of the cycle seen (HA down most of it)
+        dt_k = cyc["k"] / cyc["s"]
+        kwh = kg * per_kg - (float(e1) - float(e0))
+        if dt_k < DRAW_MIN_DT_K or kwh <= 0:
+            return None
+        kw = kwh / hours
+        self.cycles.append({"ts": float(new["start"]), "kw": round(kw, 3), "dt": round(dt_k, 2), "h": round(hours, 2),
+                            "kg": round(kg, 1)})
+        self.cycles = self.cycles[-CYCLE_KEEP:]
+        return (f"Zważone palenie: {kg:.1f} kg wystarczyło na {hours:.1f} h — dom brał średnio {kw:.2f} kW "
+                f"przy {dt_k:.1f} K różnicy dom − zewnątrz ({kw / dt_k * 1000:.0f} W/K)")
+
+    def cycle_ua(self) -> float | None:
+        vals = [c["kw"] / c["dt"] for c in self.cycles[-CYCLE_MEDIAN_N:] if c.get("dt")]
+        return _clamp(median(vals), UA_MIN_KW_K, UA_MAX_KW_K) if vals else None
+
+    def demand_basis(self) -> str | None:
+        """What the house's demand comes from: "model" (fitted hours without a fire), "history" (weighed fires)."""
+        return "model" if self.ua is not None else "history" if self.cycles else None
+
     def house_kw(self, t_room: float | None, t_out: float | None) -> float | None:
-        """What the house takes now: the fitted model, else the discharge ratio once it has seen two hours."""
+        """What the house takes now: the fitted model, the weighed fires, else the discharge ratio once it has
+        seen two hours."""
         if t_room is None or t_out is None:
             return None
         if self.ua is not None:
             return max(self.ua * (t_room - t_out) + self.base, 0.0)
+        cua = self.cycle_ua()
+        if cua is not None:
+            return max(cua * (t_room - t_out), 0.0)
         if self.draw_ua is not None and self.draw_obs_s >= DRAW_MIN_OBS_S:
             return max(self.draw_ua * (t_room - t_out), 0.0)
         return None
@@ -151,15 +217,18 @@ class BuildingModel:
         self.r2 = round(1 - ss_res / ss_tot, 2) if ss_tot > 0 else None
 
     def demand_kw(self, room_target: float, t_out: float) -> float | None:
-        if self.ua is None:
-            return None
-        return max(self.ua * (room_target - t_out) + self.base, 0.0)
+        if self.ua is not None:
+            return max(self.ua * (room_target - t_out) + self.base, 0.0)
+        cua = self.cycle_ua()
+        return None if cua is None else max(cua * (room_target - t_out), 0.0)
 
     def status(self) -> dict[str, Any]:
         return {"ua_w_k": None if self.ua is None else round(self.ua * 1000.0),
                 "base_kw": round(self.base, 2), "r2": self.r2, "samples": len(self.samples),
                 "draw_w_k": None if self.draw_ua is None else round(self.draw_ua * 1000.0),
-                "draw_h": round(self.draw_obs_s / 3600.0, 1)}
+                "draw_h": round(self.draw_obs_s / 3600.0, 1),
+                "cycle_w_k": None if self.cycle_ua() is None else round(self.cycle_ua() * 1000.0),
+                "cycles": len(self.cycles), "basis": self.demand_basis()}
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
@@ -200,7 +269,7 @@ def _target(room_target: Target, ts: float) -> float:
 def depletion(energy_kwh: float, now: float, building: BuildingModel, room_target: Target,
               forecast: list[tuple[float, float]], t_out_now: float | None) -> tuple[float | None, float | None]:
     """(timestamp when the useful heat runs out or None beyond the horizon, demand of the next 24 h in kWh)."""
-    if building.ua is None:
+    if building.demand_basis() is None:
         return None, None
     e = energy_kwh
     empty_at = None
@@ -246,8 +315,9 @@ def learned_kwh_per_kg(sessions: list[dict[str, Any]]) -> float | None:
 
 def advise(cfg: dict[str, Any], status: dict[str, Any], building: BuildingModel, now: float,
            room_target: Target, forecast: list[tuple[float, float]], t_out_now: float | None,
-           per_kg: float) -> dict[str, Any]:
-    """Advice for the panel / sensors. status = HeatingModel.status()."""
+           per_kg: float, fire_left_kwh: float | None = None) -> dict[str, Any]:
+    """Advice for the panel / sensors. status = HeatingModel.status(). fire_left_kwh: what the weighed wood of the
+    fire burning now will still give (kg × kWh/kg − what this fire has given so far) — added to the buffer."""
     buf = status.get("buffer") or {}
     dhw = status.get("dhw") or {}
     firing = bool((status.get("boiler") or {}).get("firing"))
@@ -257,9 +327,13 @@ def advise(cfg: dict[str, Any], status: dict[str, Any], building: BuildingModel,
     if not buf:
         return out
     energy = float(buf.get("energy_kwh") or 0.0)
+    out["buffer_kwh"] = round(energy, 1)
+    out["fire_left_kwh"] = None if fire_left_kwh is None else round(max(fire_left_kwh, 0.0), 1)
+    energy += max(fire_left_kwh or 0.0, 0.0)
+    out["heat_left_kwh"] = round(energy, 1)
     empty_at, demand_24 = depletion(energy, now, building, room_target, forecast, t_out_now)
     if demand_24 is not None:
-        out["basis"] = "model"
+        out["basis"] = building.demand_basis()
         out["demand_24h_kwh"] = demand_24
         t_now = temp_at(forecast, now, t_out_now)
         out["demand_kw"] = None if t_now is None else round(building.demand_kw(_target(room_target, now), t_now) or 0.0, 2)
@@ -275,7 +349,7 @@ def advise(cfg: dict[str, Any], status: dict[str, Any], building: BuildingModel,
     margin = MARGIN_K * WATER_KWH_PER_M3K * cfg["buffer_l"] / 1000.0
     room = max(float(buf.get("space_kwh") or 0.0) - margin, 0.0) + float(dhw.get("space_kwh") or 0.0)
     burn_kw = out["demand_kw"] if out["demand_kw"] is not None else 0.0
-    if out["basis"] == "model" and forecast:
+    if out["basis"] in ("model", "history") and forecast:
         hours = int(cfg["burn_hours"])
         moments = [now + h * 3600 + 1800 for h in range(hours)]
         burn = sum(building.demand_kw(_target(room_target, ts), t) or 0.0

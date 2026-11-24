@@ -122,7 +122,8 @@ def test_monthly_summary_and_log_load():
         {"start": 1_700_000_000, "duration_h": 4, "stored_kwh": 40, "wood_est_kg": 12},
         {"start": 1_700_090_000, "duration_h": 3.5, "stored_kwh": 35, "wood_est_kg": 11, "end": 1_700_100_000},
     ]
-    assert model.log_load(14.0, 1_700_100_000 + 3600)["wood_kg"] == 14.0
+    where, fire = model.log_load(14.0, 1_700_100_000 + 3600)
+    assert where == "last" and fire["wood_kg"] == 14.0
     months = hm.monthly_summary(model.sessions, 3600, price_kg=0.6)
     assert len(months) == 1 and months[0]["fires"] == 2
     assert months[0]["wood_kg"] == 26 and months[0]["weighed"] == 1 and months[0]["cost"] == pytest.approx(16)

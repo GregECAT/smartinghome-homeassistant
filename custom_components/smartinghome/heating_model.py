@@ -237,6 +237,8 @@ SESSION_END_C = 45.0
 NO_FLOW_AFTER_S = 2400   # "heat not reaching the buffer" only after the fire has run this long
 MAX_SESSIONS = 400       # a whole heating season
 MAX_SETBACKS = 4         # daytime setback periods of the house target
+PENDING_LOAD_S = 3 * 3600   # wood weighed before lighting waits this long for the fire the module recognises
+LAST_FIRE_LOAD_S = 12 * 3600  # wood can still be booked to a fire this long after it ended
 
 # probes
 PROBE_FAULT_S = 120      # unavailable / invalid this long → probe fault
@@ -744,6 +746,8 @@ class HeatingModel:
         self.state_since: float | None = None
         self.session: dict[str, Any] | None = None
         self.sessions: list[dict[str, Any]] = []
+        self.pending_loads: list[dict[str, float]] = []   # weighed before lighting: [{ts, kg}] for the next fire
+        self.notes: list[str] = []                         # log lines for the integration to pick up
         self.buffer: dict[str, Any] | None = None
         self.dhw: dict[str, Any] | None = None
         self.runtime_h: float | None = None
@@ -769,7 +773,8 @@ class HeatingModel:
 
     def dump(self) -> dict[str, Any]:
         return {"state": self.state, "state_since": self.state_since,
-                "session": self.session, "sessions": self.sessions[-MAX_SESSIONS:]}
+                "session": self.session, "sessions": self.sessions[-MAX_SESSIONS:],
+                "pending_loads": self.pending_loads}
 
     def restore(self, data: dict[str, Any] | None) -> None:
         if not isinstance(data, dict):
@@ -777,6 +782,8 @@ class HeatingModel:
         self.sessions = [s for s in (data.get("sessions") or []) if isinstance(s, dict)][-MAX_SESSIONS:]
         if isinstance(data.get("session"), dict):
             self.session = dict(data["session"])
+        self.pending_loads = [{"ts": float(p["ts"]), "kg": float(p["kg"])} for p in (data.get("pending_loads") or [])
+                              if isinstance(p, dict) and _f(p.get("ts")) is not None and _f(p.get("kg"))]
         if data.get("state") in STATE_LABELS:
             self.state = str(data["state"])
             self.state_since = _f(data.get("state_since"))
@@ -938,7 +945,19 @@ class HeatingModel:
                 "start": now, "end": None, "start_c": round(t, 1), "max_c": round(t, 1),
                 "stored_start_kwh": energy, "stored_max_kwh": energy, "overheat": False,
             }
+            pending = [p for p in self.pending_loads if now - p["ts"] <= PENDING_LOAD_S]
+            if pending:                 # weighed before lighting: it belongs to this fire
+                self.session["loads"] = pending
+                self.session["wood_kg"] = round(sum(p["kg"] for p in pending), 1)
+                self.notes.append(f"Zważone przed rozpaleniem: {self.session['wood_kg']:.1f} kg — "
+                                  f"przypisane do palenia, które właśnie się zaczęło")
+            self.pending_loads = []
         if self.session is None:
+            stale = [p for p in self.pending_loads if now - p["ts"] > PENDING_LOAD_S]
+            if stale:
+                self.pending_loads = [p for p in self.pending_loads if now - p["ts"] <= PENDING_LOAD_S]
+                self.notes.append(f"Zważone drewno ({sum(p['kg'] for p in stale):.1f} kg) nie trafiło do żadnego "
+                                  f"palenia — w ciągu {PENDING_LOAD_S // 3600} h nie było rozpalenia; wpisz je ponownie")
             return
         s = self.session
         s["max_c"] = round(max(float(s.get("max_c") or t), t), 1)
@@ -964,15 +983,56 @@ class HeatingModel:
             self.sessions = self.sessions[-MAX_SESSIONS:]
             self.session = None
 
-    def log_load(self, kg: float, now: float) -> dict[str, Any] | None:
-        """Weighed wood of the current fire (or of the last one, up to 12 h after it ended)."""
-        target = self.session
-        if target is None and self.sessions and now - float(self.sessions[-1].get("end") or 0) <= 12 * 3600:
-            target = self.sessions[-1]
-        if target is None:
+    def last_fire_open(self, now: float) -> dict[str, Any] | None:
+        """The last ended fire while wood can still be booked to it (LAST_FIRE_LOAD_S)."""
+        if self.sessions and now - float(self.sessions[-1].get("end") or 0) <= LAST_FIRE_LOAD_S:
+            return self.sessions[-1]
+        return None
+
+    @staticmethod
+    def _add_load(fire: dict[str, Any], kg: float, now: float) -> None:
+        loads = fire.setdefault("loads", [])
+        if not loads and fire.get("wood_kg"):           # a total booked before the entries were kept
+            loads.append({"ts": float(fire.get("start") or now), "kg": float(fire["wood_kg"])})
+        loads.append({"ts": round(now, 1), "kg": round(kg, 1)})
+        fire["wood_kg"] = round(sum(x["kg"] for x in loads), 1)
+
+    def log_load(self, kg: float, now: float, target: str = "auto") -> tuple[str, dict[str, Any] | None] | None:
+        """Weighed wood. target: "current" — the fire burning now (a reload adds up); "last" — the fire that ended up
+        to 12 h ago; "next" — weighed before lighting, it waits for the fire the module recognises within 3 h (the
+        water shows a new fire only after 10–30 min, and until then a new entry would land on the previous fire);
+        "auto" — the current fire, else the last one. Returns (where, fire) or None when there is nothing to book to."""
+        if target in ("auto", "current") and self.session is not None:
+            self._add_load(self.session, kg, now)
+            return "current", self.session
+        if target == "next":
+            self.pending_loads.append({"ts": round(now, 1), "kg": round(kg, 1)})
+            return "next", None
+        if target in ("auto", "last"):
+            last = self.last_fire_open(now)
+            if last is not None:
+                self._add_load(last, kg, now)
+                return "last", last
+        return None
+
+    def undo_load(self, now: float) -> tuple[float, str] | None:
+        """Remove the latest weighed entry (waiting for a fire, the current fire or the last one)."""
+        spots: list[tuple[float, str, list[dict[str, Any]], dict[str, Any] | None]] = []
+        if self.pending_loads:
+            spots.append((self.pending_loads[-1]["ts"], "next", self.pending_loads, None))
+        for where, fire in (("current", self.session), ("last", self.last_fire_open(now))):
+            if fire is not None:
+                if not fire.get("loads") and fire.get("wood_kg"):
+                    fire["loads"] = [{"ts": float(fire.get("start") or now), "kg": float(fire["wood_kg"])}]
+                if fire.get("loads"):
+                    spots.append((float(fire["loads"][-1]["ts"]), where, fire["loads"], fire))
+        if not spots:
             return None
-        target["wood_kg"] = round(float(target.get("wood_kg") or 0.0) + kg, 1)
-        return target
+        _, where, loads, fire = max(spots, key=lambda x: x[0])
+        kg = float(loads.pop()["kg"])
+        if fire is not None:
+            fire["wood_kg"] = round(sum(x["kg"] for x in loads), 1) if loads else None
+        return kg, where
 
     def _stored_kwh(self) -> float | None:
         """Heat in the buffer + hot water tank (what a fire leaves behind, without the house's draw)."""
@@ -1230,6 +1290,11 @@ class HeatingModel:
             "discharge_kw": self.discharge_kw,
             "session": session,
             "last_session": self.sessions[-1] if self.sessions else None,
+            # weighing: entries waiting for the next fire, and whether the last fire still takes wood
+            "wood": {"pending": [dict(p) for p in self.pending_loads],
+                     "pending_kg": round(sum(p["kg"] for p in self.pending_loads), 1) if self.pending_loads else None,
+                     "last_open": self.last_fire_open(now) is not None,
+                     "pending_hold_h": PENDING_LOAD_S // 3600},
             "alarms": [{"id": a.id, "level": a.level, "title": a.title, "message": a.message, "action": a.action}
                        for a in self.active_alarms()],
         }
