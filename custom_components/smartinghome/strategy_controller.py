@@ -2191,6 +2191,10 @@ class StrategyController:
         self._log_decision("inverter_watchdog", message)
         self._arb_cmd = None
 
+    def on_inverter_note(self, message: str) -> None:
+        """A note from the energy manager (Deye write preview) for the decision log."""
+        self._log_decision("inverter_preview", message)
+
     async def _apply_arbitrage(self, action: str, power_w: int) -> None:
         if action == ACT_CHARGE_GRID:
             # Full power: the plan assumed 90 %, so the battery is ready early;
@@ -3556,10 +3560,13 @@ class StrategyController:
     def _config_has_conflict(self, config: dict | list | str) -> bool:
         """Recursively check if an automation config references HEMS services/entities."""
         if isinstance(config, str):
-            # Check for conflict service names
-            for svc in HEMS_CONFLICT_SERVICES:
-                if svc in config:
-                    return True
+            # Check for conflict service names — not on read-only inverters (Deye,
+            # Growatt): Smarting HOME writes nothing there, so the user's own inverter
+            # automations are the only control and must keep running
+            if not self._em.read_only:
+                for svc in HEMS_CONFLICT_SERVICES:
+                    if svc in config:
+                        return True
             # Check for managed switch entity IDs
             for sw in HEMS_MANAGED_SWITCHES:
                 if sw in config:

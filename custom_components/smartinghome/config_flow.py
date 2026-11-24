@@ -70,8 +70,8 @@ _LOGGER = logging.getLogger(__name__)
 
 BRAND_OPTIONS: dict[str, str] = {
     INVERTER_BRAND_GOODWE: "GoodWe",
-    INVERTER_BRAND_DEYE: "Deye",
-    INVERTER_BRAND_GROWATT: "Growatt",
+    INVERTER_BRAND_DEYE: "Deye — tylko odczyt (podgląd sterowania)",
+    INVERTER_BRAND_GROWATT: "Growatt — tylko odczyt",
     INVERTER_BRAND_SOFAR: "Sofar Solar",
     INVERTER_BRAND_OTHER: "Inny / Other",
     INVERTER_BRAND_NONE: "Brak falownika — tylko licznik (dom / firma bez PV)",

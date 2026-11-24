@@ -8026,23 +8026,28 @@ class SmartingHomePanel extends HTMLElement {
           <div style="padding:4px 8px;background:rgba(0,212,255,0.06);border-radius:4px;color:#94a3b8"><code style="color:#00d4ff">sensor.sofarsolar_grid_power</code> — moc sieci</div>
           <div style="padding:4px 8px;background:rgba(0,212,255,0.06);border-radius:4px;color:#94a3b8"><code style="color:#00d4ff">sensor.sofarsolar_battery_soh</code> — stan zdrowia</div>
         </div>
-        ${_warn('Tryb Passive: Solarman <strong>tylko odczytuje dane</strong>. Sterowanie Sofar wymaga Modbus TCP lub dedykowanej integracji.')}
+        ${_warn('Sterowanie Sofar: Smarting HOME przełącza tryb pracy (<strong>Passive</strong> / <strong>Self Use</strong>) i limit eksportu przez encje Solarman (<code>select.sofarsolar_storage_control_mode</code>, <code>number.sofarsolar_passive_*</code>).')}
         ${_warn('Prefix encji zależy od nazwy integracji. Domyślnie: <strong>sofarsolar_</strong>.')}`);
     } else if (brand === 'deye') {
-      sec2 = _sec('📦', '0,212,255', '2. Integracja Deye — HACS', 'Połączenie z falownikiem Deye przez Solarman',
+      sec2 = _sec('📦', '0,212,255', '2. Integracja Deye — HACS', 'Połączenie z falownikiem Deye przez logger Solarman (ha-solarman)',
         `<div style="font-size:11px;color:#94a3b8;line-height:1.6;margin-bottom:10px">
           <strong style="color:#fff">Instalacja:</strong><br>
-          1. HACS → Integracje → wyszukaj "<strong style="color:#00d4ff">Solarman</strong>" lub "<strong style="color:#00d4ff">Deye</strong>"<br>
-          2. Zainstaluj i restart HA → wpisz IP falownika<br>
-          3. Encje pojawiają się automatycznie z prefixem <strong style="color:#fff">deye_</strong>
+          1. HACS → Integracje → wyszukaj "<strong style="color:#00d4ff">Solarman</strong>" → zainstaluj <strong style="color:#2ecc71">davidrapan/ha-solarman</strong> i zrestartuj HA<br>
+          2. Ustawienia → Integracje → + → Solarman → IP loggera (LSW-3 / LSE-3) lub bramki Modbus TCP<br>
+          3. Profil <strong style="color:#fff">deye_p3</strong> dla falowników 3-fazowych (SG04LP3, SG01HP3)<br>
+          4. Encje mają prefix nazwy urządzenia, domyślnie <strong style="color:#fff">inverter_</strong> — moc PV, zużycie, SOC, napięcia i liczniki dzienne Smarting HOME odnajduje sam
         </div>
-        <div style="font-size:10px;font-weight:700;color:#fff;margin-bottom:6px">Kluczowe encje:</div>
+        <div style="font-size:10px;font-weight:700;color:#fff;margin-bottom:6px">Kluczowe encje (ha-solarman, deye_p3):</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:9px">
-          <div style="padding:4px 8px;background:rgba(0,212,255,0.06);border-radius:4px;color:#94a3b8"><code style="color:#00d4ff">sensor.deye_pv_power</code> — moc PV</div>
-          <div style="padding:4px 8px;background:rgba(0,212,255,0.06);border-radius:4px;color:#94a3b8"><code style="color:#00d4ff">sensor.deye_load_power</code> — zużycie</div>
-          <div style="padding:4px 8px;background:rgba(0,212,255,0.06);border-radius:4px;color:#94a3b8"><code style="color:#00d4ff">sensor.deye_battery_power</code> — bateria</div>
-          <div style="padding:4px 8px;background:rgba(0,212,255,0.06);border-radius:4px;color:#94a3b8"><code style="color:#00d4ff">sensor.deye_battery_soc</code> — SOC</div>
-        </div>`);
+          <div style="padding:4px 8px;background:rgba(0,212,255,0.06);border-radius:4px;color:#94a3b8"><code style="color:#00d4ff">sensor.inverter_pv_power</code> — moc PV</div>
+          <div style="padding:4px 8px;background:rgba(0,212,255,0.06);border-radius:4px;color:#94a3b8"><code style="color:#00d4ff">sensor.inverter_load_power</code> — zużycie</div>
+          <div style="padding:4px 8px;background:rgba(0,212,255,0.06);border-radius:4px;color:#94a3b8"><code style="color:#00d4ff">sensor.inverter_battery</code> — SOC</div>
+          <div style="padding:4px 8px;background:rgba(0,212,255,0.06);border-radius:4px;color:#94a3b8"><code style="color:#00d4ff">sensor.inverter_battery_power</code> — bateria</div>
+          <div style="padding:4px 8px;background:rgba(0,212,255,0.06);border-radius:4px;color:#94a3b8"><code style="color:#00d4ff">sensor.inverter_grid_power</code> — sieć</div>
+          <div style="padding:4px 8px;background:rgba(0,212,255,0.06);border-radius:4px;color:#94a3b8"><code style="color:#00d4ff">sensor.inverter_today_production</code> — PV dziś</div>
+        </div>
+        ${_warn('Deye: Smarting HOME <strong>tylko odczytuje dane</strong> i nie zmienia nastaw falownika. Zakładka Autopilot pokazuje podgląd — co zostałoby zapisane do harmonogramu Time of Use.')}
+        ${_warn('Moc sieci i baterii przypisz ręcznie i sprawdź znak: Smarting HOME oczekuje dla sieci <strong>+ eksport / − pobór</strong>.')}`);
     } else if (brand === 'growatt') {
       sec2 = _sec('📦', '0,212,255', '2. Integracja Growatt — HACS', 'Połączenie z falownikiem Growatt',
         `<div style="font-size:11px;color:#94a3b8;line-height:1.6;margin-bottom:10px">
@@ -14143,6 +14148,9 @@ class SmartingHomePanel extends HTMLElement {
             </div>
           </div>
 
+          <!-- ═══ READ-ONLY INVERTER (Deye / Growatt) + Deye write preview ═══ -->
+          <div id="ap-inverter-control" style="display:none"></div>
+
           <!-- ═══ LIVE STRATEGY DASHBOARD (above presets) ═══ -->
           <div class="card" style="margin-bottom:14px">
             <div class="card-title">⚡ Live — Strategia w akcji</div>
@@ -15741,6 +15749,38 @@ class SmartingHomePanel extends HTMLElement {
   }
 
   /* ── Peak Sell — slider handlers ── */
+  _renderInverterControl(live) {
+    // Deye / Growatt: Smarting HOME reads only; Deye shows what it WOULD write (Time of Use)
+    const box = this.shadowRoot.getElementById('ap-inverter-control');
+    if (!box) return;
+    const ic = live && live.inverter_control;
+    if (!ic || !ic.read_only) {
+      box.style.display = 'none';
+      box.innerHTML = '';
+      return;
+    }
+    const e = (v) => this._esc(v);
+    let html = `<div style="font-size:12px;font-weight:700;color:#f39c12;margin-bottom:4px">🔒 Falownik tylko do odczytu</div>
+      <div style="font-size:11px;color:#cbd5e1;line-height:1.5">${e(ic.message)}</div>`;
+    const p = ic.preview;
+    if (p) {
+      const rows = [];
+      if (p.available) {
+        rows.push(`Teraz: slot ${e(p.slot)} (${e(p.window)}) — ${e(p.intent_label)} → SOC ${e(p.target_soc)} %, ${e(p.target_charging_label)}`);
+      }
+      if (p.note) rows.push(e(p.note));
+      if (p.last_change) {
+        rows.push(`Ostatnia zmiana w podglądzie (${e(p.last_change.at)}, ${e(p.last_change.intent_label)}): ${(p.last_change.writes || []).map(e).join('; ')}`);
+      }
+      rows.push(`Zapisy do falownika, które wykonałby dziś: ${e(p.writes_today)}${p.over_budget ? ' ⚠️ ponad budżet zapisów' : ''}`);
+      (p.problems || []).forEach(x => rows.push(`⚠️ ${e(x)}`));
+      html += `<div style="margin-top:8px;font-size:11px;font-weight:700;color:#00d4ff">Podgląd sterowania Deye — nic nie jest zapisywane</div>
+        <div style="font-size:11px;color:#94a3b8;line-height:1.6">${rows.join('<br>')}</div>`;
+    }
+    box.innerHTML = html;
+    box.style.cssText = 'display:block;margin-bottom:14px;padding:12px 14px;border-radius:10px;background:rgba(243,156,18,0.08);border:1px solid rgba(243,156,18,0.3)';
+  }
+
   _renderArbitrage(live) {
     const box = this.shadowRoot.getElementById('ap-arb-plan');
     const badge = this.shadowRoot.getElementById('ap-arb-badge');
@@ -16180,6 +16220,7 @@ class SmartingHomePanel extends HTMLElement {
           // ── Live tick status bar ──
           const live = s.autopilot_live;
           this._renderArbitrage(live);
+          this._renderInverterControl(live);
           if (live) {
             const setText = (id, val) => {
               const el = this.shadowRoot.getElementById(id);

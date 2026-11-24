@@ -54,8 +54,11 @@ from .const import (
     NUMBER_ECO_MODE_POWER,
     NUMBER_ECO_MODE_SOC,
     # Sofar Solar control entities
+    INVERTER_BRAND_DEYE,
     INVERTER_BRAND_GOODWE,
+    INVERTER_BRAND_GROWATT,
     INVERTER_BRAND_SOFAR,
+    READ_ONLY_INVERTER_BRANDS,
     SELECT_SOFAR_WORK_MODE,
     NUMBER_SOFAR_DOD,
     NUMBER_SOFAR_EXPORT_LIMIT,
@@ -67,6 +70,8 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+_BRAND_NAMES: dict[str, str] = {INVERTER_BRAND_DEYE: "Deye", INVERTER_BRAND_GROWATT: "Growatt"}
 
 # GoodWe work modes → EMS modes of the newer GoodWe integration (select "EMS mode"
 # + number "EMS power limit"), used when the "Inverter operation mode" select
@@ -132,11 +137,55 @@ class EnergyManager:
         self._goodwe_reloads: list[float] = []
         self._started: float = time.monotonic()
         self._control_unavailable_since: float = 0.0
+        # Deye / Growatt: read only — every inverter write below is skipped. The intent
+        # bookkeeping still runs, so the Autopilot plans and Deye gets a write preview.
+        self._read_only = inverter_brand in READ_ONLY_INVERTER_BRANDS
+        self._inverter_notes: list[str] = []
+        self._deye_preview = None
+        if inverter_brand == INVERTER_BRAND_DEYE:
+            from .deye_ha import DeyePreview
+
+            self._deye_preview = DeyePreview(hass)
 
     @property
     def inverter_brand(self) -> str:
         """Return configured inverter brand."""
         return self._inverter_brand
+
+    @property
+    def read_only(self) -> bool:
+        """True when Smarting HOME must not change the inverter's settings (Deye, Growatt)."""
+        return self._read_only
+
+    @property
+    def read_only_message(self) -> str:
+        name = _BRAND_NAMES.get(self._inverter_brand, self._inverter_brand)
+        return (
+            f"Falownik {name}: Smarting HOME tylko odczytuje dane i nie zmienia nastaw falownika. "
+            "Autopilot liczy plan i pokazuje decyzje, ale falownik ich nie dostaje."
+        )
+
+    def _skip_write(self, what: str) -> bool:
+        """Read-only brands: skip an inverter write (logged at debug level)."""
+        if not self._read_only:
+            return False
+        _LOGGER.debug("[%s] read only — %s not written", self._inverter_brand, what)
+        return True
+
+    def pop_inverter_notes(self) -> list[str]:
+        """Lines for the Autopilot decision log (Deye preview), cleared on read."""
+        notes, self._inverter_notes = self._inverter_notes, []
+        return notes
+
+    def control_status(self) -> dict[str, Any]:
+        """For the panel: does Smarting HOME control this inverter, and the Deye preview."""
+        return {
+            "brand": self._inverter_brand,
+            "read_only": self._read_only,
+            "message": self.read_only_message if self._read_only else "",
+            "intent": self.intent,
+            "preview": self._deye_preview.status() if self._deye_preview else None,
+        }
 
     @property
     def current_mode(self) -> HEMSMode:
@@ -253,19 +302,7 @@ class EnergyManager:
         else:
             _LOGGER.info("Forcing battery discharge (eco_discharge, DOD=95%%, soc=5, power=100, grid_export=ON)")
             # Enable grid export (47509=1) — critical for BT! Optional RS485 hub.
-            try:
-                await self.hass.services.async_call(
-                    "modbus",
-                    "write_register",
-                    {
-                        "hub": "goodwe_rs485",
-                        "slave": 247,
-                        "address": 47509,
-                        "value": 1,
-                    },
-                )
-            except Exception as err:  # noqa: BLE001 — hub not configured on this install
-                _LOGGER.debug("Modbus 47509 write skipped: %s", err)
+            await self._goodwe_modbus_write(47509, 1)
             await self._set_export_limit(self.max_export_w)
             await self._block_charging()
             # DOD=95% means 95% of battery capacity CAN be discharged (SOC → ~5%)
@@ -399,13 +436,7 @@ class EnergyManager:
             await self._set_eco_mode_power(0)
             await self._set_eco_mode_soc(100)
             # Reset EMS mode register
-            try:
-                await self.hass.services.async_call(
-                    "modbus", "write_register",
-                    {"hub": "goodwe_rs485", "slave": 247, "address": 47511, "value": 0},
-                )
-            except Exception:
-                _LOGGER.debug("Modbus 47511 reset skipped")
+            await self._goodwe_modbus_write(47511, 0)
             await self._set_work_mode("general")
             await self._enable_charging()
             await self._set_export_limit(self.max_export_w)
@@ -460,7 +491,7 @@ class EnergyManager:
             results.append(f"export_limit={export_limit}")
 
         # 5. Write Modbus register 47511 (EMS mode, -1 = skip)
-        if modbus_47511 is not None and modbus_47511 >= 0:
+        if modbus_47511 is not None and modbus_47511 >= 0 and not self._skip_write("modbus 47511"):
             await self.hass.services.async_call(
                 "modbus",
                 "write_register",
@@ -736,11 +767,25 @@ class EnergyManager:
         """Return True if configured for Sofar Solar."""
         return self._inverter_brand == INVERTER_BRAND_SOFAR
 
+    async def _goodwe_modbus_write(self, address: int, value: int) -> None:
+        """Write a GoodWe register through the optional "goodwe_rs485" Modbus hub."""
+        if self._skip_write(f"modbus {address}"):
+            return
+        try:
+            await self.hass.services.async_call(
+                "modbus", "write_register",
+                {"hub": "goodwe_rs485", "slave": 247, "address": address, "value": value},
+            )
+        except Exception as err:  # noqa: BLE001 — hub not configured on this install
+            _LOGGER.debug("Modbus %s write skipped: %s", address, err)
+
     async def _goodwe_set_parameter(self, parameter: str, value: Any) -> None:
         """Write one inverter setting and wait for it — writes must land in order
         (2026-10-05 09:43: pv_export = enable charging then block it, both fire-and-
         forget; the enable landed last and the battery charged 2.5 kW instead of the
         planned PV export)."""
+        if self._skip_write(f"goodwe {parameter}={value}"):
+            return
         try:
             await self.hass.services.async_call(
                 "goodwe", "set_parameter",
@@ -868,6 +913,8 @@ class EnergyManager:
         if self.osd_priority:
             _LOGGER.debug("OSD priority: export limit %s W not written", limit)
             return
+        if self._skip_write(f"export limit {limit} W"):
+            return
         self._check_external_limit()
         limit = grid_limits.effective_limit(limit, self.max_export_w, self.external_limit_w, self.export_cap_w)
         if self._is_sofar:
@@ -908,6 +955,8 @@ class EnergyManager:
 
     async def _set_dod(self, dod: int) -> None:
         """Set depth of discharge on grid."""
+        if self._skip_write(f"DOD {dod}%"):
+            return
         if self._is_sofar:
             entity = NUMBER_SOFAR_DOD
             if not entity:
@@ -1034,8 +1083,15 @@ class EnergyManager:
         - control select (EMS / operation mode) unavailable for > 2 min
         - battery power sensor not reporting for > 10 min (frozen data)
         Returns a message when a reload was triggered.
+
+        Deye (read only): instead recomputes the Time of Use write preview.
         """
-        if self._is_sofar:
+        if self._deye_preview is not None and not self.in_startup_grace:
+            try:
+                self._inverter_notes.extend(self._deye_preview.update(self.intent))
+            except Exception as err:  # noqa: BLE001 — the preview must never break the cycle
+                _LOGGER.debug("Deye preview failed: %s", err)
+        if self._is_sofar or self._read_only:
             return None
         control = self._goodwe_ems_select() or self._goodwe_operation_mode_select()
         if not control:
@@ -1108,6 +1164,8 @@ class EnergyManager:
 
     async def _set_work_mode(self, mode: str, power_w: int | None = None) -> None:
         """Set inverter work mode via select entity."""
+        if self._skip_write(f"work mode {mode}"):
+            return
         if self._is_sofar:
             entity = SELECT_SOFAR_WORK_MODE
             if not self.hass.states.get(entity):
@@ -1175,6 +1233,8 @@ class EnergyManager:
 
     async def _set_eco_mode_power(self, value: int) -> None:
         """Set Eco Mode power percentage (0-100%)."""
+        if self._skip_write(f"eco mode power {value}"):
+            return
         entity = self._find_goodwe_number(NUMBER_ECO_MODE_POWER, "eco_mode_power")
         if not entity:
             _LOGGER.debug("Entity %s not available — skipping eco mode power set", NUMBER_ECO_MODE_POWER)
@@ -1190,6 +1250,8 @@ class EnergyManager:
 
     async def _set_eco_mode_soc(self, value: int) -> None:
         """Set Eco Mode target SOC percentage (0-100%)."""
+        if self._skip_write(f"eco mode SOC {value}"):
+            return
         entity = self._find_goodwe_number(NUMBER_ECO_MODE_SOC, "eco_mode_soc")
         if not entity:
             _LOGGER.debug("Entity %s not available — skipping eco mode SOC set", NUMBER_ECO_MODE_SOC)
@@ -1276,7 +1338,7 @@ class EnergyManager:
 
     async def _sofar_set_number(self, entity_id: str, value: int) -> None:
         """Set a Sofar number entity value with safety checks."""
-        if not entity_id:
+        if not entity_id or self._skip_write(f"{entity_id}={value}"):
             return
         if not self.hass.states.get(entity_id):
             _LOGGER.debug(

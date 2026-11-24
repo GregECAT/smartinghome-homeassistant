@@ -305,9 +305,16 @@ async def async_setup_services(
     if strategy_controller is not None:
         strategy_controller.set_ai_advisor(ai_advisor)
 
+    def _require_inverter_control() -> None:
+        """Deye / Growatt are read only: a manual inverter command must not do nothing silently."""
+        if energy_mgr.read_only:
+            raise HomeAssistantError(energy_mgr.read_only_message)
+
     async def handle_set_mode(call: ServiceCall) -> None:
         """Handle set_mode service."""
         mode = HEMSMode(call.data["mode"])
+        if mode not in (HEMSMode.AUTO, HEMSMode.MANUAL):
+            _require_inverter_control()
         await energy_mgr.set_mode(mode)
         energy_mgr.raise_on_control_error()
         if mode == HEMSMode.AUTO:
@@ -320,12 +327,14 @@ async def async_setup_services(
 
     async def handle_force_charge(call: ServiceCall) -> None:
         """Handle force_charge service."""
+        _require_inverter_control()
         await energy_mgr.force_charge()
         energy_mgr.raise_on_control_error()
         _manual_hold(60, "Ręczne ładowanie z sieci")
 
     async def handle_force_discharge(call: ServiceCall) -> None:
         """Handle force_discharge service."""
+        _require_inverter_control()
         await energy_mgr.force_discharge()
         energy_mgr.raise_on_control_error()
         _manual_hold(60, "Ręczne rozładowanie")
@@ -350,6 +359,7 @@ async def async_setup_services(
 
     async def handle_force_custom(call: ServiceCall) -> None:
         """Handle force_custom service — configurable force command."""
+        _require_inverter_control()
         work_mode = call.data.get("work_mode")
         modbus_val = call.data.get("modbus_47511", -1)
         charge_current = call.data.get("charge_current")
@@ -375,6 +385,7 @@ async def async_setup_services(
 
     async def handle_set_export_limit(call: ServiceCall) -> None:
         """Handle set_export_limit service."""
+        _require_inverter_control()
         limit = call.data["limit"]
         await energy_mgr.set_export_limit(limit)
 
@@ -946,6 +957,8 @@ async def async_setup_services(
         except ValueError:
             _LOGGER.error("Unknown manual mode: %s", mode_str)
             return
+        if mode not in (ManualMode.SELF_CONSUMPTION, ManualMode.OFF):
+            _require_inverter_control()
 
         result = await schedule_manager.apply_manual_override(mode)
         energy_mgr.raise_on_control_error()

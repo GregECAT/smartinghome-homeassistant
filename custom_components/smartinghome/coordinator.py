@@ -104,6 +104,7 @@ from .const import (
     DEFAULT_BATTERY_CAPACITY,
     DEFAULT_BATTERY_MIN_SOC,
     CONF_INVERTER_BRAND,
+    INVERTER_BRAND_DEYE,
     INVERTER_BRAND_GOODWE,
     SENSOR_MAP_KEYS,
     CONF_ECOWITT_ENABLED,
@@ -240,10 +241,18 @@ def build_sensor_map(
     brand = entry_data.get(CONF_INVERTER_BRAND, INVERTER_BRAND_GOODWE)
     brand_defaults = get_sensor_map_defaults(brand)
     resolve = hass is not None and brand == INVERTER_BRAND_GOODWE
+    resolve_deye = hass is not None and brand == INVERTER_BRAND_DEYE
+    if resolve_deye:
+        from .deye_ha import resolve_sensor
     result: dict[str, str] = {}
     for key in SENSOR_MAP_KEYS:
         entity_id = user_map.get(key) or brand_defaults.get(key, "")
-        result[key] = _resolve_goodwe_entity(hass, entity_id) if resolve else entity_id
+        if resolve:
+            entity_id = _resolve_goodwe_entity(hass, entity_id)
+        elif resolve_deye:
+            # Deye defaults (sensor.deye_*) predate ha-solarman's names — use its entities
+            entity_id = resolve_sensor(hass, key, entity_id, brand_defaults.get(key, ""))
+        result[key] = entity_id
     if hass is not None:
         _discover_local_station(hass, result)
     return result
@@ -564,6 +573,8 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             title="Automatyczna naprawa połączenia z falownikiem",
                             message=heal.replace("🔧 Watchdog: ", ""),
                         ))
+                    for note in self._strategy_controller.energy_manager.pop_inverter_notes():
+                        self._strategy_controller.on_inverter_note(note)
                 except Exception as wd_err:  # noqa: BLE001
                     _LOGGER.debug("Inverter watchdog error: %s", wd_err)
 
@@ -2112,6 +2123,11 @@ class SmartingHomeCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "timestamp": ctrl_result.get("timestamp"),
                 "manual_hold_until": ctrl_result.get("manual_hold_until", 0),
                 "arbitrage_plan": ctrl_result.get("arbitrage"),
+                # Read-only inverters (Deye, Growatt) and the Deye write preview
+                "inverter_control": (
+                    self._strategy_controller.energy_manager.control_status()
+                    if self._strategy_controller else None
+                ),
                 **arb_data,
             },
         }

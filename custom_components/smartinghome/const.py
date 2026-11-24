@@ -64,6 +64,9 @@ INVERTER_BRAND_SOFAR: Final = "sofar"
 INVERTER_BRAND_OTHER: Final = "other"
 # No inverter — meter only (home or business without PV): no inverter control
 INVERTER_BRAND_NONE: Final = "none"
+# Brands Smarting HOME only reads: the Autopilot plans, but nothing is written to the
+# inverter (no write path yet). Deye gets a preview of its Time of Use writes (deye_tou.py).
+READ_ONLY_INVERTER_BRANDS: Final = frozenset({INVERTER_BRAND_DEYE, INVERTER_BRAND_GROWATT})
 
 
 def is_grid_only(data) -> bool:
