@@ -372,6 +372,8 @@ pali się w trakcie palenia, w rurach płynie woda, gdy pracuje pompa Laddomatu,
 CWU, wirniki pomp się kręcą, a bufor ma kolory warstw od dołu do góry. Karty ze sterowaniem,
 doradcą, paleniami i dziennikiem są niżej, po przewinięciu.
 
+Bufor jest narysowany tak, jak zaleca się go podłączać: zasilanie wężownicy CWU wychodzi z samej góry (najgorętsza
+warstwa), zasilanie CO — trochę niżej, przez zawór mieszający i pompę CO; powrót z grzejników wchodzi na dół.
 Nad kotłem stoi komin, z którego w trakcie palenia unosi się dym. Czujnik spalin, gdy jest przypisany, ma
 punkt na czopuchu i ramkę „spaliny” z temperaturą i strzałką trendu. Zasobnik CWU ma wężownicę w dolnej części,
 jak prawdziwy zasobnik, a temperaturę wody (z procentem naładowania i kWh) w górnej. Rura zasilania wężownicy,

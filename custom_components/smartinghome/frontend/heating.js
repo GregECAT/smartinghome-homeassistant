@@ -876,7 +876,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const feedC = tempColor(fromBoiler ? tb : top);
     const pos = Math.round(valve.position ?? 0);
     // the hot-water coil sits in the lower part of the tank (as in the real one); its supply enters at y 430
-    const feed = fromBoiler ? "M190 160H210V30H540V100a10 10 0 0 1 0 20V430H640" : "M495 175H540V430H640";
+    // buffer ports as plumbed (bobrek): the hot-water coil takes the very top (the hottest layer, y 108), the CH
+    // circuit a little lower (y 170) — it mixes down anyway. Where the two lines cross, one hops over the other.
+    const feed = fromBoiler ? "M190 160H210V30H540V160a10 10 0 0 1 0 20V430H640" : "M495 108H540V430H640";
     const coilBack = fromBoiler ? "M640 478H560V512H215V390H190" : "M640 478H560V445H495";
     const coil = "M640 430H730q8 0 8 8t-8 8H664q-8 0-8 8t8 8H730q8 0 8 8t-8 8H640";
 
@@ -906,9 +908,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     s += pipe("M300 180H318V100H345", tempColor(tb), ladOn);
     s += pipe("M345 440H318V210H300", tempColor(bot), ladOn);
     s += pipe("M240 210H215V390H190", tempColor(bot), ladOn);
-    s += pipe("M495 110H559", tempColor(top), coOn);
-    s += pipe("M591 110H647", supC, coOn);
-    s += pipe("M683 110H760V170H780", supC, coOn);
+    s += pipe(fromBoiler ? "M495 170H559" : "M495 170H530a10 10 0 0 1 20 0H559", tempColor(top), coOn);
+    s += pipe("M591 170H647", supC, coOn);
+    s += pipe("M683 170H780", supC, coOn);
     s += pipe("M780 315H600V360H550a10 10 0 0 0 -20 0H495", retC, coOn);
     s += pipe(feed, feedC, dhwOn);
     s += pipe(coilBack, tempColor(dhwT), dhwOn);
@@ -983,21 +985,21 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     }
 
     // mixing valve (3-way, motorised)
-    s += `<path d="M575 110L559 100V120ZM575 110L591 100V120ZM575 110L565 126H585Z" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5" stroke-linejoin="round"/>
-      <path d="M575 94V110" stroke="#94a3b8" stroke-width="2"/>
-      <rect x="564" y="76" width="22" height="18" rx="3" fill="#1e293b" stroke="${valve.busy ? "#f7b731" : "#64748b"}" class="${valve.busy ? "hotpulse" : ""}"/>
-      <text x="575" y="89" text-anchor="middle" class="t-s">M</text>
-      <text x="575" y="146" text-anchor="middle" class="t-s">${valve.configured ? `${valve.known ? "" : "~"}${pos}%` : "zawór"}</text>
-      ${valve.configured && lk.valve ? `<text x="575" y="161" text-anchor="middle" class="t-lock">🔒 blokada</text>` : ""}`;
+    s += `<path d="M575 170L559 160V180ZM575 170L591 160V180ZM575 170L565 186H585Z" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5" stroke-linejoin="round"/>
+      <path d="M575 154V170" stroke="#94a3b8" stroke-width="2"/>
+      <rect x="564" y="136" width="22" height="18" rx="3" fill="#1e293b" stroke="${valve.busy ? "#f7b731" : "#64748b"}" class="${valve.busy ? "hotpulse" : ""}"/>
+      <text x="575" y="149" text-anchor="middle" class="t-s">M</text>
+      <text x="575" y="206" text-anchor="middle" class="t-s">${valve.configured ? `${valve.known ? "" : "~"}${pos}%` : "zawór"}</text>
+      ${valve.configured && lk.valve ? `<text x="575" y="221" text-anchor="middle" class="t-lock">🔒 blokada</text>` : ""}`;
 
     // CH pump and supply
-    s += pumpSym(665, 110, coOn) + `<text x="665" y="148" text-anchor="middle" class="t-s">pompa CO${coOn ? pw((st.pump || {}).power_w) : ""}</text>
-      ${!pump.configured ? `<text x="665" y="163" text-anchor="middle" class="t-s dim">nieprzypisana</text>`
-        : lk.pump ? `<text x="665" y="163" text-anchor="middle" class="t-lock">🔒 zablokowana</text>`
-        : (ctl.force_on || {}).pump ? `<text x="665" y="163" text-anchor="middle" class="t-lock">✋ RĘKA</text>`
-        : pump.forced_active ? `<text x="665" y="163" text-anchor="middle" class="t-lock">awaryjnie</text>` : ""}
-      <text x="722" y="98" text-anchor="middle" class="t-l" style="fill:${supC}">${lbl("heating_supply")}</text>
-      ${ctl.supply_target != null ? `<text x="722" y="136" text-anchor="middle" class="t-s">zad. ${num(ctl.supply_target, 0)}°</text>` : ""}`;
+    s += pumpSym(665, 170, coOn) + `<text x="665" y="208" text-anchor="middle" class="t-s">pompa CO${coOn ? pw((st.pump || {}).power_w) : ""}</text>
+      ${!pump.configured ? `<text x="665" y="223" text-anchor="middle" class="t-s dim">nieprzypisana</text>`
+        : lk.pump ? `<text x="665" y="223" text-anchor="middle" class="t-lock">🔒 zablokowana</text>`
+        : (ctl.force_on || {}).pump ? `<text x="665" y="223" text-anchor="middle" class="t-lock">✋ RĘKA</text>`
+        : pump.forced_active ? `<text x="665" y="223" text-anchor="middle" class="t-lock">awaryjnie</text>` : ""}
+      <text x="728" y="158" text-anchor="middle" class="t-l" style="fill:${supC}">${lbl("heating_supply")}</text>
+      ${ctl.supply_target != null ? `<text x="728" y="196" text-anchor="middle" class="t-s">zad. ${num(ctl.supply_target, 0)}°</text>` : ""}`;
 
     // house — one room, or storey by storey (the top one under the roof when there are three)
     const room = v("room");
