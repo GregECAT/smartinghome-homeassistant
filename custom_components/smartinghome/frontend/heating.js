@@ -78,6 +78,15 @@ function fanDraw(hass, c, fan) {
 }
 const mmss = (sec) => { const t = Math.max(Math.round(Number(sec) || 0), 0); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`; };
 const num = (v, d = 1) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toLocaleString("pl-PL", { minimumFractionDigits: d, maximumFractionDigits: d }));
+// the CH pump's band around the house target: empty → above it (on below + 0,5 K, off at + 1 K), a number → centred
+const hystHint = (h, target) => {
+  const v = Number(h);
+  if (h == null || h === "" || !Number.isFinite(v) || v <= 0) return "puste: rusza poniżej zadanej + 0,5 K, staje przy zadanej + 1 K";
+  const t = Number(target);
+  return Number.isFinite(t)
+    ? `pasmo wokół zadanej: przy ${num(t, 1)} °C rusza poniżej ${num(t - v / 2, 2)} °C, staje przy ${num(t + v / 2, 2)} °C`
+    : `pasmo wokół zadanej: ± ${num(v / 2, 2)} K`;
+};
 const fmtTime = (ts) => (ts ? new Date(ts * 1000).toLocaleString("pl-PL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
 const hhmm = (ts) => (ts ? new Date(ts * 1000).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" }) : "—");
 const fmtHours = (h) => {
@@ -1729,6 +1738,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       ${field("night_from", "Noc od (godz.)", "", c.night_from, 'min="0" max="23"')}
       ${field("night_to", "Noc do (godz.)", "dom dogrzewa się od tej godziny", c.night_to, 'min="0" max="23"')}
       <div>${chk("night_enabled", "Obniżenie nocne", c.night_enabled, "obniżenia w ciągu dnia (np. gdy nikogo nie ma) ustawisz w Przeglądzie, w karcie Sterowanie")}</div>
+      ${field("room_hyst_k", "Histereza pompy CO (K)", hystHint(c.room_hyst_k, c.room_target_c), c.room_hyst_k, 'min="0.2" max="4" step="0.1"', "domyślnie")}
       ${field("room_gain", "Korekta od temperatury w domu (K/K)", d.features && d.features.auto ? "0 = bez korekty" : "funkcja PRO", c.room_gain, 'min="0" max="8" step="0.5"')}
       <div>${chk("room_correction", "Korekta według czujnika odniesienia", c.room_correction, d.features && d.features.auto ? "" : "wymaga licencji PRO")}</div>
       </div>
@@ -1865,7 +1875,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const c = this._draft;
     const nums = ["buffer_l", "buffer_max_c", "buffer_min_c", "buffer_full_c", "dhw_l", "dhw_cold_c", "dhw_target_c",
       "room_target_c", "warn_c", "alarm_c", "efficiency", "laddomat_on_c", "wood_kwh_per_kg", "valve_run_s", "curve_slope", "curve_shift",
-      "supply_min_c", "supply_max_c", "heating_limit_c", "room_gain", "room_night_c", "night_from", "night_to",
+      "supply_min_c", "supply_max_c", "heating_limit_c", "room_gain", "room_hyst_k", "room_night_c", "night_from", "night_to",
       "light_lead_h", "burn_hours", "wood_price_kg", "dhw_on_diff_k", "dhw_off_diff_k", "dhw_hyst_k", "dhw_max_c",
       "dhw_win1_from", "dhw_win1_to", "dhw_win2_from", "dhw_win2_to", "fan_quiet_from", "fan_quiet_to"];
     const checks = ["enabled", "notify", "valve_invert", "safety_dump", "room_correction", "night_enabled", "advisor_notify", "dhw_dump",

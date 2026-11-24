@@ -84,3 +84,23 @@ def test_pump_band_follows_the_house_closely():
     assert c.step(_inp(60, 25.5)).heating_needed is False     # at 24.5 + 1: stop
     assert c.step(_inp(90, 25.2)).heating_needed is False     # not again until below 25.0
     assert c.step(_inp(120, 24.9)).heating_needed is True
+
+
+def test_pump_band_centred_on_the_target():
+    # bobrek 24.11.2026: target 24, hysteresis 0.2 K on the mains-powered parter sensor → on below 23.9, off at 24.1
+    c = hc.HeatingController(_cfg(room_target_c=24.0, room_hyst_k=0.2))
+    assert c.step(_inp(0, 24.7)).heating_needed is False      # above the target: no heating
+    assert c.step(_inp(30, 23.9)).heating_needed is False     # not below 23.9 yet
+    assert c.step(_inp(60, 23.8)).heating_needed is True      # start
+    assert c.step(_inp(90, 24.0)).heating_needed is True      # keep going up to 24.1
+    assert c.step(_inp(120, 24.1)).heating_needed is False    # stop
+    assert c.step(_inp(150, 24.0)).heating_needed is False
+
+
+def test_hysteresis_setting_is_optional_and_clamped():
+    assert hm.normalize({})["room_hyst_k"] is None            # the band above the target, as before
+    assert hm.normalize({"room_hyst_k": ""})["room_hyst_k"] is None
+    assert hm.normalize({"room_hyst_k": 9})["room_hyst_k"] == 4.0
+    assert hm.normalize({"room_hyst_k": 0.05})["room_hyst_k"] == 0.2
+    assert hm.to_settings({"room_hyst_k": 0.2})["room_hyst_k"] == 0.2
+    assert hm.to_settings({})["room_hyst_k"] is None

@@ -79,7 +79,8 @@ ROOM_CORR_MAX = 6.0
 ROOM_I_UNWIND = 8.0         # the memory pushing against the house (≥ ROOM_I_WRONG_K off) fades this many times faster
 ROOM_I_WRONG_K = 0.3
 
-# heating on / off by the house: on below target + ON_K, off at target + OFF_K
+# heating on / off by the house: on below target + ON_K, off at target + OFF_K — or, with cfg["room_hyst_k"]
+# set, a band centred on the target (a mains-powered reference sensor that reports every 0.1 K)
 ROOM_ON_K = 0.5
 ROOM_OFF_K = 1.0
 
@@ -572,7 +573,9 @@ class HeatingController:
         damped = out.t_out_damped
         cold = damped is None or damped < (limit + 1.0 if self.needed else limit)
         buffer_ok = inp.t_top is None or inp.t_top >= room_target + 5.0
-        room_ok = inp.t_room is None or inp.t_room < room_target + (ROOM_OFF_K if self.needed else ROOM_ON_K)
+        hyst = cfg.get("room_hyst_k")
+        on_k, off_k = (ROOM_ON_K, ROOM_OFF_K) if hyst is None else (-hyst / 2.0, hyst / 2.0)
+        room_ok = inp.t_room is None or inp.t_room < room_target + (off_k if self.needed else on_k)
         self.needed = cold and buffer_ok and room_ok
         out.heating_needed = self.needed and mode == "auto"
 

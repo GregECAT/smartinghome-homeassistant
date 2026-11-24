@@ -129,8 +129,12 @@ a kafel „Zadana w domu” pokazuje ją z porą („noc, do 05:00”). Te same 
 - Okno nocy może przechodzić przez północ (np. 22:00–05:00). **Koniec nocy ustaw z zapasem** — o tej godzinie
   dom zaczyna się dogrzewać, przy grzejnikach zwykle 1–2 h przed wstaniem.
 - O początku i końcu nocy moduł zapisuje wpis w dzienniku („🌙 Noc: zadana w domu 20,0 °C…”).
-- **Pompa CO według domu:** rusza, gdy w domu jest poniżej zadanej + 0,5 K, staje przy zadanej + 1 K.
-  Pomiędzy tymi progami temperaturę w domu trzyma zawór — przez zasilanie z krzywej i korektę.
+- **Pompa CO według domu:** domyślnie rusza, gdy w domu jest poniżej zadanej + 0,5 K, i staje przy zadanej
+  + 1 K — pomiędzy tymi progami temperaturę w domu trzyma zawór, przez zasilanie z krzywej i korektę.
+  **Histereza pompy CO** (Ustawienia → Krzywa grzewcza) zamienia to na pasmo **wokół zadanej**: 0,2 K przy
+  24 °C = rusza poniżej 23,9 °C, staje przy 24,1 °C. Wąskie pasmo ma sens z czujnikiem odniesienia zasilanym
+  z sieci, który podaje każdą zmianę o 0,1 K (na baterii czujnik raportuje rzadziej); pompa i zawór
+  przełączają się wtedy częściej. Puste pole przywraca ustawienie domyślne.
 - **Korekta od temperatury w domu (PRO)** ma pamięć: gdy dom długo jest za chłodny, dokłada zasilania, gdy za
   ciepły — ujmuje (do ±4 K). Każda zmiana zadanej (ręczna albo dzień ↔ noc) zaczyna tę pamięć od zera, a pamięć
   pchająca w złą stronę (np. dokłada ciepła, choć w domu już jest za ciepło) zanika kilka razy szybciej —
@@ -162,7 +166,7 @@ Można dodać do czterech.
 |---|---|---|---|
 | Wyłączone | nic | nic (również bez zrzutu ciepła — tylko pomiary i alarmy) | nic |
 | Ręczne | przyciski w panelu albo suwak „Otwarcie zaworu” (0–100 %) | przyciski w panelu | przyciski w panelu |
-| Automatyczne | krzywa pogodowa (+ korekta od temperatury w domu, PRO), limit: góra bufora − 2 K; gdy pompa CO stoi ≥ 2 min — zamknięty (bez przepływu grawitacyjnego do grzejników) | pracuje, gdy jest zapotrzebowanie (średnia temp. zewnętrzna < granicy grzania, ciepło w buforze, w domu poniżej zadanej + 0,5 K; wyłącza przy zadanej + 1 K); min. 5 min pracy / postoju | ładowanie różnicowe albo według godzin (niżej); raz w tygodniu 30 s przepłukania |
+| Automatyczne | krzywa pogodowa (+ korekta od temperatury w domu, PRO), limit: góra bufora − 2 K; gdy pompa CO stoi ≥ 2 min — zamknięty (bez przepływu grawitacyjnego do grzejników) | pracuje, gdy jest zapotrzebowanie (średnia temp. zewnętrzna < granicy grzania, ciepło w buforze, w domu poniżej zadanej + 0,5 K; wyłącza przy zadanej + 1 K — albo pasmo „Histereza pompy CO” wokół zadanej); min. 5 min pracy / postoju | ładowanie różnicowe albo według godzin (niżej); raz w tygodniu 30 s przepłukania |
 | Lato | zamknięty | stoi; raz w tygodniu 60 s przepłukania | jak w trybie automatycznym |
 
 We wszystkich trybach poza „Wyłączone” działa bezpieczeństwo — z tymi samymi progami co skrypt na Shelly,

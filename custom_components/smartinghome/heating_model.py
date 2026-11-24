@@ -185,6 +185,8 @@ DEFAULTS: dict[str, Any] = {
     "heating_limit_c": 16.0,    # no space heating above this (damped outdoor temperature)
     "room_correction": True,
     "room_gain": 2.0,           # K of supply per K of room error
+    "room_hyst_k": None,        # CH pump band: None → above the target (on below + 0.5 K, off at + 1 K, the valve holds
+                                # the house in between); a number → centred on it (0.2 → on below 23.9, off at 24.1 at 24)
     "night_enabled": False,     # a lower house temperature at night
     "room_night_c": 19.0,       # the night (setback) target, °C
     "night_setback_k": 0.0,     # derived: day − night while enabled (the older settings stored only this)
@@ -370,6 +372,8 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     out["heating_limit_c"] = _num(raw.get("heating_limit_c"), 16.0, 5.0, 25.0)
     out["room_correction"] = raw.get("room_correction", True) is not False
     out["room_gain"] = _num(raw.get("room_gain"), 2.0, 0.0, 8.0)
+    hyst = _f(raw.get("room_hyst_k"))
+    out["room_hyst_k"] = None if hyst is None or hyst <= 0 else round(min(max(hyst, 0.2), 4.0), 1)
     # day and night targets of the house. Settings before v1.87 kept only the setback in K.
     day = out["room_target_c"]
     if _f(raw.get("room_night_c")) is None:
