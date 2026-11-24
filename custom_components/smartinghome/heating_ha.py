@@ -712,13 +712,20 @@ class HeatingManager:
             raise ValueError("Nieznana pozycja przełącznika")
         name = {"pump": "Pompa CO", "dhw_pump": "Pompa CWU"}[element]
         now = time.time()
+        was_hand = bool(self.cfg["force_on"].get(element))
         lock = {**self.cfg["lockout"], element: position == "off"}
         hand = {**self.cfg["force_on"], element: position == "on"}
         if lock != self.cfg["lockout"] or hand != self.cfg["force_on"]:
             await self.async_save({"lockout": lock, "force_on": hand})
+            valve_note = ""
+            if element == "pump" and self.cfg["mode"] in ("auto", "summer") and self._valve_configured():
+                if position == "on":
+                    valve_note = f" — zawór na {hc.HAND_VALVE_PCT:.0f} %"
+                elif position == "auto" and was_hand:
+                    valve_note = " — zawór zamykany, potem reguluje moduł"
             self._log({"off": f"🔒 {name}: pozycja 0 — zablokowana wyłącznikiem awaryjnym w panelu",
-                       "on": f"✋ {name}: pozycja RĘKA — pracuje na stałe z panelu",
-                       "auto": f"🔓 {name}: pozycja AUTO — steruje moduł"}[position], now)
+                       "on": f"✋ {name}: pozycja RĘKA — pracuje na stałe z panelu{valve_note}",
+                       "auto": f"🔓 {name}: pozycja AUTO — steruje moduł{valve_note}"}[position], now)
         if element == "pump" and self.cfg["entities"]["pump_switch"]:
             self._guard_want = position != "off"
             if not await self._guard_sync(now):
@@ -1298,6 +1305,18 @@ def async_register_ws(hass: HomeAssistant) -> None:
 HOUSEHOLD_KEYS = frozenset({"room_target_c", "room_night_c", "night_enabled", "night_from", "night_to", "setbacks"})
 
 
+def _household_command(cfg: dict[str, Any], msg: dict[str, Any]) -> bool:
+    """What any HA user may do from the panel: book weighed wood, and turn a pump between AUTO and HAND (everyone
+    at home runs the CH pump or charges the hot water by hand). The 0 position — the emergency lock, also set for
+    maintenance or an empty installation — and taking a pump out of it stay with the administrator."""
+    action = msg.get("action")
+    if action in ("log_load", "undo_load"):
+        return True
+    if action == "set_switch" and msg.get("position") in ("auto", "on") and msg.get("element") in hm.FORCE_ELEMENTS:
+        return not (cfg.get("lockout") or {}).get(msg["element"])
+    return False
+
+
 def _is_admin(connection: Any) -> bool:
     user = getattr(connection, "user", None)
     return bool(user and user.is_admin)
@@ -1353,12 +1372,13 @@ async def ws_heating_save(hass: HomeAssistant, connection, msg: dict[str, Any]) 
 })
 @websocket_api.async_response
 async def ws_heating_command(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
-    # weighed wood is data, not control: anyone at the boiler with the panel open can book it
-    if not _is_admin(connection) and msg["action"] not in ("log_load", "undo_load"):
-        connection.send_error(msg["id"], "unauthorized", "Kotłownią steruje tylko administrator")
-        return
     manager = _manager_or_error(hass, connection, msg)
     if manager is None:
+        return
+    if not _is_admin(connection) and not _household_command(manager.cfg, msg):
+        connection.send_error(msg["id"], "unauthorized",
+                              "Bez uprawnień administratora: drewno, a pompy tylko AUTO ↔ RĘKA (pozycję 0 i jej "
+                              "zdjęcie, tryb pracy i ręczne sterowanie zmienia administrator)")
         return
     try:
         payload = await manager.async_command(msg["action"], msg)

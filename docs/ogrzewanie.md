@@ -318,6 +318,14 @@ przełącznik w skrzynce:
 - **RĘKA** — pompa **pracuje na stałe**, niezależnie od trybu modułu i automatyki, aż do przełączenia na AUTO
   albo 0. Przydaje się do odpowietrzania, testów i awaryjnej pracy, gdy automatyka zawodzi. Pompa CWU w pozycji
   RĘKA wychładza zasobnik, gdy bufor jest od niego chłodniejszy.
+  **Pompa CO na RĘKA** (w trybie Automatyczne i Lato): zawór mieszający od razu jedzie na **50 %** i tam zostaje
+  — moduł nie reguluje go krzywą. Po powrocie na **AUTO** zawór najpierw się **zamyka**, a potem moduł znów
+  sam go otwiera i zamyka. Zrzut ciepła i ogranicznik zasilania mają pierwszeństwo. W trybie Ręczne zawór
+  ustawia się przyciskami jak dotąd.
+
+**Kto przełącza:** AUTO ↔ RĘKA przy pompach — każdy użytkownik Home Assistanta (w domu wszyscy palą
+i grzeją wodę). Pozycję **0** ustawia i zdejmuje tylko administrator (to wyłącznik awaryjny, np. na czas
+prac albo bez wody w instalacji), tak samo blokadę siłownika.
 
 **Siłownik zaworu** ma sam wyłącznik awaryjny: zablokowany zatrzymuje się i nie jest poruszany (także przy
 zrzucie ciepła i ograniczniku).
@@ -408,8 +416,9 @@ doradcą, paleniami i dziennikiem są niżej, po przewinięciu.
 
 **Kto co może zmienić:** temperatury w domu (dzień, noc, godziny nocy, obniżenia w ciągu dnia) i wpisy
 zważonego drewna — **każdy użytkownik Home Assistanta** z dostępem do panelu, bo w domu palą i ustawiają
-temperaturę wszyscy. Tryb pracy, ręczne sterowanie, przełączniki AUTO / 0 / RĘKA, czujniki, krzywa,
-progi alarmów i cała zakładka Ustawienia — tylko administrator.
+temperaturę wszyscy — oraz przełączanie pomp między AUTO a RĘKA. Tryb pracy, ręczne sterowanie, pozycja 0
+(wyłącznik awaryjny) i blokada siłownika, czujniki, krzywa, progi alarmów i cała zakładka Ustawienia —
+tylko administrator.
 
 Bufor jest narysowany tak, jak zaleca się go podłączać: zasilanie wężownicy CWU wychodzi z samej góry (najgorętsza
 warstwa), zasilanie CO — trochę niżej, przez zawór mieszający i pompę CO; powrót z grzejników wchodzi na dół.

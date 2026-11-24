@@ -432,3 +432,36 @@ def test_dump_top_setting_is_optional_and_clamped():
     assert hm.normalize({"dump_top_c": 120})["dump_top_c"] == 98.0
     assert hm.normalize({"dump_top_c": ""})["dump_top_c"] is None
     assert hm.to_settings({"dump_top_c": 93})["dump_top_c"] == 93.0
+
+
+# ── the CH pump on HAND holds the valve at 50 %, back on AUTO closes it first — bobrek 24.11.2026 ──
+
+def test_hand_pump_holds_the_valve_at_half_and_auto_closes_it_first():
+    ctrl = hc.HeatingController(_cfg(mode="auto", force_on={"pump": True, "dhw_pump": False}))
+    ctrl.valve.known, ctrl.valve.position = True, 0.0
+    out = ctrl.step(_inp(100.0, t_room=21.0))
+    assert out.valve.direction == "open" and out.valve.seconds == pytest.approx(0.5 * ctrl.valve.run_s, abs=0.2)
+    assert "RĘKA" in out.valve.reason and out.pump is None                     # the pump already runs
+    ctrl.valve.position, ctrl.valve.busy_until = 50.0, 0.0
+    assert ctrl.step(_inp(200.0, t_room=21.0, t_supply=30.0)).valve is None   # held, no curve regulation
+    # back on AUTO: closed first (full run into the end stop), then the module regulates again
+    ctrl.configure(_cfg(mode="auto"))
+    out = ctrl.step(_inp(300.0, t_room=21.0, t_supply=30.0))
+    assert out.valve.direction == "close" and "AUTO" in out.valve.reason
+    ctrl.valve.position, ctrl.valve.busy_until, ctrl.valve.over_close_s = 0.0, 0.0, hc.OVERRUN_S   # in the end stop
+    out = ctrl.step(_inp(400.0, t_room=21.0, t_supply=30.0))
+    assert out.valve is not None and out.valve.direction == "open" and out.valve.kind == "auto"   # the curve again
+    assert ctrl._close_after_hand is False
+
+
+def test_hand_pump_in_manual_mode_leaves_the_valve_alone():
+    ctrl = hc.HeatingController(_cfg(mode="manual", force_on={"pump": True, "dhw_pump": False}))
+    ctrl.valve.known, ctrl.valve.position = True, 0.0
+    assert ctrl.step(_inp(100.0)).valve is None
+
+
+def test_a_heat_dump_beats_the_hand_valve():
+    ctrl = hc.HeatingController(_cfg(mode="auto", force_on={"pump": True, "dhw_pump": False}))
+    ctrl.valve.known, ctrl.valve.position = True, 50.0
+    out = ctrl.step(_inp(100.0, t_boiler=95.0, t_top=92.0, overheat=True))
+    assert out.dump and out.valve.kind == "safety" and out.valve.direction == "open"

@@ -84,6 +84,9 @@ ROOM_I_WRONG_K = 0.3
 ROOM_ON_K = 0.5
 ROOM_OFF_K = 1.0
 ROOM_EPS_K = 0.001          # a reading equal to the band's edge counts as reaching it (float rounding)
+# the CH pump on HAND (panel switch): the module holds the mixing valve at this opening instead of the curve;
+# back on AUTO it first closes the valve, then regulates again (bobrek 24.11.2026)
+HAND_VALVE_PCT = 50.0
 
 OUT_FAST_TAU_S = 900.0
 OUT_DAMPED_TAU_S = 6 * 3600.0
@@ -465,6 +468,8 @@ class HeatingController:
         self.dumping = False
         self.limiting = False
         self._dump_drive_ts: float | None = None
+        self._hand_prev = False                  # the CH pump was on HAND at the last step
+        self._close_after_hand = False           # back on AUTO from HAND: close the valve before regulating
         self._invert = cfg["valve_invert"]
         self.mode = cfg["mode"]
         self.last: ControlOutput | None = None
@@ -711,7 +716,24 @@ class HeatingController:
         if inp.dhw_pump_configured and out.dhw.force:
             out.dhw_pump = self.dhw_pump.decide(now, inp.dhw_pump_on, True, out.dhw.reason, force_on=True)
 
+        # the CH pump on HAND: the valve to HAND_VALVE_PCT and held there; leaving HAND: closed first (auto / summer)
+        hand_pump = bool((cfg.get("force_on") or {}).get("pump")) and not (cfg.get("lockout") or {}).get("pump")
+        if self._hand_prev and not hand_pump:
+            self._close_after_hand = True
+        if hand_pump:
+            self._close_after_hand = False
+        self._hand_prev = hand_pump
+        valve_free = inp.valve_configured and out.valve is None and not (self.dumping or self.limiting)
+        if valve_free and mode in ("auto", "summer") and (hand_pump or self._close_after_hand):
+            if hand_pump:
+                out.valve = self._valve_to(HAND_VALVE_PCT, now, f"pompa CO na RĘKA — zawór na {HAND_VALVE_PCT:.0f} %")
+            else:
+                out.valve = self._valve_to(0.0, now, "pompa CO z RĘKA na AUTO — zawór zamknięty, dalej reguluje moduł")
+                if out.valve is None and self.valve.known and self.valve.at_end("close") and now >= self.valve.busy_until:
+                    self._close_after_hand = False
+
         if mode == "manual":
+            self._close_after_hand = False       # by hand anyway
             self.last = out
             return out
 
@@ -730,7 +752,7 @@ class HeatingController:
                         self.pump.exercise_until = now + EXERCISE_S
                 elif not self.pump.exercise_until:
                     out.pump = self.pump.decide(now, inp.pump_on, False, "lato — bez grzania domu")
-            if inp.valve_configured and out.valve is None and not (self.dumping or self.limiting):
+            if valve_free and not (hand_pump or self._close_after_hand) and out.valve is None:
                 if not self.valve.known:
                     ready = now >= self.valve.busy_until and now >= self.valve.retry_at
                     out.valve = self.valve.home() if ready else None
@@ -744,7 +766,7 @@ class HeatingController:
         # auto
         if inp.pump_configured and not force_pump:
             out.pump = self.pump.decide(now, inp.pump_on, self.needed, self._pump_reason(inp, room_target))
-        if inp.valve_configured and out.valve is None and not (self.dumping or self.limiting):
+        if valve_free and not (hand_pump or self._close_after_hand) and out.valve is None:
             if self.needed and flowing:
                 out.valve = self.valve.step(now, out.supply_target, inp.t_supply)
             elif not self.valve.known and now >= self.valve.busy_until and now >= self.valve.retry_at:
@@ -925,6 +947,13 @@ class HeatingController:
         if inp.t_room is not None:
             return f"w domu ciepło ({inp.t_room:.1f} °C)"
         return "brak zapotrzebowania"
+
+    def _valve_to(self, target: float, now: float, reason: str) -> ValveCommand | None:
+        """The module drives the valve to a fixed opening (the CH pump on HAND, or closing after it)."""
+        cmd = self.manual_valve_to(target, now)
+        if cmd is not None and cmd.kind != "home":
+            cmd.kind, cmd.reason = "auto", reason
+        return cmd
 
     def manual_valve(self, direction: str, seconds: float, now: float) -> ValveCommand | None:
         if now < self.valve.busy_until:

@@ -78,6 +78,8 @@ function fanDraw(hass, c, fan) {
 }
 const mmss = (sec) => { const t = Math.max(Math.round(Number(sec) || 0), 0); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`; };
 const num = (v, d = 1) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toLocaleString("pl-PL", { minimumFractionDigits: d, maximumFractionDigits: d }));
+// the CH pump is on HAND (the panel switch) — leaving it closes the mixing valve first
+const handC0 = (d) => !!(((d || {}).config || {}).force_on || {}).pump;
 // the CH pump's band around the house target: empty → above it (on below + 0,5 K, off at + 1 K), a number → centred
 const hystHint = (h, target) => {
   const v = Number(h);
@@ -768,7 +770,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       if (!hand[el] || !conf[el]) continue;
       html += `<div class="alarm lock hand"><span class="txt">✋ <b>${LOCK_NAMES[el]}: RĘKA</b>
         <span>pracuje na stałe z przełącznika w panelu, niezależnie od trybu i automatyki.</span></span>
-        ${d.admin ? `<button class="lockbtn" data-act="swask" data-el="${el}" data-pos="auto">AUTO…</button>` : ""}</div>`;
+        <button class="lockbtn" data-act="swask" data-el="${el}" data-pos="auto">AUTO…</button></div>`;
     }
     if (pumpC.forced_active) {
       html += `<div class="alarm ${pumpC.forced === "probe" ? "warn" : "err"}">⚙️ <b>Pompa CO pracuje awaryjnie</b> <span>(${FORCE_TEXT[pumpC.forced] || ""}).</span>${
@@ -1255,12 +1257,14 @@ class SmartingHomeHeatingPanel extends HTMLElement {
             ${admin ? `<button class="btn sm ${on ? "" : "danger"}" data-act="lockask" data-el="${el}" data-on="${on ? 0 : 1}">${on ? "Odblokuj…" : "Zablokuj…"}</button>` : ""}</div>`;
         }
         const pos = lkC[el] ? "off" : handC[el] ? "on" : "auto";
+        // every HA user: AUTO ↔ RĘKA; the 0 position (emergency lock) and leaving it — the administrator
+        const can = (p) => pos !== p && (admin || (pos !== "off" && p !== "off"));
         const segs = [["auto", "AUTO"], ["off", "0"], ["on", "RĘKA"]].map(([p, lbl]) =>
-          `<button class="${pos === p ? `on pos-${p}` : ""}" ${admin && pos !== p ? `data-act="swask" data-el="${el}" data-pos="${p}"` : "disabled"}>${lbl}</button>`).join("");
+          `<button class="${pos === p ? `on pos-${p}` : ""}" ${can(p) ? `data-act="swask" data-el="${el}" data-pos="${p}"` : "disabled"}>${lbl}</button>`).join("");
         return `<div class="lockrow ${pos === "auto" ? "" : "on"}"><span class="nm">${pos === "off" ? "🔒" : pos === "on" ? "✋" : "⚙️"} ${LOCK_NAMES[el]}</span>
           <span class="seg sw3">${segs}</span></div>`;
       }).join("")}<div class="hint">AUTO: pompą steruje moduł. 0: wyłączona, nic jej nie włączy (także zabezpieczenia). RĘKA: pracuje na stałe, niezależnie od trybu.
-        Fizyczny przełącznik AUTO–0–RĘKA w skrzynce działa niezależnie od panelu.</div></div>`;
+        Fizyczny przełącznik AUTO–0–RĘKA w skrzynce działa niezależnie od panelu.${admin ? "" : " AUTO i RĘKA może przełączać każdy domownik; pozycję 0 ustawia i zdejmuje administrator."}</div></div>`;
     }
     if (admin && c.mode !== "off" && (v.configured || pump.configured || dpump.configured)) {
       const manual = c.mode === "manual";
@@ -1609,14 +1613,14 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     if (pos === "on") {
       title = `✋ ${name}: pozycja RĘKA?`;
       body = `<p>${name} zostanie włączona i będzie <b>pracować na stałe</b>, niezależnie od trybu modułu i automatyki, dopóki nie przełączysz jej na AUTO albo 0.</p>
-        ${el === "dhw_pump" ? "<p>Gdy bufor jest chłodniejszy od wody w zasobniku, pompa CWU będzie zasobnik <b>wychładzać</b>.</p>" : "<p>Zawór mieszający dalej działa według trybu modułu.</p>"}
+        ${el === "dhw_pump" ? "<p>Gdy bufor jest chłodniejszy od wody w zasobniku, pompa CWU będzie zasobnik <b>wychładzać</b>.</p>" : "<p>Zawór mieszający od razu <b>otworzy się na 50 %</b> i zostanie tak, dopóki pompa jest na RĘKA (w trybie Auto i Lato; zrzut ciepła i ogranicznik zasilania mają pierwszeństwo).</p>"}
         ${fromLock && el === "pump" ? "<p>Skrypt bezpieczeństwa na Shelly pompy zostanie uruchomiony ponownie.</p>" : ""}`;
       ack = "Rozumiem: w instalacji jest woda, a pompa będzie pracować, dopóki jej nie przełączę.";
     } else {
       title = `⚙️ ${name}: pozycja AUTO?`;
       body = fromLock
         ? `<p>Automatyka i zabezpieczenia znów mogą włączać tę pompę, także od razu, jeśli są ku temu warunki.</p>${el === "pump" ? "<p>Skrypt bezpieczeństwa na Shelly pompy zostanie uruchomiony ponownie.</p>" : ""}`
-        : `<p>Pompą znów steruje moduł. Jeśli w obecnym trybie nie ma powodu, żeby pracowała, <b>zostanie od razu wyłączona</b>.</p>`;
+        : `<p>Pompą znów steruje moduł. Jeśli w obecnym trybie nie ma powodu, żeby pracowała, <b>zostanie od razu wyłączona</b>.</p>${el === "pump" && handC0(this._data) ? "<p>Zawór mieszający najpierw się <b>zamknie</b>, potem moduł znów sam go otwiera i zamyka.</p>" : ""}`;
     }
     return this._modal({ title, body, ack, yes: pos === "on" ? "Włącz RĘKA" : "Przełącz na AUTO", danger: pos === "on" });
   }
