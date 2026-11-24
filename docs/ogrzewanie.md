@@ -278,8 +278,11 @@ razem z pompą, bo woda jest gorąca, a nadmiar ciepła trzeba odebrać jak najs
 zrzut ciepła czy skrypt bezpieczeństwa na Shelly. Wentylator przełączony ręcznie moduł zaraz ustawi z powrotem
 tak jak pompę, chyba że pompa zmieniła stan mniej niż 2 minuty temu. Gdy gniazdko jest poza siecią,
 moduł nic do niego nie wysyła; gdy wróci, dostaje stan pompy. W trybie „Wyłączone” wentylator nie jest
-przełączany. Stan wentylatora (i moc, jeśli wybierzesz encję mocy) widać na schemacie kotłowni
-i w karcie „Sterowanie”.
+przełączany. Stan wentylatora widać na schemacie kotłowni i w karcie „Sterowanie”. Z encją mocy gniazdka
+(**Nagrzewnica — moc wentylatora**) pod garażem jest zawsze pobór „⚡ … W”, a wirnik kręci się tylko wtedy, gdy wentylator
+naprawdę pobiera prąd (≥ 5 W). Gdy gniazdko jest włączone od minuty, a poboru nie ma, schemat pisze
+„włączony, nie chodzi” i „⚡ 0 W — wypięty?”, a karta „Sterowanie” — „wypięta wtyczka albo wyłączona
+nagrzewnica?”.
 
 **Nagrzewnica w nocy.** Gdy w nocy nagrzewnica nie jest potrzebna (np. w garażu), włącz w karcie „Sterowanie”
 ramkę **„… — cisza nocna wentylatora”** (przełącznik „wyłączaj w nocy”) i wybierz godziny z list — zapisują się

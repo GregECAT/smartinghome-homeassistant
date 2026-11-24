@@ -64,6 +64,18 @@ const ROLE_HINTS = {
 };
 
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+// a unit heater's fan: with a power reading from its socket, "on" alone is not enough — someone may have pulled
+// the plug or switched the heater off. → { watts, known, drawing, missing } (missing: on ≥ 60 s and no draw)
+const FAN_MIN_W = 5;
+function fanDraw(hass, c, fan) {
+  const ents = (c && c.entities) || {};
+  const known = !!ents.fan_power && fan.online !== false;
+  const watts = fan.power_w == null ? null : Number(fan.power_w);
+  const drawing = known && watts != null && watts >= FAN_MIN_W;
+  const st = hass && ents.fan_switch ? hass.states[ents.fan_switch] : null;
+  const onFor = st && st.last_changed ? (Date.now() - Date.parse(st.last_changed)) / 1000 : 0;
+  return { watts, known, drawing, missing: known && fan.on === true && !drawing && onFor >= 60 };
+}
 const mmss = (sec) => { const t = Math.max(Math.round(Number(sec) || 0), 0); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`; };
 const num = (v, d = 1) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toLocaleString("pl-PL", { minimumFractionDigits: d, maximumFractionDigits: d }));
 const fmtTime = (ts) => (ts ? new Date(ts * 1000).toLocaleString("pl-PL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
@@ -1037,18 +1049,27 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const fan = ctl.fan || {};
     if (fan.configured) {
       const fOn = fan.on === true, fOff = fan.online === false;
-      const fc = fOn ? supC : "#475569";
-      const blade = (a) => `<path d="M1110 446q-4-13 0-17q4 4 0 17Z" transform="rotate(${a} 1110 446)" fill="${fOn ? "#2ecc71" : "#64748b"}"/>`;
+      // with the socket's power known, the blades turn only while the fan really draws power
+      const fd = fanDraw(this._hass, c, fan);
+      const turning = fOn && (!fd.known || fd.drawing);
+      const fc = fd.missing ? "#f7b731" : turning ? supC : "#475569";
+      const blade = (a) => `<path d="M1110 446q-4-13 0-17q4 4 0 17Z" transform="rotate(${a} 1110 446)" fill="${turning ? "#2ecc71" : "#64748b"}"/>`;
       s += `<text x="1110" y="380" text-anchor="middle" class="t-s">${esc(fan.name || "Nagrzewnica")}</text>
         <path d="M1040 424L1110 392L1180 424V494H1040Z" fill="rgba(255,255,255,.035)" stroke="#475569" stroke-width="2" stroke-linejoin="round"/>
-        ${fOn ? `<rect x="1084" y="420" width="52" height="52" rx="8" fill="${fc}" opacity=".3" filter="url(#hgGlow)"/>` : ""}
+        ${turning || fd.missing ? `<rect x="1084" y="420" width="52" height="52" rx="8" fill="${fc}" opacity=".3" filter="url(#hgGlow)"/>` : ""}
         <rect x="1088" y="424" width="44" height="44" rx="6" fill="#0f172a" stroke="${fc}" stroke-width="1.5"/>
-        <g class="${fOn ? "spin" : ""}">${[0, 90, 180, 270].map(blade).join("")}</g>
+        <g class="${turning ? "spin" : ""}">${[0, 90, 180, 270].map(blade).join("")}</g>
         <circle cx="1110" cy="446" r="3" fill="#cbd5e1"/>
-        <text x="1110" y="486" text-anchor="middle" class="${fOff ? "t-lock" : "t-s"}">${fOff ? "poza siecią"
+        <text x="1110" y="486" text-anchor="middle" class="${fOff || fd.missing ? "t-lock" : "t-s"}">${fOff ? "poza siecią"
+          : fd.missing ? "włączony, nie chodzi"
           : fan.quiet && !fOn ? `noc — do ${fan.quiet_to}:00`
           : fan.wait_s > 0 ? (fan.wait_to === "on" ? `rusza za ${mmss(fan.wait_s)}` : `stop za ${mmss(fan.wait_s)}`)
-          : fOn ? `wentylator${pw(fan.power_w)}` : "stoi"}</text>`;
+          : fOn ? (fd.known ? "wentylator" : `wentylator${pw(fan.power_w)}`) : "stoi"}</text>`;
+      if (fd.known) {
+        const pc = fd.missing ? "#f7b731" : fd.drawing ? "#2ecc71" : "#64748b";
+        s += `<text x="1110" y="508" text-anchor="middle" class="t-s2" style="fill:${pc}">⚡ ${fd.watts == null ? "—" : `${num(fd.watts, 0)} W`}${
+          fd.missing ? " — wypięty?" : ""}</text>`;
+      }
     }
 
     // hot-water pump and tank
@@ -1190,7 +1211,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const fan = ctl.fan || {};
     if (fan.configured) {
       html += `<div style="margin-top:6px; font-size:12px; color:#a0aec0">${esc(fan.name || "Nagrzewnica")} — wentylator:
-        ${fan.online === false ? '<span class="pill hot">gniazdko poza siecią</span>' : pill(fan.on)}${fan.on && fan.power_w >= 1 ? ` · ${num(fan.power_w, 0)} W` : ""}
+        ${fan.online === false ? '<span class="pill hot">gniazdko poza siecią</span>' : pill(fan.on)}${fanDraw(this._hass, c, fan).known ? ` · ⚡ ${num(fan.power_w, 0)} W` : fan.on && fan.power_w >= 1 ? ` · ${num(fan.power_w, 0)} W` : ""}
+        ${fanDraw(this._hass, c, fan).missing ? '<span class="pill hot">gniazdko włączone, a pobór 0 W — wypięta wtyczka albo wyłączona nagrzewnica?</span>' : ""}
         ${fan.wait_s > 0 ? `<span class="pill">${fan.wait_to === "on" ? "rusza" : "wyłączy się"} za ${mmss(fan.wait_s)}</span>` : ""}
         ${fan.quiet && !fan.dump ? `<span class="pill">🌙 noc — do ${fan.quiet_to}:00</span>` : ""}
         <span class="muted">· ${fan.follows ? (c.mode === "off" ? "w trybie Wyłączone moduł go nie przełącza"
