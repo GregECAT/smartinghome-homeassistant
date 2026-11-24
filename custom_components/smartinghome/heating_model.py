@@ -218,6 +218,7 @@ DEFAULTS: dict[str, Any] = {
     "wood_kind": "mixed",       # soft / mixed / hard — how many kg a cubic metre of seasoned wood weighs
     "wood_price": None,         # the price as bought …
     "wood_price_unit": "mp",    # … per "mp" (metr przestrzenny, stacked split logs), "m3" (solid) or "kg"
+    "wood_moisture_pct": None,  # % water (wet basis): a number → wood_kwh_per_kg from it and the kind of wood
 }
 
 STATE_LABELS = {
@@ -306,12 +307,22 @@ def switch_state(state: Any) -> bool | None:
 # ── configuration ────────────────────────────────────────────────────────────
 
 # seasoned firewood (~20 % moisture): kg per solid cubic metre; a stacked metre (metr przestrzenny, split logs
-# laid in a pile) holds about 0.65 of it in wood — the rest is air
+# laid in a pile) holds about 0.65 of it in wood — the rest is air. The third value: the lower heating value of
+# the dry wood, MJ/kg (softwood a little higher per kg — resin)
 WOOD_KINDS = {
-    "hard": ("twarde (buk, dąb, grab, jesion)", 700.0),
-    "mixed": ("mieszane", 600.0),
-    "soft": ("miękkie (sosna, świerk, olcha, topola)", 480.0),
+    "hard": ("twarde (buk, dąb, grab, jesion)", 700.0, 18.3),
+    "mixed": ("mieszane", 600.0, 18.6),
+    "soft": ("miękkie (sosna, świerk, olcha, topola)", 480.0, 19.0),
 }
+WATER_LATENT_MJ_KG = 2.44   # the water in the wood has to be evaporated: lost per kg of water
+
+
+def wood_kwh_per_kg_at(kind: str, moisture_pct: float) -> float:
+    """The lower heating value of wood at a given moisture (wet basis), kWh/kg: dry wood's value for the dry part,
+    minus evaporating the water. Hardwood: 10 % → 4.5, 12 % → 4.4, 20 % → 3.9, 30 % → 3.4 kWh/kg."""
+    w = min(max(float(moisture_pct), 0.0), 100.0) / 100.0
+    lhv = WOOD_KINDS.get(kind, WOOD_KINDS["mixed"])[2]
+    return (lhv * (1.0 - w) - WATER_LATENT_MJ_KG * w) / 3.6
 STACKED_SOLID = 0.65
 WOOD_PRICE_UNITS = {"mp": "zł / mp (metr przestrzenny)", "m3": "zł / m³ (lity)", "kg": "zł / kg"}
 
@@ -435,6 +446,11 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     out["wood_price"] = None if bought is None or bought <= 0 else round(min(bought, 5000.0), 2)
     per_unit = wood_kg_per_unit(out["wood_kind"], out["wood_price_unit"])
     out["wood_kg_per_unit"] = round(per_unit, 1)          # shown in the panel next to the price
+    moist = _f(raw.get("wood_moisture_pct"))
+    out["wood_moisture_pct"] = None if moist is None or moist <= 0 else round(min(max(moist, 5.0), 60.0), 1)
+    if out["wood_moisture_pct"] is not None:              # the heat per kg follows from the moisture and the kind
+        out["wood_kwh_per_kg"] = round(min(max(wood_kwh_per_kg_at(out["wood_kind"], out["wood_moisture_pct"]),
+                                               1.5), 5.4), 2)
     if out["wood_price"] is not None:
         price = out["wood_price"] / per_unit               # the price as bought → zł/kg
     else:

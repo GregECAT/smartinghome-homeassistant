@@ -377,6 +377,11 @@ też powiadomienie w Home Assistant — niezależnie od ustawień i licencji.
   litego), za **m³** litego albo za kg. Moduł przelicza ją na zł/kg (np. twarde po 300 zł/mp ≈ 455 kg/mp
   ≈ 0,66 zł/kg) i pokazuje koszt miesiąca, średnio na dobę, sezonu i każdego zważonego palenia. Palenia bez
   ważenia liczą się z szacunku drewna.
+- **Wilgotność drewna** (Ustawienia → Kocioł i drewno, z wilgotnościomierza): z niej i z rodzaju drewna moduł
+  liczy ciepło z kilograma — wartość opałowa suchego drewna (twarde ok. 18,3 MJ/kg, mieszane 18,6, miękkie 19,0)
+  dla suchej części minus odparowanie wody. Twarde: 10 % ≈ 4,5 kWh/kg, 12 % ≈ 4,4, 20 % ≈ 3,9, 30 % ≈ 3,4.
+  Puste pole — liczy się wpisane kWh/kg. Od tego zależą szacunek drewna, „Załaduj X kg”, koszty i zużycie domu
+  ze zważonych paleń.
 - **Drewno spalone w paleniu** (tabela paleń, sezon) to bilans ciepła: o ile więcej ciepła mają na koniec
   bufor i CWU niż na początku, plus to, co w tym czasie wziął dom (jego straty ciepła razem z temperaturą
   na zewnątrz). Dzieli się to przez ciepło z kilograma drewna. Samo „ile przybyło w buforze” zaniżało wynik

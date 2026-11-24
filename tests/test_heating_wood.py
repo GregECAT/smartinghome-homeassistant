@@ -184,3 +184,21 @@ def test_older_zl_per_kg_setting_still_counts():
     assert hm.normalize({"wood_price_kg": 0.8})["wood_price_kg"] == 0.8
     stored = hm.to_settings({"wood_kind": "hard", "wood_price": 300})
     assert stored["wood_price"] == 300 and stored["wood_kind"] == "hard" and "wood_kg_per_unit" not in stored
+
+
+# ── wood moisture → heat per kg ─────────────────────────────────────────────
+
+def test_heat_per_kg_from_moisture_and_kind():
+    assert hm.wood_kwh_per_kg_at("hard", 10) == pytest.approx(4.51, abs=0.02)
+    assert hm.wood_kwh_per_kg_at("hard", 11.5) == pytest.approx(4.42, abs=0.02)    # bobrek 10–13 %
+    assert hm.wood_kwh_per_kg_at("hard", 20) == pytest.approx(3.93, abs=0.02)
+    assert hm.wood_kwh_per_kg_at("soft", 12) > hm.wood_kwh_per_kg_at("hard", 12)    # resin: more per kg
+    c = hm.normalize({"wood_kind": "hard", "wood_moisture_pct": 11.5, "wood_kwh_per_kg": 4.0})
+    assert c["wood_moisture_pct"] == 11.5 and c["wood_kwh_per_kg"] == pytest.approx(4.42, abs=0.01)
+
+
+def test_without_moisture_the_typed_heat_per_kg_counts():
+    c = hm.normalize({"wood_kwh_per_kg": 4.4})
+    assert c["wood_moisture_pct"] is None and c["wood_kwh_per_kg"] == 4.4
+    assert hm.normalize({"wood_moisture_pct": 90})["wood_moisture_pct"] == 60.0
+    assert hm.to_settings({"wood_moisture_pct": 12})["wood_moisture_pct"] == 12.0
