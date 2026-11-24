@@ -66,6 +66,11 @@ Wskazówki montażowe: tuleje 150 mm pasują do zbiorników; na rury DN25–32 l
 leżeć na rurze zasilania kotła. Przed montażem skalibruj wszystkie sondy w jednym naczyniu
 z wodą (np. ~20 °C i ~60 °C), a różnice wpisz jako korekty w panelu.
 
+**Sonda kotła na wyjściu, a termometr kotła wyżej:** sonda na rurze wyjściowej pokazuje wodę na wyjściu,
+a termometr w kotle (np. Atmos, kapilara pod pokrywą) zwykle kilka stopni więcej. Różnicę wpisz jako korektę
+sondy „Kocioł” (np. +7 K): panel pokazuje wtedy **temperaturę kotła** (sonda + korekta) — według niej liczą się
+ostrzeżenie, alarm i stan kotła — a obok, nad Laddomatem i w karcie Kocioł, **wodę na wyjściu** bez korekty.
+
 Każdą sondę prowadź osobnym przewodem do Add-onu i łącz je w jednym miejscu, przy samym Shelly.
 Łączenie kilku sond w jeden przewód przy kotle albo buforze to najczęstsza przyczyna
 „zamrożonych” odczytów i stałych 85,0 °C. Add-on obsługuje do 5 sond DS18B20 na jednej linii (VCC,

@@ -80,6 +80,14 @@ const mmss = (sec) => { const t = Math.max(Math.round(Number(sec) || 0), 0); ret
 const WOOD_KINDS = { hard: "twarde (buk, dąb, grab, jesion)", mixed: "mieszane", soft: "miękkie (sosna, świerk, olcha, topola)" };
 const WOOD_UNITS = { mp: "zł / mp (metr przestrzenny)", m3: "zł / m³ (lity)", kg: "zł / kg" };
 const num = (v, d = 1) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toLocaleString("pl-PL", { minimumFractionDigits: d, maximumFractionDigits: d }));
+// the outlet water as the boiler probe reads it — shown apart when the boiler's own temperature is that plus a
+// correction (offsets.boiler_out); null without a correction or a reading
+const outletC = (probes, cfg) => {
+  const off = Number(((cfg || {}).offsets || {}).boiler_out) || 0;
+  const p = (probes || {}).boiler_out;
+  const raw = p && p.status === "ok" ? parseFloat(p.raw) : NaN;
+  return off && Number.isFinite(raw) ? raw : null;
+};
 // the CH pump is on HAND (the panel switch) — leaving it closes the mixing valve first
 const handC0 = (d) => !!(((d || {}).config || {}).force_on || {}).pump;
 // the CH pump's band around the house target: empty → above it (on below + 0,5 K, off at + 1 K), a number → centred
@@ -813,7 +821,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const bCls = b.state === "overheat" ? "bad" : (b.temp_c != null && b.temp_c >= (this._data.config.warn_c || 88)) ? "warn" : "";
     out.push(`<div class="card kpi ${bCls}"><div class="lbl">Kocioł</div>
       <div class="val" style="color:${STATE_COLOR[b.state] || "#e0e6ed"}">${num(b.temp_c)}<small>°C${arrow}</small></div>
-      <div class="note"><b style="color:${STATE_COLOR[b.state] || "#e0e6ed"}">${esc(b.label || "—")}</b>${trend != null ? ` · ${num(trend, 2)} K/min` : ""}${b.since ? `<br>od ${fmtTime(b.since)}` : ""}${
+      <div class="note"><b style="color:${STATE_COLOR[b.state] || "#e0e6ed"}">${esc(b.label || "—")}</b>${trend != null ? ` · ${num(trend, 2)} K/min` : ""}${
+        outletC(probes, this._data.config) != null ? `<br>wyjście z kotła <b style="color:#e0e6ed">${num(outletC(probes, this._data.config))} °C</b>` : ""}${b.since ? `<br>od ${fmtTime(b.since)}` : ""}${
         b.flue_c != null ? `<br>spaliny <b style="color:#e0e6ed">${num(b.flue_c, 0)} °C</b>${b.flue_trend_k_min != null ? ` · ${num(b.flue_trend_k_min, 1)} K/min` : ""}` : ""}</div></div>`);
     if (buf) {
       const pct = buf.charge_pct ?? 0;
@@ -982,6 +991,13 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       }
     }
 
+    // the water leaving the boiler as its probe reads it, when the boiler itself is shown with a correction
+    // (bobrek: the probe on the outlet, the boiler's own gauge ~7 K higher)
+    const outRaw = outletC(p, c);
+    if (outRaw != null) {
+      s += `<text x="270" y="140" text-anchor="middle" class="t-s dim">wyjście</text>
+        <text x="270" y="156" text-anchor="middle" class="t-m" style="fill:${tempColor(outRaw)}">${num(outRaw)}°</text>`;
+    }
     // Laddomat: its pump is started by the boiler's own thermostat (Atmos ≈ 75 °C), inferred from the outlet
     s += `<rect x="240" y="160" width="60" height="70" rx="9" fill="#0f172a" stroke="#475569"/>
       ${pumpSym(270, 195, ladOn, 14)}
