@@ -65,3 +65,50 @@ def test_plan_core_restarts_itself_and_covers_integrations():
     p = au.plan(au.select(items, cfg, {}, 0.0))
     assert p["final"]["entity_id"] == "update.core" and not p["restart"]
     assert [c["entity_id"] for c in p["install"]] == ["update.sh"]
+
+
+def test_classify_marketplace_like_hacs():
+    """HA 2026.11 replaced HACS with the core Marketplace, which keeps the unique ids."""
+    assert au.classify("marketplace", "1188124253") == "smartinghome"
+    assert au.classify("marketplace", "172733314") == "hacs"
+    assert au.labels("marketplace")["hacs"] == "Integracje (Marketplace)"
+    assert au.labels("hacs")["hacs"] == "Integracje HACS" and au.labels(None) == au.GROUP_LABELS
+
+
+def test_marketplace_warning_holds_due_updates_only():
+    cfg = au.config({"enabled": True, "groups": {"hacs": {"enabled": True, "min_age_h": 72}}})
+    msg = au.MSG_WARNING_NOT_ACCEPTED
+    items = [
+        {**_item("update.sh", "smartinghome", "v1.108.2", "v1.108.3"), "blocked": msg},
+        {**_item("update.fresh", "hacs", "1.0", "1.1"), "blocked": msg},        # too fresh anyway
+        {**_item("update.same", "hacs", "2.0", "2.0", available=False), "blocked": msg},
+        _item("update.addon", "addons", "1.0", "1.1", features=29),
+    ]
+    res = {c["entity_id"]: c for c in au.select(items, cfg, {}, 0.0)}
+    assert res["update.sh"]["held"] and not res["update.sh"]["eligible"]
+    assert res["update.sh"]["reason"] == "Otwórz Marketplace w HA i zaakceptuj ostrzeżenie"
+    assert not res["update.fresh"]["held"] and "za świeże" in res["update.fresh"]["reason"]
+    assert not res["update.same"]["held"] and res["update.same"]["reason"] == "aktualne"
+    p = au.plan(list(res.values()))
+    assert p["install"] == [] and p["final"] is None and not p["restart"]
+    assert [c["entity_id"] for c in p["held"]] == ["update.sh"]
+    # once accepted (no "blocked"), the same update installs
+    p2 = au.plan(au.select([_item("update.sh", "smartinghome", "v1.108.2", "v1.108.3")], cfg, {}, 0.0))
+    assert [c["entity_id"] for c in p2["install"]] == ["update.sh"] and p2["held"] == []
+
+
+def test_held_reported_once_per_version():
+    held = [{"entity_id": "update.sh", "latest": "v1.108.3"}]
+    assert au.held_news(held, {}) == held
+    assert au.held_news(held, {"update.sh": "v1.108.3"}) == []
+    assert au.held_news([{"entity_id": "update.sh", "latest": "v1.108.4"}], {"update.sh": "v1.108.3"})
+
+
+def test_install_error_words():
+    class Refused(Exception):
+        translation_key = "warning_not_accepted"
+
+    assert au.install_error(Refused("Open the Marketplace and read the warning first")) == \
+        "Otwórz Marketplace w HA i zaakceptuj ostrzeżenie"
+    assert au.install_error(RuntimeError("GitHub down")) == "GitHub down"
+    assert au.install_error(RuntimeError()) == "RuntimeError"

@@ -12,7 +12,7 @@
   <a href="https://hacs.xyz"><img src="https://img.shields.io/badge/HACS-Custom-41BDF5?style=for-the-badge&logo=homeassistantcommunitystore&logoColor=white" alt="HACS" /></a>
   <a href="https://www.home-assistant.io"><img src="https://img.shields.io/badge/Home%20Assistant-2025.1+-18BCF2?style=for-the-badge&logo=homeassistant&logoColor=white" alt="Home Assistant" /></a>
   <a href="https://smartinghome.pl"><img src="https://img.shields.io/badge/License-Commercial-E74C3C?style=for-the-badge&logo=keycdn&logoColor=white" alt="License" /></a>
-  <img src="https://img.shields.io/badge/Version-1.108.3-2ECC71?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/Version-1.108.4-2ECC71?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
 </p>
 
@@ -115,7 +115,23 @@
 
 ## 📦 Installation
 
-### Via HACS (Recommended)
+### Home Assistant 2026.11+ — Marketplace
+
+Home Assistant 2026.11 replaced HACS with the built-in **Marketplace** (Settings → Marketplace).
+It takes over existing HACS installs: Smarting HOME stays installed and keeps its update entity.
+
+1. Open **Settings → Marketplace** once and **accept its warning**. Until someone has accepted it,
+   the Marketplace refuses every install and update — also Smarting HOME's nightly automatic update,
+   which holds the update and says so in the panel and in a notification
+   (*„Otwórz Marketplace w HA i zaakceptuj ostrzeżenie”*).
+2. New install: add `https://github.com/GregECAT/smartinghome-homeassistant` as a custom repository
+   (type **Integration**), install **Smarting HOME** and **restart Home Assistant**.
+3. Without a connected GitHub account the Marketplace does not look for new releases of custom
+   repositories. With automatic updates on, Smarting HOME refreshes its own repository (every 6 h,
+   hourly inside the update window); otherwise connect a GitHub account in the Marketplace or refresh
+   the repository there.
+
+### Via HACS (Home Assistant before 2026.11)
 
 1. Open **HACS** in your Home Assistant instance
 2. Click the **⋮** menu → **Custom repositories**

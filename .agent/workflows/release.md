@@ -6,6 +6,8 @@ description: How to release a new version of the Smarting HOME integration to HA
 
 This workflow MUST be followed every time changes are committed to the repository. Every commit = new version = new GitHub Release. HACS only detects updates via GitHub Releases, not bare tags.
 
+Home Assistant 2026.11+ installs custom integrations through the built-in **Marketplace** (it replaced HACS and reads the same `hacs.json` and GitHub Releases). The `hacs/repository/*` websocket commands are gone there: deploy a release with `update.install` on `update.smarting_home_energy_management_update` and `version: vX.Y.Z` (the Marketplace refuses until the owner has accepted its warning in Settings → Marketplace — never accept it for them), then `homeassistant.restart`.
+
 ## Prerequisites (one-time setup)
 
 The user must authorize GitHub CLI before the first release. Run this command ONCE:

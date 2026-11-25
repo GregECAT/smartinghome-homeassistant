@@ -1007,9 +1007,12 @@ class SmartingHomePanel extends HTMLElement {
       <td style="color:${u.eligible && !locked ? '#2ecc71' : '#94a3b8'}">${u.eligible ? (locked ? '— (funkcja PRO)' : '✅ zainstaluje się w nocy') : this._esc(u.reason)}</td></tr>`).join('');
     const hist = (r.history || []).map(h => `<div style="padding:3px 0; border-bottom:1px solid #1e293b">
       <span style="color:#64748b">${this._esc(h.ts)}</span> · <b style="color:#cbd5e1">${this._esc(h.result || '')}</b> —
-      ${(h.items || []).map(i => `${i.ok === false ? '❌' : i.ok === null ? '⏳' : '✅'} ${this._esc(i.title)} ${this._esc(i.from || '')}→${this._esc(i.to || '')}`).join(', ')}</div>`).join('');
+      ${(h.items || []).map(i => `${i.ok === false ? '❌' : i.ok === null ? '⏳' : '✅'} ${this._esc(i.title)} ${this._esc(i.from || '')}→${this._esc(i.to || '')}${i.error ? ` <span style="color:#f7b731">(${this._esc(i.error)})</span>` : ''}`).join(', ')}</div>`).join('');
+    // HA 2026.11+: the core Marketplace (replaced HACS) refuses installs until its warning is accepted
+    const mkt = r.store || {};
     el.innerHTML = `
       ${locked ? `<div style="display:flex; align-items:center; gap:8px; padding:8px 10px; margin-bottom:8px; border-radius:8px; background:rgba(247,183,49,0.08); border:1px solid rgba(247,183,49,0.25); color:#f7b731">🔒 Automatyczne aktualizacje z kopią zapasową to funkcja PRO — poniżej podgląd dostępnych aktualizacji. ${this._proLock()}</div>` : ''}
+      ${mkt.warning_accepted === false ? `<div style="padding:8px 10px; margin-bottom:8px; border-radius:8px; background:rgba(247,183,49,0.08); border:1px solid rgba(247,183,49,0.25); color:#f7b731; line-height:1.5">⚠️ <b>${this._esc(mkt.message || 'Otwórz Marketplace w HA i zaakceptuj ostrzeżenie')}</b> (Ustawienia → Marketplace). Home Assistant 2026.11+ instaluje integracje — także Smarting HOME — przez Marketplace i do tego czasu odmawia ich aktualizacji. <a href="/marketplace" target="_top" style="color:#00d4ff">Otwórz Marketplace</a></div>` : ''}
       <div style="display:flex; flex-wrap:wrap; gap:14px; align-items:center; margin-bottom:8px">
         <label style="display:flex; align-items:center; gap:6px; color:#e2e8f0; font-weight:700"><input type="checkbox" id="aupd-on" ${c.enabled && !locked ? 'checked' : ''} ${dis}> Włączone</label>
         <span>okno: <input type="number" id="aupd-w0" value="${(c.window || [2, 5])[0]}" min="0" max="23" style="width:48px" ${dis}>:00 –
@@ -15188,7 +15191,7 @@ class SmartingHomePanel extends HTMLElement {
             <!-- ℹ️ Info -->
             <div class="card" style="grid-column: 1 / -1">
               <div class="card-title">ℹ️ Informacje</div>
-              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.108.3</span></div>
+              <div class="dr"><span class="lb">Wersja integracji</span><span class="vl">1.108.4</span></div>
               <div class="dr"><span class="lb">Ścieżka zdjęć</span><span class="vl" style="font-size:10px">/config/www/smartinghome/</span></div>
               <div class="dr"><span class="lb">Dokumentacja</span><span class="vl"><a href="https://smartinghome.pl/hems/" target="_blank" style="color:#00d4ff">smartinghome.pl/hems</a></span></div>
               <div class="dr"><span class="lb">Wsparcie</span><span class="vl"><a href="https://github.com/GregECAT/smartinghome-homeassistant/issues" target="_blank" style="color:#00d4ff">GitHub Issues</a></span></div>
