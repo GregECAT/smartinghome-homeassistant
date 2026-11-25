@@ -298,7 +298,9 @@ przełączany. Stan wentylatora widać na schemacie kotłowni i w karcie „Ster
 (**Nagrzewnica — moc wentylatora**) pod garażem jest zawsze pobór „⚡ … W”, a wirnik kręci się tylko wtedy, gdy wentylator
 naprawdę pobiera prąd (≥ 5 W). Gdy gniazdko jest włączone od minuty, a poboru nie ma, schemat pisze
 „włączony, nie chodzi” i „⚡ 0 W — wypięty?”, a karta „Sterowanie” — „wypięta wtyczka albo wyłączona
-nagrzewnica?”.
+nagrzewnica?”. Czujnik **Nagrzewnica — temperatura w pomieszczeniu** (opcjonalny) pokazuje temperaturę
+garażu przy jego nazwie na schemacie („Garaż · 14,0 °C”); wystarczy dowolna encja w °C — także temperatura
+baterii magazynu energii, jeśli stoi w garażu. Służy tylko do podglądu, nie steruje niczym.
 
 **Nagrzewnica w nocy.** Gdy w nocy nagrzewnica nie jest potrzebna (np. w garażu), włącz w karcie „Sterowanie”
 ramkę **„… — cisza nocna wentylatora”** (przełącznik „wyłączaj w nocy”) i wybierz godziny z list — zapisują się

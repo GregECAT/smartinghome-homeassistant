@@ -86,6 +86,9 @@ ROLES: dict[str, tuple[str, str]] = {
     # e.g. a unit heater in the garage hung on the CH circuit behind the pump: its fan runs with the pump
     "fan_switch": ("Nagrzewnica — wentylator (pracuje razem z pompą CO)", "switch"),
     "fan_power": ("Nagrzewnica — moc wentylatora", "power"),
+    # the room with the unit heater (e.g. the garage) — shown on the drawing only; any °C sensor there will do,
+    # bobrek: the PV battery standing in the garage (its BMS temperature)
+    "fan_room_temp": ("Nagrzewnica — temperatura w pomieszczeniu (np. garaż)", "temperature"),
 }
 TEMP_ROLES = tuple(r for r, (_, kind) in ROLES.items() if kind == "temperature")
 PROBE_ROLES = ("boiler_out", "buffer_top", "buffer_bottom", "dhw", "heating_supply", "heating_return",

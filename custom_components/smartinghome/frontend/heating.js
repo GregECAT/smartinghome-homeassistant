@@ -60,6 +60,7 @@ const ROLE_HINTS = {
   dhw_pump_switch: "opcjonalnie — przekaźnik pompy ładującej CWU (np. Shelly 1PM Mini)",
   dhw_pump_power: "opcjonalnie — moc pompy CWU (wykrywa awarię pompy)",
   fan_switch: "opcjonalnie — gniazdko wentylatora nagrzewnicy na obiegu CO za pompą (np. garaż): rusza 2 min po starcie pompy CO, gaśnie 2 min po jej zatrzymaniu",
+  fan_room_temp: "opcjonalnie — temperatura pomieszczenia z nagrzewnicą, np. garażu; wystarczy dowolny czujnik °C, także temperatura baterii PV, jeśli stoi w garażu (tylko na schemacie)",
   fan_power: "opcjonalnie — moc wentylatora z gniazdka",
 };
 
@@ -1096,7 +1097,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       const turning = fOn && (!fd.known || fd.drawing);
       const fc = fd.missing ? "#f7b731" : turning ? supC : "#475569";
       const blade = (a) => `<path d="M1110 446q-4-13 0-17q4 4 0 17Z" transform="rotate(${a} 1110 446)" fill="${turning ? "#2ecc71" : "#64748b"}"/>`;
-      s += `<text x="1110" y="380" text-anchor="middle" class="t-s">${esc(fan.name || "Nagrzewnica")}</text>
+      const roomT = v("fan_room_temp");
+      s += `<text x="1110" y="380" text-anchor="middle" class="t-s">${esc(fan.name || "Nagrzewnica")}${roomT != null
+        ? ` · <tspan style="fill:#e0e6ed;font-weight:700">${num(roomT)} °C</tspan>` : ""}</text>
         <path d="M1040 424L1110 392L1180 424V494H1040Z" fill="rgba(255,255,255,.035)" stroke="#475569" stroke-width="2" stroke-linejoin="round"/>
         ${turning || fd.missing ? `<rect x="1084" y="420" width="52" height="52" rx="8" fill="${fc}" opacity=".3" filter="url(#hgGlow)"/>` : ""}
         <rect x="1088" y="424" width="44" height="44" rx="6" fill="#0f172a" stroke="${fc}" stroke-width="1.5"/>

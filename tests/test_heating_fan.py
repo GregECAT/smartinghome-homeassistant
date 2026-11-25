@@ -102,3 +102,12 @@ def test_fan_quiet_settings():
     assert hm.normalize({"fan_quiet": "yes"})["fan_quiet"] is False
     saved = hm.to_settings({"fan_quiet": True, "fan_quiet_from": 23, "fan_quiet_to": 7})
     assert (saved["fan_quiet"], saved["fan_quiet_from"], saved["fan_quiet_to"]) == (True, 23, 7)
+
+
+def test_the_heater_room_temperature_is_read_and_shown_only():
+    # bobrek 25.11.2026: the garage temperature from the PV battery standing there
+    m = hm.HeatingModel({"enabled": True, "entities": {"fan_room_temp": "sensor.battery_temperature"}})
+    assert m.cfg["entities"]["fan_room_temp"] == "sensor.battery_temperature"
+    m.update({"fan_room_temp": "14.0"}, now=1000.0)
+    assert m.status(1000.0)["probes"]["fan_room_temp"]["value"] == 14.0
+    assert "fan_room_temp" not in hm.PROBE_ROLES          # no probe-fault alarm, no part in the control
