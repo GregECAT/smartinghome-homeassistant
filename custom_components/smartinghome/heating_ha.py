@@ -46,6 +46,7 @@ from homeassistant.components.select import SelectEntity
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfMass, UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.util import dt as dt_util
@@ -71,6 +72,10 @@ _LOGGER = logging.getLogger(__name__)
 SETTINGS_KEY = "heating"
 _KEY = "_heating"
 _PLATFORMS_KEY = "_heating_platforms"
+# HA 2026.11 links a device to its parent by the parent's registry id (DeviceInfo `via_device_id`); the older
+# `via_device` (the parent's identifiers) is deprecated there and stops working in 2027.8. Older HA knows only
+# `via_device` — and refuses a device info with a key it does not know — so the form is chosen at runtime.
+_VIA_DEVICE_ID = "via_device_id" in getattr(DeviceInfo, "__optional_keys__", frozenset())
 SIGNAL_UPDATE = f"{DOMAIN}_heating_update"
 TICK = timedelta(seconds=10)
 SETTINGS_TTL_S = 60
@@ -994,6 +999,16 @@ class HeatingManager:
     def forget_entry(self, entry_id: str) -> None:
         self._added = {k for k in self._added if k[0] != entry_id}
 
+    def parent_link(self, entry: Any) -> dict[str, Any]:
+        """How the "Ogrzewanie" device hangs under the integration's main device, in the form this HA
+        understands. The main device is got or created by its identifiers first: the heating entities may be
+        set up before the main sensors have registered it."""
+        if not _VIA_DEVICE_ID:
+            return {"via_device": (DOMAIN, entry.entry_id)}
+        parent = dr.async_get(self.hass).async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, entry.entry_id)})
+        return {"via_device_id": parent.id}
+
     def ws_payload(self, admin: bool) -> dict[str, Any]:
         offset = dt_util.now().utcoffset()
         return {
@@ -1173,8 +1188,8 @@ class _HeatingEntity:
             manufacturer=MANUFACTURER,
             model="Kocioł na paliwo stałe + bufor ciepła",
             sw_version=VERSION,
-            via_device=(DOMAIN, entry.entry_id),
             configuration_url=f"homeassistant://{HEATING_PANEL_URL}",
+            **manager.parent_link(entry),
         )
 
     @property

@@ -664,7 +664,7 @@ class HeatingController:
         dump_now = bool(cfg["safety_dump"]) and hot_now
         if hot_now != self.hot and mode != "off":
             by_buffer = dump_top is not None
-            out.log.append(((f"⚠️ Zrzut ciepła do domu: zawór otwarty, pompa CO włączona"
+            out.log.append((("⚠️ Zrzut ciepła do domu: zawór otwarty, pompa CO włączona"
                              + (f" — kocioł pali się, góra bufora {tt:.1f} °C" if by_buffer and tt is not None else ""))
                             if dump_now else f"⚠️ {self._hot_why.capitalize()} — pompa CO wymuszona") if hot_now
                            else ("Bufor poniżej progu albo kocioł wygasł" if by_buffer else "Kocioł poniżej progów")
