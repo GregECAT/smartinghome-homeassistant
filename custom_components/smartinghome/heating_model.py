@@ -248,6 +248,7 @@ NO_FLOW_AFTER_S = 2400   # "heat not reaching the buffer" only after the fire ha
 MAX_SESSIONS = 400       # a whole heating season
 MAX_SETBACKS = 4         # daytime setback periods of the house target
 PENDING_LOAD_S = 3 * 3600   # wood weighed before lighting waits this long for the fire the module recognises
+FULL_WEIGH_S = 3600         # a fire counts as fully weighed when its first entry came within this of its start
 LAST_FIRE_LOAD_S = 12 * 3600  # wood can still be booked to a fire this long after it ended
 
 # probes
@@ -328,6 +329,25 @@ def wood_kwh_per_kg_at(kind: str, moisture_pct: float) -> float:
     return (lhv * (1.0 - w) - WATER_LATENT_MJ_KG * w) / 3.6
 STACKED_SOLID = 0.65
 WOOD_PRICE_UNITS = {"mp": "zł / mp (metr przestrzenny)", "m3": "zł / m³ (lity)", "kg": "zł / kg"}
+
+
+def fully_weighed(fire: dict[str, Any] | None) -> bool:
+    """All of a fire's wood was weighed: its first entry was weighed before lighting ("next"), booked after the
+    fire to the whole fire ("last"), or came within FULL_WEIGH_S of the fire's start. A first entry later into a
+    burning fire is a reload into a fire whose earlier loads nobody weighed (bobrek 25.11.2026: 5.5 kg at 13:47
+    into a fire from 07:52) — its kg are real, but they are not the fire's wood: such a fire teaches nothing
+    (the house's draw, the heat per kg), and its cost takes the larger of the weighed kg and the estimate."""
+    loads = (fire or {}).get("loads") or []
+    if not loads:                       # a total booked before the entries were kept counts as before
+        return bool(_f((fire or {}).get("wood_kg")))
+    first = loads[0]
+    if first.get("to") in ("next", "last"):
+        return True
+    start, end = _f((fire or {}).get("start")), _f((fire or {}).get("end"))
+    ts = _f(first.get("ts"))
+    if start is None or ts is None:
+        return False
+    return ts - start <= FULL_WEIGH_S or (end is not None and ts >= end)
 
 
 def wood_kg_per_unit(kind: str, unit: str) -> float:
@@ -702,10 +722,11 @@ def monthly_summary(sessions: list[dict[str, Any]], utc_offset_s: float = 0.0,
         heat = _f(s.get("heat_kwh"))
         m["heat_kwh"] += heat if heat is not None else float(s.get("stored_kwh") or 0.0)
         kg = _f(s.get("wood_kg"))
-        if kg is not None:
+        if kg is not None and fully_weighed(s):
             m["weighed"] += 1
-        else:
-            kg = _f(s.get("wood_est_kg"))
+        else:                       # not weighed, or only a reload of it: the larger of the weighed kg and the estimate
+            est = _f(s.get("wood_est_kg"))
+            kg = max(kg or 0.0, est or 0.0) if (kg is not None or est is not None) else None
         m["wood_kg"] += kg or 0.0
         m["overheats"] += 1 if s.get("overheat") else 0
     out = []
@@ -835,7 +856,8 @@ class HeatingModel:
         self.sessions = [s for s in (data.get("sessions") or []) if isinstance(s, dict)][-MAX_SESSIONS:]
         if isinstance(data.get("session"), dict):
             self.session = dict(data["session"])
-        self.pending_loads = [{"ts": float(p["ts"]), "kg": float(p["kg"])} for p in (data.get("pending_loads") or [])
+        self.pending_loads = [{"ts": float(p["ts"]), "kg": float(p["kg"]), "to": "next"}
+                              for p in (data.get("pending_loads") or [])
                               if isinstance(p, dict) and _f(p.get("ts")) is not None and _f(p.get("kg"))]
         if data.get("state") in STATE_LABELS:
             self.state = str(data["state"])
@@ -1043,11 +1065,11 @@ class HeatingModel:
         return None
 
     @staticmethod
-    def _add_load(fire: dict[str, Any], kg: float, now: float) -> None:
+    def _add_load(fire: dict[str, Any], kg: float, now: float, to: str = "current") -> None:
         loads = fire.setdefault("loads", [])
         if not loads and fire.get("wood_kg"):           # a total booked before the entries were kept
             loads.append({"ts": float(fire.get("start") or now), "kg": float(fire["wood_kg"])})
-        loads.append({"ts": round(now, 1), "kg": round(kg, 1)})
+        loads.append({"ts": round(now, 1), "kg": round(kg, 1), "to": to})
         fire["wood_kg"] = round(sum(x["kg"] for x in loads), 1)
 
     def log_load(self, kg: float, now: float, target: str = "auto") -> tuple[str, dict[str, Any] | None] | None:
@@ -1056,15 +1078,15 @@ class HeatingModel:
         water shows a new fire only after 10–30 min, and until then a new entry would land on the previous fire);
         "auto" — the current fire, else the last one. Returns (where, fire) or None when there is nothing to book to."""
         if target in ("auto", "current") and self.session is not None:
-            self._add_load(self.session, kg, now)
+            self._add_load(self.session, kg, now, "current")
             return "current", self.session
         if target == "next":
-            self.pending_loads.append({"ts": round(now, 1), "kg": round(kg, 1)})
+            self.pending_loads.append({"ts": round(now, 1), "kg": round(kg, 1), "to": "next"})
             return "next", None
         if target in ("auto", "last"):
             last = self.last_fire_open(now)
             if last is not None:
-                self._add_load(last, kg, now)
+                self._add_load(last, kg, now, "last")
                 return "last", last
         return None
 
@@ -1345,6 +1367,9 @@ class HeatingModel:
             "last_session": self.sessions[-1] if self.sessions else None,
             # weighing: entries waiting for the next fire, and whether the last fire still takes wood
             "wood": {"pending": [dict(p) for p in self.pending_loads],
+                     # the fire burning now has all its wood weighed (None: nothing weighed in it)
+                     "current_full": (fully_weighed(self.session) if self.session and self.session.get("loads")
+                                      else None),
                      "pending_kg": round(sum(p["kg"] for p in self.pending_loads), 1) if self.pending_loads else None,
                      "last_open": self.last_fire_open(now) is not None,
                      "pending_hold_h": PENDING_LOAD_S // 3600},

@@ -100,7 +100,7 @@ def test_waiting_wood_survives_a_restart():
     m.log_load(11.0, 50.0, "next")
     m2 = hm.HeatingModel(CFG)
     m2.restore(m.dump())
-    assert m2.pending_loads == [{"ts": 50.0, "kg": 11.0}]
+    assert m2.pending_loads == [{"ts": 50.0, "kg": 11.0, "to": "next"}]
 
 
 def _cycle(b, start, hours, dt_k):
@@ -202,3 +202,40 @@ def test_without_moisture_the_typed_heat_per_kg_counts():
     assert c["wood_moisture_pct"] is None and c["wood_kwh_per_kg"] == 4.4
     assert hm.normalize({"wood_moisture_pct": 90})["wood_moisture_pct"] == 60.0
     assert hm.to_settings({"wood_moisture_pct": 12})["wood_moisture_pct"] == 12.0
+
+
+
+# ── a fire counts as weighed only from its start (bobrek 25.11.2026: 5.5 kg at 13:47 into a fire from 07:52) ──
+
+def test_a_reload_weighed_hours_into_a_fire_is_not_the_whole_fire():
+    m = hm.HeatingModel(CFG)
+    _start_fire(m, 0.0, energy=40.0)
+    m.log_load(5.5, 6 * H, "current")                        # nobody weighed the morning loads
+    assert hm.fully_weighed(m.session) is False
+    assert m.status(6 * H)["wood"]["current_full"] is False
+    _end_fire(m, 10 * H)
+    fire = m.sessions[-1]
+    fire["wood_est_kg"] = 40.0
+    months = hm.monthly_summary([fire], 0, price_kg=0.66)
+    assert months[0]["weighed"] == 0 and months[0]["wood_kg"] == 40   # the estimate, not 5.5 kg
+    assert ha.learned_kwh_per_kg([fire, fire]) is None
+    b = ha.BuildingModel()
+    _cycle(b, 0.0, 20.0, 24.0)
+    assert b.close_cycle(fire, {"start": 20 * H, "stored_start_kwh": 30.0}, 3.5) is None
+
+
+def test_weighed_from_the_start_or_before_lighting_or_after_the_fire():
+    m = hm.HeatingModel(CFG)
+    _start_fire(m, 0.0)
+    m.log_load(15.0, 20 * 60.0, "current")                   # within the first hour
+    m.log_load(10.0, 5 * H, "current")                       # a reload later — fine, the fire was weighed from its start
+    assert hm.fully_weighed(m.session) is True
+    m2 = hm.HeatingModel(CFG)
+    m2.log_load(12.0, 0.0, "next")
+    _start_fire(m2, 30 * 60.0)
+    assert hm.fully_weighed(m2.session) is True
+    m3 = hm.HeatingModel(CFG)
+    _start_fire(m3, 0.0)
+    _end_fire(m3, 8 * H)
+    m3.log_load(30.0, 9 * H, "last")                         # the whole fire, booked afterwards
+    assert hm.fully_weighed(m3.sessions[-1]) is True

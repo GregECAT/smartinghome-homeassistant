@@ -89,6 +89,15 @@ const outletC = (probes, cfg) => {
   const raw = p && p.status === "ok" ? parseFloat(p.raw) : NaN;
   return off && Number.isFinite(raw) ? raw : null;
 };
+// all of a fire's wood was weighed (the same rule as heating_model.fully_weighed): the first entry weighed before
+// lighting, booked after the fire, or within an hour of its start — a later first entry is only a reload
+const fullyWeighed = (f) => {
+  const loads = (f && Array.isArray(f.loads)) ? f.loads : [];
+  if (!loads.length) return !!(f && f.wood_kg);
+  const first = loads[0];
+  if (first.to === "next" || first.to === "last") return true;
+  return first.ts - f.start <= 3600 || (f.end != null && first.ts >= f.end);
+};
 // the CH pump is on HAND (the panel switch) — leaving it closes the mixing valve first
 const handC0 = (d) => !!(((d || {}).config || {}).force_on || {}).pump;
 // the CH pump's band around the house target: empty → above it (on below + 0,5 K, off at + 1 K), a number → centred
@@ -1352,7 +1361,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         <div><div class="lbl">Bufor</div><div class="v">${num(a.buffer_kwh ?? (st.buffer || {}).energy_kwh, 1)}<small>kWh</small></div>
           <div class="s">ciepło użytkowe w buforze</div></div>
         <div><div class="lbl">Drewno w kotle</div><div class="v">${a.fire_left_kwh != null ? num(a.fire_left_kwh, 1) : "—"}<small>kWh</small></div>
-          <div class="s">${fire ? (fire.wood_kg ? `z ${num(fire.wood_kg, 1)} kg zważonych w tym paleniu` : "pali się — zważ załadunek, żeby je doliczyć") : "kocioł nie pali"}</div></div>
+          <div class="s">${fire ? (fire.wood_kg ? (fullyWeighed(fire) ? `z ${num(fire.wood_kg, 1)} kg zważonych w tym paleniu` : "palenie ważone dopiero od dokładki — nie do policzenia") : "pali się — zważ załadunek, żeby je doliczyć") : "kocioł nie pali"}</div></div>
         <div><div class="lbl">Dom bierze</div><div class="v">${a.demand_kw != null ? num(a.demand_kw, 2) : "—"}<small>kW</small></div>
           <div class="s">${a.demand_24h_kwh != null ? `${num(a.demand_24h_kwh, 0)} kWh na dobę` : ""}</div></div>
       </div>`;
@@ -1374,6 +1383,10 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     let state;
     if (fire) {
       state = `🔥 <b>Pali się od ${hhmm(fire.start)}</b> · zważone w tym paleniu: <b>${fire.wood_kg ? `${num(fire.wood_kg, 1)} kg` : "nic"}</b>${loadsOf(fire).length ? ` (${loadsOf(fire).length} ${loadsOf(fire).length === 1 ? "wpis" : "wpisy"})` : ""}`;
+      if (loadsOf(fire).length && !fullyWeighed(fire)) {
+        state += `<div style="color:#f7b731;margin-top:6px">⚠ Palenie trwa od ${hhmm(fire.start)}, a pierwszy wpis jest z ${hhmm(loadsOf(fire)[0].ts)} — wcześniejszych załadunków nie zważono.
+          Te kilogramy liczą się do kosztu, ale z tego palenia moduł nie uczy się zużycia domu. Pełne ważenie zacznij przy następnym rozpaleniu: zważ pierwszy załadunek i wybierz „Rozpalam teraz”.</div>`;
+      }
     } else if (pending.length) {
       state = `⏳ <b>Czeka na rozpalenie: ${num(w.pending_kg, 1)} kg</b> — trafi do palenia, które moduł rozpozna w ciągu ${w.pending_hold_h || 3} h`;
     } else {
@@ -1444,7 +1457,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const weighed = (d.sessions || []).filter((x) => x.wood_kg).slice(-10).reverse();
     html += `<div class="card" style="margin-top:14px"><h3>📒 Zważone palenia</h3>${weighed.length
       ? `<table><tr><th>Palenie</th><th>Czas</th><th>Drewno</th><th>Ciepło</th>${price ? "<th>Koszt</th>" : ""}</tr>${weighed.map((x) => `<tr><td>${esc(fmtTime(x.start))}</td>
-          <td>${x.duration_h != null ? `${num(x.duration_h, 1)} h` : "—"}</td><td><b>${num(x.wood_kg, 1)} kg</b>${Array.isArray(x.loads) && x.loads.length > 1 ? ` <span class="muted">(${x.loads.length} wpisy)</span>` : ""}</td>
+          <td>${x.duration_h != null ? `${num(x.duration_h, 1)} h` : "—"}</td><td><b>${num(x.wood_kg, 1)} kg</b>${Array.isArray(x.loads) && x.loads.length > 1 ? ` <span class="muted">(${x.loads.length} wpisy)</span>` : ""}${fullyWeighed(x) ? "" : ` <span class="pill hot" title="pierwszy wpis później niż godzinę po rozpaleniu — wcześniejszych załadunków nie zważono">część palenia</span>`}</td>
           <td>${x.heat_kwh != null ? `${num(x.heat_kwh, 0)} kWh` : x.stored_kwh != null ? `${num(x.stored_kwh, 0)} kWh w zbiornikach` : "—"}</td>${price ? `<td>${num(x.wood_kg * price, 0)} zł</td>` : ""}</tr>`).join("")}</table>`
       : `<div class="hint">Jeszcze żadnego. Pierwsze zważone palenie pojawi się tutaj.</div>`}</div>`;
     return html;

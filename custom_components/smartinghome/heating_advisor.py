@@ -30,6 +30,8 @@ from collections.abc import Callable
 from statistics import median
 from typing import Any
 
+from .heating_model import fully_weighed
+
 MAX_SAMPLES = 24 * 30          # hourly, 30 days
 MIN_SAMPLES = 24
 MIN_DT_SPREAD_K = 4.0
@@ -112,8 +114,8 @@ class BuildingModel:
         """A new fire started: book the cycle of the previous one when all its wood was weighed (entries in
         "loads"). Returns a log line, or None when the cycle can't be used."""
         cyc = self._cyc
-        if cyc is None or prev is None or per_kg <= 0 or not prev.get("loads"):
-            return None
+        if cyc is None or prev is None or per_kg <= 0 or not fully_weighed(prev):
+            return None                          # nothing weighed, or only a reload into the fire
         if abs(float(prev.get("start") or 0.0) - cyc["start"]) > 1.0:
             return None                          # not the fire this cycle was tracked from
         kg = float(prev.get("wood_kg") or 0.0)
@@ -299,7 +301,7 @@ def learned_kwh_per_kg(sessions: list[dict[str, Any]]) -> float | None:
     vals = []
     for s in reversed(sessions):
         kg = s.get("wood_kg")
-        if not kg or kg < 3:
+        if not kg or kg < 3 or not fully_weighed(s):
             continue
         heat = s.get("heat_kwh")
         if heat is None:            # fires booked before v1.100: the highest charge + the house, as then

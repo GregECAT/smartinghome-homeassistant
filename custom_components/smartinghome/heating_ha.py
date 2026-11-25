@@ -397,7 +397,7 @@ class HeatingManager:
             # what the weighed wood of the fire burning now will still give: kg × kWh/kg − what it has given so far
             fire_left = None
             fs = status.get("session")
-            if fs and fs.get("wood_kg"):
+            if fs and fs.get("wood_kg") and hm.fully_weighed(fs):     # only a reload weighed: unknown
                 given = fs.get("heat_kwh")
                 if given is None and fs.get("stored_start_kwh") is not None:
                     stored = [x["energy_kwh"] for x in (status.get("buffer"), status.get("dhw")) if x]

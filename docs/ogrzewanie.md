@@ -406,6 +406,11 @@ mogą wszyscy użytkownicy HA (to dane, nie sterowanie).
    wpis czeka na nie do 3 h (potem przepada z wpisem w dzienniku). Bez tego wpis trafiłby do poprzedniego palenia.
 5. **Zapomniany wpis po wygaśnięciu:** „Do ostatniego palenia” — do 12 h po jego końcu.
 6. **Waż całe palenie**, od rozpałki po ostatnią dokładkę; pomyłkę cofa „Cofnij ostatni wpis”.
+   Palenie liczy się jako **zważone w całości**, gdy pierwszy wpis jest z „Rozpalam teraz”, z pierwszej godziny
+   od rozpalenia albo dopisany po wygaśnięciu („Do ostatniego palenia”). Pierwszy wpis później w trakcie
+   palenia to tylko dokładka do palenia, którego wcześniejszych załadunków nikt nie zważył: jego kilogramy
+   liczą się do kosztu (większa z wartości: zważona albo szacunek), ale moduł się z niego nie uczy, a tabela
+   oznacza je „część palenia”.
 
 **Jak moduł z tego korzysta:** gdy zaczyna się kolejne palenie, poprzednie — jeśli ma zważone wszystkie
 załadunki — zamyka cykl: drewno dało *kg × kWh/kg* (z ustawień), zbiorniki zatrzymały różnicę stanu
