@@ -101,3 +101,53 @@ def test_view_only_needs_the_storeys_own_sensor():
     assert floors[0]["source"] == "room" and floors[0]["view_only"] is False
     assert mean == 21.5
     assert hm.normalize({"floor_view_only": "yes"})["floor_view_only"] == [False, False, False]
+
+
+def test_reference_is_picked_from_the_storeys():
+    # heat by a storey: the reference follows that storey's sensor and its offset
+    c = hm.normalize({"floors": 2, "room_ref": "floor", "room_floor": 1, "offsets": {"floor1_temp": 0.5},
+                      "entities": {"room": "sensor.old", "floor0_temp": "sensor.p0", "floor1_temp": "sensor.p1",
+                                   "floor1_humidity": "sensor.h1"}})
+    assert c["room_ref"] == "floor"
+    assert c["entities"]["room"] == "sensor.p1" and c["entities"]["room_humidity"] == "sensor.h1"
+    assert c["offsets"]["room"] == 0.5
+    # the storey without a sensor: no reference (the panel lists it as „brak czujnika”)
+    c = hm.normalize({"floors": 2, "room_ref": "floor", "room_floor": 1, "entities": {"floor0_temp": "sensor.p0"}})
+    assert c["entities"]["room"] == ""
+    # a sensor picked by hand stays as it is; "none" heats by the curve only
+    c = hm.normalize({"floors": 2, "room_ref": "custom", "entities": {"room": "sensor.salon", "floor0_temp": "sensor.p0"}})
+    assert c["room_ref"] == "custom" and c["entities"]["room"] == "sensor.salon"
+    c = hm.normalize({"floors": 2, "room_ref": "none", "entities": {"room": "sensor.salon", "room_humidity": "sensor.h"}})
+    assert c["entities"]["room"] == "" and c["entities"]["room_humidity"] == ""
+    floors, _ = hm.floors_state(c, [20.0, 21.0], [None] * 2, None, None)
+    assert not any(f["ref"] for f in floors)
+    assert hm.to_settings({"floors": 2, "room_ref": "custom"})["room_ref"] == "custom"
+
+
+def test_one_storey_keeps_the_reference_as_picked():
+    c = hm.normalize({"entities": {"room": "sensor.ht"}})
+    assert c["room_ref"] == "floor" and c["entities"]["room"] == "sensor.ht"
+    # 1 → 2 storeys: the reference moves onto its storey instead of getting lost
+    c = hm.normalize({"floors": 2, "room_ref": "floor", "entities": {"room": "sensor.ht", "room_humidity": "sensor.hh"},
+                      "offsets": {"room": -0.3}})
+    assert c["entities"]["floor0_temp"] == "sensor.ht" and c["entities"]["floor0_humidity"] == "sensor.hh"
+    assert c["entities"]["room"] == "sensor.ht" and c["offsets"]["floor0_temp"] == -0.3
+
+
+def test_older_settings_keep_heating_by_the_same_sensor():
+    # bobrek 24.11.2026: the parter sensor as the reference, the parter storey left empty
+    c = hm.normalize({"floors": 3, "room_floor": 0, "entities": {
+        "room": "sensor.parter", "room_humidity": "sensor.parter_h", "floor1_temp": "sensor.p1", "floor2_temp": "sensor.trv"}})
+    assert c["room_ref"] == "floor" and c["room_floor"] == 0
+    assert c["entities"]["floor0_temp"] == "sensor.parter" and c["entities"]["floor0_humidity"] == "sensor.parter_h"
+    assert c["entities"]["room"] == "sensor.parter" and c["entities"]["floor1_temp"] == "sensor.p1"
+    # the reference is another storey's sensor → that storey becomes the reference
+    c = hm.normalize({"floors": 2, "room_floor": 0, "entities": {"room": "sensor.p1", "floor0_temp": "sensor.p0",
+                                                                 "floor1_temp": "sensor.p1"}})
+    assert c["room_ref"] == "floor" and c["room_floor"] == 1 and c["entities"]["room"] == "sensor.p1"
+    # a reference apart from the storey sensors stays picked by hand
+    c = hm.normalize({"floors": 2, "entities": {"room": "sensor.salon", "floor0_temp": "sensor.p0"}})
+    assert c["room_ref"] == "custom" and c["entities"]["room"] == "sensor.salon"
+    # storey sensors and no reference: no reference still (no room control switched on behind the user's back)
+    c = hm.normalize({"floors": 2, "entities": {"floor0_temp": "sensor.p0"}})
+    assert c["room_ref"] == "none" and c["entities"]["room"] == ""

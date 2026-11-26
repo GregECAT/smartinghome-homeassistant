@@ -128,8 +128,9 @@ Karta **Sterowanie** ma blok „Temperatura zadana w domu”: **☀️ Dzień** 
 godziny nocy (od – do) i przełącznik **obniżenie nocne**. Obowiązująca teraz wartość jest podświetlona,
 a kafel „Zadana w domu” pokazuje ją z porą („noc, do 05:00”). Te same pola są w Ustawieniach → „Krzywa grzewcza”.
 
-- Temperatura jest mierzona **czujnikiem odniesienia** (Ustawienia → „Czujniki”; przy kilku kondygnacjach —
-  „Czujnik odniesienia jest na”). Według niej liczą się krzywa grzewcza, korekta (PRO) i decyzja, czy grzać.
+- Temperatura jest mierzona **czujnikiem odniesienia**: przy jednej kondygnacji wybierasz go w Ustawieniach →
+  „Czujniki”, przy kilku — w „Dom — kondygnacje” → **„Steruj według”** (kondygnacja, której czujnik ma decydować).
+  Według niej liczą się krzywa grzewcza, korekta (PRO) i decyzja, czy grzać.
 - Noc to osobna, **bezwzględna** temperatura (np. dzień 22 °C, noc 20 °C) — zmiana dziennej jej nie przesuwa.
   Nocna nigdy nie jest wyższa od dziennej. Wyłączenie obniżenia zapamiętuje ustawioną wartość.
 - Okno nocy może przechodzić przez północ (np. 22:00–05:00). **Koniec nocy ustaw z zapasem** — o tej godzinie
@@ -477,11 +478,18 @@ gdy wyjście z kotła osiągnie próg włączenia (Ustawienia → „Kocioł i d
 Atmos: 75 °C), i jako stojącą 3 K poniżej progu. Wcześniej, w trakcie rozpalania, schemat pokazuje „od 75°”.
 
 **Dom piętro po piętrze** (Ustawienia → „Dom — kondygnacje”): do 3 kondygnacji (np. parter, 1. piętro,
-poddasze) z nazwą, powierzchnią i własnym czujnikiem temperatury / wilgotności. Kondygnacja z czujnikiem
-odniesienia bierze jego odczyt, dopóki nie ma własnego czujnika. Na schemacie dom dzieli się na piętra
-(najwyższe pod dachem), a **średnia domu** — ważona powierzchnią, bez powierzchni zwykła — trafia do
-encji „Dom — średnia temperatura” i do modelu strat ciepła doradcy (straty zależą od całego domu, nie
-jednego pomieszczenia). Grzanie (krzywa, korekta, dzień i noc) działa według czujnika odniesienia.
+poddasze) z nazwą, powierzchnią i własnym czujnikiem temperatury / wilgotności — czujnik przypisujesz do
+kondygnacji, na której wisi (sekcja „Czujniki”). W polu **„Steruj według”** wybierasz, która kondygnacja
+decyduje o grzaniu (krzywa, korekta, dzień i noc, pompa CO); lista pokazuje jej bieżący odczyt. Zmiana
+czujnika tej kondygnacji od razu zmienia też czujnik, według którego moduł grzeje. Do wyboru są też
+**„inny czujnik”** (dowolna encja, np. w salonie, i kondygnacja, na której stoi — liczy się za nią, dopóki
+nie ma ona własnego czujnika) oraz **„bez czujnika — tylko krzywa grzewcza”**. Kondygnacji „tylko podgląd”
+(głowica przy kaloryferze) nie ma na liście. Ustawienia sprzed v1.111.0 przechodzą same: czujnik odniesienia
+trafia na swoją kondygnację, a grzanie zostaje według tego samego czujnika. Na wykresie 24 h każda
+kondygnacja ma jedną linię, a ta, według której moduł grzeje, jest oznaczona „(odniesienie)”.
+Na schemacie dom dzieli się na piętra (najwyższe pod dachem), a **średnia domu** — ważona powierzchnią, bez
+powierzchni zwykła — trafia do encji „Dom — średnia temperatura” i do modelu strat ciepła doradcy (straty
+zależą od całego domu, nie jednego pomieszczenia).
 Po wpisaniu powierzchni wszystkich kondygnacji karta pokazuje sumę i udział każdej w średniej (np. 105 /
 105 / 40 m² → 42% / 42% / 16%). Kondygnacja bez odczytu jest pomijana, a udziały pozostałych rosną
 proporcjonalnie; gdy brakuje którejś powierzchni, kondygnacje liczą się po równo.

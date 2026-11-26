@@ -72,7 +72,8 @@ ROLES: dict[str, tuple[str, str]] = {
     "heating_return": ("Powrót z grzejników", "temperature"),
     "room": ("Czujnik odniesienia — temperatura", "temperature"),
     "room_humidity": ("Czujnik odniesienia — wilgotność", "humidity"),
-    # one sensor per storey (optional; the reference sensor already counts for its own storey)
+    # one sensor per storey; with storeys the reference is normally one of them (room_ref "floor"):
+    # the house heats by the sensor of storey room_floor, entities.room follows it
     "floor0_temp": ("Kondygnacja 1 — temperatura", "temperature"),
     "floor0_humidity": ("Kondygnacja 1 — wilgotność", "humidity"),
     "floor1_temp": ("Kondygnacja 2 — temperatura", "temperature"),
@@ -163,6 +164,7 @@ DEFAULTS: dict[str, Any] = {
     "floor_areas": [None, None, None],   # m² (empty → equal weights)
     "floor_view_only": [False, False, False],   # shown, but left out of the house mean (e.g. a radiator head)
     "room_floor": 0,            # the storey of the reference room (index)
+    "room_ref": "floor",        # with storeys, heat by: "floor" its sensor, "custom" entities.room, "none" the curve only
     "fan_name": FAN_NAME,       # the unit heater whose fan follows the CH pump (shown in the panel)
     "fan_off": False,           # the heater fan switched off from the panel: it stays off, heat dumps aside
     "fan_quiet": False,         # the heater fan stays off at night (fan_quiet_from–fan_quiet_to), heat dumps aside
@@ -377,6 +379,40 @@ def notify_targets(raw: Any) -> list[str]:
     return out[:NOTIFY_EXTRA_MAX]
 
 
+ROOM_REFS = ("floor", "custom", "none")
+
+
+def _room_ref(raw: dict[str, Any], out: dict[str, Any]) -> str:
+    """What the house heats by when it has storeys: "floor" — the sensor of storey room_floor (entities.room
+    follows it, with its offset), "custom" — a sensor picked by hand (entities.room), "none" — no reference,
+    the heating curve only. One storey: the reference sensor is the house — entities.room as picked.
+    Settings from before this choice (no room_ref) keep heating by the same sensor: a reference that is a
+    storey's sensor makes that storey the reference, a reference storey without its own sensor gets the
+    reference sensor, a reference apart from the storey sensors stays "custom", none with storey sensors "none"."""
+    ents, offs = out["entities"], out["offsets"]
+    ref = raw.get("room_ref")
+    if out["floors"] < 2:
+        return ref if ref in ROOM_REFS else "floor"
+    temps = [ents[f"floor{i}_temp"] for i in range(out["floors"])]
+    if ref not in ROOM_REFS:
+        room = ents["room"]
+        if not room:
+            ref = "none" if any(temps) else "floor"
+        elif room in temps:
+            ref, out["room_floor"] = "floor", temps.index(room)
+        else:
+            ref = "custom" if temps[out["room_floor"]] else "floor"
+    if ref == "floor":
+        t, h = f"floor{out['room_floor']}_temp", f"floor{out['room_floor']}_humidity"
+        if not ents[t] and ents["room"]:          # the reference moves onto its storey (older settings, 1 → 2 storeys)
+            ents[t], offs[t] = ents["room"], offs["room"]
+            ents[h] = ents[h] or ents["room_humidity"]
+        ents["room"], ents["room_humidity"], offs["room"] = ents[t], ents[h], offs[t]
+    elif ref == "none":
+        ents["room"] = ents["room_humidity"] = ""
+    return ref
+
+
 def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     """Settings "heating" with defaults filled in and every number clamped to a sane range."""
     raw = cfg if isinstance(cfg, dict) else {}
@@ -428,6 +464,7 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     views = raw.get("floor_view_only") if isinstance(raw.get("floor_view_only"), list) else []
     out["floor_view_only"] = [i < len(views) and views[i] is True for i in range(MAX_FLOORS)]
     out["room_floor"] = int(_num(raw.get("room_floor"), 0, 0, out["floors"] - 1))
+    out["room_ref"] = _room_ref(raw, out)
     out["warn_c"] = _num(raw.get("warn_c"), profile["warn_c"], 70.0, 94.0)
     out["alarm_c"] = _num(raw.get("alarm_c"), profile["alarm_c"], out["warn_c"] + 1.0, 98.0)
     out["laddomat_on_c"] = _num(raw.get("laddomat_on_c"), profile["laddomat_on_c"], 40.0, 90.0)
@@ -690,7 +727,7 @@ def floors_state(cfg: dict[str, Any], temps: list[float | None], hums: list[floa
     out: list[dict[str, Any]] = []
     views = cfg.get("floor_view_only") or []
     for i in range(cfg["floors"]):
-        ref = i == cfg["room_floor"]
+        ref = i == cfg["room_floor"] and cfg.get("room_ref") != "none"
         t = temps[i] if i < len(temps) else None
         h = hums[i] if i < len(hums) else None
         source = "probe" if t is not None else None
