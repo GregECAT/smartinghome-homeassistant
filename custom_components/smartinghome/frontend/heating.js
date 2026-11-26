@@ -517,6 +517,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
           background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.18); color:#e0e6ed; }
         .alarm .lockbtn:hover { border-color:#f7b731; color:#f7b731; }
         .t-lock { fill:#f7b731; font-size:12px; font-weight:700; }
+        .fanbtn { cursor:pointer; }
+        .fanbtn:hover .fanhit { fill:rgba(255,255,255,.05); }
         .locks { margin-top:14px; display:grid; gap:6px; }
         .locks .lh { font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:#94a3b8; }
         .lockrow { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 10px; border-radius:10px; font-size:13px;
@@ -1107,15 +1109,26 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       const fc = fd.missing ? "#f7b731" : turning ? supC : "#475569";
       const blade = (a) => `<path d="M1110 446q-4-13 0-17q4 4 0 17Z" transform="rotate(${a} 1110 446)" fill="${turning ? "#2ecc71" : "#64748b"}"/>`;
       const roomT = v("fan_room_temp");
+      // the whole heater is its on/off button: off → it no longer starts with the CH pump (a heat dump aside)
+      const fNo = !!c.fan_off;
+      const pwc = fNo ? "#e74c3c" : "#2ecc71";
       s += `<text x="1110" y="380" text-anchor="middle" class="t-s">${esc(fan.name || "Nagrzewnica")}${roomT != null
         ? ` · <tspan style="fill:#e0e6ed;font-weight:700">${num(roomT)} °C</tspan>` : ""}</text>
-        <path d="M1040 424L1110 392L1180 424V494H1040Z" fill="rgba(255,255,255,.035)" stroke="#475569" stroke-width="2" stroke-linejoin="round"/>
+        <g class="fanbtn" data-act="fantoggle" role="button" aria-label="${fNo ? "Włącz wentylator" : "Wyłącz wentylator"}">
+        <title>${fNo ? "Kliknij, aby włączyć wentylator — znów będzie chodził razem z pompą CO"
+          : "Kliknij, aby wyłączyć wentylator — przestanie ruszać z pompą CO (przy zrzucie ciepła z kotła i tak ruszy)"}</title>
+        <path class="fanhit" d="M1036 420L1110 386L1184 420V514H1036Z" fill="transparent"/>
+        <path d="M1040 424L1110 392L1180 424V494H1040Z" fill="rgba(255,255,255,.035)" stroke="${fNo ? "rgba(231,76,60,.55)" : "#475569"}" stroke-width="2" stroke-linejoin="round"/>
+        <circle cx="1157" cy="447" r="13" fill="#0f172a" stroke="${pwc}" stroke-width="1.5"/>
+        <path d="M1151.5 442.5a7.5 7.5 0 1 0 11 0M1157 438v8" fill="none" stroke="${pwc}" stroke-width="2" stroke-linecap="round"/>
         ${turning || fd.missing ? `<rect x="1084" y="420" width="52" height="52" rx="8" fill="${fc}" opacity=".3" filter="url(#hgGlow)"/>` : ""}
         <rect x="1088" y="424" width="44" height="44" rx="6" fill="#0f172a" stroke="${fc}" stroke-width="1.5"/>
         <g class="${turning ? "spin" : ""}">${[0, 90, 180, 270].map(blade).join("")}</g>
         <circle cx="1110" cy="446" r="3" fill="#cbd5e1"/>
-        <text x="1110" y="486" text-anchor="middle" class="${fOff || fd.missing ? "t-lock" : "t-s"}">${fOff ? "poza siecią"
+        <text x="1110" y="486" text-anchor="middle" class="${fOff || fd.missing || (fNo && !fOn) ? "t-lock" : "t-s"}">${fOff ? "poza siecią"
           : fd.missing ? "włączony, nie chodzi"
+          : fNo && !fOn ? "wyłączony"
+          : fNo && fan.dump ? "zrzut ciepła"
           : fan.quiet && !fOn ? `noc — do ${fan.quiet_to}:00`
           : fan.wait_s > 0 ? (fan.wait_to === "on" ? `rusza za ${mmss(fan.wait_s)}` : `stop za ${mmss(fan.wait_s)}`)
           : fOn ? (fd.known ? "wentylator" : `wentylator${pw(fan.power_w)}`) : "stoi"}</text>`;
@@ -1124,6 +1137,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         s += `<text x="1110" y="508" text-anchor="middle" class="t-s2" style="fill:${pc}">⚡ ${fd.watts == null ? "—" : `${num(fd.watts, 0)} W`}${
           fd.missing ? " — wypięty?" : ""}</text>`;
       }
+      s += `</g>`;
     }
 
     // hot-water pump and tank
@@ -1268,8 +1282,11 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         ${fan.online === false ? '<span class="pill hot">gniazdko poza siecią</span>' : pill(fan.on)}${fanDraw(this._hass, c, fan).known ? ` · ⚡ ${num(fan.power_w, 0)} W` : fan.on && fan.power_w >= 1 ? ` · ${num(fan.power_w, 0)} W` : ""}
         ${fanDraw(this._hass, c, fan).missing ? '<span class="pill hot">gniazdko włączone, a pobór 0 W — wypięta wtyczka albo wyłączona nagrzewnica?</span>' : ""}
         ${fan.wait_s > 0 ? `<span class="pill">${fan.wait_to === "on" ? "rusza" : "wyłączy się"} za ${mmss(fan.wait_s)}</span>` : ""}
-        ${fan.quiet && !fan.dump ? `<span class="pill">🌙 noc — do ${fan.quiet_to}:00</span>` : ""}
+        ${c.fan_off ? '<span class="pill hot">⏻ wyłączony</span>' : fan.quiet && !fan.dump ? `<span class="pill">🌙 noc — do ${fan.quiet_to}:00</span>` : ""}
+        <button class="btn sm ${c.fan_off ? "primary" : ""}" data-act="fantoggle">${c.fan_off ? "Włącz wentylator" : "Wyłącz wentylator"}</button>
         <span class="muted">· ${fan.follows ? (c.mode === "off" ? "w trybie Wyłączone moduł go nie przełącza"
+          : c.fan_off ? (fan.dump ? "wyłączony, ale trwa zrzut ciepła z kotła — pracuje, dopóki zrzut się nie skończy"
+            : "nie rusza z pompą CO; przy zrzucie ciepła z kotła i tak pracuje")
           : fan.dump ? "zrzut ciepła z kotła — pracuje od razu, bez czekania"
           : fan.quiet ? "w nocy nie rusza z pompą CO; przy zrzucie ciepła z kotła i tak pracuje"
           : `rusza ${num((fan.delay_s || 120) / 60, 0)} min po starcie pompy CO (nagrzewnica już ciepła), przy zrzucie ciepła od razu; gaśnie ${num((fan.delay_s || 120) / 60, 0)} min po zatrzymaniu pompy`) : "przypisz przekaźnik pompy CO"}</span></div>`;
@@ -1604,6 +1621,12 @@ class SmartingHomeHeatingPanel extends HTMLElement {
           } else return;
         }
         this._data = await this._hass.callWS({ type: "smartinghome/heating/save", config: { setbacks: list } });
+      } else if (act === "fantoggle") {
+        const off = !this._data.config.fan_off;
+        this._data = await this._hass.callWS({ type: "smartinghome/heating/save", config: { fan_off: off } });
+        const nm = this._data.config.fan_name || "Nagrzewnica";
+        this._msg = off ? `${nm}: wentylator wyłączony — nie rusza z pompą CO (przy zrzucie ciepła z kotła i tak pracuje).`
+          : `${nm}: wentylator włączony — znów chodzi razem z pompą CO.`;
       } else if (act === "fanquieton") {
         const on = !this._data.config.fan_quiet;
         this._data = await this._hass.callWS({ type: "smartinghome/heating/save", config: { fan_quiet: on } });

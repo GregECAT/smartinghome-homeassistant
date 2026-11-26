@@ -640,9 +640,9 @@ class HeatingManager:
 
     async def _sync_fan(self, now: float, dump: bool = False, local_hour: float | None = None) -> dict[str, Any]:
         """The unit heater's fan follows the CH pump FAN_DELAY_S late, on and off (hc.fan_follow); the delay
-        runs from the pump entity's last state change. In the quiet hours (fan_quiet) it stays off, heat dumps
-        aside. A socket that refused a command is tried again after FAN_RETRY_S, not every tick; an offline
-        socket is left alone until it is back."""
+        runs from the pump entity's last state change. In the quiet hours (fan_quiet), and while it is switched
+        off in the panel (fan_off), it stays off, heat dumps aside. A socket that refused a command is tried
+        again after FAN_RETRY_S, not every tick; an offline socket is left alone until it is back."""
         cfg = self.cfg
         if local_hour is None:
             local = dt_util.now()
@@ -657,12 +657,13 @@ class HeatingManager:
         fan_on = hm.switch_state(fst.state if fst is not None else None)
         pump_on = hm.switch_state(pst.state if pst is not None else None)
         pump_for = now - pst.last_changed.timestamp() if pst is not None else 0.0
-        want, wait = hc.fan_follow(self.cfg["mode"], pump_on, pump_for, fan_on, dump, quiet)
+        off = cfg["fan_off"]
+        want, wait = hc.fan_follow(self.cfg["mode"], pump_on, pump_for, fan_on, dump, quiet, off)
         info: dict[str, Any] = {"configured": True, "name": self.cfg["fan_name"], "on": fan_on,
                                 "online": fan_on is not None, "follows": bool(pump), "power_w": self.model.fan_w,
                                 "delay_s": round(hc.FAN_DELAY_S), "wait_s": round(wait),
                                 "wait_to": ("on" if pump_on else "off") if wait > 0 else None, "dump": dump,
-                                "quiet": bool(quiet), "quiet_enabled": cfg["fan_quiet"],
+                                "off": off, "quiet": bool(quiet), "quiet_enabled": cfg["fan_quiet"],
                                 "quiet_from": cfg["fan_quiet_from"], "quiet_to": cfg["fan_quiet_to"]}
         if want is None or time.monotonic() < self._fan_retry:
             return info
@@ -678,6 +679,7 @@ class HeatingManager:
         self._fan_retry, self._fan_failed = 0.0, False
         mins = f"{max(pump_for, hc.FAN_DELAY_S) / 60:.0f} min"
         what = ("włączony od razu — zrzut ciepła z kotła" if want == "on" and dump
+                else "wyłączony w panelu — nie rusza z pompą CO" if off
                 else f"wyłączony — noc, nie rusza z pompą CO do {cfg['fan_quiet_to']}:00" if quiet
                 else f"włączony — pompa CO pracuje od {mins}" if want == "on" else f"wyłączony — pompa CO stoi od {mins}")
         self._log(f"{name} {what}", now)
@@ -1317,7 +1319,8 @@ def async_register_ws(hass: HomeAssistant) -> None:
 
 
 # settings any HA user may change: the house temperatures (everyone at home lights the boiler and sets them)
-HOUSEHOLD_KEYS = frozenset({"room_target_c", "room_night_c", "night_enabled", "night_from", "night_to", "setbacks"})
+HOUSEHOLD_KEYS = frozenset({"room_target_c", "room_night_c", "night_enabled", "night_from", "night_to", "setbacks",
+                            "fan_off"})
 
 
 def _household_command(cfg: dict[str, Any], msg: dict[str, Any]) -> bool:

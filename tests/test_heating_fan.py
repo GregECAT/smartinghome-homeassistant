@@ -104,6 +104,33 @@ def test_fan_quiet_settings():
     assert (saved["fan_quiet"], saved["fan_quiet_from"], saved["fan_quiet_to"]) == (True, 23, 7)
 
 
+def test_fan_switched_off_in_the_panel_stays_off():
+    # bobrek 26.11.2026: the garage heater switched off from the drawing — it no longer starts with the CH pump
+    assert hc.fan_follow("auto", True, LATE, True, off=True) == ("off", 0.0)          # off at once
+    assert hc.fan_follow("auto", True, LATE, False, off=True) == (None, 0.0)          # the pump runs: stays off
+    assert hc.fan_follow("auto", True, 5.0, False, off=True) == (None, 0.0)           # no countdown
+    assert hc.fan_follow("manual", False, LATE, True, off=True) == ("off", 0.0)
+    assert hc.fan_follow("auto", True, LATE, None, off=True) == (None, 0.0)           # socket offline
+    assert hc.fan_follow("off", True, LATE, True, off=True) == (None, 0.0)            # "Wyłączone" = hands off
+
+
+def test_heat_dump_runs_a_switched_off_fan_too():
+    assert hc.fan_follow("auto", True, 5.0, False, dump=True, off=True) == ("on", 0.0)
+    assert hc.fan_follow("auto", False, 5.0, True, dump=True, off=True) == ("off", 0.0)  # dump over: off again
+
+
+def test_fan_switched_back_on_follows_the_pump_at_once():
+    assert hc.fan_follow("auto", True, 7200.0, False, off=False) == ("on", 0.0)
+    assert hc.fan_follow("auto", False, 7200.0, False, off=False) == (None, 0.0)
+
+
+def test_fan_off_setting():
+    assert hm.normalize({})["fan_off"] is False
+    assert hm.normalize({"fan_off": True})["fan_off"] is True
+    assert hm.normalize({"fan_off": "true"})["fan_off"] is False
+    assert hm.to_settings({"fan_off": True})["fan_off"] is True
+
+
 def test_the_heater_room_temperature_is_read_and_shown_only():
     # bobrek 25.11.2026: the garage temperature from the PV battery standing there
     m = hm.HeatingModel({"enabled": True, "entities": {"fan_room_temp": "sensor.battery_temperature"}})

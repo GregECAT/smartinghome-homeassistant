@@ -163,6 +163,7 @@ DEFAULTS: dict[str, Any] = {
     "floor_view_only": [False, False, False],   # shown, but left out of the house mean (e.g. a radiator head)
     "room_floor": 0,            # the storey of the reference room (index)
     "fan_name": FAN_NAME,       # the unit heater whose fan follows the CH pump (shown in the panel)
+    "fan_off": False,           # the heater fan switched off from the panel: it stays off, heat dumps aside
     "fan_quiet": False,         # the heater fan stays off at night (fan_quiet_from–fan_quiet_to), heat dumps aside
     "fan_quiet_from": 23,
     "fan_quiet_to": 7,
@@ -394,6 +395,7 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     out["floor_names"] = [(str(names[i]).strip()[:24] if i < len(names) and str(names[i] or "").strip() else FLOOR_NAMES[i])
                           for i in range(MAX_FLOORS)]
     out["fan_name"] = str(raw.get("fan_name") or "").strip()[:24] or FAN_NAME
+    out["fan_off"] = raw.get("fan_off") is True
     out["fan_quiet"] = raw.get("fan_quiet") is True
     for k in ("fan_quiet_from", "fan_quiet_to"):
         out[k] = int(_num(raw.get(k), DEFAULTS[k], 0, 23))

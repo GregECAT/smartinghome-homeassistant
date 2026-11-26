@@ -309,6 +309,13 @@ od razu wyłącza wentylator i do końca nocy nie włącza go razem z pompą CO.
 znów chodzi z pompą: jeśli pompa pracuje już dłużej niż 2 minuty, rusza od razu. Wyjątkiem jest **zrzut ciepła**
 z przegrzanego kotła: wtedy wentylator pracuje także w nocy, bo nadmiar ciepła trzeba odebrać.
 
+**Wyłączanie nagrzewnicy.** Kliknij nagrzewnicę (domek z wentylatorem) na schemacie kotłowni albo przycisk
+**„Wyłącz wentylator”** w karcie „Sterowanie”. Moduł od razu wyłącza wentylator i nie włącza go razem z pompą CO,
+aż klikniesz ponownie (**„Włącz wentylator”**). Wyłączona nagrzewnica ma na schemacie czerwoną ramkę, czerwony
+symbol zasilania i napis „wyłączony”. Tak jak w nocy, wyjątkiem jest **zrzut ciepła** z przegrzanego kotła: wtedy
+wentylator i tak pracuje, a po zrzucie znów się wyłącza. Nagrzewnicę może wyłączyć każdy użytkownik Home Assistant,
+nie tylko administrator.
+
 **Przy montażu, serwisie albo gdy w instalacji nie ma wody** przełącz tryb na **Wyłączone** albo zablokuj
 pompę (pozycja 0). Inaczej, dopóki sondy nie czytają, pompa CO pracuje (także na sucho).
 W trybie „Wyłączone” panel informuje, że zabezpieczenie pompy CO nie działa.
