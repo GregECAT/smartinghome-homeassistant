@@ -369,6 +369,20 @@ przełącznik AUTO–0–RĘKA w skrzynce działa niezależnie od panelu.
 Alarmy trafiają kanałami z panelu Smarting HOME (Awarie → powiadomienia). Krytyczne zawsze tworzą
 też powiadomienie w Home Assistant — niezależnie od ustawień i licencji.
 
+**Kocioł się rozpalił.** Z czujnikiem spalin moduł wysyła powiadomienie 🔥 „Kocioł się rozpalił — spaliny
+100 °C”, gdy spaliny przejdą przez 100 °C: można przełączyć kocioł z rozpalania na tryb automatyczny.
+Przychodzi raz na palenie (następne dopiero po końcu palenia) i nie po restarcie HA w trakcie palenia.
+Wyłączysz je w Ustawienia → „Powiadomienia ogrzewania”.
+
+**Ważenie drewna.** Powiadomienia o rozpalaniu przypominają o zważeniu drewna: „Rozpal do…” i „Czas
+rozpalić” — przed załadunkiem, „Kocioł się rozpalił” — z ilością już wpisaną do tego palenia albo z
+informacją, że drewna jeszcze nie wpisano.
+
+**Dodatkowi odbiorcy.** W Ustawienia → „Powiadomienia ogrzewania” zaznaczysz telefony z aplikacją Home
+Assistant (np. domowników, którzy palą w kotle). Dostają wszystkie powiadomienia ogrzewania — rozpalanie,
+„rozpal do…”, alarmy kotła — i nic poza nimi z Smarting HOME. Telefony z panelu Smarting HOME dostają je
+jak dotąd. Stuknięcie w powiadomienie otwiera panel Ogrzewanie.
+
 ## Doradca (PRO)
 
 - **Model domu:** w godzinach bez palenia (z pracującą pompą CO, bez ładowania CWU z bufora) spadek ciepła

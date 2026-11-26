@@ -127,6 +127,8 @@ class HeatingManager:
         self._weather_f = False
         self._advice_ts = 0.0
         self._advised_for: int | None = None
+        self._lit_armed: bool | None = None       # "the boiler is lit" waits for the flue to cross FLUE_FIRE_C
+        self._flue_prev: float | None = None
         self._last_tick: float | None = None
         self._settings_ts = 0.0
         self._last_save = time.monotonic()
@@ -450,6 +452,7 @@ class HeatingManager:
             async_dispatcher_send(self.hass, SIGNAL_UPDATE)
             await self._notify(raised, cleared)
             await self._advisor_notify(now)
+            await self._lit_notify(now)
             if (self._guard_want is not None and not self._guard_busy
                     and time.monotonic() >= self._guard_retry):
                 self._guard_retry = time.monotonic() + GUARD_RETRY_S
@@ -881,8 +884,6 @@ class HeatingManager:
             raised = [a for a in raised if a.id != "heating_hot"]   # the critical one says it all
         if not (raised or cleared):
             return
-        from .notifier import async_deliver
-
         ncfg = await self._ncfg()
         levels = ncfg.get("levels") or ["critical", "warning"]
         push = bool(ncfg.get("enabled")) and self.cfg.get("notify", True) is not False
@@ -893,9 +894,8 @@ class HeatingManager:
             message = alarm.message + (f"\n→ {alarm.action}" if alarm.action else "")
             sent: list[str] = []
             if push and alarm.level in levels:
-                sent = await async_deliver(
-                    self.hass, ncfg, key=alarm.id, level=alarm.level, title=title, message=message,
-                    source=SOURCE, email=alarm.level == "critical", advanced=self.has(FEATURE_ADVANCED_ALERTS))
+                sent = await self._deliver(ncfg, key=alarm.id, level=alarm.level, title=title, message=message,
+                                           email=alarm.level == "critical")
             if alarm.level == "critical" and "persistent" not in sent:
                 # boiler safety: always visible in HA, whatever the notification settings
                 await self._persistent(alarm.id, f"🔴 {title}", message)
@@ -903,12 +903,43 @@ class HeatingManager:
             if self._notified.pop(alarm.id, None) is None:
                 continue
             if push and alarm.level in levels:
-                await async_deliver(
-                    self.hass, ncfg, key=alarm.id, level="resolved",
-                    title=f"{alarm.title.split(':')[0]} — wróciło do normy",
-                    message="Problem ustąpił.", source=SOURCE, advanced=self.has(FEATURE_ADVANCED_ALERTS))
+                await self._deliver(ncfg, key=alarm.id, level="resolved",
+                                    title=f"{alarm.title.split(':')[0]} — wróciło do normy", message="Problem ustąpił.")
             # it may have been critical earlier (e.g. a probe lost during a fire) — dismissing is harmless
             await self._persistent(alarm.id, None, None)
+
+    async def _deliver(self, ncfg: dict[str, Any], **kw: Any) -> list[str]:
+        """One heating notification: to the Smarting HOME channels and also to the heating's own extra
+        recipients (notify_extra, e.g. the people who light the boiler); a tap opens the heating panel."""
+        from .notifier import async_deliver, push_targets
+
+        ch = ncfg.get("channels") or {}
+        targets = hc.push_recipients(push_targets(ncfg), self.cfg.get("notify_extra") or [], bool(ch.get("ha_push")))
+        cfg = {**ncfg, "ha_push_entities": targets, "channels": {**ch, "ha_push": bool(targets)}}
+        return await async_deliver(self.hass, cfg, source=SOURCE, url=f"/{HEATING_PANEL_URL}",
+                                   advanced=self.has(FEATURE_ADVANCED_ALERTS), **kw)
+
+    async def _lit_notify(self, now: float) -> None:
+        """The flue has risen through FLUE_FIRE_C (100 °C): the fire has taken — the boiler can go from lighting
+        to automatic. Once per fire (hc.lit_watch); with the wood booked so far or a reminder to weigh it."""
+        m = self.model
+        flue = m.t("flue_gas")
+        self._lit_armed, say = hc.lit_watch(self._lit_armed, m.session is not None, self._flue_prev, flue,
+                                            hm.FLUE_FIRE_C)
+        if flue is not None:
+            self._flue_prev = flue
+        if not say or not self.cfg.get("lit_notify", True):
+            return
+        booked = (m.session or {}).get("wood_kg") or 0.0
+        booked += sum(p.get("kg") or 0.0 for p in m.pending_loads)
+        title = f"Kocioł się rozpalił — spaliny {flue:.0f} °C"
+        message = ("Możesz przełączyć kocioł z rozpalania na tryb automatyczny.\n"
+                   + hc.wood_reminder(round(booked, 1)))
+        self._log(f"🔥 {title}", now)
+        ncfg = await self._ncfg()
+        if ncfg.get("enabled") and self.cfg.get("notify", True) is not False:
+            await self._deliver(ncfg, key="heating_lit", level="info", title=title, message=message,
+                                icon="🔥", interruption="active")
 
     async def _ncfg(self) -> dict[str, Any]:
         from .settings_io import read_async
@@ -935,14 +966,12 @@ class HeatingManager:
         kg = a.get("wood_kg")
         title = f"Rozpal w kotle do {_hhmm(light_at)}"
         message = f"Ciepła w buforze wystarczy do ok. {_hhmm(empty_at)}." + (
-            f" Załaduj ok. {kg:.0f} kg drewna — tyle przyjmie bufor i CWU razem z ogrzewaniem domu." if kg else "")
+            f" Załaduj ok. {kg:.0f} kg drewna — tyle przyjmie bufor i CWU razem z ogrzewaniem domu." if kg else "") + (
+            "\n" + hc.wood_reminder(None, before_fire=True))
         self._log(f"Doradca: {title.lower()} (bufor do {_hhmm(empty_at)}" + (f", ~{kg:.0f} kg)" if kg else ")"), now)
         ncfg = await self._ncfg()
         if ncfg.get("enabled") and self.cfg.get("notify", True) is not False:
-            from .notifier import async_deliver
-
-            await async_deliver(self.hass, ncfg, key="heating_light_by", level="info", title=title,
-                                message=message, source=SOURCE, advanced=self.has(FEATURE_ADVANCED_ALERTS))
+            await self._deliver(ncfg, key="heating_light_by", level="info", title=title, message=message)
 
     async def _persistent(self, key: str, title: str | None, message: str | None) -> None:
         try:

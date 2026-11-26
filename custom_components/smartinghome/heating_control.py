@@ -147,6 +147,46 @@ def fan_follow(mode: str, pump_on: bool | None, pump_for_s: float, fan_on: bool 
     return ("on" if pump_on else "off"), 0.0
 
 
+def lit_watch(armed: bool | None, fire: bool, prev_flue: float | None, flue: float | None,
+              lit_c: float = 100.0) -> tuple[bool, bool]:
+    """When to say "the boiler is lit — switch it from lighting to automatic": the flue rising through lit_c,
+    once per fire. Armed while no fire is booked (a session); a reading that crosses lit_c from below while
+    armed fires it and disarms until the fire has ended. armed=None: the first look (after a start of HA) —
+    armed only if no fire burns now, so a restart in the middle of a fire says nothing.
+    → (armed after this reading, notify now)."""
+    if armed is None:
+        armed = not fire
+    elif not fire:
+        armed = True
+    crossed = flue is not None and prev_flue is not None and prev_flue < lit_c <= flue
+    if armed and crossed:
+        return False, True
+    return armed, False
+
+
+def _kg(kg: float) -> str:
+    return f"{kg:.1f}".replace(".", ",")
+
+
+def wood_reminder(booked_kg: float | None, before_fire: bool = False) -> str:
+    """The line on weighing the wood in a lighting / reloading notification."""
+    if before_fire:
+        return "⚖️ Zważ drewno przed załadunkiem i wpisz je w panelu Ogrzewanie („Wpisz zważone drewno”)."
+    if booked_kg:
+        return (f"⚖️ Wpisane drewno: {_kg(booked_kg)} kg. Dokładane drewno też zważ i wpisz w panelu Ogrzewanie.")
+    return "⚖️ Nie wpisano jeszcze drewna — zważ je i wpisz w panelu Ogrzewanie („Wpisz zważone drewno”)."
+
+
+def push_recipients(base: list[str], extra: list[str], push_on: bool) -> list[str]:
+    """Who gets a heating push: the Smarting HOME phones (when push is on there) and the heating's own extra
+    recipients, each once."""
+    out: list[str] = []
+    for e in [*(base if push_on else []), *extra]:
+        if e and e not in out:
+            out.append(e)
+    return out
+
+
 def night_now(cfg: dict[str, Any], local_hour: float) -> bool:
     """The night (setback) target is in force."""
     return bool(cfg.get("night_enabled")) and in_night(cfg, local_hour)

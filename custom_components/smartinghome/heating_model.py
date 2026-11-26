@@ -33,6 +33,7 @@ Settings "heating" (settings.json): see DEFAULTS / normalize().
 from __future__ import annotations
 
 import math
+import re
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
@@ -218,6 +219,8 @@ DEFAULTS: dict[str, Any] = {
     "light_lead_h": 1.0,        # from lighting to the buffer taking heat
     "burn_hours": 4.0,
     "advisor_notify": True,
+    "lit_notify": True,         # "the boiler is lit" (flue ≥ FLUE_FIRE_C) — switch it from lighting to automatic
+    "notify_extra": [],         # more phones for the heating notifications only (notify.mobile_app_… services)
     "wood_price_kg": None,      # zł/kg, season cost (derived from wood_price / wood_price_unit when those are set)
     "wood_kind": "mixed",       # soft / mixed / hard — how many kg a cubic metre of seasoned wood weighs
     "wood_price": None,         # the price as bought …
@@ -356,6 +359,24 @@ def wood_kg_per_unit(kind: str, unit: str) -> float:
     density = WOOD_KINDS.get(kind, WOOD_KINDS["mixed"])[1]
     return 1.0 if unit == "kg" else density if unit == "m3" else density * STACKED_SOLID
 
+
+NOTIFY_EXTRA_MAX = 10
+_NOTIFY_SERVICE = re.compile(r"^notify\.[a-z0-9_]+$")
+
+
+def notify_targets(raw: Any) -> list[str]:
+    """The extra recipients of the heating notifications: notify services ("notify.mobile_app_iphone"; a bare
+    "mobile_app_iphone" gets the prefix), each once, at most NOTIFY_EXTRA_MAX; anything else is dropped."""
+    out: list[str] = []
+    for item in raw if isinstance(raw, list) else []:
+        name = str(item or "").strip().lower()
+        if name and not name.startswith("notify."):
+            name = f"notify.{name}"
+        if _NOTIFY_SERVICE.match(name) and name not in out:
+            out.append(name)
+    return out[:NOTIFY_EXTRA_MAX]
+
+
 def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     """Settings "heating" with defaults filled in and every number clamped to a sane range."""
     raw = cfg if isinstance(cfg, dict) else {}
@@ -464,6 +485,8 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     out["light_lead_h"] = _num(raw.get("light_lead_h"), 1.0, 0.0, 6.0)
     out["burn_hours"] = _num(raw.get("burn_hours"), 4.0, 1.0, 12.0)
     out["advisor_notify"] = raw.get("advisor_notify", True) is not False
+    out["lit_notify"] = raw.get("lit_notify", True) is not False
+    out["notify_extra"] = notify_targets(raw.get("notify_extra"))
     out["wood_kind"] = raw.get("wood_kind") if raw.get("wood_kind") in WOOD_KINDS else DEFAULTS["wood_kind"]
     out["wood_price_unit"] = (raw.get("wood_price_unit") if raw.get("wood_price_unit") in WOOD_PRICE_UNITS
                               else DEFAULTS["wood_price_unit"])
@@ -1269,7 +1292,8 @@ class HeatingModel:
                 "heating_light_fire", "info", "Czas rozpalić w kotle",
                 f"W domu {room:.1f} °C (zadana {target:.1f} °C), bufor naładowany "
                 f"w {self.buffer['charge_pct']:.0f}%.",
-                f"Bufor przyjmie ok. {self.buffer['wood_max_kg']:.0f} kg drewna.", hold_s=1800))
+                f"Bufor przyjmie ok. {self.buffer['wood_max_kg']:.0f} kg drewna. Zważ je i wpisz w panelu Ogrzewanie.",
+                hold_s=1800))
 
         fire_now = self.state in FIRE_STATES or self.session is not None
         if self.grid_outage and fire_now:

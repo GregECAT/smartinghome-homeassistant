@@ -47,6 +47,9 @@ async def async_deliver(
     source: str = "System",
     email: bool = False,
     advanced: bool = True,
+    url: str = PANEL_URL,
+    icon: str | None = None,
+    interruption: str | None = None,
 ) -> list[str]:
     """Send one message to the configured channels. Returns channels that succeeded.
 
@@ -57,9 +60,12 @@ async def async_deliver(
     advanced — PRO alert channels (const.FEATURE_ADVANCED_ALERTS): the email/SMS
             webhook and more than one push device. FREE gets persistent
             notifications and the first push device only.
+    url   — the panel a tap on the push opens (e.g. the heating panel)
+    icon / interruption — instead of the level's (e.g. 🔥 and an audible "active" for a
+            message that asks for a step at the boiler)
     """
     channels = cfg.get("channels") or {}
-    icon = LEVEL_ICON.get(level, "ℹ️")
+    icon = icon or LEVEL_ICON.get(level, "ℹ️")
     full_title = f"{icon} {title}"
     sent: list[str] = []
 
@@ -72,11 +78,11 @@ async def async_deliver(
                 "tag": f"smartinghome_{key}",
                 "group": group,
                 "subtitle": f"Smarting HOME · {source}",
-                "url": PANEL_URL,           # iOS: open the panel
-                "clickAction": PANEL_URL,   # Android: open the panel
+                "url": url,                 # iOS: open the panel
+                "clickAction": url,         # Android: open the panel
                 "channel": "smartinghome_alerts" if level in ("critical", "warning") else "smartinghome_info",
                 "importance": "high" if level == "critical" else "default",
-                "push": {"interruption-level": _INTERRUPTION.get(level, "active")},
+                "push": {"interruption-level": interruption or _INTERRUPTION.get(level, "active")},
             },
         }
         ok = False

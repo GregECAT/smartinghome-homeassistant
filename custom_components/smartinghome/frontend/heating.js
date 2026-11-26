@@ -1803,6 +1803,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         <label class="f">Odbiorniki ciepła${sel("emitters", d.emitters || {}, c.emitters)}</label>
       </div>
       <div class="hint">Alarmy krytyczne (przegrzanie, utrata czujnika w trakcie palenia) zawsze trafiają też do powiadomień Home Assistanta.</div></div>`;
+    html += this._notifyExtraHtml(c, dis);
 
     const nFloors = Number(c.floors) || 1;
     const floorNames = c.floor_names || ["Parter", "1. piętro", "Poddasze"];
@@ -1967,6 +1968,29 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     return html;
   }
 
+  // the heating's own recipients: phones (HA Companion) that get the heating notifications only
+  _notifyExtraHtml(c, dis) {
+    const hass = this._hass || {};
+    const apps = Object.keys((hass.services || {}).notify || {}).filter((s) => s.startsWith("mobile_app_"));
+    const chosen = new Set(c.notify_extra || []);
+    const persons = Object.values(hass.states || {}).filter((st) => st.entity_id.startsWith("person."));
+    const who = (svc) => {
+      const tracker = `device_tracker.${svc.slice(11)}`;
+      const p = persons.find((st) => (st.attributes.device_trackers || []).includes(tracker));
+      return p ? `${p.attributes.friendly_name || p.entity_id} (${svc.slice(11).replace(/_/g, " ")})` : svc.slice(11).replace(/_/g, " ");
+    };
+    const missing = [...chosen].filter((e) => !apps.includes(e.replace(/^notify\./, "")));
+    const boxes = apps.sort((a, b) => who(a).localeCompare(who(b), "pl")).map((svc) =>
+      `<label class="chk"><input type="checkbox" name="nx_${esc(svc)}" value="notify.${esc(svc)}" ${chosen.has(`notify.${svc}`) ? "checked" : ""} ${dis}> ${esc(who(svc))}</label>`).join("");
+    return `<div class="card" style="margin-top:14px"><h3>Powiadomienia ogrzewania</h3>
+      <label class="chk"><input type="checkbox" name="lit_notify" ${c.lit_notify !== false ? "checked" : ""} ${dis}> Powiadomienie „kocioł się rozpalił” — spaliny 100 °C, można przełączyć kocioł na tryb automatyczny</label>
+      <div class="hint" style="margin-top:2px">Działa z czujnikiem spalin (rola „Spaliny”). Raz na palenie.</div>
+      <div style="margin-top:12px;font-size:13px;color:#cbd5e1">Także do tych telefonów <span class="muted">— tylko powiadomienia ogrzewania (rozpalanie, „rozpal do…”, alarmy kotła), bez reszty Smarting HOME</span></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-top:8px">${boxes || '<span class="muted">Brak telefonów z aplikacją Home Assistant.</span>'}</div>
+      ${missing.length ? `<div class="hint">Nie ma już w HA: ${missing.map(esc).join(", ")} — zostają na liście.</div>` : ""}
+      <div class="hint">Telefony z panelu Smarting HOME (Powiadomienia) dostają powiadomienia ogrzewania tak jak dotąd.</div></div>`;
+  }
+
   _curveSvg(c) {
     const W = 360, H = 190, L = 32, R = 8, T = 10, B = 24;
     const room = Number(c.room_target_c) || 21, slope = Number(c.curve_slope) || 1, shift = Number(c.curve_shift) || 0;
@@ -2092,13 +2116,19 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       "light_lead_h", "burn_hours", "wood_price", "dhw_on_diff_k", "dhw_off_diff_k", "dhw_hyst_k", "dhw_max_c",
       "dhw_win1_from", "dhw_win1_to", "dhw_win2_from", "dhw_win2_to", "fan_quiet_from", "fan_quiet_to"];
     const checks = ["enabled", "notify", "valve_invert", "safety_dump", "room_correction", "night_enabled", "advisor_notify", "dhw_dump",
-      "dhw_fire_only", "fan_quiet"];
+      "dhw_fire_only", "fan_quiet", "lit_notify"];
+    // the heating's extra recipients: the phones shown in the form, plus any chosen earlier that HA no longer has
+    const nxBoxes = [...form.querySelectorAll('input[name^="nx_"]')];
+    if (nxBoxes.length) {
+      const shown = new Set(nxBoxes.map((el) => el.value));
+      c.notify_extra = [...(c.notify_extra || []).filter((e) => !shown.has(e)), ...nxBoxes.filter((el) => el.checked).map((el) => el.value)];
+    }
     const selects = ["profile", "emitters", "mode", "valve_type", "valve_cover", "valve_open_switch", "valve_close_switch", "weather_entity",
       "dhw_source", "dhw_mode", "wood_kind", "wood_price_unit"];
     // not `for … of form.elements`: HA 2026.10 patches HTMLFormElement.elements with an object whose iterator throws
     // "Method not implemented" — the whole save died there silently (bobrek, 23.11.2026)
     for (const el of form.querySelectorAll("input[name], select[name], textarea[name]")) {
-      if (!el.name) continue;
+      if (!el.name || el.name.startsWith("nx_")) continue;
       if (checks.includes(el.name)) c[el.name] = el.checked;
       else if (selects.includes(el.name)) c[el.name] = el.value;
       else if (el.name.startsWith("ent_")) { c.entities = c.entities || {}; c.entities[el.name.slice(4)] = el.value; }
