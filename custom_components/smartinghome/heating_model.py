@@ -768,8 +768,10 @@ def session_heat(s: dict[str, Any], energy_now: float | None) -> float | None:
 
 
 def monthly_summary(sessions: list[dict[str, Any]], utc_offset_s: float = 0.0,
-                    price_kg: float | None = None) -> list[dict[str, Any]]:
-    """Fires per calendar month (local time): count, hours, heat stored, wood (weighed where known)."""
+                    price_kg: float | None = None, per_kg: float | None = None) -> list[dict[str, Any]]:
+    """Fires per calendar month (local time): count, hours, heat, wood (weighed where known). A fire without the
+    house's share but with all its wood weighed counts the wood's heat (kg × per_kg) — as the fires table does —
+    not only what the tanks gained."""
     import time as _time
 
     months: dict[str, dict[str, Any]] = {}
@@ -784,8 +786,10 @@ def monthly_summary(sessions: list[dict[str, Any]], utc_offset_s: float = 0.0,
         m["hours"] += float(s.get("duration_h") or 0.0)
         m["stored_kwh"] += float(s.get("stored_kwh") or 0.0)
         heat = _f(s.get("heat_kwh"))
-        m["heat_kwh"] += heat if heat is not None else float(s.get("stored_kwh") or 0.0)
         kg = _f(s.get("wood_kg"))
+        if heat is None and kg and per_kg and fully_weighed(s):
+            heat = kg * per_kg
+        m["heat_kwh"] += heat if heat is not None else float(s.get("stored_kwh") or 0.0)
         if kg is not None and fully_weighed(s):
             m["weighed"] += 1
         else:                       # not weighed, or only a reload of it: the larger of the weighed kg and the estimate

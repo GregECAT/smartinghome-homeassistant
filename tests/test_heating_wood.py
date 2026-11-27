@@ -239,3 +239,13 @@ def test_weighed_from_the_start_or_before_lighting_or_after_the_fire():
     _end_fire(m3, 8 * H)
     m3.log_load(30.0, 9 * H, "last")                         # the whole fire, booked afterwards
     assert hm.fully_weighed(m3.sessions[-1]) is True
+
+
+def test_monthly_heat_counts_the_weighed_wood_without_the_house():
+    # bobrek 26.11.2026: 92.3 kg weighed, the house not known yet — the tanks gained only ~51 kWh at the peak
+    fire = {"start": 1_795_000_000, "duration_h": 17, "stored_kwh": 50.7, "wood_kg": 92.3,
+            "loads": [{"ts": 1_795_000_000, "kg": 92.3}]}
+    assert hm.monthly_summary([fire], 0)[0]["heat_kwh"] == 51
+    assert hm.monthly_summary([fire], 0, per_kg=3.54)[0]["heat_kwh"] == round(92.3 * 3.54)
+    known = {**fire, "heat_kwh": 300.0}
+    assert hm.monthly_summary([known], 0, per_kg=3.54)[0]["heat_kwh"] == 300

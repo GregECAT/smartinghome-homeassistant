@@ -1798,7 +1798,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     // minus the tanks; without the weighing only the tanks are known and the wood is a lower bound.
     const c = this._data.config || {};
     const cfgPerKg = (c.wood_kwh_per_kg || 0) * (c.efficiency || 0);
-    const kwh = (v, sign) => `${sign && v > 0 ? "+" : ""}${num(v, 0)} kWh`;
+    const kwh = (v, sign) => { const r = Math.round(v) || 0; return `${sign && r > 0 ? "+" : ""}${num(r, 0)} kWh`; };
     const row = (x, open) => {
       const start = x.stored_start_kwh;
       const endE = open ? [st.buffer, st.dhw].reduce((acc, p) => (p ? acc + (p.energy_kwh || 0) : acc), 0)
