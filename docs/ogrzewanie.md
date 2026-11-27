@@ -392,8 +392,21 @@ jak dotąd. Stuknięcie w powiadomienie otwiera panel Ogrzewanie.
 - **Bufor wystarczy do / Rozpal do:** godzinowa prognoza temperatury z encji pogody → zapotrzebowanie
   godzina po godzinie → moment wyczerpania ciepła użytecznego, minus czas rozpalania. Powiadomienie
   „Rozpal w kotle do…” przychodzi 30 min wcześniej.
-- **Załaduj X kg:** miejsce w buforze (z marginesem 3 K) + miejsce w CWU + to, co dom zużyje w czasie palenia,
-  podzielone przez ciepło z kilograma drewna (z ustawień: kWh/kg × sprawność).
+- **Załaduj przy rozpaleniu X kg:** miejsce, jakie bufor (z marginesem 3 K) i CWU będą mieć w chwili rozpalenia,
+  + to, co dom zużyje w czasie palenia (Ustawienia → „Czas palenia jednego załadunku”), podzielone przez ciepło
+  z kilograma drewna (z ustawień: kWh/kg × sprawność albo z ważenia).
+- **Moc kotła** (Ustawienia → Doradca i koszty, domyślnie 25 kW): kocioł pali z pełną mocą, a nie rozkłada
+  drewna na godziny. Ponad to, co bierze dom, ciepło musi przyjąć bufor — przy 24 kW kotła i 15 kW domu
+  ok. 9 kW idzie do zbiorników. Dlatego ciepły bufor przyjmie tylko kilka kilogramów: 4 kWh miejsca to
+  ok. 3 kg, a nie „4 kWh + to, co dom weźmie przez 4 h” (tak liczyły wersje do v1.111.0 — przy 87 % bufora
+  wychodziło 19 kg).
+- **W trakcie palenia — Dołóż teraz / pełny załadunek:** „Dołóż teraz: max X kg” to ile zmieści się w tej
+  chwili (miejsce w zbiornikach podzielone przez część mocy kotła, której dom nie bierze; zważone drewno, które
+  jeszcze pali się w kotle, zajmuje to samo miejsce). „Pełny załadunek ~Y kg od HH:MM (bufor ~Z %)” — Y to
+  ciepło dla domu na „Czas palenia jednego załadunku”, a godzina to chwila, gdy bufor zrobi na nie miejsce.
+  Gdy ta chwila przyjdzie, w panelu pojawia się „Pora dołożyć” i przychodzi powiadomienie „Dołóż drewna do
+  kotła — ok. Y kg” (raz, gdy bufor wcześniej w tym paleniu nie miał miejsca; nie w godzinach nocnego obniżenia,
+  nie częściej niż co 1,5 h).
 - **Sezon:** palenia, godziny, ciepło i drewno miesiąc po miesiącu, z kosztem przy podanej cenie drewna.
 - **Koszty** (Ustawienia → Doradca i koszty, widok w zakładce Drewno): rodzaj drewna — **twarde** (buk, dąb,
   grab, jesion; ok. 700 kg/m³ lite), **mieszane** (ok. 600) albo **miękkie** (sosna, świerk, olcha, topola;
@@ -412,7 +425,14 @@ jak dotąd. Stuknięcie w powiadomienie otwiera panel Ogrzewanie.
   2–3 razy przy długich paleniach, w których bufor pełny zostaje dociążany kolejnymi załadunkami.
   Straty domu biorą się z modelu domu, a zanim on się nauczy — z tempa rozładowania bufora w godzinach
   bez palenia (wystarczą ok. 2 h takich danych przy co najmniej 5 K różnicy dom – zewnątrz). Palenia
-  zarejestrowane wcześniej, i te bez tych danych, liczą tylko bufor i CWU (panel pisze wtedy „bufor i CWU”).
+  zarejestrowane wcześniej, i te bez tych danych, liczą tylko bufor i CWU.
+- **Tabela „Palenia w kotle”** (od v1.112.0) pokazuje bilans w trzech kolumnach, które się sumują:
+  **Bufor i CWU** (o ile więcej — albo mniej — ciepła jest w zbiornikach na końcu palenia niż przy rozpaleniu;
+  w trwającym paleniu do teraz), **Dom** (ciepło, które dom wziął w tym czasie) i **Ciepło z drewna** (suma).
+  Palenie sprzed chwili, gdy moduł poznał dom, ale z całym drewnem zważonym, ma dom i ciepło „z wagi”
+  (kg × kWh/kg z ustawień minus zbiorniki). Bez domu i bez wagi znane są tylko zbiorniki — ciepło i drewno są
+  wtedy dolną granicą („min.”). Przykład bobrek: 26.11 92,3 kg zważone, w zbiornikach przybyło ok. 50 kWh
+  (szczyt), a większość ciepła z drewna wziął dom — wcześniej tabela pokazywała tylko te 50 kWh.
 
 ## Ważenie drewna (zakładka „Drewno”)
 

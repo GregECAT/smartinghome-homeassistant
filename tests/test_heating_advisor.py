@@ -85,11 +85,85 @@ def test_advise_model_basis_light_at_and_wood():
     adv = ha.advise(cfg, status, m, 0.0, 21.0, fc, None, per_kg=3.2)
     assert adv["basis"] == "model"
     assert adv["light_at"] == pytest.approx(adv["empty_at"] - 3600)
-    buf_room = status["buffer"]["space_kwh"] - 3 * 1.14
-    expected = (buf_room + status["dhw"]["space_kwh"] + 5.0 * 4) / 3.2
+    # the load for the lighting: the room the buffer will have by then (what the house takes until the light
+    # time frees it) + the house during the burn — no more than the tanks soak up of the 20 kW a 25 kW boiler
+    # gives above the house's 5 kW
+    assert adv["wood_at"] == adv["light_at"]
+    room = status["buffer"]["space_kwh"] - 3 * 1.14 + 5.0 * adv["light_at"] / 3600 + status["dhw"]["space_kwh"]
+    expected = min(room + 5.0 * 4, room / (1 - 5.0 / 25.0)) / 3.2
     assert adv["wood_kg"] == round(expected)
+    unlimited = ha.advise({**cfg, "boiler_kw": 0}, status, m, 0.0, 21.0, fc, None, per_kg=3.2)
+    assert unlimited["wood_kg"] == round((room + 5.0 * 4) / 3.2)
     firing = ha.advise(cfg, {**status, "boiler": {"firing": True}}, m, 0.0, 21.0, fc, None, per_kg=3.2)
     assert firing["light_at"] is None
+
+
+def _bobrek(charge_kwh, firing=True, fire_left=None, boiler_kw=24):
+    """bobrek 27.11.2026 19:54: 1000 L buffer (59.3 kWh between 40 and 92 °C), hot water full, the house
+    ~587 W/K at 24.5 °C inside and −0.5 °C outside (≈ 14.7 kW), 3.54 kWh/kg."""
+    cfg = hm.normalize({"buffer_l": 1000, "burn_hours": 4, "boiler_kw": boiler_kw})
+    m = ha.BuildingModel()
+    m.ua, m.base = 0.587, 0.0
+    status = {"buffer": {"energy_kwh": charge_kwh, "space_kwh": 59.3 - charge_kwh, "capacity_kwh": 59.3},
+              "dhw": {"energy_kwh": 25.9, "space_kwh": 0.0}, "boiler": {"firing": firing}}
+    fc = [(h * 3600.0, -0.5) for h in range(0, 100)]
+    return ha.advise(cfg, status, m, 0.0, 24.5, fc, None, per_kg=3.54, fire_left_kwh=fire_left)
+
+
+def test_a_warm_buffer_takes_only_what_the_boiler_gives_above_the_house():
+    # "load 19 kg" at 87 %: 4.2 kWh of room + 59 kWh the house takes in 4 h — but a 24 kW boiler gives
+    # ~9.3 kW more than the house takes, which fills the 4.2 kWh in under half an hour
+    adv = _bobrek(51.7)
+    h = 0.587 * 25.0
+    share = 1 - h / 24.0
+    room = 7.6 - 3 * 1.14
+    assert adv["wood_kg"] == round(room / share / 3.54) == 3
+    # a full load (the house's heat for 4 h, ~17 kg) fits once the buffer has dropped to about half
+    assert adv["full_kg"] == round(h * 4 / 3.54) == 17
+    assert not adv["full_now"]
+    need = share * h * 4 - room                       # kWh the house must take out of the buffer first
+    assert adv["full_at"] / 3600 == pytest.approx(need / h, abs=0.25)
+    assert 45 <= adv["full_pct"] <= 55
+    assert adv["boiler_kw"] == 24
+
+
+def test_an_emptier_buffer_is_ready_for_a_full_load_now():
+    adv = _bobrek(15.0)
+    assert adv["full_now"] and adv["full_at"] == 0.0
+    # room 40.9 kWh + the house's 58.7 kWh over 4 h: the burn time caps it, the boiler doesn't
+    assert adv["wood_kg"] == round((59.3 - 15.0 - 3 * 1.14 + 0.587 * 25 * 4) / 3.54)
+
+
+def test_the_weighed_wood_still_burning_takes_the_same_room():
+    no_wood = _bobrek(30.0)
+    with_wood = _bobrek(30.0, fire_left=10.0)
+    assert with_wood["wood_kg"] < no_wood["wood_kg"]
+    assert with_wood["full_at"] > no_wood["full_at"]
+
+
+def test_a_house_taking_the_boilers_whole_power_caps_nothing():
+    assert ha.surplus_share(30.0, 24.0) == 0.0 and ha.surplus_share(6.0, 24.0) == pytest.approx(0.75)
+    assert ha.surplus_share(6.0, 0.0) == 1.0
+    assert ha.load_kwh(4.0, 120.0, 4.0, 24.0) == 124.0          # 30 kW house, 24 kW boiler
+    assert ha.load_kwh(4.0, 24.0, 4.0, 24.0) == pytest.approx(16.0 / 3)   # 6 kW house: 4 / 0.75
+    assert ha.load_kwh(4.0, 24.0, 4.0, 0.0) == 28.0             # no power known: room + house, as before
+
+
+def test_a_cold_house_without_a_fire_loads_for_the_lighting():
+    adv = _bobrek(51.7, firing=False)
+    assert adv["full_kg"] is None and adv["light_at"] is not None
+    # lit an hour before the buffer runs out: ~41 kWh of room + the house's 59 kWh over 4 h (the boiler's cap,
+    # 41 / 0.39 = 106 kWh, doesn't bind) → 28 kg
+    h = 0.587 * 25.0
+    room = 59.3 - 3 * 1.14 - h * 1.0
+    assert adv["wood_at"] == adv["light_at"]
+    assert adv["wood_kg"] == round((room + h * 4) / 3.54) == 28
+
+
+def test_boiler_power_setting():
+    assert hm.normalize({})["boiler_kw"] == 25.0
+    assert hm.normalize({"boiler_kw": 2})["boiler_kw"] == 5.0
+    assert hm.normalize({"boiler_kw": "24"})["boiler_kw"] == 24.0
 
 
 def test_advise_trend_fallback_without_model():

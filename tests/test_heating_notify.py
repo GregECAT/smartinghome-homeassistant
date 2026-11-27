@@ -86,3 +86,21 @@ def test_notify_extra_setting():
     assert len(hm.normalize({"notify_extra": [f"notify.p{i}" for i in range(20)]})["notify_extra"]) == hm.NOTIFY_EXTRA_MAX
     saved = hm.to_settings({"notify_extra": ["notify.mobile_app_iphone"], "lit_notify": True})
     assert saved["notify_extra"] == ["notify.mobile_app_iphone"] and saved["lit_notify"] is True
+
+
+def test_reload_once_the_buffer_has_room_again():
+    # a fire burning, the buffer full (no room for a full load) → later room for one: say "dołóż" once
+    full = {"firing": True, "basis": "history", "full_now": False, "full_at": 5400.0, "full_kg": 17}
+    ready = {**full, "full_now": True, "full_at": 0.0}
+    waiting, said = False, []
+    for i, a in enumerate([full, full, ready, ready, full, ready]):
+        waiting, say = hc.reload_watch(waiting, a)
+        said += [i] if say else []
+    assert said == [2, 5]
+
+
+def test_reload_not_right_after_lighting_nor_without_a_fire():
+    ready = {"firing": True, "basis": "history", "full_now": True, "full_at": 0.0, "full_kg": 30}
+    assert hc.reload_watch(False, ready) == (False, False)          # an empty buffer at lighting: no ping
+    assert hc.reload_watch(True, {**ready, "firing": False}) == (False, False)
+    assert hc.reload_watch(False, {"firing": True, "basis": None}) == (False, False)

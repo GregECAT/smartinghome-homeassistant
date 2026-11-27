@@ -21,7 +21,12 @@ minus the time a fresh fire needs to reach the buffer → "rozpal do".
 
 Wood: room in the buffer up to its maximum (minus a 3 K margin), room in the hot
 water tank, plus what the house takes during the burn, divided by the heat one kg of
-wood really gives — learned from weighed loads when there are any.
+wood really gives — learned from weighed loads when there are any. The boiler's power
+caps it: a boiler giving more than the house takes pushes the surplus into the tanks,
+so a nearly full buffer takes only a few kg (bobrek 27.11.2026: "load 19 kg" at 87 %,
+when a 24 kW boiler would have filled the last 4 kWh of room in half an hour). While a
+fire burns: "add now at most X kg", and the moment a full load (the house's heat for
+burn_hours) fits — the buffer then has room for what the boiler gives above the house.
 """
 from __future__ import annotations
 
@@ -347,17 +352,89 @@ def advise(cfg: dict[str, Any], status: dict[str, Any], building: BuildingModel,
     if out["empty_at"] is not None and not firing:
         out["light_at"] = max(out["empty_at"] - cfg["light_lead_h"] * 3600.0, now)
 
-    # wood for a fire started now: room in the tanks + the house's draw during the burn
-    margin = MARGIN_K * WATER_KWH_PER_M3K * cfg["buffer_l"] / 1000.0
-    room = max(float(buf.get("space_kwh") or 0.0) - margin, 0.0) + float(dhw.get("space_kwh") or 0.0)
+    # wood: room in the tanks + the house's draw during the burn, capped by the boiler's power
+    hours = float(cfg["burn_hours"])
+    boiler_kw = float(cfg.get("boiler_kw") or 0.0)
     burn_kw = out["demand_kw"] if out["demand_kw"] is not None else 0.0
-    if out["basis"] in ("model", "history") and forecast:
-        hours = int(cfg["burn_hours"])
-        moments = [now + h * 3600 + 1800 for h in range(hours)]
-        burn = sum(building.demand_kw(_target(room_target, ts), t) or 0.0
-                   for ts in moments if (t := temp_at(forecast, ts, t_out_now)) is not None)
+    modelled = out["basis"] in ("model", "history")
+
+    def kw_at(ts: float) -> float:
+        if modelled:
+            t = temp_at(forecast, ts, t_out_now)
+            if t is not None:
+                return building.demand_kw(_target(room_target, ts), t) or 0.0
+        return burn_kw
+
+    def house(t0: float, h: float) -> float:
+        n = max(int(round(h * 4)), 1)
+        step = h * 3600.0 / n
+        return sum(kw_at(t0 + (i + 0.5) * step) for i in range(n)) * step / 3600.0
+
+    margin = MARGIN_K * WATER_KWH_PER_M3K * cfg["buffer_l"] / 1000.0
+    dhw_room = float(dhw.get("space_kwh") or 0.0)
+    space = float(buf.get("space_kwh") or 0.0)
+    cap = float(buf.get("capacity_kwh") or float(buf.get("energy_kwh") or 0.0) + space)
+    room_max = max(cap - margin, 0.0) + dhw_room
+    # the wood still in the firebox (weighed) fills the same room — counted whole, on the safe side
+    left = max(fire_left_kwh or 0.0, 0.0) if firing else 0.0
+    room_now = space - margin + dhw_room - left
+    out["boiler_kw"] = round(boiler_kw, 1) if boiler_kw > 0 else None
+    out["full_kg"] = out["full_at"] = out["full_pct"] = None
+    out["full_now"] = False
+
+    def room_at(ts: float) -> float:
+        """Room for new wood at ts: what the house takes until then frees the tanks (never past empty)."""
+        return min(room_now + (house(now, (ts - now) / 3600.0) if ts > now else 0.0), room_max)
+
+    if firing:
+        h_now = house(now, hours)
+        e = load_kwh(max(room_now, 0.0), h_now, hours, boiler_kw)
+        out["fill_kwh"], out["wood_at"] = round(e, 1), now
+        out["wood_kg"] = round(e / per_kg) if per_kg > 0 else None
+        # a full load = the house's heat for burn_hours; it fits once the tanks can soak up what the boiler gives
+        # above the house's draw meanwhile
+        step = 900.0
+        limit = out["empty_at"] if out["empty_at"] is not None else now + 24 * 3600.0
+        limit = min(limit, now + 24 * 3600.0)
+        t, freed = now, 0.0
+        while t <= limit:
+            h_full = house(t, hours)
+            if h_full <= 0:
+                break                       # the house takes nothing: no full load to plan
+            room = min(room_now + freed, room_max)
+            if room >= surplus_share(h_full / hours, boiler_kw) * h_full:
+                out["full_at"] = t
+                out["full_now"] = t <= now
+                out["full_kg"] = round(h_full / per_kg) if per_kg > 0 else None
+                buf_space = min(max(room - dhw_room + margin, 0.0), cap)
+                out["full_pct"] = round(100.0 * (1.0 - buf_space / cap)) if cap > 0 else None
+                break
+            freed += kw_at(t + step / 2) * step / 3600.0
+            t += step
     else:
-        burn = burn_kw * cfg["burn_hours"]
-    out["fill_kwh"] = round(room + burn, 1)
-    out["wood_kg"] = round(max(room + burn, 0.0) / per_kg) if per_kg > 0 else None
+        t_load = out["light_at"] if out["light_at"] is not None else now
+        h_load = house(t_load, hours)
+        e = load_kwh(max(room_at(t_load), 0.0), h_load, hours, boiler_kw)
+        out["fill_kwh"], out["wood_at"] = round(e, 1), t_load
+        out["wood_kg"] = round(e / per_kg) if per_kg > 0 else None
     return out
+
+
+def surplus_share(house_kw: float, boiler_kw: float) -> float:
+    """Of the heat a fire gives at the boiler's power, the share the house doesn't take — it goes into the tanks.
+    1 without a boiler power (all of it, as before), 0 when the house takes the boiler's whole power."""
+    if boiler_kw <= 0:
+        return 1.0
+    return min(max(1.0 - house_kw / boiler_kw, 0.0), 1.0)
+
+
+def load_kwh(room: float, house_kwh: float, hours: float, boiler_kw: float) -> float:
+    """The heat of the wood that fits into one load: the tanks' room plus what the house takes during the burn
+    (hours) — and, the boiler's power known, no more than the tanks can soak up of what the boiler gives above
+    the house's draw (a fire burns at the boiler's power, not spread over the hours)."""
+    total = max(room, 0.0) + max(house_kwh, 0.0)
+    if boiler_kw > 0 and hours > 0:
+        share = surplus_share(house_kwh / hours, boiler_kw)
+        if share > 0:
+            total = min(total, max(room, 0.0) / share)
+    return max(total, 0.0)

@@ -768,8 +768,13 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     ];
     if (ctl.dump) chips.push(`<span class="chip bad">⚠ Zrzut ciepła do domu</span>`);
     if (ctl.limiter) chips.push(`<span class="chip warn">Ogranicznik zasilania</span>`);
-    if (st.buffer) chips.push(`<span class="chip">Bufor <b>${num(st.buffer.charge_pct, 0)}%</b> · przyjmie <b>${num(st.buffer.wood_max_kg, 0)} kg</b></span>`);
+    const addNow = !a.locked && a.firing && a.wood_kg != null;
+    if (st.buffer) chips.push(`<span class="chip">Bufor <b>${num(st.buffer.charge_pct, 0)}%</b> · ${addNow
+      ? `dołóż teraz max <b>${num(a.wood_kg, 0)} kg</b>` : `przyjmie <b>${num(st.buffer.wood_max_kg, 0)} kg</b>`}</span>`);
     if (!a.locked && a.empty_at) chips.push(`<span class="chip">⏳ Ciepła do <b>${hhmm(a.empty_at)}</b></span>`);
+    if (!a.locked && a.firing && a.full_kg) chips.push(a.full_now
+      ? `<span class="chip hot">🪵 Pora dołożyć <b>~${num(a.full_kg, 0)} kg</b></span>`
+      : a.full_at ? `<span class="chip">🪵 Dołóż <b>~${num(a.full_kg, 0)} kg</b> od <b>${hhmm(a.full_at)}</b></span>` : "");
     if (!a.locked && !a.firing && a.light_at) chips.push(`<span class="chip hot">🪵 Rozpal do <b>${hhmm(a.light_at)}</b>${a.wood_kg != null ? ` · ${num(a.wood_kg, 0)} kg` : ""}</span>`);
     if (st.runtime_h != null && (a.locked || !a.empty_at)) chips.push(`<span class="chip">⏳ Bufor na <b>${fmtHours(st.runtime_h)}</b></span>`);
     chips.push(`<span class="chip ghost">odczyt ${hhmm(st.updated)}</span>`);
@@ -815,7 +820,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       <div class="card">${this._advisorHtml(st)}</div>
     </div>`;
     html += `<div class="grid cols">
-      <div class="card wide"><h3>Palenia w kotle <small>sesja = jedno palenie; energia to przyrost ciepła w buforze i CWU (bez tego, co w tym czasie zużył dom)</small></h3>${this._sessionsHtml(st)}</div>
+      <div class="card wide"><h3>Palenia w kotle <small>jedno palenie = od rozpalenia do wygaśnięcia; ciepło z drewna = zmiana w buforze i CWU + to, co w tym czasie wziął dom</small></h3>${this._sessionsHtml(st)}</div>
       <div class="card">${this._seasonHtml()}</div>
       <div class="card"><h3>Dziennik decyzji <small>sterowanie, bezpieczeństwo, doradca</small></h3>${this._logHtml()}</div>
     </div>`;
@@ -1337,6 +1342,26 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     return html;
   }
 
+  /** The advisor's wood column: while a fire burns — what fits now and when a full load fits; else — the load
+   *  for the next lighting. Both capped by the boiler's power (a warm buffer takes only what the boiler gives
+   *  above the house's draw). */
+  _advisorWoodHtml(a, c) {
+    const perKg = `${num(a.per_kg, 2)} kWh/kg${a.learned_per_kg ? " (z ważenia)" : " (z ustawień)"}`;
+    const boiler = a.boiler_kw ? ` · kocioł ${num(a.boiler_kw, 0)} kW` : "";
+    if (a.firing) {
+      const v = a.wood_kg == null ? "—" : a.wood_kg > 0 ? `max ${num(a.wood_kg, 0)}<small>kg</small>` : "nie dokładaj";
+      const full = !a.full_kg ? "" : a.full_now
+        ? `<b style="color:#f7b731">Pora na pełny załadunek: ~${num(a.full_kg, 0)} kg</b> (dom na ${num(c.burn_hours, 0)} h)`
+        : a.full_at ? `pełny załadunek ~${num(a.full_kg, 0)} kg od <b>${hhmm(a.full_at)}</b>${a.full_pct != null ? ` (bufor ~${num(a.full_pct, 0)} %)` : ""}`
+        : "pełny załadunek: bufor nie zrobi miejsca przed wygaśnięciem";
+      return `<div><div class="lbl">Dołóż teraz</div><div class="v">${v}</div>
+        <div class="s">${full}${full ? "<br>" : ""}${perKg}${boiler}</div></div>`;
+    }
+    const lbl = a.light_at ? "Załaduj przy rozpaleniu" : "Załaduj";
+    return `<div><div class="lbl">${lbl}</div><div class="v">${a.wood_kg != null ? num(a.wood_kg, 0) : "—"}<small>kg</small></div>
+      <div class="s">${a.fill_kwh != null ? `${num(a.fill_kwh)} kWh: bufor, CWU i dom przez ${num(c.burn_hours, 0)} h` : ""}<br>${perKg}${boiler}</div></div>`;
+  }
+
   _advisorHtml(st) {
     const a = st.advice || {}, d = this._data;
     let html = `<h3>Doradca palenia <small>PRO</small></h3>`;
@@ -1351,8 +1376,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       <div><div class="lbl">Bufor wystarczy do</div><div class="v">${a.empty_at ? fmtTime(a.empty_at) : "—"}</div><div class="s">${esc(basis)}</div></div>
       <div><div class="lbl">Rozpal do</div><div class="v" style="color:#f7b731">${a.firing ? "pali się" : a.light_at ? fmtTime(a.light_at) : "—"}</div>
         <div class="s">${a.firing ? "" : `z wyprzedzeniem ${num(d.config.light_lead_h, 1)} h`}</div></div>
-      <div><div class="lbl">Załaduj</div><div class="v">${a.wood_kg != null ? num(a.wood_kg, 0) : "—"}<small>kg</small></div>
-        <div class="s">${a.fill_kwh != null ? `${num(a.fill_kwh)} kWh: bufor, CWU i dom przez ${num(d.config.burn_hours, 0)} h` : ""}<br>${num(a.per_kg, 2)} kWh/kg${a.learned_per_kg ? " (z ważenia)" : " (z ustawień)"}</div></div>
+      ${this._advisorWoodHtml(a, d.config)}
       <div><div class="lbl">Dom potrzebuje</div><div class="v">${a.demand_24h_kwh != null ? num(a.demand_24h_kwh, 0) : "—"}<small>kWh / 24 h</small></div>
         <div class="s">${a.demand_kw != null ? `teraz ${num(a.demand_kw, 2)} kW` : ""}</div></div>
     </div>
@@ -1768,25 +1792,54 @@ class SmartingHomeHeatingPanel extends HTMLElement {
   }
 
   _sessionsHtml(st) {
+    // one row = one fire, in three parts that add up: what the tanks hold more (or less) at the end than at the
+    // lighting, what the house took meanwhile, and the sum = the heat the wood gave. A fire from before the
+    // module knew the house has no house part — with all its wood weighed the house is what the wood gave
+    // minus the tanks; without the weighing only the tanks are known and the wood is a lower bound.
+    const c = this._data.config || {};
+    const cfgPerKg = (c.wood_kwh_per_kg || 0) * (c.efficiency || 0);
+    const kwh = (v, sign) => `${sign && v > 0 ? "+" : ""}${num(v, 0)} kWh`;
+    const row = (x, open) => {
+      const start = x.stored_start_kwh;
+      const endE = open ? [st.buffer, st.dhw].reduce((acc, p) => (p ? acc + (p.energy_kwh || 0) : acc), 0)
+        : x.stored_end_kwh;
+      let tanks = start != null && endE != null ? endE - start : null;
+      if (tanks == null && x.heat_kwh != null && x.house_kwh != null) tanks = x.heat_kwh - x.house_kwh;
+      const weighed = x.wood_kg && fullyWeighed(x);
+      let house = x.house_kwh, houseNote = "";
+      let total = x.heat_kwh, totalNote = "";
+      if (total == null && weighed && cfgPerKg) {
+        total = x.wood_kg * cfgPerKg;
+        totalNote = ` <span class="muted" title="${num(x.wood_kg, 1)} kg × ${num(cfgPerKg, 2)} kWh/kg z ustawień">z wagi</span>`;
+      }
+      if (house == null && total != null && tanks != null) {
+        house = Math.max(total - tanks, 0);
+        houseNote = ` <span class="muted" title="ciepło z drewna minus to, co zostało w zbiornikach">z wagi</span>`;
+      }
+      const tanksTd = tanks != null ? kwh(tanks, true)
+        : x.stored_kwh != null ? `szczyt +${num(x.stored_kwh, 0)} kWh` : "—";
+      const houseTd = house != null ? `${kwh(house)}${houseNote}` : `<span class="muted" title="moduł nie znał jeszcze strat ciepła domu">nie liczony</span>`;
+      const totalTd = total != null ? `<b>${kwh(total)}</b>${totalNote}`
+        : tanks != null || x.stored_kwh != null ? `<span class="muted" title="tylko bufor i CWU — bez domu">min. ${num(Math.max(tanks ?? 0, x.stored_kwh ?? 0), 0)} kWh</span>` : "—";
+      const wood = x.wood_kg ? `${num(x.wood_kg, 1)} kg <span class="muted">${weighed ? "ważone" : "część ważona"}</span>`
+        : x.wood_est_kg != null ? (x.heat_kwh != null ? `~${num(x.wood_est_kg, 0)} kg` : `<span class="muted" title="liczone tylko z bufora i CWU — dom nie wliczony">min. ~${num(x.wood_est_kg, 0)} kg</span>`)
+        : "—";
+      return `<tr${open ? ' class="open"' : ""}><td>${fmtTime(x.start)}</td><td>${open ? `trwa · ${fmtHours(x.duration_h)}` : fmtHours(x.duration_h)}</td>
+        <td>${num(x.max_c, 0)} °C</td><td>${wood}</td><td>${tanksTd}</td><td>${houseTd}</td><td>${totalTd}</td>
+        <td>${x.overheat ? "⚠ przegrzanie" : ""}</td></tr>`;
+    };
     const rows = [];
-    const heat = (x) => (x.heat_kwh != null
-      ? `${num(x.heat_kwh, 0)} kWh${x.house_kwh ? ` <span class="muted">(dom ${num(x.house_kwh, 0)})</span>` : ""}`
-      : `${num(x.stored_kwh)} kWh <span class="muted">(bufor i CWU)</span>`);
-    const s = st.session;
-    if (s) {
-      rows.push(`<tr class="open"><td>${fmtTime(s.start)}</td><td>trwa · ${fmtHours(s.duration_h)}</td><td>${num(s.max_c, 0)} °C</td>
-        <td>${heat(s)}</td><td>—</td><td>${s.overheat ? "⚠ przegrzanie" : ""}</td></tr>`);
-    }
-    for (const x of (this._data.sessions || []).slice().reverse()) {
-      rows.push(`<tr><td>${fmtTime(x.start)}</td><td>${fmtHours(x.duration_h)}</td><td>${num(x.max_c, 0)} °C</td>
-        <td>${heat(x)}</td><td>${x.wood_kg != null ? `${num(x.wood_kg, 1)} kg <span class="muted">ważone</span>` : x.wood_est_kg != null ? `~${num(x.wood_est_kg, 0)} kg` : "—"}</td>
-        <td>${x.overheat ? "⚠ przegrzanie" : ""}</td></tr>`);
-    }
+    if (st.session) rows.push(row(st.session, true));
+    for (const x of (this._data.sessions || []).slice().reverse()) rows.push(row(x, false));
     if (!rows.length) return `<div class="muted" style="font-size:12px">Jeszcze nie zarejestrowano palenia. Sesja zaczyna się, gdy temperatura kotła rośnie, a kończy, gdy kocioł wygaśnie.</div>`;
-    return `<div style="overflow-x:auto"><table><thead><tr><th>Start</th><th>Czas</th><th>Maks.</th><th>Ciepło z drewna</th><th>Drewno</th><th></th></tr></thead>
+    return `<div style="overflow-x:auto"><table><thead><tr><th>Start</th><th>Czas</th><th>Maks.</th><th>Drewno</th>
+      <th title="ile więcej (lub mniej) ciepła jest w buforze i CWU na końcu palenia niż przy rozpaleniu">Bufor i CWU</th>
+      <th title="ciepło, które dom wziął w czasie palenia">Dom</th><th title="bufor i CWU + dom">Ciepło z drewna</th><th></th></tr></thead>
       <tbody>${rows.join("")}</tbody></table></div>
-      <div class="hint">Ciepło z drewna = to, co przybyło w buforze i CWU, plus to, co w czasie palenia wziął dom (z jego strat ciepła).
-        Bez danych o domu (palenia sprzed v1.100.0 albo zanim moduł poznał dom) liczy się tylko bufor i CWU — wtedy drewna wychodzi za mało.</div>`;
+      <div class="hint"><b>Ciepło z drewna = Bufor i CWU + Dom.</b> „Bufor i CWU” to różnica między końcem palenia a rozpaleniem
+        (w trwającym paleniu — do teraz); „Dom” to ciepło, które dom wziął w tym czasie, liczone ze strat ciepła domu.
+        Gdy moduł nie znał jeszcze domu, a całe drewno było zważone, dom wychodzi z wagi (kg × kWh/kg z ustawień, oznaczone „z wagi”).
+        Bez domu i bez wagi znane są tylko zbiorniki — wtedy ciepło i drewno to tylko dolna granica („min.”).</div>`;
   }
 
   // ── settings ──────────────────────────────────────────────────────────────
@@ -1978,7 +2031,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     html += `<div class="card" style="margin-top:14px"><h3>Doradca i koszty</h3><div class="grid2">
       <label class="f">Encja pogody (prognoza godzinowa)${sel("weather_entity", weather, c.weather_entity)}</label>
       ${field("light_lead_h", "Rozpalanie z wyprzedzeniem (h)", "zanim kocioł zacznie ładować bufor", c.light_lead_h, 'min="0" max="6" step="0.25"')}
-      ${field("burn_hours", "Czas palenia jednego załadunku (h)", "", c.burn_hours, 'min="1" max="12" step="0.5"')}
+      ${field("burn_hours", "Czas palenia jednego załadunku (h)", "na tyle godzin ogrzewania domu liczy się pełny załadunek", c.burn_hours, 'min="1" max="12" step="0.5"')}
+      ${field("boiler_kw", "Moc kotła (kW)", "przy pełnym paleniu (tabliczka albo pomiar) — nadwyżkę ponad to, co bierze dom, musi przyjąć bufor", c.boiler_kw, 'min="5" max="150" step="1"')}
       <label class="f">Rodzaj drewna${sel("wood_kind", WOOD_KINDS, c.wood_kind || "mixed")}<span class="h">ile waży metr drewna sezonowanego — z tego cena za kg</span></label>
       ${field("wood_price", "Cena drewna", c.wood_price_kg ? `= ${num(c.wood_price_kg, 2)} zł/kg${priceUnit !== "kg" ? ` (${num(c.wood_kg_per_unit, 0)} kg na ${priceUnit === "m3" ? "m³" : "mp"})` : ""}` : "np. 300 zł za metr przestrzenny",
         c.wood_price ?? c.wood_price_kg, 'min="0" max="5000" step="0.01"')}
@@ -2141,7 +2195,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     const nums = ["buffer_l", "buffer_max_c", "buffer_min_c", "buffer_full_c", "dhw_l", "dhw_cold_c", "dhw_target_c",
       "room_target_c", "warn_c", "alarm_c", "dump_top_c", "efficiency", "laddomat_on_c", "wood_kwh_per_kg", "wood_moisture_pct", "valve_run_s", "curve_slope", "curve_shift",
       "supply_min_c", "supply_max_c", "heating_limit_c", "room_gain", "room_hyst_k", "room_night_c", "night_from", "night_to",
-      "light_lead_h", "burn_hours", "wood_price", "dhw_on_diff_k", "dhw_off_diff_k", "dhw_hyst_k", "dhw_max_c",
+      "light_lead_h", "burn_hours", "boiler_kw", "wood_price", "dhw_on_diff_k", "dhw_off_diff_k", "dhw_hyst_k", "dhw_max_c",
       "dhw_win1_from", "dhw_win1_to", "dhw_win2_from", "dhw_win2_to", "fan_quiet_from", "fan_quiet_to"];
     const checks = ["enabled", "notify", "valve_invert", "safety_dump", "room_correction", "night_enabled", "advisor_notify", "dhw_dump",
       "dhw_fire_only", "fan_quiet", "lit_notify"];

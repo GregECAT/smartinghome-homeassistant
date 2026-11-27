@@ -177,6 +177,16 @@ def wood_reminder(booked_kg: float | None, before_fire: bool = False) -> str:
     return "⚖️ Nie wpisano jeszcze drewna — zważ je i wpisz w panelu Ogrzewanie („Wpisz zważone drewno”)."
 
 
+def reload_watch(waiting: bool, advice: dict[str, Any]) -> tuple[bool, bool]:
+    """While a fire burns: "dołóż" once the buffer has room for a full load (advice full_now) after it had none
+    during this fire — not right after lighting, when the buffer is empty anyway. → (waiting, say now)."""
+    if not advice.get("firing"):
+        return False, False
+    if not advice.get("full_now"):
+        return (True if advice.get("basis") else waiting), False
+    return False, waiting
+
+
 def push_recipients(base: list[str], extra: list[str], push_on: bool) -> list[str]:
     """Who gets a heating push: the Smarting HOME phones (when push is on there) and the heating's own extra
     recipients, each once."""

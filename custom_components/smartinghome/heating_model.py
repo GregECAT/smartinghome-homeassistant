@@ -220,6 +220,7 @@ DEFAULTS: dict[str, Any] = {
     "weather_entity": "",
     "light_lead_h": 1.0,        # from lighting to the buffer taking heat
     "burn_hours": 4.0,
+    "boiler_kw": 25.0,          # the boiler's heat output at full fire — caps how much wood a warm buffer takes
     "advisor_notify": True,
     "lit_notify": True,         # "the boiler is lit" (flue ≥ FLUE_FIRE_C) — switch it from lighting to automatic
     "notify_extra": [],         # more phones for the heating notifications only (notify.mobile_app_… services)
@@ -521,6 +522,7 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     # advisor
     out["light_lead_h"] = _num(raw.get("light_lead_h"), 1.0, 0.0, 6.0)
     out["burn_hours"] = _num(raw.get("burn_hours"), 4.0, 1.0, 12.0)
+    out["boiler_kw"] = _num(raw.get("boiler_kw"), 25.0, 5.0, 150.0)
     out["advisor_notify"] = raw.get("advisor_notify", True) is not False
     out["lit_notify"] = raw.get("lit_notify", True) is not False
     out["notify_extra"] = notify_targets(raw.get("notify_extra"))

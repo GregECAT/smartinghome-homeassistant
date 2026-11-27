@@ -87,6 +87,7 @@ PROBE_FORCE_S = 60.0          # like the Shelly guard: a boiler / buffer probe l
 MAXTIME_TTL_S = 3600.0
 SAVE_DELAY_S = 10.0
 ADVISOR_EVERY_S = 60
+RELOAD_NOTIFY_GAP_S = 90 * 60
 FAN_RETRY_S = 60.0            # the heater fan's socket refused a command: try again after this long
 GUARD_RETRY_S = 60.0          # a locked / unlocked CH pump whose Shelly did not answer: try the guard again
 LOG_LEN = 100
@@ -127,6 +128,8 @@ class HeatingManager:
         self._weather_f = False
         self._advice_ts = 0.0
         self._advised_for: int | None = None
+        self._reload_wait = False                 # "dołóż": the buffer had no room for a full load during this fire
+        self._reload_sent = 0.0
         self._lit_armed: bool | None = None       # "the boiler is lit" waits for the flue to cross FLUE_FIRE_C
         self._flue_prev: float | None = None
         self._last_tick: float | None = None
@@ -949,13 +952,39 @@ class HeatingManager:
         except Exception:  # noqa: BLE001
             return {}
 
+    async def _reload_notify(self, a: dict[str, Any], now: float) -> None:
+        """While a fire burns: once the buffer has room for a full load again after it had none — "dołóż".
+        Not at night (the night setback's hours) and not more often than RELOAD_NOTIFY_GAP_S."""
+        self._reload_wait, say = hc.reload_watch(self._reload_wait, a)
+        if not say:
+            return
+        if now - self._reload_sent < RELOAD_NOTIFY_GAP_S:
+            return
+        kg, pct, empty_at = a.get("full_kg"), a.get("full_pct"), a.get("empty_at")
+        local = dt_util.as_local(dt_util.utc_from_timestamp(now))
+        if hc.night_now(self.cfg, local.hour + local.minute / 60.0):
+            self._log(f"Doradca: bufor ma miejsce na pełny załadunek (~{kg} kg) — w nocy bez powiadomienia", now)
+            return
+        self._reload_sent = now
+        title = f"Dołóż drewna do kotła — ok. {kg} kg"
+        message = (f"Bufor{f' ({pct} %)' if pct is not None else ''} ma już miejsce na pełny załadunek: ok. {kg} kg "
+                   f"drewna — ciepło dla domu na {self.cfg['burn_hours']:g} h, nadwyżkę kotła przyjmie bufor.".replace(".5 h", ",5 h")
+                   + (f" Bez dokładki ciepła wystarczy do ok. {_hhmm(empty_at)}." if empty_at else "")
+                   + "\n" + hc.wood_reminder(None, before_fire=True))
+        self._log(f"Doradca: dołóż ok. {kg} kg — bufor ma miejsce na pełny załadunek", now)
+        ncfg = await self._ncfg()
+        if ncfg.get("enabled") and self.cfg.get("notify", True) is not False:
+            await self._deliver(ncfg, key="heating_reload", level="info", title=title, message=message)
+
     async def _advisor_notify(self, now: float) -> None:
         a = self.advice
         if not a or a.get("locked") or not self.cfg.get("advisor_notify", True):
             return
         if a.get("firing"):
             self._advised_for = None
+            await self._reload_notify(a, now)
             return
+        self._reload_wait = False
         light_at, empty_at = a.get("light_at"), a.get("empty_at")
         if light_at is None or empty_at is None or now < light_at - 1800:
             return
