@@ -353,6 +353,7 @@ class HeatingManager:
                 t_dhw=self.model.t("dhw"), dhw_pump_on=dhw_pump_on, dhw_pump_configured=dhw_pump_configured,
                 firing=(True if self.model.state in hm.FIRE_STATES or self.model.session is not None
                         else None if self.model.state == "unknown" else False),
+                fire_start=hm._f((self.model.session or {}).get("start")),
             ))
             for line in out.log:
                 self._log(line, now)
@@ -443,6 +444,7 @@ class HeatingManager:
                 "t_out_sensor": None if self.model.t("outdoor") is None else round(self.model.t("outdoor"), 1),
                 "t_out_weather": None if self._weather_now is None else round(self._weather_now, 1),
                 "heating_needed": out.heating_needed, "dump": out.dump, "limiter": out.limiter, "note": out.note,
+                "buffer_first": out.buffer_first,
                 "valve": {"configured": self._valve_configured(), "position": round(valve.position),
                           "known": valve.known, "saturated": valve.saturated, "busy": now < valve.busy_until,
                           "run_last_h_s": round(valve.run_last_hour(now))},

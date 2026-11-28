@@ -986,7 +986,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     // next to the pipe (the fire seen at once)
     {
       const hasFlue = !!ents.flue_gas;
-      const fc = !hasFlue || flue == null ? "#475569" : flue >= 100 ? "#e67e22" : flue >= 60 ? "#c0846a" : "#64748b";
+      const fHot = Number((this._data.config || {}).flue_alarm_c) || 320;   // "spaliny za gorące" — red
+      const fc = !hasFlue || flue == null ? "#475569" : flue >= fHot ? "#e74c3c" : flue >= 100 ? "#e67e22" : flue >= 60 ? "#c0846a" : "#64748b";
       const ft = b.flue_trend_k_min;
       const low = b.state === "burnout" ? " low" : "";
       s += `${hasFlue && flue != null && flue >= 100 ? `<rect x="140" y="100" width="32" height="56" rx="8" fill="${fc}" opacity=".35" filter="url(#hgGlow)"/>` : ""}
@@ -1256,6 +1257,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       <div class="seg modes">${modeBtns}</div>`;
     if (ctl.dump) html += `<div class="banner err" style="margin-top:12px">⚠️ <b>Zrzut ciepła do domu</b> — kocioł przegrzany: zawór otwarty, pompa CO włączona.</div>`;
     if (ctl.limiter) html += `<div class="banner warn" style="margin-top:12px">Ogranicznik: zasilanie powyżej ${num(c.supply_max_c, 0)} °C — zawór jest przymykany.</div>`;
+    if (ctl.buffer_first) html += `<div class="banner warn" style="margin-top:12px">🔒 <b>Najpierw bufor</b> — ${esc(ctl.buffer_first.replace(/^najpierw bufor — /, ""))}.
+      Gdy w domu zrobi się o 1 °C chłodniej niż zadana, dom dostanie ciepło od razu. Zrzut ciepła działa zawsze.</div>`;
+    else if (c.buffer_first && c.mode === "auto") html += `<div class="hint" style="margin-top:8px">🔓 Najpierw bufor włączone (od ${num(c.buffer_first_c, 0)} °C na dole bufora) — w tym paleniu dom już dostaje ciepło albo w kotle się nie pali.</div>`;
     const corr = ctl.room_corr ? ` ${ctl.room_corr > 0 ? "+" : ""}${num(ctl.room_corr)} K korekta z domu` : "";
     const hrs = (h) => `${String(Number(h) || 0).padStart(2, "0")}:00`;
     const dayNight = ctl.setback ? `🏠 obniżenie, do ${hrs(ctl.setback.to)}` : ctl.night ? `🌙 noc, do ${hrs(c.night_to)}`
@@ -1994,6 +1998,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         ? `zrzut, gdy kocioł pali się, a góra bufora ma ${num(c.dump_top_c, 1)} °C (koniec 3 K niżej albo po wygaśnięciu); temperatura kotła zrzutu nie włącza — alarm przegrzania tylko powiadamia`
         : "puste: zrzut według kotła i bufora (kocioł od alarmu − 2 K albo od ostrzeżenia przy pełnym buforze)", c.dump_top_c, 'min="80" max="98" step="0.5"', "według kotła")}
       ${field("efficiency", "Sprawność kotła (0–1)", "", c.efficiency, 'min="0.4" max="0.95" step="0.01"', `profil: ${num(prof.efficiency, 2)}`)}
+      ${field("flue_alarm_c", "Spaliny — ostrzeżenie „za gorące” (°C)", "od tej temperatury spalin (przez 2 min) — Atmos DC: powyżej 320 °C grozi uszkodzenie kotła", c.flue_alarm_c, 'min="150" max="500" step="5"', `profil: ${num(prof.flue_alarm_c, 0)}`)}
       ${field("flue_clean_c", "Spaliny — próg czyszczenia wymiennika (°C)", "szczyt palenia (średnia z 30 min) od tej wartości — do pierwszego zapisanego czyszczenia", c.flue_clean_c, 'min="150" max="500" step="5"')}
       ${field("flue_rise_k", "Spaliny — wzrost po czyszczeniu (K)", "o tyle wyższy szczyt niż czysty wymiennik = pora czyścić", c.flue_rise_k, 'min="10" max="200" step="5"')}
       ${field("laddomat_on_c", "Pompa Laddomatu rusza od (°C)", "ustawienie termostatu kotła; tylko do schematu", c.laddomat_on_c, 'min="40" max="90"', `profil: ${num(prof.laddomat_on_c, 0)}`)}
@@ -2084,6 +2089,10 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       ${field("night_from", "Noc od (godz.)", "", c.night_from, 'min="0" max="23"')}
       ${field("night_to", "Noc do (godz.)", "dom dogrzewa się od tej godziny", c.night_to, 'min="0" max="23"')}
       <div>${chk("night_enabled", "Obniżenie nocne", c.night_enabled, "obniżenia w ciągu dnia (np. gdy nikogo nie ma) ustawisz w Przeglądzie, w karcie Sterowanie")}</div>
+      <div>${chk("buffer_first", "Najpierw bufor (test): przy paleniu dom i CWU czekają na ciepły dół bufora", c.buffer_first,
+        "od rozpalenia pompa CO i ładowanie CWU stoją, aż dół bufora dojdzie do progu obok (bez sondy dołu: góra) — kocioł ładuje tylko bufor. Potem do końca palenia normalnie. Dom dostaje ciepło od razu, gdy spadnie o 1 °C poniżej zadanej albo minie czas obok. Zrzut ciepła i wymuszenia bezpieczeństwa działają zawsze. Tylko w trybie Auto.")}</div>
+      ${field("buffer_first_c", "Najpierw bufor — dół bufora od (°C)", "od tej temperatury dom i CWU dostają ciepło", c.buffer_first_c, 'min="30" max="90" step="1"')}
+      ${field("buffer_first_max_h", "Najpierw bufor — najdłużej (h od rozpalenia)", "potem dom dostaje ciepło bez względu na bufor", c.buffer_first_max_h, 'min="0.5" max="8" step="0.5"')}
       ${field("room_hyst_k", "Histereza pompy CO (K)", hystHint(c.room_hyst_k, c.room_target_c), c.room_hyst_k, 'min="0.2" max="4" step="0.1"', "domyślnie")}
       ${field("room_gain", "Korekta od temperatury w domu (K/K)", d.features && d.features.auto ? "0 = bez korekty" : "funkcja PRO", c.room_gain, 'min="0" max="8" step="0.5"')}
       <div>${chk("room_correction", "Korekta według czujnika odniesienia", c.room_correction, d.features && d.features.auto ? "" : "wymaga licencji PRO")}</div>
@@ -2262,9 +2271,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       "room_target_c", "warn_c", "alarm_c", "dump_top_c", "efficiency", "laddomat_on_c", "wood_kwh_per_kg", "wood_moisture_pct", "valve_run_s", "curve_slope", "curve_shift",
       "supply_min_c", "supply_max_c", "heating_limit_c", "room_gain", "room_hyst_k", "room_night_c", "night_from", "night_to",
       "light_lead_h", "burn_hours", "boiler_kw", "wood_price", "dhw_on_diff_k", "dhw_off_diff_k", "dhw_hyst_k", "dhw_max_c",
-      "dhw_win1_from", "dhw_win1_to", "dhw_win2_from", "dhw_win2_to", "fan_quiet_from", "fan_quiet_to", "flue_clean_c", "flue_rise_k"];
+      "dhw_win1_from", "dhw_win1_to", "dhw_win2_from", "dhw_win2_to", "fan_quiet_from", "fan_quiet_to", "flue_clean_c", "flue_rise_k", "flue_alarm_c", "buffer_first_c", "buffer_first_max_h"];
     const checks = ["enabled", "notify", "valve_invert", "safety_dump", "room_correction", "night_enabled", "advisor_notify", "dhw_dump",
-      "dhw_fire_only", "fan_quiet", "lit_notify", "flue_clean_notify"];
+      "dhw_fire_only", "fan_quiet", "lit_notify", "flue_clean_notify", "buffer_first"];
     // the heating's extra recipients: the phones shown in the form, plus any chosen earlier that HA no longer has
     const nxBoxes = [...form.querySelectorAll('input[name^="nx_"]')];
     if (nxBoxes.length) {

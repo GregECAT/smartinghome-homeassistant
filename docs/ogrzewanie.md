@@ -228,6 +228,26 @@ spaliny przez 15 minut są chłodniejsze niż 80 °C. Ładowanie przerwane końc
   ciepło do CWU trafia głównie ze zrzutu przy gorącym kotle. Pewniejsze jest sterowanie według sondy CWU:
   pompa ładuje wtedy zasobnik w trakcie każdego palenia, aż do zadanej.
 
+### Najpierw bufor (test)
+
+Opcja **Najpierw bufor** (Ustawienia → Krzywa grzewcza, domyślnie wyłączona, tylko w trybie Auto) zmienia
+kolejność w czasie palenia. Od rozpalenia pompa CO i ładowanie CWU stoją, a kocioł ładuje wyłącznie bufor, aż
+**dół bufora** dojdzie do progu (domyślnie 60 °C). Bez sondy dołu decyduje góra. Kocioł dostaje wtedy szybciej
+cieplejszy powrót. Potem, do końca tego palenia, wszystko działa normalnie, także gdy dom znów schłodzi dół bufora.
+Dom dostaje ciepło od razu:
+- gdy minie **czas od rozpalenia** z ustawień (domyślnie 3 h),
+- gdy w domu zrobi się o **1 °C chłodniej** niż zadana,
+- gdy nie ma odczytu bufora albo stan kotła jest nieznany.
+
+Zrzut ciepła, wymuszenie pompy przy braku odczytu sondy i dogrzewanie CWU z gorącego kotła działają zawsze. W
+dzienniku decyzji widać początek (🔒) i koniec (🔓) czekania, a w karcie Sterowanie — powód.
+
+Na czym polega test: tabela paleń zapisuje średnią i szczyt spalin każdego palenia, więc palenia z tą opcją i bez
+niej da się porównać przy podobnej pogodzie i podobnym załadunku. Według danych z bobrka (26–28.11.2026) spaliny
+przy zimnym dole bufora były tak samo wysokie z pompą CO i bez niej. Spadają, gdy bufor jest pełny i wentylator
+kotła zwalnia przy termostacie. Bufor bez odbioru do domu napełni się szybciej, więc kocioł wcześniej dojdzie do
+termostatu. Test pokaże, czy daje to mniej drewna na tę samą temperaturę w domu.
+
 ### Krążenie grawitacyjne do CWU
 
 Gorąca woda z bufora potrafi sama, bez pompy, wznosić się do wężownicy zasobnika. Bufor oddaje wtedy ciepło do
@@ -297,6 +317,12 @@ Wpis zrobiony przez pomyłkę można cofnąć przez 48 h. Ocena wymiennika:
   **Spaliny — wzrost po czyszczeniu** (domyślnie 30 K). Jeśli już wzorzec ma co najmniej próg czyszczenia,
   karta mówi, że sam wymiennik spalin nie obniży;
 - liczą się palenia ze spalinami od 100 °C przez co najmniej 2 h. Krótki dopał nie ma porównywalnego szczytu.
+
+**Ostrzeżenie „Spaliny za gorące”** przychodzi, gdy spaliny przez 2 minuty mają co najmniej próg z ustawień
+(**Kocioł i drewno → Spaliny — ostrzeżenie „za gorące”**, w profilu Atmos DC 320 °C). Według instrukcji Atmos
+DC…S powyżej 320 °C grozi uszkodzenie kotła. Przy mocy nominalnej DC 25S ma ok. 177 °C spalin, a wymagany ciąg
+komina to 23 Pa. Ostrzeżenie kończy się, gdy spaliny spadną 20 K poniżej progu. Na schemacie kotłowni odczyt
+spalin jest wtedy czerwony.
 
 **Przypomnienie 🧹 „Wyczyść wymiennik kotła”** przychodzi po końcu palenia, gdy **2 palenia z rzędu** mają szczyt
 na limicie albo wyżej. Pojedyncze gorące palenie przy zimnym buforze nie wystarcza. Przypomnienie wraca najwyżej co
@@ -396,6 +422,7 @@ przełącznik AUTO–0–RĘKA w skrzynce działa niezależnie od panelu.
 | Przegrzanie kotła (≥ próg alarmu, Atmos: 92 °C) | krytyczny |
 | Kocioł gorący (≥ próg ostrzeżenia, 88 °C) | ostrzeżenie |
 | Bufor pełny (góra ≥ 88 °C) | ostrzeżenie |
+| Spaliny za gorące (czujnik spalin ≥ próg przez 2 min, Atmos DC: 320 °C; koniec 20 K niżej) | ostrzeżenie |
 | Ciepło nie płynie do bufora (kocioł ≥ 85 °C, góra bufora o 15 K niżej i nie rośnie od 20 min) | ostrzeżenie |
 | Brak odczytu czujnika (−127 °C, nagłe 85,0 °C, niedostępny > 2 min; skok > 10 K przyjmowany po 3 nowych odczytach lub 60 s; czujnik spalin: poza −20…500 °C, skok > 80 K) | ostrzeżenie; krytyczny w trakcie palenia (sonda kotła / góry bufora) |
 | Ciepło płynie do CWU grawitacyjnie (pompa CWU stoi ≥ 60 min, a rura wężownicy przy zasobniku zostaje ciepła — szczegóły wyżej) | ostrzeżenie (po 20 min) |

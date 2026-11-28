@@ -52,11 +52,14 @@ PROFILES: dict[str, dict[str, Any]] = {
         "label": "Atmos DC…S / DC…GD (zgazowujący, wentylator wyciągowy)",
         "warn_c": 88.0, "alarm_c": 92.0, "tzb_c": 95.0, "min_return_c": 65.0, "efficiency": 0.80,
         "laddomat_on_c": 75.0,
+        # the Atmos manual (GSxx/DCxxS): above 320 °C flue the boiler may be damaged; 177 °C at nominal output
+        "flue_alarm_c": 320.0,
     },
     "generic": {
         "label": "Inny kocioł zgazowujący drewno",
         "warn_c": 88.0, "alarm_c": 92.0, "tzb_c": 95.0, "min_return_c": 60.0, "efficiency": 0.78,
         "laddomat_on_c": 72.0,
+        "flue_alarm_c": 320.0,
     },
 }
 
@@ -197,6 +200,12 @@ DEFAULTS: dict[str, Any] = {
     "heating_limit_c": 16.0,    # no space heating above this (damped outdoor temperature)
     "room_correction": True,
     "room_gain": 2.0,           # K of supply per K of room error
+    # "najpierw bufor" (a test the owner asked for): during a fire the house (CH pump) and the hot water wait
+    # until the buffer's bottom is this warm — the boiler gets a warm return sooner; released for the rest of the
+    # fire then, or after buffer_first_max_h, or when the house falls BUFFER_FIRST_ROOM_K below its target
+    "buffer_first": False,
+    "buffer_first_c": 60.0,
+    "buffer_first_max_h": 3.0,
     "room_hyst_k": None,        # CH pump band: None → above the target (on below + 0.5 K, off at + 1 K, the valve holds
                                 # the house in between); a number → centred on it (0.2 → on below 23.9, off at 24.1 at 24)
     "night_enabled": False,     # a lower house temperature at night
@@ -292,6 +301,8 @@ FLUE_BASELINE_FIRES = 2        # the clean exchanger = the median peak of the fi
 FLUE_DUE_FIRES = 2             # the reminder needs this many fires in a row over the limit …
 FLUE_NOTIFY_GAP_S = 3 * 86400  # … and comes back at most this often until a cleaning is logged
 FLUE_UNDO_CLEAN_S = 48 * 3600  # a cleaning booked by mistake can be taken back this long
+FLUE_ALARM_HYST_K = 20.0       # "spaliny za gorące" ends this far below flue_alarm_c …
+FLUE_ALARM_HOLD_S = 120        # … and starts once the flue stays at or over it this long
 MAX_CLEANINGS = 30
 
 # gravity flow into the hot-water coil: the coil's supply pipe at the tank stays warm with the pump stopped
@@ -484,6 +495,7 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     out["warn_c"] = _num(raw.get("warn_c"), profile["warn_c"], 70.0, 94.0)
     out["alarm_c"] = _num(raw.get("alarm_c"), profile["alarm_c"], out["warn_c"] + 1.0, 98.0)
     out["laddomat_on_c"] = _num(raw.get("laddomat_on_c"), profile["laddomat_on_c"], 40.0, 90.0)
+    out["flue_alarm_c"] = _num(raw.get("flue_alarm_c"), profile["flue_alarm_c"], 150.0, 500.0)
     top = _f(raw.get("dump_top_c"))
     out["dump_top_c"] = None if top is None or top <= 0 else round(min(max(top, 80.0), 98.0), 1)
     out["efficiency"] = _num(raw.get("efficiency"), profile["efficiency"], 0.4, 0.95)
@@ -508,6 +520,9 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     out["heating_limit_c"] = _num(raw.get("heating_limit_c"), 16.0, 5.0, 25.0)
     out["room_correction"] = raw.get("room_correction", True) is not False
     out["room_gain"] = _num(raw.get("room_gain"), 2.0, 0.0, 8.0)
+    out["buffer_first"] = raw.get("buffer_first") is True
+    out["buffer_first_c"] = _num(raw.get("buffer_first_c"), 60.0, 30.0, 90.0)
+    out["buffer_first_max_h"] = _num(raw.get("buffer_first_max_h"), 3.0, 0.5, 8.0)
     hyst = _f(raw.get("room_hyst_k"))
     out["room_hyst_k"] = None if hyst is None or hyst <= 0 else round(min(max(hyst, 0.2), 4.0), 1)
     # day and night targets of the house. Settings before v1.87 kept only the setback in K.
@@ -1379,6 +1394,18 @@ class HeatingModel:
                     "heating_hot", "warning", f"Kocioł gorący: {t_boiler:.0f} °C",
                     f"Wyjście z kotła {t_boiler:.0f} °C, próg alarmu {cfg['alarm_c']:.0f} °C.",
                     "Nie dokładaj drewna; sprawdź, czy bufor jeszcze przyjmuje ciepło.", hold_s=60))
+
+        flue = self.t("flue_gas")
+        if flue is not None and (flue >= cfg["flue_alarm_c"]
+                                 or ("heating_flue_hot" in active and flue >= cfg["flue_alarm_c"] - FLUE_ALARM_HYST_K)):
+            out.append(AlarmSpec(
+                "heating_flue_hot", "warning", f"Spaliny za gorące: {flue:.0f} °C",
+                f"Spaliny {flue:.0f} °C, próg {cfg['flue_alarm_c']:.0f} °C. Tyle ciepła ucieka kominem — zwykle "
+                "za mocny ciąg, za dużo powietrza albo brudny wymiennik (instrukcja Atmos DC…S: powyżej 320 °C "
+                "grozi uszkodzenie kotła; DC 25S przy mocy nominalnej ma ok. 177 °C).",
+                "Nie dokładaj teraz drewna i przymknij powietrze pierwotne według instrukcji kotła. Na stałe: "
+                "zmierz ciąg komina (wymagany podaje instrukcja; za mocny ogranicza regulator ciągu), wyczyść "
+                "wymiennik i turbulatory, pal grubszymi polanami.", hold_s=FLUE_ALARM_HOLD_S))
 
         if t_top is not None and (t_top >= cfg["buffer_full_c"]
                                   or ("heating_buffer_full" in active and t_top >= cfg["buffer_full_c"] - 3.0)):

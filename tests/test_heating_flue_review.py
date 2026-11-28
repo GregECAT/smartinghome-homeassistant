@@ -174,3 +174,60 @@ def test_any_household_member_may_book_a_cleaning():
     allowed = ns["_household_command"]
     assert allowed({}, {"action": "log_clean"}) and allowed({}, {"action": "undo_clean"})
     assert not allowed({}, {"action": "valve_home"})
+
+
+# ── "spaliny za gorące" ────────────────────────────────────────────────────────
+
+def _tick(model, t, flue):
+    model.update({"boiler_out": "80", "buffer_top": "70", "buffer_bottom": "45", "flue_gas": f"{flue:.1f}"}, now=t)
+    return model.evaluate_alarms(t)
+
+
+def _active(model):
+    return {a.id for a in model.active_alarms()}
+
+
+def test_flue_hot_alarm_after_two_minutes_with_hysteresis():
+    m = hm.HeatingModel({**CFG, "entities": {"boiler_out": "b", "buffer_top": "t", "buffer_bottom": "d",
+                                             "flue_gas": "f"}})
+    t = 1_000_000.0
+    for _ in range(12):                                            # warm up below the limit
+        _tick(m, t, 300.0)
+        t += 10
+    raised_at = None
+    for _ in range(20):
+        raised, _ = _tick(m, t, 330.0)
+        if any(a.id == "heating_flue_hot" for a in raised):
+            raised_at = t
+            break
+        t += 10
+    assert raised_at is not None
+    spec = next(a for a in m.active_alarms() if a.id == "heating_flue_hot")
+    assert spec.level == "warning" and "330" in spec.title
+    for flue in (325.0, 315.0, 305.0):                             # within 20 K below the limit: still on
+        _tick(m, t, flue)
+        t += 10
+    assert "heating_flue_hot" in _active(m)
+    for _ in range(6):
+        _, cleared = _tick(m, t, 295.0)
+        t += 10
+        if cleared:
+            break
+    assert "heating_flue_hot" not in _active(m)
+
+
+def test_flue_hot_needs_the_hold_time():
+    m = hm.HeatingModel({**CFG, "entities": {"boiler_out": "b", "buffer_top": "t", "buffer_bottom": "d",
+                                             "flue_gas": "f"}})
+    t = 1_000_000.0
+    for flue in [300.0] * 6 + [330.0] * 6 + [290.0] * 6:          # a minute over the limit
+        _tick(m, t, flue)
+        t += 10
+    assert "heating_flue_hot" not in _active(m)
+
+
+def test_flue_alarm_setting_from_the_profile():
+    assert hm.normalize({})["flue_alarm_c"] == 320
+    assert hm.normalize({"profile": "generic"})["flue_alarm_c"] == 320
+    assert hm.normalize({"flue_alarm_c": 280})["flue_alarm_c"] == 280
+    assert hm.normalize({"flue_alarm_c": 50})["flue_alarm_c"] == 150

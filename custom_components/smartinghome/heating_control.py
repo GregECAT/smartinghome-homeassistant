@@ -87,6 +87,7 @@ ROOM_EPS_K = 0.001          # a reading equal to the band's edge counts as reach
 # the CH pump on HAND (panel switch): the module holds the mixing valve at this opening instead of the curve;
 # back on AUTO it first closes the valve, then regulates again (bobrek 24.11.2026)
 HAND_VALVE_PCT = 50.0
+BUFFER_FIRST_ROOM_K = 1.0   # "najpierw bufor": the house this far below its target gets heat at once
 
 OUT_FAST_TAU_S = 900.0
 OUT_DAMPED_TAU_S = 6 * 3600.0
@@ -465,6 +466,7 @@ class ControlInput:
     dhw_pump_configured: bool = False
     firing: bool | None = None       # a fire in the boiler (model state ignition … burnout, or an open session)
     weekday: int | None = None       # local day of the week, Monday = 0 (setback periods); None: every day
+    fire_start: float | None = None  # when the current fire (the model's session) started
 
 
 @dataclass
@@ -497,6 +499,7 @@ class ControlOutput:
     dhw_pump: tuple[str, str] | None = None
     # why the CH pump is held on by a safety rule ("dump" / "hot" / "probe"), also in "off" where it is not acted on
     pump_forced: str = ""
+    buffer_first: str = ""           # "najpierw bufor" holds the house and the hot water back: why, till when
     log: list[str] = field(default_factory=list)
     alarms: list[AlarmSpec] = field(default_factory=list)
     note: str = ""
@@ -522,6 +525,8 @@ class HeatingController:
         self._dump_drive_ts: float | None = None
         self._hand_prev = False                  # the CH pump was on HAND at the last step
         self._close_after_hand = False           # back on AUTO from HAND: close the valve before regulating
+        self._bf_released_for: float | None = None   # "najpierw bufor" let go for the fire that started then
+        self._bf_hold = ""                       # … holding back now (the reason), "" when not
         self._invert = cfg["valve_invert"]
         self.mode = cfg["mode"]
         self.last: ControlOutput | None = None
@@ -543,7 +548,7 @@ class HeatingController:
         return {"valve": self.valve.dump(), "pump": self.pump.dump(), "dhw_pump": self.dhw_pump.dump(),
                 "room_i": round(self.room_i, 3),
                 "out_damped": self.out_damped.value, "out_damped_ts": self.out_damped.ts, "mode": self.mode,
-                "run_s": self.valve.run_s, "invert": self._invert}
+                "run_s": self.valve.run_s, "invert": self._invert, "bf_released_for": self._bf_released_for}
 
     def restore(self, data: dict[str, Any] | None) -> None:
         if not isinstance(data, dict):
@@ -565,6 +570,8 @@ class HeatingController:
             self.out_damped.ts = float(data.get("out_damped_ts") or 0.0) or None
         if data.get("mode") in MODES:
             self.mode = data["mode"]
+        bf = data.get("bf_released_for")
+        self._bf_released_for = float(bf) if isinstance(bf, (int, float)) else None
 
     # ── one evaluation ──────────────────────────────────────────────────────
     def step(self, inp: ControlInput) -> ControlOutput:
@@ -645,6 +652,7 @@ class HeatingController:
             room_ok = inp.t_room is None or inp.t_room <= room_target - hyst / 2.0 + ROOM_EPS_K
         self.needed = cold and buffer_ok and room_ok
         out.heating_needed = self.needed and mode == "auto"
+        out.buffer_first = self._buffer_first(inp, room_target, out)
 
         # supply target: curve + room correction, never above what the buffer can give
         t_out = out.t_out if out.t_out is not None else 0.0
@@ -817,7 +825,8 @@ class HeatingController:
 
         # auto
         if inp.pump_configured and not force_pump:
-            out.pump = self.pump.decide(now, inp.pump_on, self.needed, self._pump_reason(inp, room_target))
+            out.pump = self.pump.decide(now, inp.pump_on, self.needed and not self._bf_hold,
+                                        self._bf_hold or self._pump_reason(inp, room_target))
         if valve_free and not (hand_pump or self._close_after_hand) and out.valve is None:
             if self.needed and flowing:
                 out.valve = self.valve.step(now, out.supply_target, inp.t_supply)
@@ -842,6 +851,9 @@ class HeatingController:
         for the house (a 500 L tank lasts a day or two; bobrek 22.11.2026: the 05–06 window took ~20 kWh out of a
         cooling buffer just before lighting). The hot-boiler dump (force) is safety and is never held back."""
         plan = self._dhw_rule(inp)
+        if self._bf_hold and not plan.force:
+            self.dhw_charging = False
+            return DhwPlan(source_c=plan.source_c, reason=self._bf_hold)
         if self.cfg.get("dhw_fire_only") and not inp.firing and not plan.force:
             self.dhw_charging = False
             why = "stan kotła nieznany" if inp.firing is None else "w kotle się nie pali"
@@ -987,6 +999,49 @@ class HeatingController:
                 p.exercise_until = now + DHW_EXERCISE_S
             return cmd
         return p.decide(now, inp.dhw_pump_on, plan.want, plan.reason, urgent=plan.urgent)
+
+    def _buffer_first(self, inp: ControlInput, room_target: float, out: ControlOutput) -> str:
+        """"Najpierw bufor" (buffer_first, mode Auto): from the lighting the house (CH pump) and the hot water wait
+        until the buffer's bottom reaches buffer_first_c — the boiler loads only the buffer and gets a warm return
+        sooner. Let go for the rest of the fire once the bottom is that warm, after buffer_first_max_h from the
+        lighting, when the house falls BUFFER_FIRST_ROOM_K below its target, or without a buffer reading; never
+        while the fire is unknown. Safety (heat dump, a probe fault, a hot-boiler charge of the tank) is not held
+        back — it runs before this rule. Returns the hold reason, "" when nothing is held."""
+        cfg, now = self.cfg, inp.now
+        if inp.firing is not True:
+            self._bf_released_for = None         # the next fire starts held again
+            self._bf_hold = ""
+            return ""
+        start = inp.fire_start if inp.fire_start is not None else now
+        if not cfg.get("buffer_first") or cfg["mode"] != "auto" or self._bf_released_for == start:
+            self._bf_hold = ""
+            return ""
+        bottom = inp.t_bottom is not None
+        t = inp.t_bottom if bottom else inp.t_top
+        probe = "dół bufora" if bottom else "góra bufora"
+        limit, max_h = cfg["buffer_first_c"], cfg["buffer_first_max_h"]
+        why = ""
+        if t is None:
+            why = "brak odczytu bufora"
+        elif t >= limit:
+            why = f"{probe} {t:.0f} °C"
+        elif now - start >= max_h * 3600.0:
+            why = f"minęło {max_h:g} h od rozpalenia".replace(".", ",")
+        elif inp.t_room is not None and inp.t_room <= room_target - BUFFER_FIRST_ROOM_K:
+            why = f"w domu {inp.t_room:.1f} °C, zadana {room_target:.1f} °C".replace(".", ",")
+        if why:
+            self._bf_released_for = start
+            if self._bf_hold:
+                out.log.append(f"🔓 Najpierw bufor: dom i CWU dostają ciepło — {why}")
+            self._bf_hold = ""
+            return ""
+        hold = (f"najpierw bufor — dom i CWU czekają, aż {probe} dojdzie do {limit:.0f} °C "
+                f"(teraz {t:.0f} °C; najdłużej {max_h:g} h od rozpalenia)").replace(".", ",")
+        if not self._bf_hold:
+            out.log.append(f"🔒 Najpierw bufor: dom i CWU czekają, aż {probe} dojdzie do {limit:.0f} °C "
+                           f"(teraz {t:.0f} °C)")
+        self._bf_hold = hold
+        return hold
 
     def _pump_reason(self, inp: ControlInput, room_target: float) -> str:
         if self.needed:
