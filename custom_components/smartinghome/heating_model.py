@@ -23,6 +23,8 @@ Wi-Fi or HA. Here we measure, explain and warn:
 - boiler state from the outlet temperature and its trend (cold → ignition →
   burning → burn-out → idle, overheat), each fire is a session; with a flue-gas
   sensor the fire starts and ends by the flue (the water lags by an hour or more),
+  and each fire keeps its flue figures (mean, 30-minute peak, time over the cleaning
+  limit) — flue_review() tells from them when the exchanger needs cleaning,
 - how long the buffer lasts at the current draw,
 - alarms with hold times and hysteresis (overheat, buffer full, heat not reaching
   the buffer, probe fault, CH / hot-water pump not drawing power, room cold with an
@@ -223,6 +225,10 @@ DEFAULTS: dict[str, Any] = {
     "boiler_kw": 25.0,          # the boiler's heat output at full fire — caps how much wood a warm buffer takes
     "advisor_notify": True,
     "lit_notify": True,         # "the boiler is lit" (flue ≥ FLUE_FIRE_C) — switch it from lighting to automatic
+    # the exchanger check from the flue sensor (flue_review): soot on the tubes sends the heat up the chimney
+    "flue_clean_notify": True,  # remind to clean the exchanger once the fires run hot
+    "flue_clean_c": 300.0,      # before a cleaning is logged: two fires in a row with a 30-min flue peak this hot
+    "flue_rise_k": 30.0,        # after one: two fires in a row this much hotter than the fires right after it
     "notify_extra": [],         # more phones for the heating notifications only (notify.mobile_app_… services)
     "wood_price_kg": None,      # zł/kg, season cost (derived from wood_price / wood_price_unit when those are set)
     "wood_kind": "mixed",       # soft / mixed / hard — how many kg a cubic metre of seasoned wood weighs
@@ -278,6 +284,15 @@ FLUE_END_C = 80.0         # flue below this (not rising) ends the fire …
 FLUE_END_HOLD_S = 900     # … once it stays there this long (the exhaust fan pausing at the boiler thermostat isn't the end)
 FLUE_RISING_K_MIN = 2.0   # K/min over the trend window (the flue moves ~10× faster than the water)
 FLUE_FALLING_K_MIN = -1.0
+# each fire's flue figures, and the exchanger check built on them (flue_review)
+FLUE_PEAK_WINDOW_S = 1800      # the fire's peak = its hottest 30-minute mean (one spike says nothing of the tubes)
+FLUE_STAT_GAP_S = 120          # a longer gap between readings (HA down, sensor offline) is not counted
+FLUE_REVIEW_MIN_H = 2.0        # a fire counts in the check with at least this long above FLUE_FIRE_C
+FLUE_BASELINE_FIRES = 2        # the clean exchanger = the median peak of the first fires after a cleaning
+FLUE_DUE_FIRES = 2             # the reminder needs this many fires in a row over the limit …
+FLUE_NOTIFY_GAP_S = 3 * 86400  # … and comes back at most this often until a cleaning is logged
+FLUE_UNDO_CLEAN_S = 48 * 3600  # a cleaning booked by mistake can be taken back this long
+MAX_CLEANINGS = 30
 
 # gravity flow into the hot-water coil: the coil's supply pipe at the tank stays warm with the pump stopped
 DHW_GRAVITY_OFF_S = 3600  # the pump stood this long — a pipe without flow has cooled down by then
@@ -525,6 +540,9 @@ def normalize(cfg: dict[str, Any] | None) -> dict[str, Any]:
     out["boiler_kw"] = _num(raw.get("boiler_kw"), 25.0, 5.0, 150.0)
     out["advisor_notify"] = raw.get("advisor_notify", True) is not False
     out["lit_notify"] = raw.get("lit_notify", True) is not False
+    out["flue_clean_notify"] = raw.get("flue_clean_notify", True) is not False
+    out["flue_clean_c"] = _num(raw.get("flue_clean_c"), 300.0, 150.0, 500.0)
+    out["flue_rise_k"] = _num(raw.get("flue_rise_k"), 30.0, 10.0, 200.0)
     out["notify_extra"] = notify_targets(raw.get("notify_extra"))
     out["wood_kind"] = raw.get("wood_kind") if raw.get("wood_kind") in WOOD_KINDS else DEFAULTS["wood_kind"]
     out["wood_price_unit"] = (raw.get("wood_price_unit") if raw.get("wood_price_unit") in WOOD_PRICE_UNITS
@@ -809,6 +827,60 @@ def monthly_summary(sessions: list[dict[str, Any]], utc_offset_s: float = 0.0,
     return out
 
 
+def flue_fire(s: dict[str, Any]) -> bool:
+    """A fire the exchanger check can go by: its flue figures were kept and it burned long enough to have a
+    full-power phase (a short burn-out of a fire the module joined late has no comparable peak)."""
+    return s.get("flue_peak_c") is not None and float(s.get("flue_burn_s") or 0.0) >= FLUE_REVIEW_MIN_H * 3600
+
+
+def _median(vals: list[float]) -> float:
+    v = sorted(vals)
+    n = len(v)
+    return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
+
+
+def flue_review(sessions: list[dict[str, Any]], cleanings: list[float], cfg: dict[str, Any]) -> dict[str, Any]:
+    """Is the boiler's exchanger due for a cleaning? Soot on the tubes insulates them: the heat the water no longer
+    takes leaves through the chimney, and the same fire runs hotter fire by fire. Each fire's peak (its hottest
+    30-minute mean flue) is compared with a limit:
+    - no cleaning logged yet: flue_clean_c (a gasification boiler at full power runs well below 300 °C);
+    - after a cleaning: the median peak of its first FLUE_BASELINE_FIRES fires (the clean exchanger) + flue_rise_k;
+      until those fires have burned there is no limit ("learning").
+    Due when the last FLUE_DUE_FIRES compared fires in a row are all at or over the limit (one hot fire on a cold
+    buffer is not a dirty exchanger)."""
+    fires = [s for s in sessions if flue_fire(s)]
+    cleaned = max(cleanings) if cleanings else None
+    after = [s for s in fires if cleaned is None or float(s.get("start") or 0.0) >= cleaned]
+    baseline = None
+    base: list[dict[str, Any]] = []
+    if cleaned is None:
+        basis, limit, compared = "limit", float(cfg["flue_clean_c"]), after
+    else:
+        base = after[:FLUE_BASELINE_FIRES]
+        compared = after[len(base):]
+        if len(base) >= FLUE_BASELINE_FIRES:
+            baseline = round(_median([float(s["flue_peak_c"]) for s in base]), 0)
+            basis, limit = "baseline", baseline + float(cfg["flue_rise_k"])
+        else:
+            basis, limit = "learning", None
+    recent = compared[-FLUE_DUE_FIRES:]
+    due = (limit is not None and len(recent) >= FLUE_DUE_FIRES
+           and all(float(s["flue_peak_c"]) >= limit for s in recent))
+
+    def row(s: dict[str, Any]) -> dict[str, Any]:
+        return {"start": s.get("start"), "peak_c": s.get("flue_peak_c"), "avg_c": s.get("flue_avg_c"),
+                "hot_min": round(float(s.get("flue_hot_s") or 0.0) / 60.0),
+                "hot_c": s.get("flue_hot_c", cfg["flue_clean_c"]),
+                "baseline": any(s is b for b in base)}
+
+    return {"cleaned_at": cleaned, "basis": basis, "limit_c": None if limit is None else round(limit, 0),
+            "baseline_c": baseline, "baseline_n": len(base), "baseline_need": FLUE_BASELINE_FIRES,
+            "due_fires": FLUE_DUE_FIRES, "due": due, "peaks": [float(s["flue_peak_c"]) for s in recent] if due else [],
+            # the clean exchanger is still this hot: cleaning alone won't bring it down (draft, air, log size)
+            "high_after_clean": baseline is not None and baseline >= float(cfg["flue_clean_c"]),
+            "fires_since": len(after), "recent": [row(s) for s in fires[-6:]]}
+
+
 # ── trend helper ─────────────────────────────────────────────────────────────
 
 class Trend:
@@ -889,6 +961,8 @@ class HeatingModel:
         self.session: dict[str, Any] | None = None
         self.sessions: list[dict[str, Any]] = []
         self.pending_loads: list[dict[str, float]] = []   # weighed before lighting: [{ts, kg}] for the next fire
+        self.cleanings: list[float] = []                   # when the boiler's exchanger was cleaned (flue_review)
+        self.flue_notified: float | None = None            # the last "clean the exchanger" reminder
         self.notes: list[str] = []                         # log lines for the integration to pick up
         self.buffer: dict[str, Any] | None = None
         self.dhw: dict[str, Any] | None = None
@@ -897,6 +971,8 @@ class HeatingModel:
         self._boiler_trend = Trend(TREND_WINDOW_S)
         self._flue_trend = Trend(TREND_WINDOW_S)
         self._flue_low_since: float | None = None   # flue below FLUE_END_C (not rising) since
+        self._flue_win: deque[tuple[float, float, float]] = deque()   # (t, flue·dt, dt) of the last 30 min of a fire
+        self._flue_stat_ts: float | None = None     # the previous flue reading counted in the fire's figures
         self._top_trend = Trend(1200)
         self._buffer_trend = Trend(RUNTIME_WINDOW_S)
         self._pump_low_since: float | None = None
@@ -916,7 +992,8 @@ class HeatingModel:
     def dump(self) -> dict[str, Any]:
         return {"state": self.state, "state_since": self.state_since,
                 "session": self.session, "sessions": self.sessions[-MAX_SESSIONS:],
-                "pending_loads": self.pending_loads}
+                "pending_loads": self.pending_loads, "cleanings": self.cleanings[-MAX_CLEANINGS:],
+                "flue_notified": self.flue_notified}
 
     def restore(self, data: dict[str, Any] | None) -> None:
         if not isinstance(data, dict):
@@ -927,6 +1004,8 @@ class HeatingModel:
         self.pending_loads = [{"ts": float(p["ts"]), "kg": float(p["kg"]), "to": "next"}
                               for p in (data.get("pending_loads") or [])
                               if isinstance(p, dict) and _f(p.get("ts")) is not None and _f(p.get("kg"))]
+        self.cleanings = sorted(t for t in (_f(x) for x in (data.get("cleanings") or [])) if t is not None)[-MAX_CLEANINGS:]
+        self.flue_notified = _f(data.get("flue_notified"))
         if data.get("state") in STATE_LABELS:
             self.state = str(data["state"])
             self.state_since = _f(data.get("state_since"))
@@ -1095,6 +1174,7 @@ class HeatingModel:
                 self.notes.append(f"Zważone przed rozpaleniem: {self.session['wood_kg']:.1f} kg — "
                                   f"przypisane do palenia, które właśnie się zaczęło")
             self.pending_loads = []
+            self._flue_win.clear()
         if self.session is None:
             stale = [p for p in self.pending_loads if now - p["ts"] > PENDING_LOAD_S]
             if stale:
@@ -1106,6 +1186,9 @@ class HeatingModel:
         s["max_c"] = round(max(float(s.get("max_c") or t), t), 1)
         if flue is not None:
             s["flue_max_c"] = round(max(float(s.get("flue_max_c") or flue), flue), 0)
+            self._flue_stats(s, flue, now)
+        else:
+            self._flue_stat_ts = None
         if self.state == "overheat":
             s["overheat"] = True
         if energy is not None:
@@ -1125,6 +1208,45 @@ class HeatingModel:
             self.sessions.append(s)
             self.sessions = self.sessions[-MAX_SESSIONS:]
             self.session = None
+
+    def _flue_stats(self, s: dict[str, Any], flue: float, now: float) -> None:
+        """The fire's flue figures, time-weighted (readings come every tick, and a gap is not counted):
+        flue_avg_c — the mean while it burns (flue ≥ FLUE_FIRE_C; the cold lighting and the burn-out tail would
+        pull it down), flue_peak_c — the hottest 30-minute mean, flue_hot_s — the time at or over flue_hot_c
+        (the cleaning limit when the fire started)."""
+        prev, self._flue_stat_ts = self._flue_stat_ts, now
+        if prev is None:
+            return
+        dt = now - prev
+        if dt <= 0 or dt > FLUE_STAT_GAP_S:
+            self._flue_win.clear()
+            return
+        if flue >= FLUE_FIRE_C:
+            s["flue_burn_s"] = round(float(s.get("flue_burn_s") or 0.0) + dt, 1)
+            s["flue_sum"] = round(float(s.get("flue_sum") or 0.0) + flue * dt, 1)
+            s["flue_avg_c"] = round(s["flue_sum"] / s["flue_burn_s"], 0)
+        hot_c = float(s.setdefault("flue_hot_c", self.cfg["flue_clean_c"]))
+        if flue >= hot_c:
+            s["flue_hot_s"] = round(float(s.get("flue_hot_s") or 0.0) + dt, 1)
+        win = self._flue_win
+        win.append((now, flue * dt, dt))
+        while win and win[0][0] <= now - FLUE_PEAK_WINDOW_S:
+            win.popleft()
+        span = sum(x[2] for x in win)
+        if span >= FLUE_PEAK_WINDOW_S * 0.9:
+            mean = sum(x[1] for x in win) / span
+            s["flue_peak_c"] = round(max(float(s.get("flue_peak_c") or 0.0), mean), 0)
+
+    def log_clean(self, now: float) -> None:
+        """The exchanger was cleaned now: the next fires become the clean baseline the later ones are compared to."""
+        self.cleanings = (self.cleanings + [round(now, 1)])[-MAX_CLEANINGS:]
+        self.flue_notified = None
+
+    def undo_clean(self, now: float) -> float | None:
+        """Take back a cleaning booked by mistake (only the latest, within FLUE_UNDO_CLEAN_S)."""
+        if self.cleanings and now - self.cleanings[-1] <= FLUE_UNDO_CLEAN_S:
+            return self.cleanings.pop()
+        return None
 
     def last_fire_open(self, now: float) -> dict[str, Any] | None:
         """The last ended fire while wood can still be booked to it (LAST_FIRE_LOAD_S)."""

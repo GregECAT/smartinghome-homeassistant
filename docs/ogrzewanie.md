@@ -271,6 +271,44 @@ Gdy czujnik spalin nie ma odczytu, moduł wraca do reguł według wody. Jeśli c
 przeliczony sygnał), wyraźne palenie widoczne w wodzie (≥ 65 °C i szybki wzrost) i tak otworzy sesję, a skończy ją
 temperatura wody. Odczyt spalin i jego trend są w karcie kotła i na schemacie (czopuch i komin nad kotłem).
 
+### Spaliny w każdym paleniu i czyszczenie wymiennika
+
+Z czujnikiem spalin każde palenie zapisuje trzy liczby (tabela „Palenia w kotle”, kolumna „Spaliny śr. / szczyt”):
+- **średnia** — średnia ważona czasem, liczona tylko wtedy, gdy spaliny mają co najmniej 100 °C (zimne rozpalanie
+  i ogon wygasania jej nie zaniżają);
+- **szczyt** — najwyższa **średnia z 30 minut** palenia. Pojedynczy skok odczytu jej nie zmienia, a 30 minut pełnej
+  mocy przy zimnym buforze tak;
+- **czas od progu czyszczenia** — ile palenie trwało ze spalinami od progu (domyślnie 300 °C) wzwyż.
+
+Po końcu palenia te liczby trafiają też do dziennika decyzji. Przerwa w odczytach dłuższa niż 2 minuty (restart HA,
+brak czujnika) nie jest liczona.
+
+**Dlaczego to ważne.** Sadza i smoła na rurach wymiennika izolują je: woda bierze mniej ciepła, a więcej ucieka
+kominem, więc spaliny z palenia na palenie rosną. Każde 100 K spalin mniej to w przybliżeniu 5–7 % drewna mniej
+(zależnie od nadmiaru powietrza). Na tym samym kotle wysokie spaliny mają też inne przyczyny: za mocny ciąg komina
+(regulator ciągu), za szeroko otwarte powietrze, cienkie i bardzo suche polana. Ich nie da się usunąć czyszczeniem.
+
+**Karta „Spaliny i wymiennik”** (Przegląd, gdy przypisany jest czujnik spalin) pokazuje ostatnie palenia, limit i
+przycisk **„Wyczyściłem wymiennik”**. Ten przycisk może nacisnąć każdy użytkownik HA, tak jak przy wpisie drewna.
+Wpis zrobiony przez pomyłkę można cofnąć przez 48 h. Ocena wymiennika:
+- **do pierwszego zapisanego czyszczenia** limitem jest próg z ustawień (**Kocioł i drewno → Spaliny — próg
+  czyszczenia wymiennika**, domyślnie 300 °C);
+- **po czyszczeniu** pierwsze **2 palenia** są wzorcem czystego wymiennika (mediana ich szczytów). Limit to wzorzec +
+  **Spaliny — wzrost po czyszczeniu** (domyślnie 30 K). Jeśli już wzorzec ma co najmniej próg czyszczenia,
+  karta mówi, że sam wymiennik spalin nie obniży;
+- liczą się palenia ze spalinami od 100 °C przez co najmniej 2 h. Krótki dopał nie ma porównywalnego szczytu.
+
+**Przypomnienie 🧹 „Wyczyść wymiennik kotła”** przychodzi po końcu palenia, gdy **2 palenia z rzędu** mają szczyt
+na limicie albo wyżej. Pojedyncze gorące palenie przy zimnym buforze nie wystarcza. Przypomnienie wraca najwyżej co
+3 dni, aż do zapisania czyszczenia. Wyłączysz je w Ustawienia → „Powiadomienia ogrzewania”.
+
+Na kotle z Laddomatem i buforem spaliny są najwyższe w pierwszych 1–2,5 h po rozpaleniu, gdy dół bufora jest zimny.
+Wentylator pracuje wtedy na pełnych obrotach, bo woda nie dochodzi do termostatu kotła. Pompa CO (dom) tego nie
+zmienia: dom bierze ciepło z bufora, a kocioł widzi tylko powrót z dołu bufora przez Laddomat. Gdy bufor jest pełny,
+spaliny spadają, bo kocioł dochodzi do termostatu i wentylator zwalnia albo staje. Wtedy kocioł ma mniejszą moc, ale
+nie spala lepiej. Dlatego szczyty spalin warto porównywać przy podobnym stanie bufora, a w czasie palenia nie
+odcinać domu.
+
 **Zawór przy postoju pompy CO.** Gdy pompa CO stoi co najmniej 2 minuty (np. w domu jest ciepło albo trwa
 obniżenie nocne), moduł zamyka zawór mieszający do końca. Otwarty zawór pozwala gorącej wodzie z bufora
 płynąć grawitacyjnie do grzejników także bez pompy. W jednej z pierwszych nocy było to ok. 17 kWh, czyli

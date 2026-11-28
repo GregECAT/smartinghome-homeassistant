@@ -106,6 +106,12 @@ def _hhmm(ts: float | None) -> str:
     return dt_util.as_local(dt_util.utc_from_timestamp(ts)).strftime("%H:%M")
 
 
+def _date(ts: float | None, with_time: bool = False) -> str:
+    if ts is None:
+        return "—"
+    return dt_util.as_local(dt_util.utc_from_timestamp(ts)).strftime("%d.%m %H:%M" if with_time else "%d.%m")
+
+
 # ── manager ──────────────────────────────────────────────────────────────────
 
 class HeatingManager:
@@ -132,6 +138,7 @@ class HeatingManager:
         self._reload_sent = 0.0
         self._lit_armed: bool | None = None       # "the boiler is lit" waits for the flue to cross FLUE_FIRE_C
         self._flue_prev: float | None = None
+        self._flue_checked: float | None = None   # the end of the last fire whose flue figures were reviewed
         self._last_tick: float | None = None
         self._settings_ts = 0.0
         self._last_save = time.monotonic()
@@ -456,6 +463,7 @@ class HeatingManager:
             await self._notify(raised, cleared)
             await self._advisor_notify(now)
             await self._lit_notify(now)
+            await self._flue_notify(now)
             if (self._guard_want is not None and not self._guard_busy
                     and time.monotonic() >= self._guard_retry):
                 self._guard_retry = time.monotonic() + GUARD_RETRY_S
@@ -862,6 +870,16 @@ class HeatingManager:
                               f"palenie od {_hhmm(fire.get('start'))}, razem {fire.get('wood_kg'):.1f} kg", now)
                 self._advice_ts = 0.0           # the advice counts the new wood at once
                 await self._save()
+            elif action == "log_clean":
+                self.model.log_clean(now)
+                self._log("🧹 Wymiennik kotła wyczyszczony — kolejne palenia będą wzorcem czystego wymiennika", now)
+                await self._save()
+            elif action == "undo_clean":
+                undone = self.model.undo_clean(now)
+                if undone is None:
+                    raise ValueError("Nie ma wpisu czyszczenia do cofnięcia (cofnąć można ostatni, do 48 h)")
+                self._log(f"Cofnięto wpis czyszczenia wymiennika z {_date(undone, True)}", now)
+                await self._save()
             elif action == "undo_load":
                 undone = self.model.undo_load(now)
                 if undone is None:
@@ -943,6 +961,45 @@ class HeatingManager:
         if ncfg.get("enabled") and self.cfg.get("notify", True) is not False:
             await self._deliver(ncfg, key="heating_lit", level="info", title=title, message=message,
                                 icon="🔥", interruption="active")
+
+    async def _flue_notify(self, now: float) -> None:
+        """A fire has just ended: its flue figures go to the log, and when the last fires ran hot the
+        exchanger reminder goes out (hm.flue_review) — at most every FLUE_NOTIFY_GAP_S until a cleaning is logged."""
+        m = self.model
+        last = m.sessions[-1] if m.sessions else None
+        end = hm._f((last or {}).get("end"))
+        if end is None or end == self._flue_checked:
+            return
+        self._flue_checked = end
+        if now - end > 1800 or last.get("flue_avg_c") is None:   # an old fire (restart) or one without the flue
+            return
+        hot_min = round(float(last.get("flue_hot_s") or 0.0) / 60.0)
+        hot_c = last.get("flue_hot_c", self.cfg["flue_clean_c"])
+        self._log(f"Spaliny w paleniu od {_hhmm(last.get('start'))}: średnio {last['flue_avg_c']:.0f} °C"
+                  + (f", szczyt {last['flue_peak_c']:.0f} °C (średnia z 30 min)" if last.get("flue_peak_c") is not None else "")
+                  + (f", {hot_min} min powyżej {hot_c:.0f} °C" if hot_min else ""), now)
+        review = hm.flue_review(m.sessions, m.cleanings, self.cfg)
+        if not review["due"] or not self.cfg.get("flue_clean_notify", True):
+            return
+        if m.flue_notified is not None and now - m.flue_notified < hm.FLUE_NOTIFY_GAP_S:
+            return
+        m.flue_notified = now
+        peaks = " i ".join(f"{p:.0f}" for p in review["peaks"])
+        title = f"Wyczyść wymiennik kotła — spaliny {max(review['peaks']):.0f} °C"
+        if review["basis"] == "baseline":
+            why = (f"Ostatnie palenia miały szczyt spalin {peaks} °C — o co najmniej {self.cfg['flue_rise_k']:.0f} K "
+                   f"więcej niż po czyszczeniu {_date(review['cleaned_at'])} ({review['baseline_c']:.0f} °C).")
+        else:
+            why = (f"Ostatnie palenia miały szczyt spalin {peaks} °C (średnia z 30 minut), "
+                   f"próg to {review['limit_c']:.0f} °C.")
+        message = (why + " Sadza na rurach wymiennika izoluje je i ciepło ucieka kominem. Wyczyść rury i turbulatory, "
+                   "potem zapisz czyszczenie w panelu ogrzewania (Przegląd → „Spaliny i wymiennik”) — moduł porówna "
+                   "kolejne palenia z czystym wymiennikiem.")
+        self._log(f"🧹 {title}", now)
+        await self._save()
+        ncfg = await self._ncfg()
+        if ncfg.get("enabled") and self.cfg.get("notify", True) is not False:
+            await self._deliver(ncfg, key="heating_flue_clean", level="info", title=title, message=message, icon="🧹")
 
     async def _ncfg(self) -> dict[str, Any]:
         from .settings_io import read_async
@@ -1077,6 +1134,7 @@ class HeatingManager:
             "config": self.cfg,
             "status": self.snapshot,
             "sessions": self.model.sessions[-30:],
+            "flue_review": hm.flue_review(self.model.sessions, self.model.cleanings, self.cfg),
             "monthly": hm.monthly_summary(self.model.sessions, offset.total_seconds() if offset else 0.0,
                                           self.cfg.get("wood_price_kg"),
                                           self.cfg["wood_kwh_per_kg"] * self.cfg["efficiency"]),
@@ -1387,7 +1445,7 @@ def _household_command(cfg: dict[str, Any], msg: dict[str, Any]) -> bool:
     at home runs the CH pump or charges the hot water by hand). The 0 position — the emergency lock, also set for
     maintenance or an empty installation — and taking a pump out of it stay with the administrator."""
     action = msg.get("action")
-    if action in ("log_load", "undo_load"):
+    if action in ("log_load", "undo_load", "log_clean", "undo_clean"):
         return True
     if action == "set_switch" and msg.get("position") in ("auto", "on") and msg.get("element") in hm.FORCE_ELEMENTS:
         return not (cfg.get("lockout") or {}).get(msg["element"])

@@ -821,6 +821,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     </div>`;
     html += `<div class="grid cols">
       <div class="card wide"><h3>Palenia w kotle <small>jedno palenie = od rozpalenia do wygaśnięcia; ciepło z drewna = zmiana w buforze i CWU + to, co w tym czasie wziął dom</small></h3>${this._sessionsHtml(st)}</div>
+      ${(this._data.config.entities || {}).flue_gas ? `<div class="card">${this._flueHtml(st)}</div>` : ""}
       <div class="card">${this._seasonHtml()}</div>
       <div class="card"><h3>Dziennik decyzji <small>sterowanie, bezpieczeństwo, doradca</small></h3>${this._logHtml()}</div>
     </div>`;
@@ -1513,6 +1514,54 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     return html;
   }
 
+  // the exchanger check: each fire's flue peak against the limit (before a cleaning is logged) or against the
+  // clean exchanger (the first fires after one) — hm.flue_review
+  _flueHtml(st) {
+    const r = this._data.flue_review || {};
+    const c = this._data.config || {};
+    const cur = st.session || {};
+    let html = `<h3>🧹 Spaliny i wymiennik <small>szczyt = najwyższa średnia spalin z 30 minut palenia</small></h3>`;
+    let status;
+    if (r.due) {
+      status = `<div class="banner warn" style="font-size:14px"><b>Pora wyczyścić wymiennik.</b> Ostatnie ${r.due_fires} palenia miały szczyt
+        ${(r.peaks || []).map((p) => `${num(p, 0)} °C`).join(" i ")} — ${r.basis === "baseline"
+          ? `co najmniej ${num(c.flue_rise_k, 0)} K więcej niż czysty wymiennik (${num(r.baseline_c, 0)} °C)`
+          : `próg to ${num(r.limit_c, 0)} °C`}. Wyczyść rury i turbulatory, potem kliknij „Wyczyściłem wymiennik”.</div>`;
+    } else if (r.basis === "learning") {
+      status = `<div style="font-size:14px">Po czyszczeniu ${fmtTime(r.cleaned_at)} moduł zbiera wzorzec czystego wymiennika:
+        <b>${r.baseline_n} z ${r.baseline_need}</b> paleń (liczy się palenie ze spalinami od 100 °C przez co najmniej 2 h).</div>`;
+    } else {
+      const last = (r.recent || []).slice(-1)[0];
+      status = `<div style="font-size:14px">${last ? `Ostatnie palenie: szczyt <b>${num(last.peak_c, 0)} °C</b>` : "Brak pełnego palenia ze spalinami"}
+        · limit <b>${num(r.limit_c, 0)} °C</b> <span class="muted">${r.basis === "baseline" ? `(czysty wymiennik ${num(r.baseline_c, 0)} °C + ${num(c.flue_rise_k, 0)} K)` : "(próg z ustawień — do pierwszego zapisanego czyszczenia)"}</span></div>`;
+    }
+    if (r.high_after_clean) {
+      status += `<div class="banner warn" style="margin-top:8px">Po czyszczeniu szczyt spalin nadal ma ${num(r.baseline_c, 0)} °C, czyli co najmniej
+        ${num(c.flue_clean_c, 0)} °C. Sam wymiennik tego nie obniży: sprawdź ciąg komina (regulator ciągu), ustawienie powietrza
+        pierwotnego i wtórnego według instrukcji kotła i grubość polan (cienkie, bardzo suche palą się za szybko).</div>`;
+    }
+    if (cur.flue_avg_c != null) {
+      status += `<div class="hint" style="margin-top:8px">Trwające palenie: średnio ${num(cur.flue_avg_c, 0)} °C${cur.flue_peak_c != null ? `, szczyt ${num(cur.flue_peak_c, 0)} °C` : ""}.</div>`;
+    }
+    const rows = (r.recent || []).slice().reverse().map((x) => `<tr><td>${fmtTime(x.start)}</td><td>${num(x.avg_c, 0)} °C</td>
+      <td><b>${num(x.peak_c, 0)} °C</b>${x.baseline ? ' <span class="muted">wzorzec</span>' : ""}</td>
+      <td>${x.hot_min ? fmtHours(x.hot_min / 60) : "—"}</td></tr>`).join("");
+    const canUndo = r.cleaned_at && Date.now() / 1000 - r.cleaned_at <= 48 * 3600;
+    html += `${status}
+      ${rows ? `<div style="overflow-x:auto;margin-top:10px"><table><thead><tr><th>Palenie</th><th>Średnio</th><th>Szczyt</th>
+        <th>Od ${num(c.flue_clean_c, 0)} °C</th></tr></thead><tbody>${rows}</tbody></table></div>` : ""}
+      <div class="inline" style="flex-wrap:wrap;gap:10px;margin-top:12px">
+        <button class="btn primary" data-act="cleanlog">🧹 Wyczyściłem wymiennik</button>
+        ${canUndo ? `<button class="btn sm" data-act="cleanundo">↶ Cofnij wpis z ${fmtTime(r.cleaned_at)}</button>` : ""}
+        <span class="muted" style="font-size:12px">Ostatnie czyszczenie: ${r.cleaned_at ? fmtTime(r.cleaned_at) : "nie zapisano"}</span>
+      </div>
+      <div class="hint">Sadza na rurach wymiennika izoluje je — woda bierze mniej ciepła, a więcej ucieka kominem, więc spaliny
+        z palenia na palenie rosną. Do pierwszego zapisanego czyszczenia limitem jest próg z ustawień; po czyszczeniu pierwsze
+        ${r.baseline_need || 2} palenia są wzorcem czystego wymiennika, a przypomnienie przychodzi, gdy ${r.due_fires || 2} kolejne palenia
+        mają szczyt wyższy o ${num(c.flue_rise_k, 0)} K. Każde 100 K spalin mniej to w przybliżeniu 5–7 % drewna mniej.</div>`;
+    return html;
+  }
+
   _seasonHtml() {
     const rows = (this._data.monthly || []).slice().reverse();
     let html = `<h3>Sezon grzewczy <small>z zarejestrowanych paleń</small></h3>`;
@@ -1689,6 +1738,13 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         this._msg = ds.target === "next"
           ? `Zapisano ${num(kg, 1)} kg — wpis czeka na rozpalenie i sam trafi do nowego palenia.`
           : `Zapisano ${num(kg, 1)} kg w ${ds.target === "last" ? "ostatnim" : "bieżącym"} paleniu.`;
+      } else if (act === "cleanlog") {
+        this._data = await this._hass.callWS({ type: "smartinghome/heating/command", action: "log_clean" });
+        this._msg = "Zapisano czyszczenie wymiennika — kolejne palenia będą wzorcem czystego wymiennika.";
+      } else if (act === "cleanundo") {
+        if (!confirm("Cofnąć wpis czyszczenia wymiennika?")) return;
+        this._data = await this._hass.callWS({ type: "smartinghome/heating/command", action: "undo_clean" });
+        this._msg = "Cofnięto wpis czyszczenia.";
       } else if (act === "undoload") {
         if (!confirm("Cofnąć ostatni wpis zważonego drewna?")) return;
         this._data = await this._hass.callWS({ type: "smartinghome/heating/command", action: "undo_load" });
@@ -1798,6 +1854,7 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     // minus the tanks; without the weighing only the tanks are known and the wood is a lower bound.
     const c = this._data.config || {};
     const cfgPerKg = (c.wood_kwh_per_kg || 0) * (c.efficiency || 0);
+    const hasFlue = !!(c.entities || {}).flue_gas || [st.session, ...(this._data.sessions || [])].some((x) => x && x.flue_max_c != null);
     const kwh = (v, sign) => { const r = Math.round(v) || 0; return `${sign && r > 0 ? "+" : ""}${num(r, 0)} kWh`; };
     const row = (x, open) => {
       const start = x.stored_start_kwh;
@@ -1824,15 +1881,20 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       const wood = x.wood_kg ? `${num(x.wood_kg, 1)} kg <span class="muted">${weighed ? "ważone" : "część ważona"}</span>`
         : x.wood_est_kg != null ? (x.heat_kwh != null ? `~${num(x.wood_est_kg, 0)} kg` : `<span class="muted" title="liczone tylko z bufora i CWU — dom nie wliczony">min. ~${num(x.wood_est_kg, 0)} kg</span>`)
         : "—";
+      const hotMin = Math.round((x.flue_hot_s || 0) / 60);
+      const flueTd = x.flue_avg_c != null
+        ? `${num(x.flue_avg_c, 0)}° / <b>${x.flue_peak_c != null ? `${num(x.flue_peak_c, 0)}°` : "—"}</b>${hotMin ? ` <span class="muted" title="czas ze spalinami od ${num(x.flue_hot_c ?? c.flue_clean_c, 0)} °C wzwyż">${fmtHours(hotMin / 60)} ≥${num(x.flue_hot_c ?? c.flue_clean_c, 0)}°</span>` : ""}`
+        : x.flue_max_c != null ? `<span class="muted" title="z tego palenia zapisane jest tylko maksimum">maks. ${num(x.flue_max_c, 0)}°</span>` : "—";
       return `<tr${open ? ' class="open"' : ""}><td>${fmtTime(x.start)}</td><td>${open ? `trwa · ${fmtHours(x.duration_h)}` : fmtHours(x.duration_h)}</td>
-        <td>${num(x.max_c, 0)} °C</td><td>${wood}</td><td>${tanksTd}</td><td>${houseTd}</td><td>${totalTd}</td>
+        <td>${num(x.max_c, 0)} °C</td>${hasFlue ? `<td>${flueTd}</td>` : ""}<td>${wood}</td><td>${tanksTd}</td><td>${houseTd}</td><td>${totalTd}</td>
         <td>${x.overheat ? "⚠ przegrzanie" : ""}</td></tr>`;
     };
     const rows = [];
     if (st.session) rows.push(row(st.session, true));
     for (const x of (this._data.sessions || []).slice().reverse()) rows.push(row(x, false));
     if (!rows.length) return `<div class="muted" style="font-size:12px">Jeszcze nie zarejestrowano palenia. Sesja zaczyna się, gdy temperatura kotła rośnie, a kończy, gdy kocioł wygaśnie.</div>`;
-    return `<div style="overflow-x:auto"><table><thead><tr><th>Start</th><th>Czas</th><th>Maks.</th><th>Drewno</th>
+    return `<div style="overflow-x:auto"><table><thead><tr><th>Start</th><th>Czas</th><th>Maks.</th>${hasFlue
+      ? `<th title="średnia w czasie palenia (spaliny od 100 °C) / szczyt = najwyższa średnia z 30 minut; obok czas ze spalinami od progu czyszczenia">Spaliny śr. / szczyt</th>` : ""}<th>Drewno</th>
       <th title="ile więcej (lub mniej) ciepła jest w buforze i CWU na końcu palenia niż przy rozpaleniu">Bufor i CWU</th>
       <th title="ciepło, które dom wziął w czasie palenia">Dom</th><th title="bufor i CWU + dom">Ciepło z drewna</th><th></th></tr></thead>
       <tbody>${rows.join("")}</tbody></table></div>
@@ -1932,6 +1994,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
         ? `zrzut, gdy kocioł pali się, a góra bufora ma ${num(c.dump_top_c, 1)} °C (koniec 3 K niżej albo po wygaśnięciu); temperatura kotła zrzutu nie włącza — alarm przegrzania tylko powiadamia`
         : "puste: zrzut według kotła i bufora (kocioł od alarmu − 2 K albo od ostrzeżenia przy pełnym buforze)", c.dump_top_c, 'min="80" max="98" step="0.5"', "według kotła")}
       ${field("efficiency", "Sprawność kotła (0–1)", "", c.efficiency, 'min="0.4" max="0.95" step="0.01"', `profil: ${num(prof.efficiency, 2)}`)}
+      ${field("flue_clean_c", "Spaliny — próg czyszczenia wymiennika (°C)", "szczyt palenia (średnia z 30 min) od tej wartości — do pierwszego zapisanego czyszczenia", c.flue_clean_c, 'min="150" max="500" step="5"')}
+      ${field("flue_rise_k", "Spaliny — wzrost po czyszczeniu (K)", "o tyle wyższy szczyt niż czysty wymiennik = pora czyścić", c.flue_rise_k, 'min="10" max="200" step="5"')}
       ${field("laddomat_on_c", "Pompa Laddomatu rusza od (°C)", "ustawienie termostatu kotła; tylko do schematu", c.laddomat_on_c, 'min="40" max="90"', `profil: ${num(prof.laddomat_on_c, 0)}`)}
       ${field("wood_moisture_pct", "Wilgotność drewna (%)", c.wood_moisture_pct != null
         ? `= ${num(c.wood_kwh_per_kg, 2)} kWh/kg dla drewna ${esc((WOOD_KINDS[c.wood_kind] || "").split(" (")[0] || "mieszanego")} (rodzaj w karcie Doradca i koszty)`
@@ -2059,6 +2123,8 @@ class SmartingHomeHeatingPanel extends HTMLElement {
     return `<div class="card" style="margin-top:14px"><h3>Powiadomienia ogrzewania</h3>
       <label class="chk"><input type="checkbox" name="lit_notify" ${c.lit_notify !== false ? "checked" : ""} ${dis}> Powiadomienie „kocioł się rozpalił” — spaliny 100 °C, można przełączyć kocioł na tryb automatyczny</label>
       <div class="hint" style="margin-top:2px">Działa z czujnikiem spalin (rola „Spaliny”). Raz na palenie.</div>
+      <label class="chk" style="margin-top:10px"><input type="checkbox" name="flue_clean_notify" ${c.flue_clean_notify !== false ? "checked" : ""} ${dis}> Przypomnienie „wyczyść wymiennik kotła” — gdy dwa palenia z rzędu mają za gorące spaliny</label>
+      <div class="hint" style="margin-top:2px">Po zakończonym paleniu, najwyżej co 3 dni, aż do zapisania czyszczenia. Progi: Ustawienia → Kocioł i drewno.</div>
       <div style="margin-top:12px;font-size:13px;color:#cbd5e1">Także do tych telefonów <span class="muted">— tylko powiadomienia ogrzewania (rozpalanie, „rozpal do…”, alarmy kotła), bez reszty Smarting HOME</span></div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-top:8px">${boxes || '<span class="muted">Brak telefonów z aplikacją Home Assistant.</span>'}</div>
       ${missing.length ? `<div class="hint">Nie ma już w HA: ${missing.map(esc).join(", ")} — zostają na liście.</div>` : ""}
@@ -2196,9 +2262,9 @@ class SmartingHomeHeatingPanel extends HTMLElement {
       "room_target_c", "warn_c", "alarm_c", "dump_top_c", "efficiency", "laddomat_on_c", "wood_kwh_per_kg", "wood_moisture_pct", "valve_run_s", "curve_slope", "curve_shift",
       "supply_min_c", "supply_max_c", "heating_limit_c", "room_gain", "room_hyst_k", "room_night_c", "night_from", "night_to",
       "light_lead_h", "burn_hours", "boiler_kw", "wood_price", "dhw_on_diff_k", "dhw_off_diff_k", "dhw_hyst_k", "dhw_max_c",
-      "dhw_win1_from", "dhw_win1_to", "dhw_win2_from", "dhw_win2_to", "fan_quiet_from", "fan_quiet_to"];
+      "dhw_win1_from", "dhw_win1_to", "dhw_win2_from", "dhw_win2_to", "fan_quiet_from", "fan_quiet_to", "flue_clean_c", "flue_rise_k"];
     const checks = ["enabled", "notify", "valve_invert", "safety_dump", "room_correction", "night_enabled", "advisor_notify", "dhw_dump",
-      "dhw_fire_only", "fan_quiet", "lit_notify"];
+      "dhw_fire_only", "fan_quiet", "lit_notify", "flue_clean_notify"];
     // the heating's extra recipients: the phones shown in the form, plus any chosen earlier that HA no longer has
     const nxBoxes = [...form.querySelectorAll('input[name^="nx_"]')];
     if (nxBoxes.length) {
